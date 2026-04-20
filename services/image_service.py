@@ -442,71 +442,65 @@ def _resolve_upstream_model(access_token: str, requested_model: str) -> str:
     return str(requested_model or DEFAULT_MODEL).strip() or DEFAULT_MODEL
 
 
-def generate_image_result(access_token: str, prompt: str, model: str = DEFAULT_MODEL, n: int = 1) -> dict:
+def generate_image_result(access_token: str, prompt: str, model: str = DEFAULT_MODEL) -> dict:
     prompt = str(prompt or "").strip()
     access_token = str(access_token or "").strip()
     if not prompt:
         raise ImageGenerationError("prompt is required")
     if not access_token:
         raise ImageGenerationError("token is required")
-    if n < 1:
-        raise ImageGenerationError("n must be >= 1")
 
     session, fp = _new_session(access_token)
     try:
         upstream_model = _resolve_upstream_model(access_token, model)
         print(
             f"[image-upstream] start token={access_token[:12]}... "
-            f"requested_model={model} upstream_model={upstream_model} n={n}"
+            f"requested_model={model} upstream_model={upstream_model}"
         )
-        results: list[GeneratedImage] = []
-        for _ in range(n):
-            device_id = _bootstrap(session, fp)
-            chat_token, pow_info = _chat_requirements(session, access_token, device_id)
-            proof_token = None
-            if pow_info.get("required"):
-                proof_token = _generate_proof_token(
-                    seed=str(pow_info["seed"]),
-                    difficulty=str(pow_info["difficulty"]),
-                    user_agent=USER_AGENT,
-                    proof_config=_pow_config(USER_AGENT),
-                )
-            parent_message_id = str(uuid.uuid4())
-            response = _send_conversation(
-                session,
-                access_token,
-                device_id,
-                chat_token,
-                proof_token,
-                parent_message_id,
-                prompt,
-                upstream_model,
+        device_id = _bootstrap(session, fp)
+        chat_token, pow_info = _chat_requirements(session, access_token, device_id)
+        proof_token = None
+        if pow_info.get("required"):
+            proof_token = _generate_proof_token(
+                seed=str(pow_info["seed"]),
+                difficulty=str(pow_info["difficulty"]),
+                user_agent=USER_AGENT,
+                proof_config=_pow_config(USER_AGENT),
             )
-            parsed = _parse_sse(response)
-            actual_conversation_id = parsed.get("conversation_id") or ""
-            file_ids = parsed.get("file_ids") or []
-            response_text = str(parsed.get("text") or "").strip()
-            if actual_conversation_id and not file_ids:
-                file_ids = _poll_image_ids(session, access_token, device_id, actual_conversation_id)
-            if not file_ids:
-                if response_text:
-                    raise ImageGenerationError(response_text)
-                raise ImageGenerationError("no image returned from upstream")
-            first_file_id = str(file_ids[0])
-            download_url = _fetch_download_url(session, access_token, device_id, actual_conversation_id, first_file_id)
-            if not download_url:
-                raise ImageGenerationError("failed to get download url")
-            results.append(
-                GeneratedImage(
-                    b64_json=_download_as_base64(session, download_url),
-                    revised_prompt=prompt,
-                    url=download_url,
-                )
-            )
-        print(f"[image-upstream] success token={access_token[:12]}... images={len(results)}")
+        parent_message_id = str(uuid.uuid4())
+        response = _send_conversation(
+            session,
+            access_token,
+            device_id,
+            chat_token,
+            proof_token,
+            parent_message_id,
+            prompt,
+            upstream_model,
+        )
+        parsed = _parse_sse(response)
+        actual_conversation_id = parsed.get("conversation_id") or ""
+        file_ids = parsed.get("file_ids") or []
+        response_text = str(parsed.get("text") or "").strip()
+        if actual_conversation_id and not file_ids:
+            file_ids = _poll_image_ids(session, access_token, device_id, actual_conversation_id)
+        if not file_ids:
+            if response_text:
+                raise ImageGenerationError(response_text)
+            raise ImageGenerationError("no image returned from upstream")
+        first_file_id = str(file_ids[0])
+        download_url = _fetch_download_url(session, access_token, device_id, actual_conversation_id, first_file_id)
+        if not download_url:
+            raise ImageGenerationError("failed to get download url")
+        result = GeneratedImage(
+            b64_json=_download_as_base64(session, download_url),
+            revised_prompt=prompt,
+            url=download_url,
+        )
+        print(f"[image-upstream] success token={access_token[:12]}... images=1")
         return {
             "created": time.time_ns() // 1_000_000_000,
-            "data": [{"b64_json": item.b64_json, "revised_prompt": item.revised_prompt} for item in results],
+            "data": [{"b64_json": result.b64_json, "revised_prompt": result.revised_prompt}],
         }
     except Exception as exc:
         print(f"[image-upstream] fail token={access_token[:12]}... error={exc}")

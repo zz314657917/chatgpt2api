@@ -9,13 +9,11 @@ from html.parser import HTMLParser
 
 import pybase64
 
-
-class _Logger:
-    def info(self, *args, **kwargs):
-        return None
-
-
-logger = _Logger()
+"""
+这个文件用于生成上游 ChatGPT 网页接口需要的 PoW 参数。
+它会解析首页 HTML 并缓存构建信息，组装浏览器指纹风格的配置数据，
+然后生成图片请求流程里会用到的 requirements token 和 proof token。
+"""
 
 cores = [8, 16, 24, 32]
 timeLayout = "%a %b %d %Y %H:%M:%S"
@@ -402,7 +400,6 @@ def get_data_build_from_html(html_content):
             data_build = match.group(1)
             cached_dpl = data_build
             cached_time = int(time.time())
-            logger.info(f"Found dpl: {cached_dpl}")
 
 
 async def get_dpl(service):
@@ -421,7 +418,6 @@ async def get_dpl(service):
         else:
             return True
     except Exception as e:
-        logger.info(f"Failed to get dpl: {e}")
         cached_dpl = None
         cached_time = int(time.time())
         return False
@@ -460,7 +456,6 @@ def get_answer_token(seed, diff, config):
     start = time.time()
     answer, solved = generate_answer(seed, diff, config)
     end = time.time()
-    logger.info(f'diff: {diff}, time: {int((end - start) * 1e6) / 1e3}ms, solved: {solved}')
     return "gAAAAAB" + answer, solved
 
 
@@ -488,20 +483,3 @@ def generate_answer(seed, diff, config):
 def get_requirements_token(config):
     require, solved = generate_answer(format(random.random()), "0fffff", config)
     return 'gAAAAAC' + require
-
-
-if __name__ == "__main__":
-    # cached_scripts.append(
-    #     "https://cdn.oaistatic.com/_next/static/cXh69klOLzS0Gy2joLDRS/_ssgManifest.js?dpl=453ebaec0d44c2decab71692e1bfe39be35a24b3")
-    # cached_dpl = "453ebaec0d44c2decab71692e1bfe39be35a24b3"
-    # cached_time = int(time.time())
-    # for i in range(10):
-    #     seed = format(random.random())
-    #     diff = "000032"
-    #     config = get_config("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome")
-    #     answer = get_answer_token(seed, diff, config)
-    cached_scripts.append(
-        "https://cdn.oaistatic.com/_next/static/cXh69klOLzS0Gy2joLDRS/_ssgManifest.js?dpl=453ebaec0d44c2decab71692e1bfe39be35a24b3")
-    cached_dpl = "prod-f501fe933b3edf57aea882da888e1a544df99840"
-    config = get_config("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36")
-    get_requirements_token(config)

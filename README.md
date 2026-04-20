@@ -6,7 +6,10 @@ ChatGPT 图片生成代理与账号池管理面板，提供账号维护、额度
 
 ## 功能
 
-- 批量导入和管理 `access_token`
+- 兼容 OpenAI `Chat Completions` 图片响应
+- 兼容 OpenAI `Responses API` 图片生成接口
+- 支持导入 CPA 格式文件
+- 支持多种方式导入 `access_token`
 - 自动刷新账号邮箱、类型、图片额度、恢复时间
 - 轮询可用账号进行图片生成
 - 失效 Token 自动剔除
@@ -15,9 +18,15 @@ ChatGPT 图片生成代理与账号池管理面板，提供账号维护、额度
 > 目前仅实现了生图效果，编辑图片以及gpt-image-2模型尚未实现，需要后续更新。
 
 生图界面：
+
 ![image](assets/image.png)
 
+Chery Studio 中使用：
+
+![image](assets/chery_studio.png)
+
 号池管理：
+
 ![image](assets/account_pool.png)
 
 ## 接口
@@ -32,6 +41,14 @@ Authorization: Bearer <auth-key>
 
 ```http
 POST /v1/images/generations
+```
+
+```http
+POST /v1/chat/completions
+```
+
+```http
+POST /v1/responses
 ```
 
 请求体示例：

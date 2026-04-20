@@ -221,21 +221,58 @@ class AccountService:
         with self._lock:
             return [token for item in self._accounts if (token := self._clean_token(item.get("access_token")))]
 
-    def next_token(self, excluded_tokens: set[str] | None = None) -> str:
+    def _list_available_candidate_tokens(self, excluded_tokens: set[str] | None = None) -> list[str]:
+        excluded = {self._clean_token(token) for token in (excluded_tokens or set()) if self._clean_token(token)}
+        return [
+            token
+            for item in self._accounts
+            if self._is_image_account_available(item)
+            and (token := self._clean_token(item.get("access_token")))
+            and token not in excluded
+        ]
+
+    def _pick_next_candidate_token(self, excluded_tokens: set[str] | None = None) -> str:
         with self._lock:
-            excluded = {self._clean_token(token) for token in (excluded_tokens or set()) if self._clean_token(token)}
-            tokens = [
-                token
-                for item in self._accounts
-                if self._is_image_account_available(item)
-                and (token := self._clean_token(item.get("access_token")))
-                and token not in excluded
-            ]
+            tokens = self._list_available_candidate_tokens(excluded_tokens)
             if not tokens:
                 raise RuntimeError(f"No available tokens found in {self.store_file}")
             access_token = tokens[self._index % len(tokens)]
             self._index += 1
             return access_token
+
+    def refresh_account_state(self, access_token: str) -> dict | None:
+        try:
+            remote_info = self.fetch_remote_info(access_token)
+        except Exception as exc:
+            message = str(exc)
+            print(f"[account-available] refresh token={access_token[:12]}... fail {message}")
+            if "/backend-api/me failed: HTTP 401" in message:
+                return self.update_account(
+                    access_token,
+                    {
+                        "status": "异常",
+                        "quota": 0,
+                    },
+                )
+            return None
+        return self.update_account(access_token, remote_info)
+
+    def get_available_access_token(self) -> str:
+        attempted_tokens: set[str] = set()
+        while True:
+            access_token = self._pick_next_candidate_token(excluded_tokens=attempted_tokens)
+            attempted_tokens.add(access_token)
+            account = self.refresh_account_state(access_token)
+            if self._is_image_account_available(account or {}):
+                return access_token
+            print(
+                f"[account-available] skip token={access_token[:12]}... "
+                f"quota={account.get('quota') if account else 'unknown'} "
+                f"status={account.get('status') if account else 'unknown'}"
+            )
+
+    def next_token(self) -> str:
+        return self.get_available_access_token()
 
     def get_account(self, access_token: str) -> dict | None:
         access_token = self._clean_token(access_token)

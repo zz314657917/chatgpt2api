@@ -8,15 +8,13 @@ from fastapi import APIRouter, FastAPI, Header, HTTPException
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from services.account_service import account_service
+from services.chatgpt_service import ChatGPTService
 from services.config import config
-from services.backend_service import BackendService
-from services.chat_image_service import ChatImageService
 from services.image_service import ImageGenerationError
 from services.version import get_app_version
-
 
 BASE_DIR = Path(__file__).resolve().parents[1]
 WEB_DIST_DIR = BASE_DIR / "web_dist"
@@ -47,6 +45,27 @@ class AccountUpdateRequest(BaseModel):
     type: str | None = None
     status: str | None = None
     quota: int | None = None
+
+
+class ChatCompletionRequest(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    model: str | None = None
+    prompt: str | None = None
+    n: int | None = None
+    stream: bool | None = None
+    modalities: list[str] | None = None
+    messages: list[dict[str, object]] | None = None
+
+
+class ResponseCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    model: str | None = None
+    input: object | None = None
+    tools: list[dict[str, object]] | None = None
+    tool_choice: object | None = None
+    stream: bool | None = None
 
 
 def build_model_item(model_id: str) -> dict[str, object]:
@@ -98,11 +117,7 @@ def resolve_web_asset(requested_path: str) -> Path | None:
         candidates = [WEB_DIST_DIR / "index.html"]
     else:
         relative_path = Path(clean_path)
-        candidates = [
-            WEB_DIST_DIR / relative_path,
-            WEB_DIST_DIR / relative_path / "index.html",
-            WEB_DIST_DIR / f"{clean_path}.html",
-        ]
+        candidates = [WEB_DIST_DIR / relative_path, WEB_DIST_DIR / relative_path / "index.html", WEB_DIST_DIR / f"{clean_path}.html"]
 
     for candidate in candidates:
         try:
@@ -116,8 +131,7 @@ def resolve_web_asset(requested_path: str) -> Path | None:
 
 
 def create_app() -> FastAPI:
-    service = BackendService(account_service)
-    chat_image_service = ChatImageService(service)
+    chatgpt_service = ChatGPTService(account_service)
     app_version = get_app_version()
 
     @asynccontextmanager
@@ -142,13 +156,7 @@ def create_app() -> FastAPI:
 
     @router.get("/v1/models")
     async def list_models():
-        return {
-            "object": "list",
-            "data": [
-                build_model_item("gpt-image-1"),
-                build_model_item("gpt-image-2"),
-            ],
-        }
+        return {"object": "list", "data": [build_model_item("gpt-image-1"), build_model_item("gpt-image-2")]}
 
     @router.post("/auth/login")
     async def login(authorization: str | None = Header(default=None)):
@@ -165,28 +173,17 @@ def create_app() -> FastAPI:
         return {"items": account_service.list_accounts()}
 
     @router.post("/api/accounts")
-    async def create_accounts(
-            body: AccountCreateRequest,
-            authorization: str | None = Header(default=None),
-    ):
+    async def create_accounts(body: AccountCreateRequest, authorization: str | None = Header(default=None)):
         require_auth_key(authorization)
         tokens = [str(token or "").strip() for token in body.tokens if str(token or "").strip()]
         if not tokens:
             raise HTTPException(status_code=400, detail={"error": "tokens is required"})
         result = account_service.add_accounts(tokens)
         refresh_result = account_service.refresh_accounts(tokens)
-        return {
-            **result,
-            "refreshed": refresh_result.get("refreshed", 0),
-            "errors": refresh_result.get("errors", []),
-            "items": refresh_result.get("items", result.get("items", [])),
-        }
+        return {**result, "refreshed": refresh_result.get("refreshed", 0), "errors": refresh_result.get("errors", []), "items": refresh_result.get("items", result.get("items", []))}
 
     @router.delete("/api/accounts")
-    async def delete_accounts(
-            body: AccountDeleteRequest,
-            authorization: str | None = Header(default=None),
-    ):
+    async def delete_accounts(body: AccountDeleteRequest, authorization: str | None = Header(default=None)):
         require_auth_key(authorization)
         tokens = [str(token or "").strip() for token in body.tokens if str(token or "").strip()]
         if not tokens:
@@ -194,10 +191,7 @@ def create_app() -> FastAPI:
         return account_service.delete_accounts(tokens)
 
     @router.post("/api/accounts/refresh")
-    async def refresh_accounts(
-            body: AccountRefreshRequest,
-            authorization: str | None = Header(default=None),
-    ):
+    async def refresh_accounts(body: AccountRefreshRequest, authorization: str | None = Header(default=None)):
         require_auth_key(authorization)
         access_tokens = [str(token or "").strip() for token in body.access_tokens if str(token or "").strip()]
         if not access_tokens:
@@ -207,24 +201,13 @@ def create_app() -> FastAPI:
         return account_service.refresh_accounts(access_tokens)
 
     @router.post("/api/accounts/update")
-    async def update_account(
-            body: AccountUpdateRequest,
-            authorization: str | None = Header(default=None),
-    ):
+    async def update_account(body: AccountUpdateRequest, authorization: str | None = Header(default=None)):
         require_auth_key(authorization)
         access_token = str(body.access_token or "").strip()
         if not access_token:
             raise HTTPException(status_code=400, detail={"error": "access_token is required"})
 
-        updates = {
-            key: value
-            for key, value in {
-                "type": body.type,
-                "status": body.status,
-                "quota": body.quota,
-            }.items()
-            if value is not None
-        }
+        updates = {key: value for key, value in {"type": body.type, "status": body.status, "quota": body.quota}.items() if value is not None}
         if not updates:
             raise HTTPException(status_code=400, detail={"error": "no updates provided"})
 
@@ -234,28 +217,22 @@ def create_app() -> FastAPI:
         return {"item": account, "items": account_service.list_accounts()}
 
     @router.post("/v1/images/generations")
-    async def generate_images(
-            body: ImageGenerationRequest,
-            authorization: str | None = Header(default=None),
-    ):
+    async def generate_images(body: ImageGenerationRequest, authorization: str | None = Header(default=None)):
         require_auth_key(authorization)
         try:
-            return await run_in_threadpool(
-                service.generate_with_pool,
-                body.prompt,
-                body.model,
-                body.n,
-            )
+            return await run_in_threadpool(chatgpt_service.generate_with_pool, body.prompt, body.model, body.n)
         except ImageGenerationError as exc:
             raise HTTPException(status_code=502, detail={"error": str(exc)}) from exc
 
     @router.post("/v1/chat/completions")
-    async def create_chat_completion(
-            body: dict[str, object],
-            authorization: str | None = Header(default=None),
-    ):
+    async def create_chat_completion(body: ChatCompletionRequest, authorization: str | None = Header(default=None)):
         require_auth_key(authorization)
-        return await run_in_threadpool(chat_image_service.create_image_completion, body)
+        return await run_in_threadpool(chatgpt_service.create_image_completion, body.model_dump(mode="python"))
+
+    @router.post("/v1/responses")
+    async def create_response(body: ResponseCreateRequest, authorization: str | None = Header(default=None)):
+        require_auth_key(authorization)
+        return await run_in_threadpool(chatgpt_service.create_response, body.model_dump(mode="python"))
 
     app.include_router(router)
 
