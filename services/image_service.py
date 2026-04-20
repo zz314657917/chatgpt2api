@@ -12,7 +12,6 @@ from typing import Optional
 from curl_cffi.requests import Session
 
 from services.account_service import account_service
-from services.config import config
 from services import proof_of_work
 
 
@@ -89,7 +88,7 @@ def _new_session(access_token: str) -> tuple[Session, dict]:
     fp = _build_fp(access_token)
     session = Session(
         impersonate=fp.get("impersonate") or "edge101",
-        verify=config.tls_verify,
+        verify=True,
     )
     session.headers.update(
         {

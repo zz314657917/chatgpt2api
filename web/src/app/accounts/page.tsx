@@ -13,7 +13,6 @@ import {
   Download,
   LoaderCircle,
   Pencil,
-  Plus,
   RefreshCw,
   Search,
   Trash2,
@@ -32,7 +31,6 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import {
@@ -42,9 +40,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Textarea } from "@/components/ui/textarea";
 import {
-  createAccounts,
   deleteAccounts,
   fetchAccounts,
   refreshAccounts,
@@ -54,6 +50,8 @@ import {
   type AccountType,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
+
+import { AccountImportDialog } from "./components/account-import-dialog";
 
 const accountTypeOptions: { label: string; value: AccountType | "all" }[] = [
   { label: "全部类型", value: "all" },
@@ -168,15 +166,12 @@ export default function AccountsPage() {
   const [statusFilter, setStatusFilter] = useState<AccountStatus | "all">("all");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState("10");
-  const [open, setOpen] = useState(false);
-  const [newTokens, setNewTokens] = useState("");
   const [editingAccount, setEditingAccount] = useState<Account | null>(null);
   const [editType, setEditType] = useState<AccountType>("Free");
   const [editStatus, setEditStatus] = useState<AccountStatus>("正常");
   const [editQuota, setEditQuota] = useState("0");
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [isSubmitting, setIsSubmitting] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
 
@@ -257,41 +252,6 @@ export default function AccountsPage() {
 
     return items;
   }, [pageCount, safePage]);
-
-  const handleAddAccounts = async () => {
-    const tokens = newTokens
-      .split(/\r?\n/)
-      .map((item) => item.trim())
-      .filter(Boolean);
-
-    if (tokens.length === 0) {
-      toast.error("请先粘贴至少一个 Access Token");
-      return;
-    }
-
-    setIsSubmitting(true);
-    try {
-      const data = await createAccounts(tokens);
-      setAccounts(normalizeAccounts(data.items));
-      setSelectedIds([]);
-      setOpen(false);
-      setNewTokens("");
-      setPage(1);
-      if ((data.errors?.length ?? 0) > 0) {
-        const firstError = data.errors?.[0]?.error;
-        toast.error(
-          `新增 ${data.added ?? 0} 个账户，已刷新 ${data.refreshed ?? 0} 个，失败 ${data.errors?.length ?? 0} 个${firstError ? `，首个错误：${firstError}` : ""}`,
-        );
-      } else {
-        toast.success(`新增 ${data.added ?? 0} 个账户，跳过 ${data.skipped ?? 0} 个重复项，已自动刷新账号信息`);
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "新增账户失败";
-      toast.error(message);
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
 
   const handleDeleteTokens = async (tokens: string[]) => {
     if (tokens.length === 0) {
@@ -394,7 +354,7 @@ export default function AccountsPage() {
             variant="outline"
             className="h-10 rounded-xl border-stone-200 bg-white/80 px-4 text-stone-700 hover:bg-white"
             onClick={() => void loadAccounts()}
-            disabled={isLoading || isRefreshing || isSubmitting || isDeleting}
+            disabled={isLoading || isRefreshing || isDeleting}
           >
             <RefreshCw className={cn("size-4", isLoading ? "animate-spin" : "")} />
             刷新
@@ -403,56 +363,19 @@ export default function AccountsPage() {
             variant="outline"
             className="h-10 rounded-xl border-stone-200 bg-white/80 px-4 text-stone-700 hover:bg-white"
             onClick={() => void handleRefreshAccounts(accounts.map((item) => item.access_token))}
-            disabled={isLoading || isRefreshing || isSubmitting || isDeleting || accounts.length === 0}
+            disabled={isLoading || isRefreshing || isDeleting || accounts.length === 0}
           >
             <RefreshCw className={cn("size-4", isRefreshing ? "animate-spin" : "")} />
             一键刷新所有账号信息和额度
           </Button>
-          <Dialog open={open} onOpenChange={setOpen}>
-            <DialogTrigger asChild>
-              <Button className="h-10 rounded-xl bg-stone-950 px-4 text-white hover:bg-stone-800">
-                <Plus className="size-4" />
-                新增
-              </Button>
-            </DialogTrigger>
-            <DialogContent showCloseButton={false} className="rounded-2xl p-6">
-              <DialogHeader className="gap-2">
-                <DialogTitle>新增账户</DialogTitle>
-                <DialogDescription className="text-sm leading-6">
-                  每行一个 Access Token。保存后会自动拉取邮箱、类型和额度。
-                </DialogDescription>
-              </DialogHeader>
-              <div className="space-y-4">
-                <div className="space-y-2">
-                  <label className="text-sm font-medium text-stone-700">Token 列表</label>
-                  <Textarea
-                    placeholder="粘贴 Token，每行一个..."
-                    value={newTokens}
-                    onChange={(event) => setNewTokens(event.target.value)}
-                    className="min-h-48 resize-none rounded-xl border-stone-200"
-                  />
-                </div>
-              </div>
-              <DialogFooter className="pt-2">
-                <Button
-                  variant="secondary"
-                  className="h-10 rounded-xl bg-stone-100 px-5 text-stone-700 hover:bg-stone-200"
-                  onClick={() => setOpen(false)}
-                  disabled={isSubmitting}
-                >
-                  取消
-                </Button>
-                <Button
-                  className="h-10 rounded-xl bg-stone-950 px-5 text-white hover:bg-stone-800"
-                  onClick={() => void handleAddAccounts()}
-                  disabled={isSubmitting}
-                >
-                  {isSubmitting ? <LoaderCircle className="size-4 animate-spin" /> : null}
-                  新增账户
-                </Button>
-              </DialogFooter>
-            </DialogContent>
-          </Dialog>
+          <AccountImportDialog
+            disabled={isLoading || isRefreshing || isDeleting}
+            onImported={(items) => {
+              setAccounts(normalizeAccounts(items));
+              setSelectedIds([]);
+              setPage(1);
+            }}
+          />
           <Button
             variant="outline"
             className="h-10 rounded-xl border-stone-200 bg-white/80 px-4 text-stone-700 hover:bg-white"

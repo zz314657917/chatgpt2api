@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 from services.account_service import account_service
 from services.config import config
 from services.backend_service import BackendService
+from services.chat_image_service import ChatImageService
 from services.image_service import ImageGenerationError
 from services.version import get_app_version
 
@@ -70,6 +71,8 @@ def require_auth_key(authorization: str | None) -> None:
 
 
 def start_limited_account_watcher(stop_event: Event) -> Thread:
+    interval_seconds = config.refresh_account_interval_minute * 60
+
     def worker() -> None:
         while not stop_event.is_set():
             try:
@@ -79,7 +82,7 @@ def start_limited_account_watcher(stop_event: Event) -> Thread:
                     account_service.refresh_accounts(limited_tokens)
             except Exception as exc:
                 print(f"[account-limited-watcher] fail {exc}")
-            stop_event.wait(300)
+            stop_event.wait(interval_seconds)
 
     thread = Thread(target=worker, name="limited-account-watcher", daemon=True)
     thread.start()
@@ -114,6 +117,7 @@ def resolve_web_asset(requested_path: str) -> Path | None:
 
 def create_app() -> FastAPI:
     service = BackendService(account_service)
+    chat_image_service = ChatImageService(service)
     app_version = get_app_version()
 
     @asynccontextmanager
@@ -244,6 +248,14 @@ def create_app() -> FastAPI:
             )
         except ImageGenerationError as exc:
             raise HTTPException(status_code=502, detail={"error": str(exc)}) from exc
+
+    @router.post("/v1/chat/completions")
+    async def create_chat_completion(
+            body: dict[str, object],
+            authorization: str | None = Header(default=None),
+    ):
+        require_auth_key(authorization)
+        return await run_in_threadpool(chat_image_service.create_image_completion, body)
 
     app.include_router(router)
 

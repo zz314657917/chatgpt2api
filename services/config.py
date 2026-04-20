@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 
 BASE_DIR = Path(__file__).resolve().parents[1]
 DATA_DIR = BASE_DIR / "data"
 CONFIG_FILE = BASE_DIR / "config.json"
+CONFIG_EXAMPLE_FILE = BASE_DIR / "config.example.json"
 
 
 @dataclass(frozen=True)
@@ -17,51 +20,48 @@ class AppSettings:
     host: str
     port: int
     accounts_file: Path
-    tls_verify: bool
+    refresh_account_interval_minute: int
+
+def _load_json_object(path: Path, *, name: str) -> dict[str, object]:
+    text = path.read_text(encoding="utf-8").strip()
+    if not text:
+        return {}
+
+    loaded = json.loads(text)
+    if not isinstance(loaded, dict):
+        raise ValueError(f"{name} must be a JSON object")
+    return loaded
 
 
-def _parse_bool(value: object, *, default: bool) -> bool:
-    if value is None:
-        return default
-    if isinstance(value, bool):
-        return value
-    text = str(value).strip().lower()
-    if text in {"1", "true", "yes", "on"}:
-        return True
-    if text in {"0", "false", "no", "off"}:
-        return False
-    raise ValueError("config 'tls-verify' must be a boolean")
+def _ensure_config_file() -> None:
+    if CONFIG_FILE.exists():
+        return
+    if not CONFIG_EXAMPLE_FILE.exists():
+        return
+    shutil.copyfile(CONFIG_EXAMPLE_FILE, CONFIG_FILE)
 
 
 def _load_settings() -> AppSettings:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    raw_config: dict[str, object] = {}
+    _ensure_config_file()
 
+    raw_config: dict[str, object] = {}
+    if CONFIG_EXAMPLE_FILE.exists():
+        raw_config.update(_load_json_object(CONFIG_EXAMPLE_FILE, name="config.example.json"))
     if CONFIG_FILE.exists():
-        text = CONFIG_FILE.read_text(encoding="utf-8").strip()
-        if text:
-            loaded = json.loads(text)
-            if not isinstance(loaded, dict):
-                raise ValueError("config.json must be a JSON object")
-            raw_config = loaded
+        raw_config.update(_load_json_object(CONFIG_FILE, name="config.json"))
 
     auth_key = str(os.getenv("CHATGPT2API_AUTH_KEY") or raw_config.get("auth-key") or "").strip()
     if not auth_key:
-        raise ValueError(
-            "config.json must contain a non-empty 'auth-key' or CHATGPT2API_AUTH_KEY must be set"
-        )
-
-    tls_verify = _parse_bool(
-        os.getenv("CHATGPT2API_TLS_VERIFY", raw_config.get("tls-verify")),
-        default=True,
-    )
+        raise ValueError("config.example.json must contain a non-empty 'auth-key'")
+    refresh_account_interval_minute = cast(int, raw_config.get("refresh_account_interval_minute", 5))
 
     return AppSettings(
         auth_key=auth_key,
         host="0.0.0.0",
         port=8000,
         accounts_file=DATA_DIR / "accounts.json",
-        tls_verify=tls_verify,
+        refresh_account_interval_minute=refresh_account_interval_minute,
     )
 
 
