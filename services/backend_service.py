@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import HTTPException
 
 from services.account_service import AccountService
+from services.cpa_service import cpa_service
 from services.image_service import ImageGenerationError, generate_image_result, is_token_invalid_error
 
 
@@ -42,6 +43,45 @@ class BackendService:
             raise HTTPException(status_code=503, detail={"error": str(exc)}) from exc
 
     def generate_with_pool(self, prompt: str, model: str, n: int):
+        if cpa_service.enabled:
+            return self._generate_with_cpa(prompt, model, n)
+        return self._generate_with_local_pool(prompt, model, n)
+
+    def _generate_with_cpa(self, prompt: str, model: str, n: int):
+        """Fetch token from CLIProxyAPI on-the-fly and generate images."""
+        attempted_tokens: set[str] = set()
+        max_attempts = 5
+
+        for attempt in range(max_attempts):
+            request_token = cpa_service.get_token(excluded_tokens=attempted_tokens)
+            if not request_token:
+                if attempt == 0:
+                    raise HTTPException(
+                        status_code=503,
+                        detail={"error": "No access_token available from CPA"},
+                    )
+                break
+            attempted_tokens.add(request_token)
+            print(f"[image-generate] cpa token={request_token[:12]}... model={model} n={n}")
+
+            try:
+                result = generate_image_result(request_token, prompt, model, n)
+                print(f"[image-generate] cpa success token={request_token[:12]}...")
+                return result
+            except ImageGenerationError as exc:
+                print(f"[image-generate] cpa fail token={request_token[:12]}... error={exc}")
+                if is_token_invalid_error(str(exc)):
+                    cpa_service.invalidate_cache()
+                    continue
+                raise
+
+        raise HTTPException(
+            status_code=503,
+            detail={"error": "All CPA tokens exhausted or failed"},
+        )
+
+    def _generate_with_local_pool(self, prompt: str, model: str, n: int):
+        """Original local account pool logic."""
         attempted_tokens: set[str] = set()
 
         while True:
