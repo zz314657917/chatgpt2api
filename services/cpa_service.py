@@ -1,135 +1,62 @@
-"""CLIProxyAPI integration — fetch access_tokens from multiple remote CPA instances."""
+"""CLIProxyAPI integration for browsing remote auth files and importing selected tokens."""
 
 from __future__ import annotations
 
 import json
-import time
+import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
-from typing import Any
 
 from curl_cffi.requests import Session
 
-from services.config import config, DATA_DIR
+from services.account_service import account_service
+from services.config import DATA_DIR
 
 
 CPA_CONFIG_FILE = DATA_DIR / "cpa_config.json"
 
 
-# ── Pool entry type ──────────────────────────────────────────────────
-
-def _new_pool_id() -> str:
+def _new_id() -> str:
     return uuid.uuid4().hex[:12]
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _normalize_import_job(raw: object, *, fail_unfinished: bool) -> dict | None:
+    if not isinstance(raw, dict):
+        return None
+    status = str(raw.get("status") or "failed").strip() or "failed"
+    if fail_unfinished and status in {"pending", "running"}:
+        status = "failed"
+    return {
+        "job_id": str(raw.get("job_id") or uuid.uuid4().hex).strip(),
+        "status": status,
+        "created_at": str(raw.get("created_at") or _now_iso()).strip() or _now_iso(),
+        "updated_at": str(raw.get("updated_at") or raw.get("created_at") or _now_iso()).strip() or _now_iso(),
+        "total": int(raw.get("total") or 0),
+        "completed": int(raw.get("completed") or 0),
+        "added": int(raw.get("added") or 0),
+        "skipped": int(raw.get("skipped") or 0),
+        "refreshed": int(raw.get("refreshed") or 0),
+        "failed": int(raw.get("failed") or 0),
+        "errors": raw.get("errors") if isinstance(raw.get("errors"), list) else [],
+    }
 
 
 def _normalize_pool(raw: dict) -> dict:
     return {
-        "id": str(raw.get("id") or _new_pool_id()).strip(),
+        "id": str(raw.get("id") or _new_id()).strip(),
         "name": str(raw.get("name") or "").strip(),
         "base_url": str(raw.get("base_url") or "").strip(),
         "secret_key": str(raw.get("secret_key") or "").strip(),
-        "enabled": bool(raw.get("enabled", True)),
+        "import_job": _normalize_import_job(raw.get("import_job"), fail_unfinished=True),
     }
 
-
-def _is_pool_usable(pool: dict) -> bool:
-    return bool(pool.get("enabled") and pool.get("base_url") and pool.get("secret_key"))
-
-
-# ── Persisted multi-pool config ─────────────────────────────────────
-
-class CPAConfig:
-    """Manages a list of CPA pool entries persisted to ``cpa_config.json``."""
-
-    def __init__(self, store_file: Path):
-        self._store_file = store_file
-        self._lock = Lock()
-        self._pools: list[dict] = self._load()
-
-    # -- persistence ---------------------------------------------------
-
-    def _load(self) -> list[dict]:
-        if not self._store_file.exists():
-            return []
-        try:
-            raw = json.loads(self._store_file.read_text(encoding="utf-8"))
-            # Migrate from old single-pool format
-            if isinstance(raw, dict) and "base_url" in raw:
-                pool = _normalize_pool(raw)
-                if pool["base_url"]:
-                    return [pool]
-                return []
-            if isinstance(raw, list):
-                return [_normalize_pool(item) for item in raw if isinstance(item, dict)]
-        except Exception:
-            pass
-        return []
-
-    def _save(self) -> None:
-        self._store_file.parent.mkdir(parents=True, exist_ok=True)
-        self._store_file.write_text(
-            json.dumps(self._pools, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-        )
-
-    # -- public API ----------------------------------------------------
-
-    def list_pools(self) -> list[dict]:
-        with self._lock:
-            return [dict(p) for p in self._pools]
-
-    def get_pool(self, pool_id: str) -> dict | None:
-        with self._lock:
-            for p in self._pools:
-                if p["id"] == pool_id:
-                    return dict(p)
-        return None
-
-    def add_pool(self, name: str, base_url: str, secret_key: str, enabled: bool = True) -> dict:
-        pool = _normalize_pool({
-            "id": _new_pool_id(),
-            "name": name,
-            "base_url": base_url,
-            "secret_key": secret_key,
-            "enabled": enabled,
-        })
-        with self._lock:
-            self._pools.append(pool)
-            self._save()
-        return dict(pool)
-
-    def update_pool(self, pool_id: str, updates: dict) -> dict | None:
-        with self._lock:
-            for i, p in enumerate(self._pools):
-                if p["id"] == pool_id:
-                    merged = {**p, **{k: v for k, v in updates.items() if v is not None}, "id": pool_id}
-                    self._pools[i] = _normalize_pool(merged)
-                    self._save()
-                    return dict(self._pools[i])
-        return None
-
-    def delete_pool(self, pool_id: str) -> bool:
-        with self._lock:
-            before = len(self._pools)
-            self._pools = [p for p in self._pools if p["id"] != pool_id]
-            if len(self._pools) < before:
-                self._save()
-                return True
-        return False
-
-    def usable_pools(self) -> list[dict]:
-        with self._lock:
-            return [dict(p) for p in self._pools if _is_pool_usable(p)]
-
-    @property
-    def has_usable(self) -> bool:
-        with self._lock:
-            return any(_is_pool_usable(p) for p in self._pools)
-
-
-# ── CPA fetcher (per-pool) ──────────────────────────────────────────
 
 def _management_headers(secret_key: str) -> dict[str, str]:
     return {
@@ -138,204 +65,250 @@ def _management_headers(secret_key: str) -> dict[str, str]:
     }
 
 
-def _extract_access_token(auth_file: dict[str, Any]) -> str | None:
-    for key in ("access_token", "token", "accessToken", "access-token"):
-        value = str(auth_file.get(key) or "").strip()
-        if value:
-            return value
-    for wrapper_key in ("data", "content", "credential", "auth", "credentials"):
-        nested = auth_file.get(wrapper_key)
-        if isinstance(nested, dict):
-            for key in ("access_token", "token", "accessToken", "access-token"):
-                value = str(nested.get(key) or "").strip()
-                if value:
-                    return value
-    for value in auth_file.values():
-        if isinstance(value, str) and value.strip().startswith("eyJ") and len(value.strip()) > 100:
-            return value.strip()
-    return None
+class CPAConfig:
+    def __init__(self, store_file: Path):
+        self._store_file = store_file
+        self._lock = Lock()
+        self._pools: list[dict] = self._load()
 
+    def _load(self) -> list[dict]:
+        if not self._store_file.exists():
+            return []
+        try:
+            raw = json.loads(self._store_file.read_text(encoding="utf-8"))
+            if isinstance(raw, dict) and "base_url" in raw:
+                pool = _normalize_pool(raw)
+                return [pool] if pool["base_url"] else []
+            if isinstance(raw, list):
+                return [_normalize_pool(item) for item in raw if isinstance(item, dict)]
+        except Exception:
+            pass
+        return []
 
-def _resolve_file_list(payload: Any) -> list[dict]:
-    if isinstance(payload, list):
-        return [item for item in payload if isinstance(item, dict)]
-    if isinstance(payload, dict):
-        for key in ("files", "auth_files", "auth-files", "data", "items"):
-            candidate = payload.get(key)
-            if isinstance(candidate, list):
-                return [item for item in candidate if isinstance(item, dict)]
-        return [payload]
-    return []
+    def _save(self) -> None:
+        self._store_file.parent.mkdir(parents=True, exist_ok=True)
+        self._store_file.write_text(json.dumps(self._pools, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
+    def list_pools(self) -> list[dict]:
+        with self._lock:
+            return [dict(pool) for pool in self._pools]
 
-def _fetch_file_detail(session: Session, base_url: str, secret_key: str, file_name: str) -> dict | None:
-    url = f"{base_url.rstrip('/')}/v0/management/auth-files/download"
-    try:
-        response = session.get(url, headers=_management_headers(secret_key), params={"name": file_name}, timeout=15)
-        if not response.ok:
-            return None
-        data = response.json()
-        return data if isinstance(data, dict) else None
-    except Exception:
+    def get_pool(self, pool_id: str) -> dict | None:
+        with self._lock:
+            for pool in self._pools:
+                if pool["id"] == pool_id:
+                    return dict(pool)
+        return None
+
+    def add_pool(self, name: str, base_url: str, secret_key: str) -> dict:
+        pool = _normalize_pool({"id": _new_id(), "name": name, "base_url": base_url, "secret_key": secret_key})
+        with self._lock:
+            self._pools.append(pool)
+            self._save()
+        return dict(pool)
+
+    def update_pool(self, pool_id: str, updates: dict) -> dict | None:
+        with self._lock:
+            for index, pool in enumerate(self._pools):
+                if pool["id"] != pool_id:
+                    continue
+                merged = {**pool, **{key: value for key, value in updates.items() if value is not None}, "id": pool_id}
+                self._pools[index] = _normalize_pool(merged)
+                self._save()
+                return dict(self._pools[index])
+        return None
+
+    def delete_pool(self, pool_id: str) -> bool:
+        with self._lock:
+            before = len(self._pools)
+            self._pools = [pool for pool in self._pools if pool["id"] != pool_id]
+            if len(self._pools) < before:
+                self._save()
+                return True
+        return False
+
+    def set_import_job(self, pool_id: str, import_job: dict | None) -> dict | None:
+        with self._lock:
+            for index, pool in enumerate(self._pools):
+                if pool["id"] != pool_id:
+                    continue
+                next_pool = dict(pool)
+                next_pool["import_job"] = _normalize_import_job(import_job, fail_unfinished=False)
+                self._pools[index] = next_pool
+                self._save()
+                return dict(next_pool)
+        return None
+
+    def get_import_job(self, pool_id: str) -> dict | None:
+        with self._lock:
+            for pool in self._pools:
+                if pool["id"] == pool_id:
+                    job = pool.get("import_job")
+                    return dict(job) if isinstance(job, dict) else None
         return None
 
 
-def fetch_tokens_for_pool(pool: dict) -> list[str]:
-    """Fetch all access_tokens from a single CPA pool."""
-    base_url = pool.get("base_url") or ""
-    secret_key = pool.get("secret_key") or ""
+def list_remote_files(pool: dict) -> list[dict]:
+    base_url = str(pool.get("base_url") or "").strip()
+    secret_key = str(pool.get("secret_key") or "").strip()
     if not base_url or not secret_key:
         return []
 
-    pool_name = pool.get("name") or pool.get("id") or "?"
     url = f"{base_url.rstrip('/')}/v0/management/auth-files"
-    print(f"[cpa-service] [{pool_name}] fetching from {url}")
-
-    session = Session(verify=config.tls_verify)
+    session = Session(verify=True)
     try:
         response = session.get(url, headers=_management_headers(secret_key), timeout=30)
         if not response.ok:
-            print(f"[cpa-service] [{pool_name}] HTTP {response.status_code}")
-            return []
+            raise RuntimeError(f"remote list failed: HTTP {response.status_code}")
+        payload = response.json()
+    finally:
+        session.close()
+
+    files = payload.get("files") if isinstance(payload, dict) else None
+    if not isinstance(files, list):
+        raise RuntimeError("remote list payload is invalid")
+
+    items: list[dict] = []
+    for item in files:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        email = str(item.get("email") or item.get("account") or "").strip()
+        if not name:
+            continue
+        items.append({"name": name, "email": email})
+    return items
+
+
+def fetch_remote_access_token(pool: dict, file_name: str) -> tuple[str | None, str | None]:
+    base_url = str(pool.get("base_url") or "").strip()
+    secret_key = str(pool.get("secret_key") or "").strip()
+    file_name = str(file_name or "").strip()
+    if not base_url or not secret_key or not file_name:
+        return None, "invalid request"
+
+    url = f"{base_url.rstrip('/')}/v0/management/auth-files/download"
+    session = Session(verify=True)
+    try:
+        response = session.get(url, headers=_management_headers(secret_key), params={"name": file_name}, timeout=30)
+        if not response.ok:
+            return None, f"HTTP {response.status_code}"
         payload = response.json()
     except Exception as exc:
-        print(f"[cpa-service] [{pool_name}] error: {exc}")
-        return []
+        return None, str(exc)
+    finally:
+        session.close()
 
-    file_entries = _resolve_file_list(payload)
-    active_entries = [
-        e for e in file_entries
-        if not e.get("disabled") and not e.get("unavailable")
-        and e.get("status") in (None, "", "active")
-        and e.get("type") in (None, "", "codex")
-    ]
-    print(f"[cpa-service] [{pool_name}] {len(active_entries)} active codex entries")
+    if not isinstance(payload, dict):
+        return None, "invalid payload"
 
-    tokens: list[str] = []
-    seen: set[str] = set()
-    need_download: list[dict] = []
-
-    for entry in active_entries:
-        token = _extract_access_token(entry)
-        if token and token not in seen:
-            seen.add(token)
-            tokens.append(token)
-        else:
-            need_download.append(entry)
-
-    if need_download:
-        max_workers = min(10, len(need_download))
-        try:
-            with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                future_map = {}
-                for entry in need_download:
-                    file_name = str(entry.get("name") or entry.get("id") or "").strip()
-                    if not file_name:
-                        continue
-                    future = executor.submit(_fetch_file_detail, session, base_url, secret_key, file_name)
-                    future_map[future] = file_name
-
-                for future in as_completed(future_map):
-                    detail = future.result()
-                    if detail is None:
-                        continue
-                    content = detail.get("content")
-                    if isinstance(content, str):
-                        try:
-                            parsed = json.loads(content)
-                            if isinstance(parsed, dict):
-                                detail = {**detail, **parsed}
-                        except Exception:
-                            pass
-                    token = _extract_access_token(detail)
-                    if token and token not in seen:
-                        seen.add(token)
-                        tokens.append(token)
-        except Exception as exc:
-            print(f"[cpa-service] [{pool_name}] concurrent fetch error: {exc}")
-
-    session.close()
-    print(f"[cpa-service] [{pool_name}] extracted {len(tokens)} token(s)")
-    return tokens
+    access_token = str(payload.get("access_token") or "").strip()
+    if not access_token:
+        return None, "missing access_token"
+    return access_token, None
 
 
-def fetch_pool_status(pool: dict) -> dict:
-    """Test a single pool and return status info."""
-    tokens = fetch_tokens_for_pool(pool)
-    return {"pool_id": pool["id"], "tokens": len(tokens)}
-
-
-# ── Aggregated CPA service ──────────────────────────────────────────
-
-class CPAService:
-    """Aggregates tokens from all usable CPA pools with caching."""
-
+class CPAImportService:
     def __init__(self, cpa_config: CPAConfig):
         self._config = cpa_config
-        self._lock = Lock()
-        self._tokens: list[str] = []
-        self._index = 0
-        self._last_refresh: float = 0
-        self._cache_ttl = 300
 
-    @property
-    def enabled(self) -> bool:
-        return self._config.has_usable
+    def start_import(self, pool: dict, selected_files: list[str]) -> dict:
+        names = [str(name or "").strip() for name in selected_files if str(name or "").strip()]
+        if not names:
+            raise ValueError("selected files is required")
 
-    def fetch_all_tokens(self) -> list[str]:
-        """Fetch tokens from all usable pools concurrently."""
-        pools = self._config.usable_pools()
-        if not pools:
-            return []
+        pool_id = str(pool.get("id") or "").strip()
+        job = {
+            "job_id": uuid.uuid4().hex,
+            "status": "pending",
+            "created_at": _now_iso(),
+            "updated_at": _now_iso(),
+            "total": len(names),
+            "completed": 0,
+            "added": 0,
+            "skipped": 0,
+            "refreshed": 0,
+            "failed": 0,
+            "errors": [],
+        }
+        saved_pool = self._config.set_import_job(pool_id, job)
+        if saved_pool is None:
+            raise ValueError("pool not found")
 
-        all_tokens: list[str] = []
-        seen: set[str] = set()
+        thread = threading.Thread(
+            target=self._run_import,
+            args=(pool_id, pool, names),
+            name=f"cpa-import-{pool_id}",
+            daemon=True,
+        )
+        thread.start()
+        return dict(saved_pool.get("import_job") or job)
 
-        max_workers = min(5, len(pools))
+    def _update_job(self, pool_id: str, **updates) -> dict | None:
+        current = self._config.get_import_job(pool_id)
+        if current is None:
+            return None
+        next_job = {**current, **updates, "updated_at": _now_iso()}
+        pool = self._config.set_import_job(pool_id, next_job)
+        if pool is None:
+            return None
+        job = pool.get("import_job")
+        return dict(job) if isinstance(job, dict) else None
+
+    def _append_error(self, pool_id: str, file_name: str, message: str) -> None:
+        current = self._config.get_import_job(pool_id)
+        if current is None:
+            return
+        errors = list(current.get("errors") or [])
+        errors.append({"name": file_name, "error": message})
+        self._update_job(pool_id, errors=errors, failed=len(errors))
+
+    def _run_import(self, pool_id: str, pool: dict, names: list[str]) -> None:
+        self._update_job(pool_id, status="running")
+
+        tokens: list[str] = []
+        max_workers = min(16, max(1, len(names)))
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            future_map = {executor.submit(fetch_tokens_for_pool, pool): pool for pool in pools}
+            future_map = {executor.submit(fetch_remote_access_token, pool, name): name for name in names}
             for future in as_completed(future_map):
+                file_name = future_map[future]
                 try:
-                    tokens = future.result()
-                    for token in tokens:
-                        if token not in seen:
-                            seen.add(token)
-                            all_tokens.append(token)
+                    token, error = future.result()
                 except Exception as exc:
-                    pool = future_map[future]
-                    print(f"[cpa-service] pool {pool.get('name', pool.get('id'))} error: {exc}")
+                    token, error = None, str(exc)
 
-        print(f"[cpa-service] total {len(all_tokens)} token(s) from {len(pools)} pool(s)")
-        return all_tokens
+                if token:
+                    tokens.append(token)
+                else:
+                    self._append_error(pool_id, file_name, error or "unknown error")
 
-    def get_token(self, excluded_tokens: set[str] | None = None) -> str | None:
-        with self._lock:
-            now = time.time()
-            if not self._tokens or (now - self._last_refresh) > self._cache_ttl:
-                self._tokens = self.fetch_all_tokens()
-                self._last_refresh = now
-                if self._tokens:
-                    self._index = 0
+                current = self._config.get_import_job(pool_id) or {}
+                failed = len(current.get("errors") or [])
+                self._update_job(pool_id, completed=int(current.get("completed") or 0) + 1, failed=failed)
 
-            excluded = {t for t in (excluded_tokens or set()) if t}
-            available = [t for t in self._tokens if t not in excluded]
-            if not available:
-                return None
+        if not tokens:
+            current = self._config.get_import_job(pool_id) or {}
+            self._update_job(
+                pool_id,
+                status="failed",
+                completed=int(current.get("total") or 0),
+                failed=len(current.get("errors") or []),
+            )
+            return
 
-            token = available[self._index % len(available)]
-            self._index += 1
-            return token
+        add_result = account_service.add_accounts(tokens)
+        refresh_result = account_service.refresh_accounts(tokens)
+        current = self._config.get_import_job(pool_id) or {}
+        self._update_job(
+            pool_id,
+            status="completed",
+            completed=len(names),
+            added=int(add_result.get("added") or 0),
+            skipped=int(add_result.get("skipped") or 0),
+            refreshed=int(refresh_result.get("refreshed") or 0),
+            failed=len(current.get("errors") or []),
+        )
 
-    def invalidate_cache(self) -> None:
-        with self._lock:
-            self._last_refresh = 0
-
-
-# ── Singletons ──────────────────────────────────────────────────────
 
 cpa_config = CPAConfig(CPA_CONFIG_FILE)
-cpa_service = CPAService(cpa_config)
-
-if cpa_config.has_usable:
-    pools = cpa_config.usable_pools()
-    print(f"[cpa-service] {len(pools)} usable pool(s) configured")
+cpa_import_service = CPAImportService(cpa_config)

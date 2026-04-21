@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from services.account_service import account_service
 from services.chatgpt_service import ChatGPTService
 from services.config import config
-from services.cpa_service import cpa_service, cpa_config, fetch_tokens_for_pool, fetch_pool_status
+from services.cpa_service import cpa_config, cpa_import_service, list_remote_files
 
 from services.image_service import ImageGenerationError
 from services.version import get_app_version
@@ -69,24 +69,21 @@ class ResponseCreateRequest(BaseModel):
     tool_choice: object | None = None
     stream: bool | None = None
 
-    class CPAConfigUpdateRequest(BaseModel):
-        base_url: str | None = None
-
-    secret_key: str | None = None
-
 
 class CPAPoolCreateRequest(BaseModel):
     name: str = ""
     base_url: str = ""
     secret_key: str = ""
-    enabled: bool = True
 
 
 class CPAPoolUpdateRequest(BaseModel):
     name: str | None = None
     base_url: str | None = None
     secret_key: str | None = None
-    enabled: bool | None = None
+
+
+class CPAImportRequest(BaseModel):
+    names: list[str] = Field(default_factory=list)
 
 
 def build_model_item(model_id: str) -> dict[str, object]:
@@ -96,6 +93,20 @@ def build_model_item(model_id: str) -> dict[str, object]:
         "created": 0,
         "owned_by": "chatgpt2api",
     }
+
+
+def sanitize_cpa_pool(pool: dict | None) -> dict | None:
+    if not isinstance(pool, dict):
+        return None
+    return {
+        key: value
+        for key, value in pool.items()
+        if key != "secret_key"
+    }
+
+
+def sanitize_cpa_pools(pools: list[dict]) -> list[dict]:
+    return [sanitized for pool in pools if (sanitized := sanitize_cpa_pool(pool)) is not None]
 
 
 def extract_bearer_token(authorization: str | None) -> str:
@@ -283,7 +294,7 @@ def create_app() -> FastAPI:
     @router.get("/api/cpa/pools")
     async def list_cpa_pools(authorization: str | None = Header(default=None)):
         require_auth_key(authorization)
-        return {"pools": cpa_config.list_pools()}
+        return {"pools": sanitize_cpa_pools(cpa_config.list_pools())}
 
     @router.post("/api/cpa/pools")
     async def create_cpa_pool(
@@ -299,10 +310,8 @@ def create_app() -> FastAPI:
             name=body.name,
             base_url=body.base_url,
             secret_key=body.secret_key,
-            enabled=body.enabled,
         )
-        cpa_service.invalidate_cache()
-        return {"pool": pool, "pools": cpa_config.list_pools()}
+        return {"pool": sanitize_cpa_pool(pool), "pools": sanitize_cpa_pools(cpa_config.list_pools())}
 
     @router.post("/api/cpa/pools/{pool_id}")
     async def update_cpa_pool(
@@ -314,8 +323,7 @@ def create_app() -> FastAPI:
         pool = cpa_config.update_pool(pool_id, body.model_dump(exclude_none=True))
         if pool is None:
             raise HTTPException(status_code=404, detail={"error": "pool not found"})
-        cpa_service.invalidate_cache()
-        return {"pool": pool, "pools": cpa_config.list_pools()}
+        return {"pool": sanitize_cpa_pool(pool), "pools": sanitize_cpa_pools(cpa_config.list_pools())}
 
     @router.delete("/api/cpa/pools/{pool_id}")
     async def delete_cpa_pool(
@@ -325,11 +333,10 @@ def create_app() -> FastAPI:
         require_auth_key(authorization)
         if not cpa_config.delete_pool(pool_id):
             raise HTTPException(status_code=404, detail={"error": "pool not found"})
-        cpa_service.invalidate_cache()
-        return {"pools": cpa_config.list_pools()}
+        return {"pools": sanitize_cpa_pools(cpa_config.list_pools())}
 
-    @router.get("/api/cpa/pools/{pool_id}/status")
-    async def cpa_pool_status(
+    @router.get("/api/cpa/pools/{pool_id}/files")
+    async def cpa_pool_files(
             pool_id: str,
             authorization: str | None = Header(default=None),
     ):
@@ -337,38 +344,32 @@ def create_app() -> FastAPI:
         pool = cpa_config.get_pool(pool_id)
         if pool is None:
             raise HTTPException(status_code=404, detail={"error": "pool not found"})
-        result = await run_in_threadpool(fetch_pool_status, pool)
-        return result
+        files = await run_in_threadpool(list_remote_files, pool)
+        return {"pool_id": pool_id, "files": files}
 
-    @router.post("/api/cpa/pools/{pool_id}/sync")
-    async def cpa_pool_sync(
+    @router.post("/api/cpa/pools/{pool_id}/import")
+    async def cpa_pool_import(
             pool_id: str,
+            body: CPAImportRequest,
             authorization: str | None = Header(default=None),
     ):
-        """Pull tokens from a specific CPA pool and import into local account pool."""
         require_auth_key(authorization)
         pool = cpa_config.get_pool(pool_id)
         if pool is None:
             raise HTTPException(status_code=404, detail={"error": "pool not found"})
-        tokens = await run_in_threadpool(fetch_tokens_for_pool, pool)
-        if not tokens:
-            raise HTTPException(status_code=502, detail={"error": "No tokens returned from CPA"})
-        result = account_service.add_accounts(tokens)
-        refresh_result = account_service.refresh_accounts(tokens)
-        return {
-            **result,
-            "refreshed": refresh_result.get("refreshed", 0),
-            "errors": refresh_result.get("errors", []),
-            "items": refresh_result.get("items", result.get("items", [])),
-        }
+        try:
+            job = cpa_import_service.start_import(pool, body.names)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
+        return {"import_job": job}
 
-    @router.get("/api/cpa/status")
-    async def cpa_global_status(authorization: str | None = Header(default=None)):
+    @router.get("/api/cpa/pools/{pool_id}/import")
+    async def cpa_pool_import_progress(pool_id: str, authorization: str | None = Header(default=None)):
         require_auth_key(authorization)
-        if not cpa_config.has_usable:
-            return {"enabled": False, "pools": 0, "tokens": 0}
-        tokens = await run_in_threadpool(cpa_service.fetch_all_tokens)
-        return {"enabled": True, "pools": len(cpa_config.usable_pools()), "tokens": len(tokens)}
+        pool = cpa_config.get_pool(pool_id)
+        if pool is None:
+            raise HTTPException(status_code=404, detail={"error": "pool not found"})
+        return {"import_job": pool.get("import_job")}
 
     app.include_router(router)
 
