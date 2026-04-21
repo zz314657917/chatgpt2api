@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from threading import Event, Thread
 
-from fastapi import APIRouter, FastAPI, Header, HTTPException
+from fastapi import APIRouter, FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -279,6 +279,35 @@ def create_app() -> FastAPI:
         except ImageGenerationError as exc:
             raise HTTPException(status_code=502, detail={"error": str(exc)}) from exc
 
+    @router.post("/v1/images/edits")
+    async def edit_images(
+        authorization: str | None = Header(default=None),
+        image: UploadFile | None = File(default=None),
+        prompt: str = Form(...),
+        model: str = Form(default="gpt-image-1"),
+        n: int = Form(default=1),
+    ):
+        require_auth_key(authorization)
+        if n < 1 or n > 4:
+            raise HTTPException(status_code=400, detail={"error": "n must be between 1 and 4"})
+
+        if image is None:
+            raise HTTPException(status_code=400, detail={"error": "image file is required"})
+
+        image_data = await image.read()
+        if not image_data:
+            raise HTTPException(status_code=400, detail={"error": "image file is empty"})
+
+        file_name = image.filename or "image.png"
+        mime_type = image.content_type or "image/png"
+
+        try:
+            return await run_in_threadpool(
+                chatgpt_service.edit_with_pool, prompt, image_data, file_name, mime_type, model, n
+            )
+        except ImageGenerationError as exc:
+            raise HTTPException(status_code=502, detail={"error": str(exc)}) from exc
+
     @router.post("/v1/chat/completions")
     async def create_chat_completion(body: ChatCompletionRequest, authorization: str | None = Header(default=None)):
         require_auth_key(authorization)
@@ -288,6 +317,8 @@ def create_app() -> FastAPI:
     async def create_response(body: ResponseCreateRequest, authorization: str | None = Header(default=None)):
         require_auth_key(authorization)
         return await run_in_threadpool(chatgpt_service.create_response, body.model_dump(mode="python"))
+
+
 
     # ── CPA multi-pool endpoints ────────────────────────────────────
 
