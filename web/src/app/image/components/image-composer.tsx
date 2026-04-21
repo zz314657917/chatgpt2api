@@ -86,7 +86,7 @@ export function ImageComposer({
               width={56}
               height={56}
               unoptimized
-              className="size-14 rounded-xl object-cover"
+              className="rounded-xl object-cover"
             />
             <div className="min-w-0 flex-1">
               <div className="truncate text-sm font-medium text-stone-800">{referenceImageName}</div>

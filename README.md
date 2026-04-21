@@ -14,12 +14,18 @@ ChatGPT 图片生成代理与账号池管理面板，提供账号维护、额度
 - 轮询可用账号进行图片生成
 - 失效 Token 自动剔除
 - 提供 Web 后台管理账号和生成图片 
+- 支持文生图、编辑图
 
-> 目前仅实现了生图效果，编辑图片以及gpt-image-2模型尚未实现，需要后续更新。
+> gpt-image-2灰度中，不保证完全是gpt-image-2
 
-生图界面：
+文生图界面：
 
 ![image](assets/image.png)
+
+编辑图：
+
+![image](assets/image_edit.png)
+
 
 Chery Studio 中使用：
 

@@ -123,6 +123,7 @@ export function ImageLightbox({
               height={1536}
               unoptimized
               className="max-h-[90vh] max-w-[90vw] rounded-lg object-contain"
+              style={{ width: "auto", height: "auto" }}
               onClick={(e) => e.stopPropagation()}
               draggable={false}
             />
