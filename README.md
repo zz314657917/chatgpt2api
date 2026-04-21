@@ -64,6 +64,8 @@ POST /v1/responses
 
 ## 部署
 
+已发布镜像支持 `linux/amd64` 与 `linux/arm64`，在 x86 服务器和 Apple Silicon / ARM Linux 设备上都会自动拉取匹配架构的版本。
+
 ```bash
 git clone git@github.com:basketikun/chatgpt2api.git
 # 首次启动会自动生成 config.json，也可以手动复制后修改
