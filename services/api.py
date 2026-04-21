@@ -281,11 +281,11 @@ def create_app() -> FastAPI:
 
     @router.post("/v1/images/edits")
     async def edit_images(
-        authorization: str | None = Header(default=None),
-        image: UploadFile | None = File(default=None),
-        prompt: str = Form(...),
-        model: str = Form(default="gpt-image-1"),
-        n: int = Form(default=1),
+            authorization: str | None = Header(default=None),
+            image: UploadFile | None = File(default=None),
+            prompt: str = Form(...),
+            model: str = Form(default="gpt-image-1"),
+            n: int = Form(default=1),
     ):
         require_auth_key(authorization)
         if n < 1 or n > 4:
@@ -317,8 +317,6 @@ def create_app() -> FastAPI:
     async def create_response(body: ResponseCreateRequest, authorization: str | None = Header(default=None)):
         require_auth_key(authorization)
         return await run_in_threadpool(chatgpt_service.create_response, body.model_dump(mode="python"))
-
-
 
     # ── CPA multi-pool endpoints ────────────────────────────────────
 
