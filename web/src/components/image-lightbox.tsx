@@ -74,6 +74,10 @@ export function ImageLightbox({
           className="fixed inset-0 z-50 flex items-center justify-center outline-none"
           onPointerDownOutside={(e) => e.preventDefault()}
         >
+          <DialogPrimitive.Title className="sr-only">
+            图片预览
+          </DialogPrimitive.Title>
+
           {/* toolbar */}
           <div className="absolute top-4 right-4 z-10 flex items-center gap-2">
             {images.length > 1 && (
