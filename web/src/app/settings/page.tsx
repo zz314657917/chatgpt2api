@@ -5,6 +5,7 @@ import { LoaderCircle } from "lucide-react";
 
 import { useAuthGuard } from "@/lib/use-auth-guard";
 
+import { AnnouncementsCard } from "./components/announcements-card";
 import { ConfigCard } from "./components/config-card";
 import { CPAPoolDialog } from "./components/cpa-pool-dialog";
 import { CPAPoolsCard } from "./components/cpa-pools-card";
@@ -53,6 +54,7 @@ function SettingsPageContent() {
       <SettingsHeader />
       <section className="space-y-6">
         <ConfigCard />
+        <AnnouncementsCard />
         <UserKeysCard />
         <CPAPoolsCard />
         <Sub2APIConnections />

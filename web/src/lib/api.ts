@@ -4,6 +4,7 @@ export type AccountType = "Free" | "Plus" | "ProLite" | "Pro" | "Team";
 export type AccountStatus = "正常" | "限流" | "异常" | "禁用";
 export type ImageModel = "gpt-image-2" | "codex-gpt-image-2";
 export type AuthRole = "admin" | "user";
+export type AnnouncementTarget = "login" | "image";
 
 export type Account = {
   id: string;
@@ -110,6 +111,17 @@ export type LoginResponse = {
   name: string;
 };
 
+export type Announcement = {
+  id: string;
+  title: string;
+  content: string;
+  enabled?: boolean;
+  show_login: boolean;
+  show_image: boolean;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
 export type UserKey = {
   id: string;
   name: string;
@@ -166,6 +178,46 @@ export async function login(authKey: string) {
       Authorization: `Bearer ${normalizedAuthKey}`,
     },
     redirectOnUnauthorized: false,
+  });
+}
+
+export async function fetchVisibleAnnouncements(target: AnnouncementTarget) {
+  const params = new URLSearchParams({ target });
+  return httpRequest<{ items: Announcement[] }>(`/api/announcements?${params.toString()}`, {
+    redirectOnUnauthorized: false,
+  });
+}
+
+export async function fetchAdminAnnouncements() {
+  return httpRequest<{ items: Announcement[] }>("/api/admin/announcements");
+}
+
+export async function createAnnouncement(announcement: {
+  title: string;
+  content: string;
+  enabled: boolean;
+  show_login: boolean;
+  show_image: boolean;
+}) {
+  return httpRequest<{ item: Announcement; items: Announcement[] }>("/api/admin/announcements", {
+    method: "POST",
+    body: announcement,
+  });
+}
+
+export async function updateAnnouncement(
+  announcementId: string,
+  updates: Partial<Pick<Announcement, "title" | "content" | "enabled" | "show_login" | "show_image">>,
+) {
+  return httpRequest<{ item: Announcement; items: Announcement[] }>(`/api/admin/announcements/${announcementId}`, {
+    method: "POST",
+    body: updates,
+  });
+}
+
+export async function deleteAnnouncement(announcementId: string) {
+  return httpRequest<{ items: Announcement[] }>(`/api/admin/announcements/${announcementId}`, {
+    method: "DELETE",
   });
 }
 

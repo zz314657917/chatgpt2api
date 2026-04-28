@@ -1,3 +1,5 @@
+# syntax=docker/dockerfile:1.7
+
 ARG BUILDPLATFORM
 ARG TARGETPLATFORM
 ARG TARGETOS
@@ -12,7 +14,7 @@ ARG VERSION=0.0.0-dev
 ENV VITE_APP_VERSION=${VERSION}
 
 COPY web/package.json web/bun.lock ./
-RUN npm install
+RUN --mount=type=cache,target=/root/.npm npm install
 
 COPY web ./
 RUN npm run build
@@ -27,11 +29,13 @@ ARG VERSION=0.0.0-dev
 WORKDIR /src
 
 COPY go.mod go.sum ./
-RUN go mod download
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
 
 COPY cmd ./cmd
 COPY internal ./internal
-RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build -trimpath -ldflags="-s -w -X chatgpt2api/internal/version.Version=${VERSION}" -o /out/chatgpt2api ./cmd/chatgpt2api
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build -trimpath -ldflags="-s -w -X chatgpt2api/internal/version.Version=${VERSION}" -o /out/chatgpt2api ./cmd/chatgpt2api
 
 
 FROM --platform=$TARGETPLATFORM debian:bookworm-slim AS app

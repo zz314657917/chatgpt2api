@@ -30,6 +30,7 @@ type App struct {
 	engine     *protocol.Engine
 	images     *service.ImageService
 	tasks      *service.ImageTaskService
+	announce   *service.AnnouncementService
 	cpa        *service.CPAConfig
 	cpaImport  *service.CPAImportService
 	sub2       *service.Sub2APIConfig
@@ -54,7 +55,7 @@ func NewApp() (*App, error) {
 	accounts := service.NewAccountService(storageBackend, cfg, proxy, logs)
 	auth := service.NewAuthService(storageBackend)
 	engine := &protocol.Engine{Accounts: accounts, Config: cfg, Proxy: proxy, Logger: logger}
-	app := &App{config: cfg, auth: auth, accounts: accounts, logs: logs, logger: logger, proxy: proxy, engine: engine, images: service.NewImageService(cfg), cpa: service.NewCPAConfig(cfg.DataDir), sub2: service.NewSub2APIConfig(cfg.DataDir), cancel: cancel}
+	app := &App{config: cfg, auth: auth, accounts: accounts, logs: logs, logger: logger, proxy: proxy, engine: engine, images: service.NewImageService(cfg), announce: service.NewAnnouncementService(cfg.DataDir), cpa: service.NewCPAConfig(cfg.DataDir), sub2: service.NewSub2APIConfig(cfg.DataDir), cancel: cancel}
 	app.cpaImport = service.NewCPAImportService(app.cpa, accounts, proxy)
 	app.sub2Import = service.NewSub2APIService(app.sub2, accounts)
 	app.register = service.NewRegisterService(cfg.DataDir, accounts)
@@ -113,6 +114,10 @@ func (a *App) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		a.handleLogin(w, r)
 	case path == "/version" && r.Method == http.MethodGet:
 		util.WriteJSON(w, http.StatusOK, map[string]any{"version": version.Get()})
+	case path == "/api/announcements":
+		a.handlePublicAnnouncements(w, r)
+	case path == "/api/admin/announcements" || strings.HasPrefix(path, "/api/admin/announcements/"):
+		a.handleAdminAnnouncements(w, r)
 	case strings.HasPrefix(path, "/api/auth/users"):
 		a.handleUserKeys(w, r)
 	case path == "/api/accounts" || strings.HasPrefix(path, "/api/accounts/"):

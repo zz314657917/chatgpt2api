@@ -85,6 +85,74 @@ func (a *App) handleUserKeys(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (a *App) handlePublicAnnouncements(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	util.WriteJSON(w, http.StatusOK, map[string]any{"items": a.announce.ListVisible(strings.TrimSpace(r.URL.Query().Get("target")))})
+}
+
+func (a *App) handleAdminAnnouncements(w http.ResponseWriter, r *http.Request) {
+	if _, ok := a.requireAdmin(w, r); !ok {
+		return
+	}
+	base := "/api/admin/announcements"
+	if r.URL.Path == base {
+		switch r.Method {
+		case http.MethodGet:
+			util.WriteJSON(w, http.StatusOK, map[string]any{"items": a.announce.ListAll()})
+		case http.MethodPost:
+			body, err := readJSONMap(r)
+			if err != nil {
+				util.WriteError(w, http.StatusBadRequest, "invalid json body")
+				return
+			}
+			if util.Clean(body["content"]) == "" {
+				util.WriteError(w, http.StatusBadRequest, "content is required")
+				return
+			}
+			item := a.announce.Create(body)
+			util.WriteJSON(w, http.StatusOK, map[string]any{"item": item, "items": a.announce.ListAll()})
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+		return
+	}
+	parts := splitPath(r.URL.Path)
+	if len(parts) != 4 || parts[0] != "api" || parts[1] != "admin" || parts[2] != "announcements" {
+		http.NotFound(w, r)
+		return
+	}
+	id := parts[3]
+	switch r.Method {
+	case http.MethodPost:
+		body, err := readJSONMap(r)
+		if err != nil {
+			util.WriteError(w, http.StatusBadRequest, "invalid json body")
+			return
+		}
+		if value, exists := body["content"]; exists && util.Clean(value) == "" {
+			util.WriteError(w, http.StatusBadRequest, "content is required")
+			return
+		}
+		item := a.announce.Update(id, body)
+		if item == nil {
+			util.WriteError(w, http.StatusNotFound, "announcement not found")
+			return
+		}
+		util.WriteJSON(w, http.StatusOK, map[string]any{"item": item, "items": a.announce.ListAll()})
+	case http.MethodDelete:
+		if !a.announce.Delete(id) {
+			util.WriteError(w, http.StatusNotFound, "announcement not found")
+			return
+		}
+		util.WriteJSON(w, http.StatusOK, map[string]any{"items": a.announce.ListAll()})
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
 func (a *App) handleAccounts(w http.ResponseWriter, r *http.Request) {
 	if _, ok := a.requireAdmin(w, r); !ok {
 		return

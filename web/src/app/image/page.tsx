@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { ImageComposer } from "@/app/image/components/image-composer";
 import { ImageResults, type ImageLightboxItem } from "@/app/image/components/image-results";
 import { ImageSidebar } from "@/app/image/components/image-sidebar";
+import { AnnouncementNotifications } from "@/components/announcement-banner";
 import { ImageLightbox } from "@/components/image-lightbox";
 import {
   Dialog,
@@ -1088,6 +1089,8 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
         </Dialog>
 
         <div className="flex min-h-0 flex-col gap-2 sm:gap-4">
+          <AnnouncementNotifications target="image" className="px-1 sm:px-4" />
+
           <div className="flex items-center justify-between gap-2 px-1 lg:hidden">
             <Button
               variant="outline"

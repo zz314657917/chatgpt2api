@@ -22,17 +22,31 @@
 
 ## 快速开始
 
-当前后端运行时为 Go 单体服务，容器镜像启动 `/app/chatgpt2api` 二进制；前端仍在镜像构建阶段编译为静态资源并由 Go 服务托管。
+当前后端运行时为 Go 单体服务，容器镜像启动 `/app/chatgpt2api` 二进制；前端在发布镜像中已编译为静态资源并由 Go 服务托管。
 
-默认 `docker compose` 会从当前源码构建 Go 后端镜像，避免运行到未更新的远端镜像。Dockerfile 支持 `linux/amd64` 与 `linux/arm64` 构建。
+推送到 `main` 后，GitHub Actions 会自动发布 `ghcr.io/zyphrzero/chatgpt2api:latest`。服务器默认拉取这个镜像，不在生产机现场安装依赖和编译。
 
 ```bash
-git clone git@github.com:basketikun/chatgpt2api.git
+git clone git@github.com:ZyphrZero/chatgpt2api.git
 cp .env.example .env
-# 按需编辑 .env，至少设置 CHATGPT2API_AUTH_KEY
-# 可选：设置 CHATGPT2API_VERSION=1.0.0，用于注入前后端版本号
+# 编辑 .env，至少设置 CHATGPT2API_AUTH_KEY
 docker compose up -d
 ```
+
+升级：
+
+```bash
+git pull
+docker compose up -d
+```
+
+如需从当前源码自建镜像：
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+```
+
+如果服务器拉取 GHCR 镜像时提示 denied，请在 GitHub Packages 中把镜像设为 Public，或先执行 `docker login ghcr.io`。
 
 本地开发或自建二进制：
 

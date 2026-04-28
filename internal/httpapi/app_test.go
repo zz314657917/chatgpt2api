@@ -76,6 +76,93 @@ func TestAppAuthAndSPACompatibility(t *testing.T) {
 		t.Fatalf("/version body = %#v", versionBody)
 	}
 
+	req = httptest.NewRequest(http.MethodGet, "/api/announcements?target=login", nil)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("/api/announcements status = %d body = %s", res.Code, res.Body.String())
+	}
+	var announcementsBody map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &announcementsBody); err != nil {
+		t.Fatalf("announcements json: %v", err)
+	}
+	if items := logItems(announcementsBody); len(items) != 0 {
+		t.Fatalf("unexpected initial announcements = %#v", announcementsBody)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/admin/announcements", strings.NewReader(`{"title":"通知 A","content":"今晚维护","show_login":true,"show_image":false}`))
+	req.Header.Set("Authorization", "Bearer admin-secret")
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("create login announcement status = %d body = %s", res.Code, res.Body.String())
+	}
+	var createBody map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &createBody); err != nil {
+		t.Fatalf("create announcement json: %v", err)
+	}
+	createdItem, _ := createBody["item"].(map[string]any)
+	createdID, _ := createdItem["id"].(string)
+	if createdID == "" {
+		t.Fatalf("missing created announcement id: %#v", createBody)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/admin/announcements", strings.NewReader(`{"title":"通知 B","content":"画图页公告","show_login":false,"show_image":true}`))
+	req.Header.Set("Authorization", "Bearer admin-secret")
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("create image announcement status = %d body = %s", res.Code, res.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/admin/announcements", nil)
+	req.Header.Set("Authorization", "Bearer admin-secret")
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("admin list announcements status = %d body = %s", res.Code, res.Body.String())
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &announcementsBody); err != nil {
+		t.Fatalf("admin announcements json: %v", err)
+	}
+	if items := logItems(announcementsBody); len(items) != 2 {
+		t.Fatalf("admin announcements length = %d body = %#v", len(items), announcementsBody)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/announcements?target=login", nil)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("public login announcements status = %d body = %s", res.Code, res.Body.String())
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &announcementsBody); err != nil {
+		t.Fatalf("public login announcements json: %v", err)
+	}
+	items := logItems(announcementsBody)
+	if len(items) != 1 || items[0]["title"] != "通知 A" {
+		t.Fatalf("unexpected public login announcements = %#v", announcementsBody)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/admin/announcements/"+createdID, strings.NewReader(`{"enabled":false}`))
+	req.Header.Set("Authorization", "Bearer admin-secret")
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("disable announcement status = %d body = %s", res.Code, res.Body.String())
+	}
+	req = httptest.NewRequest(http.MethodGet, "/api/announcements?target=login", nil)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("public login announcements after disable status = %d body = %s", res.Code, res.Body.String())
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &announcementsBody); err != nil {
+		t.Fatalf("public login announcements after disable json: %v", err)
+	}
+	if items := logItems(announcementsBody); len(items) != 0 {
+		t.Fatalf("disabled announcement should be hidden: %#v", announcementsBody)
+	}
+
 	msgReq := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader("{"))
 	msgReq.Header.Set("x-api-key", rawKey)
 	msgRes := httptest.NewRecorder()
