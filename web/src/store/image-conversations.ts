@@ -4,12 +4,14 @@ import localforage from "localforage";
 
 import type { ImageModel } from "@/lib/api";
 
-export type ImageConversationMode = "generate" | "edit";
+export type ImageConversationMode = "generate" | "image" | "edit";
+export type StoredReferenceImageSource = "upload" | "conversation";
 
 export type StoredReferenceImage = {
   name: string;
   type: string;
   dataUrl: string;
+  source?: StoredReferenceImageSource;
 };
 
 export type StoredImage = {
@@ -75,12 +77,30 @@ function normalizeStoredImage(image: StoredImage): StoredImage {
   };
 }
 
-function normalizeReferenceImage(image: StoredReferenceImage): StoredReferenceImage {
+function normalizeReferenceImage(image: StoredReferenceImage & Record<string, unknown>): StoredReferenceImage {
+  const source =
+    image.source === "upload" || image.source === "conversation"
+      ? image.source
+      : undefined;
   return {
     name: image.name || "reference.png",
     type: image.type || "image/png",
     dataUrl: image.dataUrl,
+    ...(source ? { source } : {}),
   };
+}
+
+function normalizeImageMode(value: unknown, referenceImages: StoredReferenceImage[]): ImageConversationMode {
+  if (value === "generate") {
+    return "generate";
+  }
+  if (value === "image") {
+    return "image";
+  }
+  if (value === "edit") {
+    return referenceImages.some((image) => image.source === "conversation") ? "edit" : "image";
+  }
+  return referenceImages.length > 0 ? "image" : "generate";
 }
 
 function dataUrlMimeType(dataUrl: string) {
@@ -109,6 +129,7 @@ function getLegacyReferenceImages(source: Record<string, unknown>): StoredRefere
           name: typeof image.fileName === "string" && image.fileName ? image.fileName : "reference.png",
           type: dataUrlMimeType(image.dataUrl),
           dataUrl: image.dataUrl,
+          source: "upload",
         },
       ];
     }
@@ -119,6 +140,7 @@ function getLegacyReferenceImages(source: Record<string, unknown>): StoredRefere
 
 function normalizeTurn(turn: ImageTurn & Record<string, unknown>): ImageTurn {
   const normalizedImages = Array.isArray(turn.images) ? turn.images.map(normalizeStoredImage) : [];
+  const referenceImages = getLegacyReferenceImages(turn);
   const derivedStatus: ImageTurnStatus =
     normalizedImages.some((image) => image.status === "loading")
       ? "generating"
@@ -130,8 +152,8 @@ function normalizeTurn(turn: ImageTurn & Record<string, unknown>): ImageTurn {
     id: String(turn.id || `${Date.now()}`),
     prompt: String(turn.prompt || ""),
     model: (turn.model as ImageModel) || "gpt-image-2",
-    mode: turn.mode === "edit" ? "edit" : "generate",
-    referenceImages: getLegacyReferenceImages(turn),
+    mode: normalizeImageMode(turn.mode, referenceImages),
+    referenceImages,
     count: Math.max(1, Number(turn.count || normalizedImages.length || 1)),
     size: typeof turn.size === "string" ? turn.size : "",
     images: normalizedImages,
@@ -148,6 +170,7 @@ function normalizeTurn(turn: ImageTurn & Record<string, unknown>): ImageTurn {
 }
 
 function normalizeConversation(conversation: ImageConversation & Record<string, unknown>): ImageConversation {
+  const legacyReferenceImages = getLegacyReferenceImages(conversation);
   const turns = Array.isArray(conversation.turns)
     ? conversation.turns.map((turn) => normalizeTurn(turn as ImageTurn & Record<string, unknown>))
     : [
@@ -155,8 +178,8 @@ function normalizeConversation(conversation: ImageConversation & Record<string, 
           id: String(conversation.id || `${Date.now()}`),
           prompt: String(conversation.prompt || ""),
           model: (conversation.model as ImageModel) || "gpt-image-2",
-          mode: conversation.mode === "edit" ? "edit" : "generate",
-          referenceImages: getLegacyReferenceImages(conversation),
+          mode: normalizeImageMode(conversation.mode, legacyReferenceImages),
+          referenceImages: legacyReferenceImages,
           count: Number(conversation.count || 1),
           size: typeof conversation.size === "string" ? conversation.size : "",
           images: Array.isArray(conversation.images) ? (conversation.images as StoredImage[]) : [],

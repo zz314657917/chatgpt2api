@@ -20,10 +20,18 @@ type StreamResult struct {
 	Kind  string
 }
 
+const xmlToolRule = "Tool output adapter: when calling tools, output ONLY this XML and no prose/markdown:\n<tool_calls><tool_call><tool_name>TOOL_NAME</tool_name><parameters><PARAM><![CDATA[value]]></PARAM></parameters></tool_call></tool_calls>"
+
 func (e *Engine) HandleImageGenerations(ctx context.Context, body map[string]any) (map[string]any, *StreamResult, error) {
 	prompt := util.Clean(body["prompt"])
+	if prompt == "" {
+		return nil, nil, HTTPError{Status: 400, Message: "prompt is required"}
+	}
 	model := firstNonEmpty(util.Clean(body["model"]), util.ImageModelGPT)
-	n := util.ToInt(body["n"], 1)
+	n, err := ParseImageCount(body["n"])
+	if err != nil {
+		return nil, nil, err
+	}
 	size := util.Clean(body["size"])
 	responseFormat := firstNonEmpty(util.Clean(body["response_format"]), "b64_json")
 	baseURL := util.Clean(body["base_url"])
@@ -406,7 +414,8 @@ func (e *Engine) HandleResponses(ctx context.Context, body map[string]any) (map[
 
 func (e *Engine) ResponseEvents(ctx context.Context, body map[string]any) (<-chan map[string]any, <-chan error, error) {
 	if !HasResponseImageGenerationTool(body) {
-		return e.StreamTextResponse(ctx, body), nilOnClosed(), nil
+		events, errCh := e.StreamTextResponse(ctx, body)
+		return events, errCh, nil
 	}
 	prompt := ExtractResponsePrompt(body["input"])
 	if prompt == "" {
@@ -424,37 +433,63 @@ func (e *Engine) ResponseEvents(ctx context.Context, body map[string]any) (<-cha
 	return events, combineErrorChannels(errCh, responseErr), nil
 }
 
-func nilOnClosed() <-chan error {
-	ch := make(chan error, 1)
-	ch <- nil
-	close(ch)
-	return ch
+func (e *Engine) StreamTextResponse(ctx context.Context, body map[string]any) (<-chan map[string]any, <-chan error) {
+	model := firstNonEmpty(util.Clean(body["model"]), "auto")
+	messages := MessagesFromInput(body["input"], body["instructions"])
+	deltas, errCh := e.StreamTextDeltas(ctx, e.TextBackend(e.Accounts.GetTextAccessToken()), ConversationRequest{Model: model, Messages: messages})
+	return streamTextResponseEvents(ctx, model, deltas, errCh)
 }
 
-func (e *Engine) StreamTextResponse(ctx context.Context, body map[string]any) <-chan map[string]any {
+func streamTextResponseEvents(ctx context.Context, model string, deltas <-chan string, upstreamErr <-chan error) (<-chan map[string]any, <-chan error) {
 	out := make(chan map[string]any)
+	errOut := make(chan error, 1)
 	go func() {
 		defer close(out)
-		model := firstNonEmpty(util.Clean(body["model"]), "auto")
-		messages := MessagesFromInput(body["input"], body["instructions"])
+		defer close(errOut)
 		responseID := "resp_" + util.NewHex(32)
 		itemID := "msg_" + util.NewHex(32)
 		created := time.Now().Unix()
 		full := ""
-		out <- ResponseCreated(responseID, model, created)
-		out <- map[string]any{"type": "response.output_item.added", "output_index": 0, "item": TextOutputItem("", itemID, "in_progress")}
-		deltas, errCh := e.StreamTextDeltas(ctx, e.TextBackend(e.Accounts.GetTextAccessToken()), ConversationRequest{Model: model, Messages: messages})
+		send := func(item map[string]any) bool {
+			select {
+			case out <- item:
+				return true
+			case <-ctx.Done():
+				errOut <- ctx.Err()
+				return false
+			}
+		}
+		if !send(ResponseCreated(responseID, model, created)) {
+			return
+		}
+		if !send(map[string]any{"type": "response.output_item.added", "output_index": 0, "item": TextOutputItem("", itemID, "in_progress")}) {
+			return
+		}
 		for delta := range deltas {
 			full += delta
-			out <- map[string]any{"type": "response.output_text.delta", "item_id": itemID, "output_index": 0, "content_index": 0, "delta": delta}
+			if !send(map[string]any{"type": "response.output_text.delta", "item_id": itemID, "output_index": 0, "content_index": 0, "delta": delta}) {
+				return
+			}
 		}
-		<-errCh
-		out <- map[string]any{"type": "response.output_text.done", "item_id": itemID, "output_index": 0, "content_index": 0, "text": full}
+		if upstreamErr != nil {
+			if err := <-upstreamErr; err != nil {
+				errOut <- err
+				return
+			}
+		}
+		if !send(map[string]any{"type": "response.output_text.done", "item_id": itemID, "output_index": 0, "content_index": 0, "text": full}) {
+			return
+		}
 		item := TextOutputItem(full, itemID, "completed")
-		out <- map[string]any{"type": "response.output_item.done", "output_index": 0, "item": item}
-		out <- ResponseCompleted(responseID, model, created, []map[string]any{item})
+		if !send(map[string]any{"type": "response.output_item.done", "output_index": 0, "item": item}) {
+			return
+		}
+		if !send(ResponseCompleted(responseID, model, created, []map[string]any{item})) {
+			return
+		}
+		errOut <- nil
 	}()
-	return out
+	return out, errOut
 }
 
 func combineErrorChannels(first, second <-chan error) <-chan error {
@@ -706,6 +741,10 @@ func BuildToolPrompt(tools any) string {
 }
 
 func MergeSystem(system any, extra string) any {
+	system = CompactSystem(system)
+	if hasClaudeCodeSystem(system) {
+		extra = xmlToolRule
+	}
 	if extra == "" {
 		return system
 	}
@@ -716,6 +755,50 @@ func MergeSystem(system any, extra string) any {
 		return append(list, map[string]any{"type": "text", "text": extra})
 	}
 	return extra
+}
+
+func CompactSystem(system any) any {
+	switch typed := system.(type) {
+	case string:
+		return compactSystemText(typed)
+	case []any:
+		result := make([]any, 0, len(typed))
+		for _, item := range typed {
+			if block, ok := item.(map[string]any); ok && util.Clean(block["type"]) == "text" {
+				copied := util.CopyMap(block)
+				copied["text"] = compactSystemText(util.Clean(block["text"]))
+				result = append(result, copied)
+				continue
+			}
+			result = append(result, item)
+		}
+		return result
+	default:
+		return system
+	}
+}
+
+func compactSystemText(text string) string {
+	return text
+}
+
+func compactMessageText(text string) string {
+	return text
+}
+
+func hasClaudeCodeSystem(system any) bool {
+	switch typed := system.(type) {
+	case string:
+		return strings.Contains(typed, "You are Claude Code")
+	case []any:
+		for _, item := range typed {
+			block, ok := item.(map[string]any)
+			if ok && strings.Contains(util.Clean(block["text"]), "You are Claude Code") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func PreprocessMessages(messages any) any {
@@ -730,7 +813,9 @@ func PreprocessMessages(messages any) any {
 			continue
 		}
 		item := util.CopyMap(message)
-		if blocks := anyList(item["content"]); blocks != nil {
+		if text, ok := item["content"].(string); ok {
+			item["content"] = compactMessageText(text)
+		} else if blocks := anyList(item["content"]); blocks != nil {
 			processed := make([]any, 0, len(blocks))
 			for _, block := range blocks {
 				processed = append(processed, preprocessBlock(block))
@@ -748,6 +833,10 @@ func preprocessBlock(block any) any {
 		return block
 	}
 	switch util.Clean(item["type"]) {
+	case "text":
+		copied := util.CopyMap(item)
+		copied["text"] = compactMessageText(util.Clean(item["text"]))
+		return copied
 	case "tool_use":
 		data, _ := json.Marshal(item["input"])
 		return map[string]any{"type": "text", "text": fmt.Sprintf("<tool_calls><tool_call><tool_name>%s</tool_name><parameters>%s</parameters></tool_call></tool_calls>", util.Clean(item["name"]), string(data))}

@@ -1,7 +1,10 @@
 package protocol
 
 import (
+	"context"
 	"encoding/base64"
+	"errors"
+	"strings"
 	"testing"
 )
 
@@ -78,5 +81,67 @@ func TestStreamImageResponseErrorsWhenNoImageOutput(t *testing.T) {
 	}
 	if err := <-errCh; err == nil || err.Error() != "image generation failed" {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestStreamTextResponseEventsPropagatesUpstreamError(t *testing.T) {
+	deltas := make(chan string, 1)
+	upstreamErr := make(chan error, 1)
+	deltas <- "partial"
+	close(deltas)
+	upstreamErr <- errors.New("upstream failed")
+	close(upstreamErr)
+
+	events, errCh := streamTextResponseEvents(context.Background(), "auto", deltas, upstreamErr)
+	var types []string
+	for event := range events {
+		if eventType, ok := event["type"].(string); ok {
+			types = append(types, eventType)
+		}
+	}
+	if err := <-errCh; err == nil || err.Error() != "upstream failed" {
+		t.Fatalf("err = %v, want upstream failed", err)
+	}
+	for _, eventType := range types {
+		if eventType == "response.completed" || eventType == "response.output_text.done" {
+			t.Fatalf("unexpected completion event after upstream error: %v", types)
+		}
+	}
+}
+
+func TestHandleImageGenerationsValidatesPromptAndCount(t *testing.T) {
+	engine := &Engine{}
+	for _, tc := range []struct {
+		name string
+		body map[string]any
+		want string
+	}{
+		{name: "empty prompt", body: map[string]any{"n": 1}, want: "prompt is required"},
+		{name: "too many images", body: map[string]any{"prompt": "draw", "n": 5}, want: "n must be between 1 and 4"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, err := engine.HandleImageGenerations(context.Background(), tc.body)
+			var httpErr HTTPError
+			if !errors.As(err, &httpErr) {
+				t.Fatalf("err = %T %v, want HTTPError", err, err)
+			}
+			if httpErr.Status != 400 || httpErr.Message != tc.want {
+				t.Fatalf("HTTPError = %#v, want status 400 message %q", httpErr, tc.want)
+			}
+		})
+	}
+}
+
+func TestMergeSystemUsesCompactToolRuleForClaudeCode(t *testing.T) {
+	merged := MergeSystem("You are Claude Code, an agent.", "Available tools:\nTool: read_file\n\nTool use rules:\nverbose")
+	text, ok := merged.(string)
+	if !ok {
+		t.Fatalf("MergeSystem() = %T, want string", merged)
+	}
+	if strings.Contains(text, "Available tools:") {
+		t.Fatalf("MergeSystem() kept verbose tool prompt: %q", text)
+	}
+	if !strings.Contains(text, "Tool output adapter") || !strings.Contains(text, "<tool_calls>") {
+		t.Fatalf("MergeSystem() missing compact XML rule: %q", text)
 	}
 }

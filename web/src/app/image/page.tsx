@@ -212,6 +212,25 @@ function deriveTurnStatus(turn: ImageTurn): Pick<ImageTurn, "status" | "error"> 
   return { status: "queued", error: undefined };
 }
 
+function isTurnInProgress(turn: ImageTurn) {
+  return (
+    turn.status === "queued" ||
+    turn.status === "generating" ||
+    turn.images.some((image) => image.status === "loading")
+  );
+}
+
+function usesReferenceImages(mode: ImageConversationMode) {
+  return mode === "image" || mode === "edit";
+}
+
+function getComposerConversationMode(referenceImages: StoredReferenceImage[]): ImageConversationMode {
+  if (referenceImages.length === 0) {
+    return "generate";
+  }
+  return referenceImages.some((image) => image.source === "conversation") ? "edit" : "image";
+}
+
 async function syncConversationImageTasks(items: ImageConversation[]) {
   const taskIds = Array.from(
     new Set(
@@ -340,7 +359,6 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
   const [imageCount, setImageCount] = useState("1");
   const [imageSize, setImageSize] = useState("");
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
-  const [referenceImageFiles, setReferenceImageFiles] = useState<File[]>([]);
   const [referenceImages, setReferenceImages] = useState<StoredReferenceImage[]>([]);
   const [conversations, setConversations] = useState<ImageConversation[]>([]);
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
@@ -520,7 +538,6 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
   const clearComposerInputs = useCallback(() => {
     setImagePrompt("");
     setImageCount("1");
-    setReferenceImageFiles([]);
     setReferenceImages([]);
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
@@ -605,10 +622,10 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
           name: file.name,
           type: file.type || "image/png",
           dataUrl: await readFileAsDataUrl(file),
+          source: "upload" as const,
         })),
       );
 
-      setReferenceImageFiles((prev) => [...prev, ...files]);
       setReferenceImages((prev) => [...prev, ...previews]);
       if (fileInputRef.current) {
         fileInputRef.current.value = "";
@@ -631,14 +648,13 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
   );
 
   const handleRemoveReferenceImage = useCallback((index: number) => {
-    setReferenceImageFiles((prev) => {
+    setReferenceImages((prev) => {
       const next = prev.filter((_, currentIndex) => currentIndex !== index);
       if (next.length === 0 && fileInputRef.current) {
         fileInputRef.current.value = "";
       }
       return next;
     });
-    setReferenceImages((prev) => prev.filter((_, currentIndex) => currentIndex !== index));
   }, []);
 
   const handleContinueEdit = useCallback(
@@ -648,7 +664,6 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
           "dataUrl" in image
             ? {
                 referenceImage: image,
-                file: dataUrlToFile(image.dataUrl, image.name, image.type),
               }
             : await buildReferenceImageFromStoredImage(image, `conversation-${conversationId}-${Date.now()}.png`);
         if (!nextReference) {
@@ -656,8 +671,13 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
         }
 
         setSelectedConversationId(conversationId);
-        setReferenceImages((prev) => [...prev, nextReference.referenceImage]);
-        setReferenceImageFiles((prev) => [...prev, nextReference.file]);
+        setReferenceImages((prev) => [
+          ...prev,
+          {
+            ...nextReference.referenceImage,
+            source: "conversation",
+          },
+        ]);
         setImagePrompt("");
         textareaRef.current?.focus();
         toast.success("已加入当前参考图，继续输入描述即可编辑");
@@ -678,6 +698,51 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
     setLightboxIndex(Math.max(0, Math.min(index, images.length - 1)));
     setLightboxOpen(true);
   }, []);
+
+  const handleUpdateTurnPrompt = useCallback(
+    async (conversationId: string, turnId: string, prompt: string) => {
+      const nextPrompt = prompt.trim();
+      if (!nextPrompt) {
+        toast.error("请输入提示词");
+        return;
+      }
+
+      const targetConversation = conversationsRef.current.find((conversation) => conversation.id === conversationId);
+      const targetTurn = targetConversation?.turns.find((turn) => turn.id === turnId);
+      if (!targetConversation || !targetTurn) {
+        toast.error("未找到对应的对话轮次");
+        return;
+      }
+      if (isTurnInProgress(targetTurn)) {
+        toast.error("当前轮次正在处理，稍后再编辑");
+        return;
+      }
+      if (targetTurn.prompt.trim() === nextPrompt) {
+        return;
+      }
+
+      const now = new Date().toISOString();
+      await updateConversation(conversationId, (current) => {
+        const conversation = current ?? targetConversation;
+        const isFirstTurn = conversation.turns[0]?.id === turnId;
+        return {
+          ...conversation,
+          title: isFirstTurn ? buildConversationTitle(nextPrompt) : conversation.title,
+          updatedAt: now,
+          turns: conversation.turns.map((turn) =>
+            turn.id === turnId
+              ? {
+                  ...turn,
+                  prompt: nextPrompt,
+                }
+              : turn,
+          ),
+        };
+      });
+      toast.success("已更新提示词");
+    },
+    [updateConversation],
+  );
 
   const runConversationQueue = useCallback(
     async (conversationId: string) => {
@@ -748,15 +813,15 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
         const referenceFiles = activeTurn.referenceImages.map((image, index) =>
           dataUrlToFile(image.dataUrl, image.name || `${activeTurn.id}-${index + 1}.png`, image.type),
         );
-        if (activeTurn.mode === "edit" && referenceFiles.length === 0) {
-          throw new Error("未找到可用于继续编辑的参考图");
+        if (usesReferenceImages(activeTurn.mode) && referenceFiles.length === 0) {
+          throw new Error("未找到可用的参考图");
         }
 
         const pendingImages = activeTurn.images.filter((image) => image.status === "loading");
         const submitted = await Promise.all(
           pendingImages.map((image) => {
             const taskId = image.taskId || image.id;
-            return activeTurn.mode === "edit"
+            return usesReferenceImages(activeTurn.mode)
               ? createImageEditTask(taskId, referenceFiles, activeTurn.prompt, activeTurn.model, activeTurn.size)
               : createImageGenerationTask(taskId, activeTurn.prompt, activeTurn.model, activeTurn.size);
           }),
@@ -785,7 +850,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
             );
             const resubmitted = await Promise.all(
               missingImages.map((image) =>
-                activeTurn.mode === "edit"
+                usesReferenceImages(activeTurn.mode)
                   ? createImageEditTask(image.taskId || image.id, referenceFiles, activeTurn.prompt, activeTurn.model, activeTurn.size)
                   : createImageGenerationTask(image.taskId || image.id, activeTurn.prompt, activeTurn.model, activeTurn.size),
               ),
@@ -852,6 +917,65 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
     }
   }, [conversations, runConversationQueue]);
 
+  const handleRegenerateTurn = useCallback(
+    async (conversationId: string, turnId: string) => {
+      const targetConversation = conversationsRef.current.find((conversation) => conversation.id === conversationId);
+      const targetTurn = targetConversation?.turns.find((turn) => turn.id === turnId);
+      if (!targetConversation || !targetTurn) {
+        toast.error("未找到对应的对话轮次");
+        return;
+      }
+      if (!targetTurn.prompt.trim()) {
+        toast.error("请输入提示词");
+        return;
+      }
+      if (isTurnInProgress(targetTurn)) {
+        toast.error("当前轮次正在处理，稍后再重新生成");
+        return;
+      }
+      if (usesReferenceImages(targetTurn.mode) && targetTurn.referenceImages.length === 0) {
+        toast.error("未找到可用的参考图");
+        return;
+      }
+
+      const now = new Date().toISOString();
+      const regenerationId = createId();
+      await updateConversation(conversationId, (current) => {
+        const conversation = current ?? targetConversation;
+        const isFirstTurn = conversation.turns[0]?.id === turnId;
+        return {
+          ...conversation,
+          title: isFirstTurn ? buildConversationTitle(targetTurn.prompt) : conversation.title,
+          updatedAt: now,
+          turns: conversation.turns.map((turn) => {
+            if (turn.id !== turnId) {
+              return turn;
+            }
+
+            const imageCount = Math.max(1, Math.min(10, Number(turn.count || turn.images.length || 1)));
+            return {
+              ...turn,
+              count: imageCount,
+              status: "queued",
+              error: undefined,
+              images: Array.from({ length: imageCount }, (_, index) => {
+                const imageId = `${turn.id}-${regenerationId}-${index}`;
+                return {
+                  id: imageId,
+                  taskId: imageId,
+                  status: "loading" as const,
+                };
+              }),
+            };
+          }),
+        };
+      });
+      void runConversationQueue(conversationId);
+      toast.success("已加入重新生成队列");
+    },
+    [runConversationQueue, updateConversation],
+  );
+
   const handleSubmit = async () => {
     const prompt = imagePrompt.trim();
     if (!prompt) {
@@ -859,7 +983,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
       return;
     }
 
-    const effectiveImageMode: ImageConversationMode = referenceImageFiles.length > 0 ? "edit" : "generate";
+    const effectiveImageMode = getComposerConversationMode(referenceImages);
 
     const targetConversation = selectedConversationId
       ? conversationsRef.current.find((conversation) => conversation.id === selectedConversationId) ?? null
@@ -872,7 +996,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
       prompt,
       model: "gpt-image-2",
       mode: effectiveImageMode,
-      referenceImages: effectiveImageMode === "edit" ? referenceImages : [],
+      referenceImages: usesReferenceImages(effectiveImageMode) ? referenceImages : [],
       count: parsedCount,
       size: imageSize,
       images: Array.from({ length: parsedCount }, (_, index) => {
@@ -998,6 +1122,8 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
               selectedConversation={selectedConversation}
               onOpenLightbox={openLightbox}
               onContinueEdit={handleContinueEdit}
+              onUpdateTurnPrompt={handleUpdateTurnPrompt}
+              onRegenerateTurn={handleRegenerateTurn}
               formatConversationTime={formatConversationTime}
             />
           </div>

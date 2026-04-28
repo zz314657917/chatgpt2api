@@ -22,13 +22,15 @@ type AccountConfig interface {
 }
 
 type AccountService struct {
-	mu      sync.Mutex
-	storage storage.Backend
-	config  AccountConfig
-	proxy   *ProxyService
-	logs    *LogService
-	index   int
-	items   []map[string]any
+	mu                sync.Mutex
+	storage           storage.Backend
+	config            AccountConfig
+	proxy             *ProxyService
+	logs              *LogService
+	index             int
+	items             []map[string]any
+	remoteBaseURL     string
+	browserHTTPClient func(profile string, timeout time.Duration) *http.Client
 }
 
 const (
@@ -38,7 +40,20 @@ const (
 )
 
 func NewAccountService(backend storage.Backend, config AccountConfig, proxy *ProxyService, logs *LogService) *AccountService {
-	s := &AccountService{storage: backend, config: config, proxy: proxy, logs: logs}
+	browserHTTPClient := func(profile string, timeout time.Duration) *http.Client {
+		if proxy == nil {
+			return &http.Client{Timeout: timeout}
+		}
+		return proxy.BrowserHTTPClientWithProfile(profile, timeout)
+	}
+	s := &AccountService{
+		storage:           backend,
+		config:            config,
+		proxy:             proxy,
+		logs:              logs,
+		remoteBaseURL:     "https://chatgpt.com",
+		browserHTTPClient: browserHTTPClient,
+	}
 	s.items = s.loadAccounts()
 	return s
 }
@@ -244,12 +259,8 @@ func (s *AccountService) HasAvailableAccount() bool {
 func (s *AccountService) RefreshAccountState(ctx context.Context, accessToken string) map[string]any {
 	remote, err := s.FetchRemoteInfo(ctx, accessToken)
 	if err != nil {
-		message := err.Error()
-		if strings.Contains(message, "/backend-api/me failed: HTTP 401") {
-			if s.RemoveInvalidToken(accessToken, "refresh_account_state") {
-				return nil
-			}
-			return s.UpdateAccount(accessToken, map[string]any{"status": "异常", "quota": 0})
+		if _, handled := s.ApplyAccountError(accessToken, "refresh_account_state", err); handled {
+			return s.GetAccount(accessToken)
 		}
 		return nil
 	}
@@ -292,7 +303,7 @@ func (s *AccountService) RefreshAccounts(ctx context.Context, accessTokens []str
 		close(results)
 	}()
 	refreshed := 0
-	var errors []map[string]string
+	errors := []map[string]string{}
 	for res := range results {
 		if res.err == nil {
 			if s.UpdateAccount(res.token, res.info) != nil {
@@ -301,11 +312,8 @@ func (s *AccountService) RefreshAccounts(ctx context.Context, accessTokens []str
 			continue
 		}
 		message := res.err.Error()
-		if strings.Contains(message, "/backend-api/me failed: HTTP 401") {
-			if !s.RemoveInvalidToken(res.token, "refresh_accounts") {
-				s.UpdateAccount(res.token, map[string]any{"status": "异常", "quota": 0})
-			}
-			message = "检测到封号"
+		if normalized, handled := s.ApplyAccountError(res.token, "refresh_accounts", res.err); handled {
+			message = normalized
 		}
 		errors = append(errors, map[string]string{"access_token": res.token, "error": message})
 	}
@@ -372,13 +380,41 @@ func (s *AccountService) RemoveInvalidToken(accessToken, event string) bool {
 	return removed
 }
 
+func (s *AccountService) ApplyAccountError(accessToken, event string, err error) (string, bool) {
+	if err == nil {
+		return "", false
+	}
+	return s.ApplyAccountErrorMessage(accessToken, event, err.Error())
+}
+
+func (s *AccountService) ApplyAccountErrorMessage(accessToken, event, message string) (string, bool) {
+	if IsAccountInvalidErrorMessage(message) {
+		if !s.RemoveInvalidToken(accessToken, event) {
+			s.UpdateAccount(accessToken, map[string]any{"status": "异常", "quota": 0, "image_quota_unknown": false})
+		}
+		return "检测到封号", true
+	}
+	if IsAccountRateLimitedErrorMessage(message) {
+		s.UpdateAccount(accessToken, map[string]any{"status": "限流", "quota": 0, "image_quota_unknown": false})
+		return "检测到限流", true
+	}
+	return message, false
+}
+
 func (s *AccountService) FetchRemoteInfo(ctx context.Context, accessToken string) (map[string]any, error) {
 	accessToken = util.Clean(accessToken)
 	if accessToken == "" {
 		return nil, fmt.Errorf("access_token is required")
 	}
+	baseURL := strings.TrimRight(firstNonEmpty(s.remoteBaseURL, "https://chatgpt.com"), "/")
 	headers := s.remoteHeaders(accessToken)
-	client := s.proxy.BrowserHTTPClientWithProfile(s.remoteImpersonation(accessToken), 30*time.Second)
+	client := s.browserHTTPClient(s.remoteImpersonation(accessToken), 30*time.Second)
+	if client == nil {
+		client = &http.Client{Timeout: 30 * time.Second}
+	}
+	if err := s.bootstrapRemote(ctx, client, baseURL, accessToken); err != nil {
+		return nil, err
+	}
 	type response struct {
 		payload map[string]any
 		err     error
@@ -389,7 +425,7 @@ func (s *AccountService) FetchRemoteInfo(ctx context.Context, accessToken string
 			data, _ := json.Marshal(body)
 			reader = bytes.NewReader(data)
 		}
-		req, _ := http.NewRequestWithContext(ctx, method, "https://chatgpt.com"+urlPath, reader)
+		req, _ := http.NewRequestWithContext(ctx, method, baseURL+urlPath, reader)
 		for key, value := range headers {
 			req.Header.Set(key, value)
 		}
@@ -403,28 +439,26 @@ func (s *AccountService) FetchRemoteInfo(ctx context.Context, accessToken string
 			return response{err: err}
 		}
 		defer resp.Body.Close()
+		data, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			return response{err: readErr}
+		}
 		if resp.StatusCode != http.StatusOK {
-			return response{err: fmt.Errorf("%s failed: HTTP %d", urlPath, resp.StatusCode)}
+			return response{err: refreshHTTPError(urlPath, resp.StatusCode, data)}
 		}
 		var payload map[string]any
-		if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		if err := json.Unmarshal(data, &payload); err != nil {
 			return response{err: err}
 		}
 		return response{payload: payload}
 	}
-	meCh := make(chan response, 1)
-	initCh := make(chan response, 1)
-	go func() { meCh <- fetch(http.MethodGet, "/backend-api/me", nil, nil) }()
-	go func() {
-		initCh <- fetch(http.MethodPost, "/backend-api/conversation/init", map[string]any{
-			"gizmo_id": nil, "requested_default_model": nil, "conversation_id": nil, "timezone_offset_min": -480,
-		}, nil)
-	}()
-	me := <-meCh
+	me := fetch(http.MethodGet, "/backend-api/me", nil, nil)
 	if me.err != nil {
 		return nil, me.err
 	}
-	init := <-initCh
+	init := fetch(http.MethodPost, "/backend-api/conversation/init", map[string]any{
+		"gizmo_id": nil, "requested_default_model": nil, "conversation_id": nil, "timezone_offset_min": -480,
+	}, nil)
 	if init.err != nil {
 		return nil, init.err
 	}
@@ -449,6 +483,23 @@ func (s *AccountService) FetchRemoteInfo(ctx context.Context, accessToken string
 		"restore_at":          restoreAt,
 		"status":              status,
 	}, nil
+}
+
+func (s *AccountService) bootstrapRemote(ctx context.Context, client *http.Client, baseURL, accessToken string) error {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/", nil)
+	for key, value := range s.remoteBootstrapHeaders(accessToken) {
+		req.Header.Set(key, value)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	data, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return refreshHTTPError("bootstrap", resp.StatusCode, data)
+	}
+	return nil
 }
 
 func (s *AccountService) StartLimitedWatcher(ctx context.Context, interval time.Duration) {
@@ -564,6 +615,36 @@ func (s *AccountService) remoteHeaders(accessToken string) map[string]string {
 	return headers
 }
 
+func (s *AccountService) remoteBootstrapHeaders(accessToken string) map[string]string {
+	account := s.GetAccount(accessToken)
+	clean := func(keys ...string) string {
+		for _, key := range keys {
+			if raw, ok := account["fp"].(map[string]any); ok {
+				if value := util.Clean(raw[key]); value != "" {
+					return value
+				}
+			}
+			if value := util.Clean(account[key]); value != "" {
+				return value
+			}
+		}
+		return ""
+	}
+	return map[string]string{
+		"user-agent":                firstNonEmpty(clean("user-agent", "user_agent"), defaultRemoteUserAgent),
+		"accept":                    "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+		"accept-language":           "zh-CN,zh;q=0.9,en;q=0.8",
+		"sec-ch-ua":                 firstNonEmpty(clean("sec-ch-ua"), defaultRemoteSecCHUA),
+		"sec-ch-ua-mobile":          firstNonEmpty(clean("sec-ch-ua-mobile"), "?0"),
+		"sec-ch-ua-platform":        firstNonEmpty(clean("sec-ch-ua-platform"), `"Windows"`),
+		"sec-fetch-dest":            "document",
+		"sec-fetch-mode":            "navigate",
+		"sec-fetch-site":            "none",
+		"sec-fetch-user":            "?1",
+		"upgrade-insecure-requests": "1",
+	}
+}
+
 func (s *AccountService) remoteImpersonation(accessToken string) string {
 	account := s.GetAccount(accessToken)
 	if raw, ok := account["fp"].(map[string]any); ok {
@@ -601,6 +682,43 @@ func IsImageAccountAvailable(account map[string]any) bool {
 		return true
 	}
 	return util.ToInt(account["quota"], 0) > 0
+}
+
+func IsAccountInvalidErrorMessage(message string) bool {
+	text := strings.ToLower(strings.TrimSpace(message))
+	if text == "" || isBootstrapErrorMessage(text) {
+		return false
+	}
+	return strings.Contains(text, "token_invalidated") ||
+		strings.Contains(text, "token_revoked") ||
+		strings.Contains(text, "authentication token has been invalidated") ||
+		strings.Contains(text, "invalidated oauth token") ||
+		hasAccountHTTPStatus(text, http.StatusUnauthorized)
+}
+
+func IsAccountRateLimitedErrorMessage(message string) bool {
+	text := strings.ToLower(strings.TrimSpace(message))
+	if text == "" || isBootstrapErrorMessage(text) {
+		return false
+	}
+	if hasAccountHTTPStatus(text, http.StatusTooManyRequests) ||
+		strings.Contains(text, "rate_limit") ||
+		strings.Contains(text, "rate limit") ||
+		strings.Contains(text, "too many requests") ||
+		strings.Contains(text, "too_many_requests") ||
+		strings.Contains(text, "insufficient_quota") ||
+		strings.Contains(text, "limit reached") ||
+		strings.Contains(text, "usage limit") ||
+		strings.Contains(text, "image generation limit") ||
+		strings.Contains(text, "you've reached") ||
+		strings.Contains(text, "you have reached") ||
+		strings.Contains(text, "限流") ||
+		strings.Contains(text, "额度已用尽") ||
+		strings.Contains(text, "生成上限") ||
+		strings.Contains(text, "已达上限") {
+		return true
+	}
+	return false
 }
 
 func normalizeAccount(item map[string]any) map[string]any {
@@ -799,4 +917,56 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func hasHTTPStatus(message string, status int) bool {
+	code := fmt.Sprint(status)
+	return strings.Contains(message, "http "+code) ||
+		strings.Contains(message, "status="+code) ||
+		strings.Contains(message, "status: "+code) ||
+		strings.Contains(message, `"status":`+code)
+}
+
+func hasAccountHTTPStatus(message string, status int) bool {
+	if !hasHTTPStatus(message, status) {
+		return false
+	}
+	return strings.Contains(message, "/backend-api/") ||
+		strings.Contains(message, "auth_chat_requirements") ||
+		strings.Contains(message, "authorization") ||
+		strings.Contains(message, "token")
+}
+
+func isBootstrapErrorMessage(message string) bool {
+	return strings.HasPrefix(strings.TrimSpace(message), "bootstrap failed")
+}
+
+func refreshHTTPError(context string, status int, body []byte) error {
+	detail := summarizeRefreshErrorBody(body)
+	if detail == "" {
+		return fmt.Errorf("%s failed: HTTP %d", context, status)
+	}
+	return fmt.Errorf("%s failed: HTTP %d, %s", context, status, detail)
+}
+
+func summarizeRefreshErrorBody(body []byte) string {
+	text := strings.TrimSpace(string(body))
+	if text == "" {
+		return ""
+	}
+	lower := strings.ToLower(text)
+	if strings.Contains(lower, "cf_chl") ||
+		strings.Contains(lower, "challenge-platform") ||
+		strings.Contains(lower, "enable javascript and cookies to continue") ||
+		strings.Contains(lower, "cloudflare") {
+		return "upstream returned Cloudflare challenge page; refresh browser fingerprint/session or change proxy"
+	}
+	if strings.Contains(lower, "<html") || strings.Contains(lower, "<!doctype html") || strings.Contains(lower, "<body") {
+		return "upstream returned HTML error page"
+	}
+	const maxBodyDetail = 2048
+	if len(text) > maxBodyDetail {
+		return "body=" + text[:maxBodyDetail] + "...(truncated)"
+	}
+	return "body=" + text
 }

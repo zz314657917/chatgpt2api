@@ -51,6 +51,7 @@ export function RegisterCard() {
       ...(type === "tempmail_lol" ? { api_key: "", domain: [] } : {}),
       ...(type === "duckmail" ? { api_key: "", default_domain: "duckmail.sbs" } : {}),
       ...(type === "gptmail" ? { api_key: "", default_domain: "" } : {}),
+      ...(type === "moemail" ? { api_base: "", api_key: "", domain: [], expiry_time: 0 } : {}),
     });
   };
 
@@ -143,6 +144,7 @@ export function RegisterCard() {
               {providers.map((provider, index) => {
                 const type = String(provider.type || "tempmail_lol");
                 const domains = Array.isArray(provider.domain) ? provider.domain.map(String).join("\n") : "";
+                const domainPlaceholder = type === "tempmail_lol" ? "每行一个域名，留空则使用服务默认域名" : "每行一个域名";
                 return (
                   <div key={index} className="space-y-3 border-t border-stone-200 pt-3 first:border-t-0 first:pt-0">
                     <div className="flex items-center justify-between gap-3">
@@ -167,22 +169,25 @@ export function RegisterCard() {
                             <SelectItem value="tempmail_lol">tempmail_lol</SelectItem>
                             <SelectItem value="duckmail">duckmail</SelectItem>
                             <SelectItem value="gptmail">gptmail(未测试)</SelectItem>
+                            <SelectItem value="moemail">moemail</SelectItem>
                           </SelectContent>
                         </Select>
                       </div>
+                      {type === "cloudflare_temp_email" || type === "moemail" ? (
+                        <div className="space-y-2">
+                          <label className="text-sm text-stone-700">API Base</label>
+                          <Input value={String(provider.api_base || "")} onChange={(event) => updateProvider(index, { api_base: event.target.value })} className="h-10 rounded-xl border-stone-200 bg-white" disabled={config.enabled} />
+                        </div>
+                      ) : null}
                       {type === "cloudflare_temp_email" ? (
                         <>
-                          <div className="space-y-2">
-                            <label className="text-sm text-stone-700">API Base</label>
-                            <Input value={String(provider.api_base || "")} onChange={(event) => updateProvider(index, { api_base: event.target.value })} className="h-10 rounded-xl border-stone-200 bg-white" disabled={config.enabled} />
-                          </div>
                           <div className="space-y-2">
                             <label className="text-sm text-stone-700">Admin Password</label>
                             <Input value={String(provider.admin_password || "")} onChange={(event) => updateProvider(index, { admin_password: event.target.value })} className="h-10 rounded-xl border-stone-200 bg-white" disabled={config.enabled} />
                           </div>
                         </>
                       ) : null}
-                      {type === "tempmail_lol" || type === "duckmail" || type === "gptmail" ? (
+                      {type === "tempmail_lol" || type === "duckmail" || type === "gptmail" || type === "moemail" ? (
                         <div className="space-y-2">
                           <label className="text-sm text-stone-700">API Key</label>
                           <Input value={String(provider.api_key || "")} onChange={(event) => updateProvider(index, { api_key: event.target.value })} className="h-10 rounded-xl border-stone-200 bg-white" disabled={config.enabled} />
@@ -194,12 +199,18 @@ export function RegisterCard() {
                           <Input value={String(provider.default_domain || "")} onChange={(event) => updateProvider(index, { default_domain: event.target.value })} placeholder={type === "duckmail" ? "duckmail.sbs" : ""} className="h-10 rounded-xl border-stone-200 bg-white" disabled={config.enabled} />
                         </div>
                       ) : null}
+                      {type === "moemail" ? (
+                        <div className="space-y-2">
+                          <label className="text-sm text-stone-700">Expiry Time</label>
+                          <Input value={String(provider.expiry_time || "")} onChange={(event) => updateProvider(index, { expiry_time: Number(event.target.value) || 0 })} className="h-10 rounded-xl border-stone-200 bg-white" disabled={config.enabled} />
+                        </div>
+                      ) : null}
                     </div>
 
-                    {type === "tempmail_lol" || type === "cloudflare_temp_email" ? (
+                    {type === "tempmail_lol" || type === "cloudflare_temp_email" || type === "moemail" ? (
                       <div className="space-y-2">
                         <label className="text-sm text-stone-700">Domain</label>
-                        <Textarea value={domains} onChange={(event) => updateProvider(index, { domain: event.target.value.split(/[\n,]/).map((item) => item.trim()).filter(Boolean) })} placeholder="每行一个域名，留空则使用服务默认域名" className="min-h-20 rounded-xl border-stone-200 bg-white font-mono text-xs" disabled={config.enabled} />
+                        <Textarea value={domains} onChange={(event) => updateProvider(index, { domain: event.target.value.split(/[\n,]/).map((item) => item.trim()).filter(Boolean) })} placeholder={domainPlaceholder} className="min-h-20 rounded-xl border-stone-200 bg-white font-mono text-xs" disabled={config.enabled} />
                       </div>
                     ) : null}
                   </div>

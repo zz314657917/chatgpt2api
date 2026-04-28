@@ -484,6 +484,7 @@ func readMultipartImageBody(r *http.Request) (map[string]any, []protocol.Uploade
 		return nil, nil, err
 	}
 	body := map[string]any{
+		"client_task_id":  firstForm(r.MultipartForm, "client_task_id"),
 		"prompt":          firstForm(r.MultipartForm, "prompt"),
 		"model":           firstNonEmpty(firstForm(r.MultipartForm, "model"), "gpt-image-2"),
 		"n":               util.ToInt(firstForm(r.MultipartForm, "n"), 1),

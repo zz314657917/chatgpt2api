@@ -313,9 +313,17 @@ func (e *Engine) StreamImageOutputsWithPool(ctx context.Context, request Convers
 				emittedForToken := false
 				returnedMessage := false
 				returnedResult := false
+				rateLimitedForToken := false
+				rateLimitMessage := ""
 				client := backend.NewClient(token, e.Accounts, e.Proxy)
 				outputs, imageErr := e.StreamImageOutputs(ctx, client, request, index, request.N)
 				for output := range outputs {
+					if output.Kind == "message" && service.IsAccountRateLimitedErrorMessage(output.Text) {
+						rateLimitedForToken = true
+						rateLimitMessage = output.Text
+						lastError = output.Text
+						continue
+					}
 					if output.Kind == "message" && request.MessageAsError {
 						e.Accounts.MarkImageResult(token, false)
 						errCh <- &ImageGenerationError{Message: firstNonEmpty(output.Text, "Image generation was rejected by upstream policy."), StatusCode: 400, Type: "invalid_request_error", Code: "content_policy_violation"}
@@ -329,6 +337,10 @@ func (e *Engine) StreamImageOutputsWithPool(ctx context.Context, request Convers
 				}
 				err = <-imageErr
 				if err == nil {
+					if rateLimitedForToken {
+						e.Accounts.ApplyAccountErrorMessage(token, "image_stream", rateLimitMessage)
+						continue
+					}
 					if returnedMessage || !returnedResult {
 						e.Accounts.MarkImageResult(token, false)
 						errCh <- nil
@@ -339,8 +351,13 @@ func (e *Engine) StreamImageOutputsWithPool(ctx context.Context, request Convers
 				}
 				e.Accounts.MarkImageResult(token, false)
 				lastError = err.Error()
+				if normalized, handled := e.Accounts.ApplyAccountErrorMessage(token, "image_stream", lastError); handled {
+					lastError = normalized
+					if service.IsAccountRateLimitedErrorMessage(err.Error()) || !emittedForToken {
+						continue
+					}
+				}
 				if !emittedForToken && IsTokenInvalidError(lastError) {
-					e.Accounts.RemoveInvalidToken(token, "image_stream")
 					continue
 				}
 				errCh <- NewImageGenerationError(imageStreamErrorMessage(lastError))
@@ -500,11 +517,7 @@ func (e *Engine) SaveImageBytes(imageData []byte, baseURL string) string {
 }
 
 func IsTokenInvalidError(message string) bool {
-	text := strings.ToLower(message)
-	return strings.Contains(text, "token_invalidated") ||
-		strings.Contains(text, "token_revoked") ||
-		strings.Contains(text, "authentication token has been invalidated") ||
-		strings.Contains(text, "invalidated oauth token")
+	return service.IsAccountInvalidErrorMessage(message)
 }
 
 func MessageText(content any) string {

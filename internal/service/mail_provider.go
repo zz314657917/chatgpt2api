@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"crypto/sha1"
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
@@ -75,6 +76,11 @@ type registerGPTMailProvider struct {
 	entry map[string]any
 }
 
+type registerMoEmailProvider struct {
+	registerHTTPMailProvider
+	entry map[string]any
+}
+
 func createRegisterMailbox(mailConfig map[string]any, username string) (map[string]any, error) {
 	provider, err := createRegisterMailProvider(mailConfig, "", "")
 	if err != nil {
@@ -96,7 +102,7 @@ func waitRegisterCode(ctx context.Context, mailConfig map[string]any, mailbox ma
 	for {
 		message, fetchErr := provider.FetchLatestMessage(mailbox)
 		if fetchErr == nil && message != nil {
-			if code := extractRegisterMailCode(message); code != "" {
+			if code := extractUnseenRegisterMailCode(mailbox, message); code != "" {
 				return code, nil
 			}
 		}
@@ -130,6 +136,8 @@ func createRegisterMailProvider(mailConfig map[string]any, providerName, provide
 		return &registerDuckMailProvider{registerHTTPMailProvider: base, entry: entry}, nil
 	case "gptmail":
 		return &registerGPTMailProvider{registerHTTPMailProvider: base, entry: entry}, nil
+	case "moemail":
+		return &registerMoEmailProvider{registerHTTPMailProvider: base, entry: entry}, nil
 	default:
 		return nil, fmt.Errorf("unsupported mail.provider: %s", util.Clean(entry["type"]))
 	}
@@ -225,6 +233,64 @@ func extractRegisterMailCode(message map[string]any) string {
 		}
 	}
 	return ""
+}
+
+func extractUnseenRegisterMailCode(mailbox map[string]any, message map[string]any) string {
+	ref := registerMailMessageRef(message)
+	seen := registerSeenMailRefs(mailbox["_seen_code_message_refs"])
+	if ref != "" {
+		if _, ok := seen[ref]; ok {
+			return ""
+		}
+	}
+	code := extractRegisterMailCode(message)
+	if code == "" || ref == "" {
+		return code
+	}
+	existing := registerSeenMailRefList(mailbox["_seen_code_message_refs"])
+	mailbox["_seen_code_message_refs"] = append(existing, ref)
+	return code
+}
+
+func registerSeenMailRefs(value any) map[string]struct{} {
+	out := map[string]struct{}{}
+	for _, item := range registerSeenMailRefList(value) {
+		out[item] = struct{}{}
+	}
+	return out
+}
+
+func registerSeenMailRefList(value any) []string {
+	switch typed := value.(type) {
+	case []string:
+		return append([]string(nil), typed...)
+	case []any:
+		out := make([]string, 0, len(typed))
+		for _, item := range typed {
+			if ref := util.Clean(item); ref != "" {
+				out = append(out, ref)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func registerMailMessageRef(message map[string]any) string {
+	provider := util.Clean(message["provider"])
+	mailbox := util.Clean(message["mailbox"])
+	if id := registerMessageID(message); id != "" {
+		return "id:" + provider + ":" + mailbox + ":" + id
+	}
+	textContent, htmlContent := extractRegisterMailContent(message)
+	received := util.Clean(message["received_at"])
+	content := strings.Join([]string{util.Clean(message["subject"]), textContent, htmlContent}, "\n")
+	if strings.TrimSpace(content) == "" {
+		return ""
+	}
+	sum := sha1.Sum([]byte(content))
+	return fmt.Sprintf("content:%s:%s:%s:%x", provider, mailbox, received, sum[:8])
 }
 
 func extractRegisterMailContent(data map[string]any) (string, string) {
@@ -434,7 +500,7 @@ func registerMessageReceivedAt(data map[string]any) time.Time {
 }
 
 func registerMessageID(data map[string]any) string {
-	return util.Clean(firstNonNil(data["id"], data["_id"], data["token"], data["@id"]))
+	return util.Clean(firstNonNil(data["id"], data["message_id"], data["_id"], data["token"], data["@id"]))
 }
 
 func parseRegisterMailTime(value any) time.Time {
@@ -795,6 +861,98 @@ func (p *registerGPTMailProvider) FetchLatestMessage(mailbox map[string]any) (ma
 		"text_content": textContent,
 		"html_content": htmlContent,
 		"raw":          latest["raw"],
+	}, nil
+}
+
+func (p *registerMoEmailProvider) CreateMailbox(username string) (map[string]any, error) {
+	apiBase := strings.TrimRight(util.Clean(p.entry["api_base"]), "/")
+	if apiBase == "" {
+		return nil, fmt.Errorf("moemail api_base is required")
+	}
+	domain, err := nextRegisterDomain(util.AsStringSlice(p.entry["domain"]))
+	if err != nil {
+		return nil, err
+	}
+	payload := map[string]any{
+		"name":       firstNonEmpty(strings.TrimSpace(username), registerRandomMailboxName()),
+		"expiryTime": util.ToInt(p.entry["expiry_time"], 0),
+		"domain":     domain,
+	}
+	data, err := registerMailRequestJSON(p.client, http.MethodPost, apiBase+"/api/emails/generate", map[string]string{
+		"X-API-Key":    util.Clean(p.entry["api_key"]),
+		"Content-Type": "application/json",
+		"User-Agent":   p.conf.UserAgent,
+		"Accept":       "application/json",
+	}, nil, payload, http.StatusOK, http.StatusCreated)
+	if err != nil {
+		return nil, err
+	}
+	address := util.Clean(data["email"])
+	emailID := firstNonEmpty(util.Clean(data["id"]), util.Clean(data["email_id"]))
+	if address == "" || emailID == "" {
+		return nil, fmt.Errorf("MoEmail missing email or id")
+	}
+	return map[string]any{"provider": "moemail", "provider_ref": p.entry["provider_ref"], "address": address, "email_id": emailID}, nil
+}
+
+func (p *registerMoEmailProvider) FetchLatestMessage(mailbox map[string]any) (map[string]any, error) {
+	apiBase := strings.TrimRight(util.Clean(p.entry["api_base"]), "/")
+	emailID := util.Clean(mailbox["email_id"])
+	if apiBase == "" {
+		return nil, fmt.Errorf("moemail api_base is required")
+	}
+	if emailID == "" {
+		return nil, fmt.Errorf("MoEmail missing email_id")
+	}
+	data, err := registerMailRequestJSON(p.client, http.MethodGet, apiBase+"/api/emails/"+emailID, map[string]string{
+		"X-API-Key":    util.Clean(p.entry["api_key"]),
+		"Content-Type": "application/json",
+		"User-Agent":   p.conf.UserAgent,
+		"Accept":       "application/json",
+	}, nil, nil, http.StatusOK)
+	if err != nil {
+		return nil, err
+	}
+	items := util.AsMapSlice(data["messages"])
+	if len(items) == 0 {
+		return nil, nil
+	}
+	latest := latestRegisterMailMessage(items)
+	messageID := firstNonEmpty(util.Clean(latest["id"]), util.Clean(latest["message_id"]), util.Clean(latest["_id"]))
+	message := latest
+	raw := any(data)
+	if messageID != "" {
+		detail, detailErr := registerMailRequestJSON(p.client, http.MethodGet, apiBase+"/api/emails/"+emailID+"/"+messageID, map[string]string{
+			"X-API-Key":    util.Clean(p.entry["api_key"]),
+			"Content-Type": "application/json",
+			"User-Agent":   p.conf.UserAgent,
+			"Accept":       "application/json",
+		}, nil, nil, http.StatusOK)
+		if detailErr != nil {
+			return nil, detailErr
+		}
+		raw = detail
+		if nested := util.StringMap(detail["message"]); len(nested) > 0 {
+			message = nested
+		} else {
+			message = detail
+		}
+	}
+	textContent, htmlContent := extractRegisterMailContent(message)
+	sender := firstNonNil(message["from"], message["sender"])
+	if senderMap, ok := sender.(map[string]any); ok {
+		sender = firstNonNil(senderMap["address"], senderMap["email"], senderMap["name"])
+	}
+	return map[string]any{
+		"provider":     "moemail",
+		"mailbox":      util.Clean(mailbox["address"]),
+		"message_id":   messageID,
+		"subject":      firstNonEmpty(util.Clean(message["subject"]), util.Clean(latest["subject"])),
+		"sender":       util.Clean(sender),
+		"text_content": textContent,
+		"html_content": htmlContent,
+		"received_at":  firstNonNil(message["createdAt"], message["created_at"], message["receivedAt"], message["date"], message["timestamp"], latest["createdAt"], latest["created_at"], latest["receivedAt"], latest["date"], latest["timestamp"]),
+		"raw":          raw,
 	}, nil
 }
 
