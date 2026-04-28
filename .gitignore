@@ -1,14 +1,10 @@
-# Python-generated files
-__pycache__/
-*.py[oc]
+# Generated files
 build/
 dist/
-wheels/
-*.egg-info
 web_dist
-# Virtual environments
-.venv
+
 .idea
+node_modules/
 data
 edit
 

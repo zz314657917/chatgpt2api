@@ -22,13 +22,24 @@
 
 ## 快速开始
 
-已发布镜像支持 `linux/amd64` 与 `linux/arm64`，在 x86 服务器和 Apple Silicon / ARM Linux 设备上都会自动拉取匹配架构的版本。
+当前后端运行时为 Go 单体服务，容器镜像启动 `/app/chatgpt2api` 二进制；前端仍在镜像构建阶段编译为静态资源并由 Go 服务托管。
+
+默认 `docker compose` 会从当前源码构建 Go 后端镜像，避免运行到未更新的远端镜像。Dockerfile 支持 `linux/amd64` 与 `linux/arm64` 构建。
 
 ```bash
 git clone git@github.com:basketikun/chatgpt2api.git
 cp .env.example .env
 # 按需编辑 .env，至少设置 CHATGPT2API_AUTH_KEY
+# 可选：设置 CHATGPT2API_VERSION=1.0.0，用于注入前后端版本号
 docker compose up -d
+```
+
+本地开发或自建二进制：
+
+```bash
+go test ./...
+go build -ldflags "-X chatgpt2api/internal/version.Version=1.0.0" -o chatgpt2api ./cmd/chatgpt2api
+CHATGPT2API_AUTH_KEY=your_secret_key ./chatgpt2api
 ```
 
 ### 存储后端配置

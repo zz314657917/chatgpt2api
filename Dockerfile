@@ -1,53 +1,57 @@
 ARG BUILDPLATFORM
 ARG TARGETPLATFORM
+ARG TARGETOS
 ARG TARGETARCH
+ARG VERSION=0.0.0-dev
 
 FROM --platform=$BUILDPLATFORM node:22-alpine AS web-build
 
 WORKDIR /app/web
 
+ARG VERSION=0.0.0-dev
+ENV VITE_APP_VERSION=${VERSION}
+
 COPY web/package.json web/bun.lock ./
 RUN npm install
 
-COPY VERSION /app/VERSION
 COPY web ./
 RUN npm run build
 
 
-FROM --platform=$TARGETPLATFORM python:3.13-slim AS app
+FROM --platform=$BUILDPLATFORM golang:1.24-bookworm AS go-build
 
-ARG TARGETPLATFORM
+ARG TARGETOS
 ARG TARGETARCH
+ARG VERSION=0.0.0-dev
 
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    UV_LINK_MODE=copy
+WORKDIR /src
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY cmd ./cmd
+COPY internal ./internal
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build -trimpath -ldflags="-s -w -X chatgpt2api/internal/version.Version=${VERSION}" -o /out/chatgpt2api ./cmd/chatgpt2api
+
+
+FROM --platform=$TARGETPLATFORM debian:bookworm-slim AS app
 
 WORKDIR /app
+ENV PORT=80
 
-# 安装系统依赖
+# 运行时依赖：
+# - ca-certificates: HTTPS 上游请求需要
 # - git: Git 存储后端需要
-# - libpq-dev: PostgreSQL 客户端库
-# - gcc: 编译 psycopg2-binary 需要
+# - tzdata: 保持容器内时区数据可用
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
     git \
-    libpq-dev \
-    gcc \
+    tzdata \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir uv
-
-COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-dev --no-install-project
-
-COPY main.py ./
-COPY VERSION ./
-COPY api ./api
-COPY services ./services
-COPY utils ./utils
-COPY scripts ./scripts
+COPY --from=go-build /out/chatgpt2api ./chatgpt2api
 COPY --from=web-build /app/web/dist ./web_dist
 
 EXPOSE 80
 
-CMD ["uv", "run", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "80", "--access-log"]
+CMD ["/app/chatgpt2api"]

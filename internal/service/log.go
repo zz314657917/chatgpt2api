@@ -1,0 +1,191 @@
+package service
+
+import (
+	"bufio"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
+	"chatgpt2api/internal/util"
+)
+
+const (
+	LogTypeCall    = "call"
+	LogTypeAccount = "account"
+)
+
+type LogService struct {
+	mu   sync.Mutex
+	path string
+}
+
+func NewLogService(dataDir string) *LogService {
+	path := filepath.Join(dataDir, "logs.jsonl")
+	_ = os.MkdirAll(filepath.Dir(path), 0o755)
+	return &LogService{path: path}
+}
+
+func (s *LogService) Add(logType, summary string, detail map[string]any) {
+	if detail == nil {
+		detail = map[string]any{}
+	}
+	item := map[string]any{
+		"time":    util.NowLocal(),
+		"type":    logType,
+		"summary": summary,
+		"detail":  detail,
+	}
+	data, err := json.Marshal(item)
+	if err != nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	file, err := os.OpenFile(s.path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	defer file.Close()
+	_, _ = file.Write(append(data, '\n'))
+}
+
+func (s *LogService) List(logType, startDate, endDate string, limit int) []map[string]any {
+	if limit <= 0 {
+		limit = 200
+	}
+	file, err := os.Open(s.path)
+	if err != nil {
+		return []map[string]any{}
+	}
+	defer file.Close()
+	var lines []string
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		lines = append(lines, scanner.Text())
+	}
+	out := make([]map[string]any, 0, limit)
+	for i := len(lines) - 1; i >= 0 && len(out) < limit; i-- {
+		var item map[string]any
+		if json.Unmarshal([]byte(lines[i]), &item) != nil {
+			continue
+		}
+		t := util.Clean(item["time"])
+		day := t
+		if len(day) > 10 {
+			day = day[:10]
+		}
+		if logType != "" && item["type"] != logType {
+			continue
+		}
+		if startDate != "" && day < startDate {
+			continue
+		}
+		if endDate != "" && day > endDate {
+			continue
+		}
+		out = append(out, item)
+	}
+	return out
+}
+
+type Logger struct {
+	levels func() []string
+}
+
+func NewLogger(levels func() []string) *Logger {
+	return &Logger{levels: levels}
+}
+
+func (l *Logger) enabled(level string) bool {
+	levels := l.levels()
+	if len(levels) == 0 {
+		return level == "info" || level == "warning" || level == "error"
+	}
+	for _, item := range levels {
+		if item == level {
+			return true
+		}
+	}
+	return false
+}
+
+func (l *Logger) Debug(v any)   { l.print("debug", v) }
+func (l *Logger) Info(v any)    { l.print("info", v) }
+func (l *Logger) Warning(v any) { l.print("warning", v) }
+func (l *Logger) Error(v any)   { l.print("error", v) }
+
+func (l *Logger) print(level string, v any) {
+	if !l.enabled(level) {
+		return
+	}
+	data, _ := json.Marshal(sanitize(v))
+	os.Stderr.WriteString("[" + strings.ToUpper(level) + "] " + string(data) + "\n")
+}
+
+func sanitize(v any) any {
+	switch x := v.(type) {
+	case map[string]any:
+		out := map[string]any{}
+		for key, value := range x {
+			lower := strings.ToLower(key)
+			if s, ok := value.(string); ok && (strings.Contains(lower, "token") || lower == "dx") {
+				out[key] = maskString(s, 10)
+			} else if s, ok := value.(string); ok && (strings.Contains(lower, "base64") || lower == "b64_json") {
+				out[key] = maskBase64(s)
+			} else {
+				out[key] = sanitize(value)
+			}
+		}
+		return out
+	case []any:
+		out := make([]any, len(x))
+		for i, item := range x {
+			out[i] = sanitize(item)
+		}
+		return out
+	case []map[string]any:
+		out := make([]any, len(x))
+		for i, item := range x {
+			out[i] = sanitize(item)
+		}
+		return out
+	case string:
+		if strings.HasPrefix(strings.TrimSpace(x), "data:") && strings.Contains(x, ";base64,") {
+			return maskBase64(x)
+		}
+		return x
+	default:
+		return v
+	}
+}
+
+func maskString(value string, keep int) string {
+	if len(value) <= keep {
+		return value
+	}
+	return value[:keep] + "..."
+}
+
+func maskBase64(value string) string {
+	if idx := strings.Index(value, ","); strings.HasPrefix(value, "data:") && idx >= 0 {
+		return value[:idx+1] + maskString(value[idx+1:], 24)
+	}
+	return maskString(value, 24)
+}
+
+func sortedKeys(m map[string]any) []string {
+	keys := make([]string, 0, len(m))
+	for key := range m {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func durationMS(start time.Time) int64 {
+	return time.Since(start).Milliseconds()
+}

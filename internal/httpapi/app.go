@@ -1,0 +1,682 @@
+package httpapi
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"mime/multipart"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"chatgpt2api/internal/config"
+	"chatgpt2api/internal/protocol"
+	"chatgpt2api/internal/service"
+	"chatgpt2api/internal/util"
+	"chatgpt2api/internal/version"
+)
+
+type App struct {
+	config     *config.Store
+	auth       *service.AuthService
+	accounts   *service.AccountService
+	logs       *service.LogService
+	logger     *service.Logger
+	proxy      *service.ProxyService
+	engine     *protocol.Engine
+	images     *service.ImageService
+	tasks      *service.ImageTaskService
+	cpa        *service.CPAConfig
+	cpaImport  *service.CPAImportService
+	sub2       *service.Sub2APIConfig
+	sub2Import *service.Sub2APIService
+	register   *service.RegisterService
+	cancel     context.CancelFunc
+}
+
+func NewApp() (*App, error) {
+	cfg, err := config.NewStore()
+	if err != nil {
+		return nil, err
+	}
+	storageBackend, err := cfg.StorageBackend()
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	logs := service.NewLogService(cfg.DataDir)
+	logger := service.NewLogger(cfg.LogLevels)
+	proxy := service.NewProxyService(cfg)
+	accounts := service.NewAccountService(storageBackend, cfg, proxy, logs)
+	auth := service.NewAuthService(storageBackend)
+	engine := &protocol.Engine{Accounts: accounts, Config: cfg, Proxy: proxy, Logger: logger}
+	app := &App{config: cfg, auth: auth, accounts: accounts, logs: logs, logger: logger, proxy: proxy, engine: engine, images: service.NewImageService(cfg), cpa: service.NewCPAConfig(cfg.DataDir), sub2: service.NewSub2APIConfig(cfg.DataDir), cancel: cancel}
+	app.cpaImport = service.NewCPAImportService(app.cpa, accounts, proxy)
+	app.sub2Import = service.NewSub2APIService(app.sub2, accounts)
+	app.register = service.NewRegisterService(cfg.DataDir, accounts)
+	app.tasks = service.NewImageTaskService(filepath.Join(cfg.DataDir, "image_tasks.json"),
+		func(ctx context.Context, payload map[string]any) (map[string]any, error) {
+			result, _, err := engine.HandleImageGenerations(ctx, payload)
+			return result, err
+		},
+		func(ctx context.Context, payload map[string]any) (map[string]any, error) {
+			images, _ := payload["images"].([]protocol.UploadedImage)
+			result, _, err := engine.HandleImageEdits(ctx, payload, images)
+			return result, err
+		},
+		cfg.ImageRetentionDays,
+	)
+	accounts.StartLimitedWatcher(ctx, time.Duration(cfg.RefreshAccountIntervalMinute())*time.Minute)
+	cfg.CleanupOldImages()
+	return app, nil
+}
+
+func (a *App) Close() {
+	if a.cancel != nil {
+		a.cancel()
+	}
+}
+
+func (a *App) Handler() http.Handler {
+	return http.HandlerFunc(a.serveHTTP)
+}
+
+func (a *App) serveHTTP(w http.ResponseWriter, r *http.Request) {
+	a.applyCORS(w)
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	path := r.URL.Path
+	switch {
+	case path == "/v1/models" && r.Method == http.MethodGet:
+		a.handleModels(w, r)
+	case path == "/v1/images/generations" && r.Method == http.MethodPost:
+		a.handleImageGenerations(w, r)
+	case path == "/v1/images/edits" && r.Method == http.MethodPost:
+		a.handleImageEdits(w, r)
+	case path == "/v1/chat/completions" && r.Method == http.MethodPost:
+		a.handleChatCompletions(w, r)
+	case path == "/v1/responses" && r.Method == http.MethodPost:
+		a.handleResponses(w, r)
+	case path == "/v1/messages" && r.Method == http.MethodPost:
+		a.handleMessages(w, r)
+	case path == "/auth/login" && r.Method == http.MethodPost:
+		a.handleLogin(w, r)
+	case path == "/version" && r.Method == http.MethodGet:
+		util.WriteJSON(w, http.StatusOK, map[string]any{"version": version.Get()})
+	case strings.HasPrefix(path, "/api/auth/users"):
+		a.handleUserKeys(w, r)
+	case path == "/api/accounts" || strings.HasPrefix(path, "/api/accounts/"):
+		a.handleAccounts(w, r)
+	case strings.HasPrefix(path, "/api/cpa/pools"):
+		a.handleCPA(w, r)
+	case strings.HasPrefix(path, "/api/sub2api/servers"):
+		a.handleSub2API(w, r)
+	case strings.HasPrefix(path, "/api/image-tasks"):
+		a.handleImageTasks(w, r)
+	case strings.HasPrefix(path, "/api/register"):
+		a.handleRegister(w, r)
+	case path == "/api/settings":
+		a.handleSettings(w, r)
+	case path == "/api/images" && r.Method == http.MethodGet:
+		a.handleImages(w, r)
+	case path == "/api/logs" && r.Method == http.MethodGet:
+		a.handleLogs(w, r)
+	case path == "/api/proxy" || path == "/api/proxy/test":
+		a.handleProxy(w, r)
+	case path == "/api/storage/info" && r.Method == http.MethodGet:
+		a.handleStorageInfo(w, r)
+	case strings.HasPrefix(path, "/images/"):
+		http.StripPrefix("/images/", http.FileServer(http.Dir(a.config.ImagesDir()))).ServeHTTP(w, r)
+	case strings.HasPrefix(path, "/image-thumbnails/"):
+		http.StripPrefix("/image-thumbnails/", http.FileServer(http.Dir(a.config.ImageThumbnailsDir()))).ServeHTTP(w, r)
+	default:
+		a.serveWeb(w, r)
+	}
+}
+
+func (a *App) applyCORS(w http.ResponseWriter) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "*")
+	w.Header().Set("Access-Control-Allow-Headers", "*")
+}
+
+func (a *App) handleModels(w http.ResponseWriter, r *http.Request) {
+	if _, ok := a.requireIdentity(w, r, ""); !ok {
+		return
+	}
+	result, err := a.engine.ListModels(r.Context())
+	a.writeProtocol(w, r, result, nil, err, "openai", "/v1/models", "models", "模型列表")
+}
+
+func (a *App) handleImageGenerations(w http.ResponseWriter, r *http.Request) {
+	identity, ok := a.requireIdentity(w, r, "")
+	if !ok {
+		return
+	}
+	body, err := readJSONMap(r)
+	if err != nil {
+		util.WriteError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	body["base_url"] = a.resolveImageBaseURL(r)
+	result, stream, err := a.engine.HandleImageGenerations(r.Context(), body)
+	a.writeProtocol(w, r, result, stream, err, "openai", "/v1/images/generations", util.Clean(body["model"]), callSummary("文生图", identity))
+}
+
+func (a *App) handleImageEdits(w http.ResponseWriter, r *http.Request) {
+	identity, ok := a.requireIdentity(w, r, "")
+	if !ok {
+		return
+	}
+	body, images, err := readMultipartImageBody(r)
+	if err != nil {
+		util.WriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if n := util.ToInt(body["n"], 1); n < 1 || n > 4 {
+		util.WriteError(w, http.StatusBadRequest, "n must be between 1 and 4")
+		return
+	}
+	if len(images) == 0 {
+		util.WriteError(w, http.StatusBadRequest, "image file is required")
+		return
+	}
+	body["base_url"] = a.resolveImageBaseURL(r)
+	result, stream, err := a.engine.HandleImageEdits(r.Context(), body, images)
+	a.writeProtocol(w, r, result, stream, err, "openai", "/v1/images/edits", util.Clean(body["model"]), callSummary("图生图", identity))
+}
+
+func (a *App) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
+	identity, ok := a.requireIdentity(w, r, "")
+	if !ok {
+		return
+	}
+	body, err := readJSONMap(r)
+	if err != nil {
+		util.WriteError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	model := firstNonEmpty(util.Clean(body["model"]), "auto")
+	result, stream, err := a.engine.HandleChatCompletions(r.Context(), body)
+	a.writeProtocol(w, r, result, stream, err, "openai", "/v1/chat/completions", model, callSummary("文本生成", identity))
+}
+
+func (a *App) handleResponses(w http.ResponseWriter, r *http.Request) {
+	identity, ok := a.requireIdentity(w, r, "")
+	if !ok {
+		return
+	}
+	body, err := readJSONMap(r)
+	if err != nil {
+		util.WriteError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	model := firstNonEmpty(util.Clean(body["model"]), "auto")
+	result, stream, err := a.engine.HandleResponses(r.Context(), body)
+	a.writeProtocol(w, r, result, stream, err, "openai", "/v1/responses", model, callSummary("Responses", identity))
+}
+
+func (a *App) handleMessages(w http.ResponseWriter, r *http.Request) {
+	authHeader := r.Header.Get("Authorization")
+	if authHeader == "" && r.Header.Get("x-api-key") != "" {
+		authHeader = "Bearer " + r.Header.Get("x-api-key")
+	}
+	identity, ok := a.requireIdentity(w, r, authHeader)
+	if !ok {
+		return
+	}
+	body, err := readJSONMap(r)
+	if err != nil {
+		util.WriteError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	model := firstNonEmpty(util.Clean(body["model"]), "auto")
+	result, stream, err := a.engine.HandleMessages(r.Context(), body)
+	a.writeProtocol(w, r, result, stream, err, "anthropic", "/v1/messages", model, callSummary("Messages", identity))
+}
+
+func (a *App) writeProtocol(w http.ResponseWriter, r *http.Request, result map[string]any, stream *protocol.StreamResult, err error, sseKind, endpoint, model, summary string) {
+	start := time.Now()
+	if err != nil {
+		a.logCall(summary, endpoint, model, start, "failed", err.Error(), nil)
+		a.writeProtocolError(w, err)
+		return
+	}
+	if stream == nil {
+		a.logCall(summary, endpoint, model, start, "success", "", collectURLs(result))
+		util.WriteJSON(w, http.StatusOK, result)
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	flusher, _ := w.(http.Flusher)
+	if stream.Kind == "anthropic" || sseKind == "anthropic" {
+		var urls []string
+		for item := range stream.Items {
+			urls = append(urls, collectURLs(item)...)
+			event := firstNonEmpty(util.Clean(item["type"]), "message_delta")
+			fmt.Fprintf(w, "event: %s\n", event)
+			fmt.Fprintf(w, "data: %s\n\n", jsonString(item))
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
+		if err := <-stream.Err; err != nil {
+			a.logCall(summary, endpoint, model, start, "failed", err.Error(), urls)
+			fmt.Fprintf(w, "event: error\n")
+			fmt.Fprintf(w, "data: %s\n\n", jsonString(map[string]any{"type": "error", "error": map[string]any{"type": fmt.Sprintf("%T", err), "message": err.Error()}}))
+			return
+		}
+		a.logCall(summary, endpoint, model, start, "success", "", urls)
+		return
+	}
+	fmt.Fprint(w, ": stream-open\n\n")
+	if flusher != nil {
+		flusher.Flush()
+	}
+	var urls []string
+	for item := range stream.Items {
+		urls = append(urls, collectURLs(item)...)
+		fmt.Fprintf(w, "data: %s\n\n", jsonString(item))
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}
+	if err := <-stream.Err; err != nil {
+		a.logCall(summary, endpoint, model, start, "failed", err.Error(), urls)
+		fmt.Fprintf(w, "data: %s\n\n", jsonString(openAIErrorForStream(err)))
+	} else {
+		a.logCall(summary, endpoint, model, start, "success", "", urls)
+	}
+	fmt.Fprint(w, "data: [DONE]\n\n")
+}
+
+func (a *App) writeProtocolError(w http.ResponseWriter, err error) {
+	var httpErr protocol.HTTPError
+	if errors.As(err, &httpErr) {
+		util.WriteError(w, httpErr.Status, httpErr.Message)
+		return
+	}
+	var imageErr *protocol.ImageGenerationError
+	if errors.As(err, &imageErr) {
+		util.WriteJSON(w, imageErr.StatusCode, imageErr.OpenAIError())
+		return
+	}
+	message := err.Error()
+	if strings.Contains(strings.ToLower(message), "no available image quota") {
+		util.WriteJSON(w, http.StatusTooManyRequests, map[string]any{"error": map[string]any{"message": "no available image quota", "type": "insufficient_quota", "param": nil, "code": "insufficient_quota"}})
+		return
+	}
+	util.WriteJSON(w, http.StatusBadGateway, map[string]any{"detail": map[string]any{"error": message}})
+}
+
+func (a *App) handleLogin(w http.ResponseWriter, r *http.Request) {
+	identity, ok := a.requireIdentity(w, r, "")
+	if !ok {
+		return
+	}
+	util.WriteJSON(w, http.StatusOK, map[string]any{"ok": true, "version": version.Get(), "role": identity.Role, "subject_id": identity.ID, "name": identity.Name})
+}
+
+func (a *App) handleSettings(w http.ResponseWriter, r *http.Request) {
+	if _, ok := a.requireAdmin(w, r); !ok {
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		util.WriteJSON(w, http.StatusOK, map[string]any{"config": a.config.Get()})
+	case http.MethodPost:
+		body, err := readJSONMap(r)
+		if err != nil {
+			util.WriteError(w, http.StatusBadRequest, "invalid json body")
+			return
+		}
+		updated, err := a.config.Update(body)
+		if err != nil {
+			util.WriteError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		util.WriteJSON(w, http.StatusOK, map[string]any{"config": updated})
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func (a *App) handleImages(w http.ResponseWriter, r *http.Request) {
+	if _, ok := a.requireAdmin(w, r); !ok {
+		return
+	}
+	util.WriteJSON(w, http.StatusOK, a.images.ListImages(a.resolveImageBaseURL(r), strings.TrimSpace(r.URL.Query().Get("start_date")), strings.TrimSpace(r.URL.Query().Get("end_date"))))
+}
+
+func (a *App) handleLogs(w http.ResponseWriter, r *http.Request) {
+	if _, ok := a.requireAdmin(w, r); !ok {
+		return
+	}
+	util.WriteJSON(w, http.StatusOK, map[string]any{"items": a.logs.List(strings.TrimSpace(r.URL.Query().Get("type")), strings.TrimSpace(r.URL.Query().Get("start_date")), strings.TrimSpace(r.URL.Query().Get("end_date")), 200)})
+}
+
+func (a *App) handleStorageInfo(w http.ResponseWriter, r *http.Request) {
+	if _, ok := a.requireAdmin(w, r); !ok {
+		return
+	}
+	backend, err := a.config.StorageBackend()
+	if err != nil {
+		util.WriteError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	util.WriteJSON(w, http.StatusOK, map[string]any{"backend": backend.Info(), "health": backend.HealthCheck()})
+}
+
+func (a *App) handleProxy(w http.ResponseWriter, r *http.Request) {
+	if _, ok := a.requireAdmin(w, r); !ok {
+		return
+	}
+	if r.URL.Path == "/api/proxy/test" {
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		body, _ := readJSONMap(r)
+		candidate := strings.TrimSpace(util.Clean(body["url"]))
+		if candidate == "" {
+			candidate = a.config.Proxy()
+		}
+		if candidate == "" {
+			util.WriteError(w, http.StatusBadRequest, "proxy url is required")
+			return
+		}
+		util.WriteJSON(w, http.StatusOK, map[string]any{"result": a.proxy.Test(candidate, 15*time.Second)})
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		util.WriteJSON(w, http.StatusOK, map[string]any{"proxy": map[string]any{"url": a.config.Proxy()}})
+	case http.MethodPost:
+		body, _ := readJSONMap(r)
+		url := util.Clean(body["url"])
+		updated, err := a.config.Update(map[string]any{"proxy": url})
+		if err != nil {
+			util.WriteError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		util.WriteJSON(w, http.StatusOK, map[string]any{"proxy": map[string]any{"url": updated["proxy"]}})
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func (a *App) requireIdentity(w http.ResponseWriter, r *http.Request, overrideAuth string) (service.Identity, bool) {
+	auth := overrideAuth
+	if auth == "" {
+		auth = r.Header.Get("Authorization")
+	}
+	token := extractBearerToken(auth)
+	if token != "" && token == a.config.AuthKey() {
+		return service.Identity{ID: "admin", Name: "管理员", Role: "admin"}, true
+	}
+	if identity := a.auth.Authenticate(token); identity != nil {
+		return *identity, true
+	}
+	util.WriteError(w, http.StatusUnauthorized, "authorization is invalid")
+	return service.Identity{}, false
+}
+
+func (a *App) requireAdmin(w http.ResponseWriter, r *http.Request) (service.Identity, bool) {
+	identity, ok := a.requireIdentity(w, r, "")
+	if !ok {
+		return service.Identity{}, false
+	}
+	if identity.Role != "admin" {
+		util.WriteError(w, http.StatusForbidden, "admin permission required")
+		return service.Identity{}, false
+	}
+	return identity, true
+}
+
+func extractBearerToken(auth string) string {
+	scheme, value, ok := strings.Cut(strings.TrimSpace(auth), " ")
+	if !ok || strings.ToLower(scheme) != "bearer" {
+		return ""
+	}
+	return strings.TrimSpace(value)
+}
+
+func (a *App) resolveImageBaseURL(r *http.Request) string {
+	if base := a.config.BaseURL(); base != "" {
+		return base
+	}
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	if forwarded := r.Header.Get("x-forwarded-proto"); forwarded != "" {
+		scheme = strings.Split(forwarded, ",")[0]
+	}
+	host := r.Host
+	if value := r.Header.Get("host"); value != "" {
+		host = value
+	}
+	return scheme + "://" + host
+}
+
+func readJSONMap(r *http.Request) (map[string]any, error) {
+	var body map[string]any
+	err := util.DecodeJSON(r.Body, &body)
+	if body == nil {
+		body = map[string]any{}
+	}
+	return body, err
+}
+
+func readMultipartImageBody(r *http.Request) (map[string]any, []protocol.UploadedImage, error) {
+	if err := r.ParseMultipartForm(128 << 20); err != nil {
+		return nil, nil, err
+	}
+	body := map[string]any{
+		"prompt":          firstForm(r.MultipartForm, "prompt"),
+		"model":           firstNonEmpty(firstForm(r.MultipartForm, "model"), "gpt-image-2"),
+		"n":               util.ToInt(firstForm(r.MultipartForm, "n"), 1),
+		"size":            firstForm(r.MultipartForm, "size"),
+		"response_format": firstNonEmpty(firstForm(r.MultipartForm, "response_format"), "b64_json"),
+		"stream":          util.ToBool(firstForm(r.MultipartForm, "stream")),
+	}
+	var images []protocol.UploadedImage
+	for _, field := range []string{"image", "image[]"} {
+		for _, header := range r.MultipartForm.File[field] {
+			image, err := readUpload(header)
+			if err != nil {
+				return nil, nil, err
+			}
+			if len(image.Data) == 0 {
+				return nil, nil, fmt.Errorf("image file is empty")
+			}
+			images = append(images, image)
+		}
+	}
+	return body, images, nil
+}
+
+func firstForm(form *multipart.Form, key string) string {
+	if form == nil || len(form.Value[key]) == 0 {
+		return ""
+	}
+	return form.Value[key][0]
+}
+
+func readUpload(header *multipart.FileHeader) (protocol.UploadedImage, error) {
+	file, err := header.Open()
+	if err != nil {
+		return protocol.UploadedImage{}, err
+	}
+	defer file.Close()
+	data, err := io.ReadAll(file)
+	if err != nil {
+		return protocol.UploadedImage{}, err
+	}
+	contentType := header.Header.Get("Content-Type")
+	if contentType == "" {
+		contentType = "image/png"
+	}
+	filename := header.Filename
+	if filename == "" {
+		filename = "image.png"
+	}
+	return protocol.UploadedImage{Data: data, Filename: filename, ContentType: contentType}, nil
+}
+
+func jsonString(v any) string {
+	data, _ := json.Marshal(v)
+	return string(data)
+}
+
+func openAIErrorForStream(err error) map[string]any {
+	var imageErr *protocol.ImageGenerationError
+	if errors.As(err, &imageErr) {
+		return imageErr.OpenAIError()
+	}
+	return map[string]any{"error": map[string]any{"message": err.Error(), "type": fmt.Sprintf("%T", err)}}
+}
+
+func callSummary(summary string, identity service.Identity) string {
+	return summary
+}
+
+func (a *App) logCall(summary, endpoint, model string, started time.Time, status, errText string, urls []string) {
+	detail := map[string]any{"endpoint": endpoint, "model": model, "started_at": started.Format("2006-01-02 15:04:05"), "ended_at": time.Now().Format("2006-01-02 15:04:05"), "duration_ms": time.Since(started).Milliseconds(), "status": status}
+	if errText != "" {
+		detail["error"] = errText
+	}
+	if len(urls) > 0 {
+		detail["urls"] = dedupe(urls)
+	}
+	suffix := "调用完成"
+	if status == "failed" {
+		suffix = "调用失败"
+	}
+	a.logs.Add(service.LogTypeCall, summary+suffix, detail)
+}
+
+func collectURLs(v any) []string {
+	switch x := v.(type) {
+	case map[string]any:
+		var urls []string
+		for key, value := range x {
+			if key == "url" {
+				if u := util.Clean(value); u != "" {
+					urls = append(urls, u)
+				}
+			} else if key == "urls" {
+				for _, raw := range anyList(value) {
+					if u := util.Clean(raw); u != "" {
+						urls = append(urls, u)
+					}
+				}
+			} else {
+				urls = append(urls, collectURLs(value)...)
+			}
+		}
+		return urls
+	case []any:
+		var urls []string
+		for _, item := range x {
+			urls = append(urls, collectURLs(item)...)
+		}
+		return urls
+	case []map[string]any:
+		var urls []string
+		for _, item := range x {
+			urls = append(urls, collectURLs(item)...)
+		}
+		return urls
+	default:
+		return nil
+	}
+}
+
+func dedupe(items []string) []string {
+	seen := map[string]struct{}{}
+	var out []string
+	for _, item := range items {
+		if _, ok := seen[item]; ok {
+			continue
+		}
+		seen[item] = struct{}{}
+		out = append(out, item)
+	}
+	return out
+}
+
+func anyList(v any) []any {
+	if list, ok := v.([]any); ok {
+		return list
+	}
+	if list, ok := v.([]map[string]any); ok {
+		out := make([]any, len(list))
+		for i, item := range list {
+			out[i] = item
+		}
+		return out
+	}
+	return nil
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func (a *App) serveWeb(w http.ResponseWriter, r *http.Request) {
+	webDist := filepath.Join(a.config.RootDir, "web_dist")
+	clean := strings.Trim(r.URL.Path, "/")
+	if asset := resolveWebAsset(webDist, clean); asset != "" {
+		http.ServeFile(w, r, asset)
+		return
+	}
+	last := clean
+	if idx := strings.LastIndex(last, "/"); idx >= 0 {
+		last = last[idx+1:]
+	}
+	if strings.HasPrefix(clean, "assets/") || strings.Contains(last, ".") {
+		http.NotFound(w, r)
+		return
+	}
+	if asset := resolveWebAsset(webDist, ""); asset != "" {
+		http.ServeFile(w, r, asset)
+		return
+	}
+	http.NotFound(w, r)
+}
+
+func resolveWebAsset(webDist, requested string) string {
+	if info, err := os.Stat(webDist); err != nil || !info.IsDir() {
+		return ""
+	}
+	base, _ := filepath.Abs(webDist)
+	var candidates []string
+	if requested == "" {
+		candidates = []string{filepath.Join(base, "index.html")}
+	} else {
+		candidates = []string{filepath.Join(base, filepath.FromSlash(requested)), filepath.Join(base, filepath.FromSlash(requested), "index.html"), filepath.Join(base, filepath.FromSlash(requested)+".html")}
+	}
+	for _, candidate := range candidates {
+		resolved, _ := filepath.Abs(candidate)
+		if !strings.HasPrefix(resolved, base) {
+			continue
+		}
+		if info, err := os.Stat(resolved); err == nil && !info.IsDir() {
+			return resolved
+		}
+	}
+	return ""
+}

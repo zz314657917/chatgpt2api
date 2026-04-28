@@ -315,9 +315,13 @@ export async function fetchManagedImages(filters: { start_date?: string; end_dat
   const params = new URLSearchParams();
   if (filters.start_date) params.set("start_date", filters.start_date);
   if (filters.end_date) params.set("end_date", filters.end_date);
-  return httpRequest<{ items: ManagedImage[]; groups: Array<{ date: string; items: ManagedImage[] }> }>(
+  const data = await httpRequest<{ items?: ManagedImage[] | null; groups?: Array<{ date: string; items: ManagedImage[] }> | null }>(
     `/api/images${params.toString() ? `?${params.toString()}` : ""}`,
   );
+  return {
+    items: Array.isArray(data.items) ? data.items : [],
+    groups: Array.isArray(data.groups) ? data.groups : [],
+  };
 }
 
 export async function fetchSystemLogs(filters: { type?: string; start_date?: string; end_date?: string }) {
