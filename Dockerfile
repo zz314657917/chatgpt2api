@@ -1,9 +1,5 @@
 # syntax=docker/dockerfile:1.7
 
-ARG BUILDPLATFORM
-ARG TARGETPLATFORM
-ARG TARGETOS
-ARG TARGETARCH
 ARG VERSION=0.0.0-dev
 
 FROM --platform=$BUILDPLATFORM node:22-alpine AS web-build
