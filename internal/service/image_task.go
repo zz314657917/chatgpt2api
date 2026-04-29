@@ -53,11 +53,19 @@ func NewImageTaskService(path string, generation ImageTaskHandler, edit ImageTas
 }
 
 func (s *ImageTaskService) SubmitGeneration(ctx context.Context, identity Identity, clientTaskID, prompt, model, size, baseURL string, n int) (map[string]any, error) {
+	prompt = strings.TrimSpace(prompt)
+	if prompt == "" {
+		return nil, fmt.Errorf("prompt is required")
+	}
 	payload := map[string]any{"prompt": prompt, "model": model, "n": normalizedImageTaskCount(n), "size": size, "response_format": "url", "base_url": baseURL}
 	return s.submit(ctx, identity, clientTaskID, "generate", payload)
 }
 
 func (s *ImageTaskService) SubmitEdit(ctx context.Context, identity Identity, clientTaskID, prompt, model, size, baseURL string, images any, n int) (map[string]any, error) {
+	prompt = strings.TrimSpace(prompt)
+	if prompt == "" {
+		return nil, fmt.Errorf("prompt is required")
+	}
 	payload := map[string]any{"prompt": prompt, "images": images, "model": model, "n": normalizedImageTaskCount(n), "size": size, "response_format": "url", "base_url": baseURL}
 	return s.submit(ctx, identity, clientTaskID, "edit", payload)
 }
@@ -182,13 +190,21 @@ func (s *ImageTaskService) runTask(ctx context.Context, key, mode string, identi
 			status = TaskStatusCancelled
 			message = "任务已终止"
 		}
-		s.updateActiveTask(key, map[string]any{"status": status, "error": message, "data": taskResultData(result)})
+		updates := map[string]any{"status": status, "error": message, "data": taskResultData(result)}
+		if outputType := util.Clean(result["output_type"]); outputType != "" {
+			updates["output_type"] = outputType
+		}
+		s.updateActiveTask(key, updates)
 		return
 	}
 	data := util.AsMapSlice(result["data"])
 	if len(data) == 0 {
 		message := firstNonEmpty(util.Clean(result["message"]), "image task returned no image data")
-		s.updateActiveTask(key, map[string]any{"status": TaskStatusError, "error": message, "data": []any{}})
+		updates := map[string]any{"status": TaskStatusError, "error": message, "data": []any{}}
+		if outputType := util.Clean(result["output_type"]); outputType != "" {
+			updates["output_type"] = outputType
+		}
+		s.updateActiveTask(key, updates)
 		return
 	}
 	s.updateActiveTask(key, map[string]any{"status": TaskStatusSuccess, "data": data, "error": ""})
@@ -306,6 +322,9 @@ func (s *ImageTaskService) loadLocked() map[string]map[string]any {
 		if errText := util.Clean(task["error"]); errText != "" {
 			normalized["error"] = errText
 		}
+		if outputType := util.Clean(task["output_type"]); outputType != "" {
+			normalized["output_type"] = outputType
+		}
 		tasks[taskKey(owner, id)] = normalized
 	}
 	return tasks
@@ -371,6 +390,9 @@ func publicTask(task map[string]any) map[string]any {
 	}
 	if util.Clean(task["error"]) != "" {
 		item["error"] = task["error"]
+	}
+	if util.Clean(task["output_type"]) != "" {
+		item["output_type"] = task["output_type"]
 	}
 	return item
 }

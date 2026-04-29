@@ -17,14 +17,15 @@ export type StoredReferenceImage = {
 export type StoredImage = {
   id: string;
   taskId?: string;
-  status?: "loading" | "success" | "error" | "cancelled";
+  status?: "loading" | "success" | "error" | "cancelled" | "message";
   b64_json?: string;
   url?: string;
   revised_prompt?: string;
   error?: string;
+  text_response?: string;
 };
 
-export type ImageTurnStatus = "queued" | "generating" | "success" | "error" | "cancelled";
+export type ImageTurnStatus = "queued" | "generating" | "success" | "error" | "cancelled" | "message";
 
 export type ImageTurn = {
   id: string;
@@ -67,8 +68,9 @@ function normalizeStoredImage(image: StoredImage): StoredImage {
     taskId: typeof image.taskId === "string" && image.taskId ? image.taskId : undefined,
     url: typeof image.url === "string" && image.url ? image.url : undefined,
     revised_prompt: typeof image.revised_prompt === "string" ? image.revised_prompt : undefined,
+    text_response: typeof image.text_response === "string" && image.text_response ? image.text_response : undefined,
   };
-  if (image.status === "loading" || image.status === "error" || image.status === "success" || image.status === "cancelled") {
+  if (image.status === "loading" || image.status === "error" || image.status === "success" || image.status === "cancelled" || image.status === "message") {
     return normalized;
   }
   return {
@@ -148,7 +150,9 @@ function normalizeTurn(turn: ImageTurn & Record<string, unknown>): ImageTurn {
         ? "error"
         : normalizedImages.some((image) => image.status === "cancelled")
           ? "cancelled"
-        : "success";
+          : normalizedImages.some((image) => image.status === "message")
+            ? "message"
+            : "success";
 
   return {
     id: String(turn.id || `${Date.now()}`),
@@ -165,7 +169,8 @@ function normalizeTurn(turn: ImageTurn & Record<string, unknown>): ImageTurn {
       turn.status === "generating" ||
       turn.status === "success" ||
       turn.status === "error" ||
-      turn.status === "cancelled"
+      turn.status === "cancelled" ||
+      turn.status === "message"
         ? turn.status
         : derivedStatus,
     error: typeof turn.error === "string" ? turn.error : undefined,
@@ -188,7 +193,7 @@ function normalizeConversation(conversation: ImageConversation & Record<string, 
           images: Array.isArray(conversation.images) ? (conversation.images as StoredImage[]) : [],
           createdAt: String(conversation.createdAt || new Date().toISOString()),
           status:
-            conversation.status === "generating" || conversation.status === "success" || conversation.status === "error"
+            conversation.status === "generating" || conversation.status === "success" || conversation.status === "error" || conversation.status === "message"
               ? conversation.status
               : "success",
           error: typeof conversation.error === "string" ? conversation.error : undefined,

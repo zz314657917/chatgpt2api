@@ -82,6 +82,20 @@ func TestImageServiceCreatesWebPThumbnails(t *testing.T) {
 	if decoded.Bounds().Dx() <= 0 || decoded.Bounds().Dy() <= 0 {
 		t.Fatalf("decoded thumbnail has invalid bounds: %v", decoded.Bounds())
 	}
+	if decoded.Bounds().Dx() > ThumbnailSize || decoded.Bounds().Dy() > ThumbnailSize {
+		t.Fatalf("decoded thumbnail bounds = %v, want max side <= %d", decoded.Bounds(), ThumbnailSize)
+	}
+	meta, err := os.ReadFile(thumbPath + ".json")
+	if err != nil {
+		t.Fatalf("read thumbnail metadata: %v", err)
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal(meta, &metadata); err != nil {
+		t.Fatalf("unmarshal thumbnail metadata: %v", err)
+	}
+	if numericMetaValue(metadata["thumbnail_size"]) != ThumbnailSize {
+		t.Fatalf("thumbnail_size metadata = %v, want %d", metadata["thumbnail_size"], ThumbnailSize)
+	}
 }
 
 func writeTestPNG(path string) error {

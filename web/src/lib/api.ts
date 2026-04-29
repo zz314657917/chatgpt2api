@@ -114,6 +114,7 @@ export type ImageTask = {
   updated_at: string;
   data?: Array<{ b64_json?: string; url?: string; revised_prompt?: string }>;
   error?: string;
+  output_type?: "text";
 };
 
 type ImageTaskListResponse = {

@@ -120,6 +120,63 @@ func TestImageModelSlugSupportsSelection(t *testing.T) {
 	}
 }
 
+func TestConversationPayloadEmbedsOpenAIMessageHistoryInSingleUserMessage(t *testing.T) {
+	client := &Client{}
+	payload := client.conversationPayload([]map[string]any{
+		{"role": "user", "content": "你好，你是什么模型？"},
+		{"role": "assistant", "content": "你好！我是一个由OpenAI开发的语言模型，叫做GPT-4。"},
+		{"role": "user", "content": "我之前说了什么？"},
+	}, "auto", "Asia/Shanghai")
+
+	if payload["parent_message_id"] != "client-created-root" {
+		t.Fatalf("parent_message_id = %q, want client-created-root", payload["parent_message_id"])
+	}
+	messages, ok := payload["messages"].([]map[string]any)
+	if !ok {
+		t.Fatalf("messages = %T, want []map[string]any", payload["messages"])
+	}
+	if len(messages) != 1 {
+		t.Fatalf("messages length = %d, want 1", len(messages))
+	}
+	author := messages[0]["author"].(map[string]any)
+	if author["role"] != "user" {
+		t.Fatalf("message role = %q, want user", author["role"])
+	}
+	content := messages[0]["content"].(map[string]any)
+	parts := content["parts"].([]any)
+	if len(parts) != 1 {
+		t.Fatalf("parts length = %d, want 1", len(parts))
+	}
+	prompt, ok := parts[0].(string)
+	if !ok {
+		t.Fatalf("prompt = %T, want string", parts[0])
+	}
+	for _, want := range []string{
+		"Conversation history:",
+		"User: 你好，你是什么模型？",
+		"Assistant: 你好！我是一个由OpenAI开发的语言模型，叫做GPT-4。",
+		"Current user message:\n我之前说了什么？",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing %q: %s", want, prompt)
+		}
+	}
+}
+
+func TestConversationPayloadKeepsSingleUserMessagePrompt(t *testing.T) {
+	client := &Client{}
+	payload := client.conversationPayload([]map[string]any{
+		{"role": "user", "content": "hello"},
+	}, "auto", "Asia/Shanghai")
+
+	messages := payload["messages"].([]map[string]any)
+	content := messages[0]["content"].(map[string]any)
+	parts := content["parts"].([]any)
+	if parts[0] != "hello" {
+		t.Fatalf("prompt = %q, want hello", parts[0])
+	}
+}
+
 func TestSolveTurnstileTokenInterpretsEncodedProgram(t *testing.T) {
 	program := `[[3,"ok"]]`
 	key := "secret"

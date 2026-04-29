@@ -86,6 +86,32 @@ func TestImageTaskServiceListTasksReturnsEmptyArrays(t *testing.T) {
 	}
 }
 
+func TestImageTaskServiceRejectsBlankPromptBeforeQueueing(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "image_tasks.json")
+	svc := NewImageTaskService(path, failingImageTaskHandler, failingImageTaskHandler, func() int { return 30 })
+	identity := Identity{ID: "alice", Name: "Alice", Role: "user"}
+
+	for name, submit := range map[string]func() (map[string]any, error){
+		"generation": func() (map[string]any, error) {
+			return svc.SubmitGeneration(context.Background(), identity, "task-1", "  ", "gpt-image-2", "1024x1024", "https://base.test", 1)
+		},
+		"edit": func() (map[string]any, error) {
+			return svc.SubmitEdit(context.Background(), identity, "task-2", "\t", "gpt-image-2", "1024x1024", "https://base.test", []any{"image"}, 1)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := submit(); err == nil || err.Error() != "prompt is required" {
+				t.Fatalf("Submit() error = %v, want prompt is required", err)
+			}
+		})
+	}
+
+	got := svc.ListTasks(identity, nil)
+	if len(got["items"].([]map[string]any)) != 0 {
+		t.Fatalf("blank prompt should not queue tasks: %#v", got)
+	}
+}
+
 func TestImageTaskServiceLimitsConcurrentImageSlots(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "image_tasks.json")
 	started := make(chan string, 2)
@@ -225,6 +251,28 @@ func TestImageTaskServicePreservesPartialDataOnFailure(t *testing.T) {
 	}
 	if item["error"] != "second image failed" {
 		t.Fatalf("partial failure error = %#v", item)
+	}
+}
+
+func TestImageTaskServicePreservesTextOutputType(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "image_tasks.json")
+	handler := func(ctx context.Context, identity Identity, payload map[string]any) (map[string]any, error) {
+		return map[string]any{"message": "text response", "output_type": "text"}, nil
+	}
+	svc := NewImageTaskService(path, handler, handler, func() int { return 30 })
+	identity := Identity{ID: "alice", Name: "Alice", Role: "user"}
+
+	if _, err := svc.SubmitGeneration(context.Background(), identity, "task-1", "who are you", "gpt-image-2", "1024x1024", "https://base.test", 1); err != nil {
+		t.Fatalf("SubmitGeneration() error = %v", err)
+	}
+	waitForTaskStatus(t, svc, identity, "task-1", TaskStatusError)
+	got := svc.ListTasks(identity, []string{"task-1"})
+	item := got["items"].([]map[string]any)[0]
+	if item["output_type"] != "text" {
+		t.Fatalf("output_type = %#v, want text in %#v", item["output_type"], item)
+	}
+	if item["error"] != "text response" {
+		t.Fatalf("error = %#v, want text response", item["error"])
 	}
 }
 

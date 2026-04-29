@@ -189,7 +189,7 @@ export function ImageComposer({
                       onClick={onPickReferenceImage}
                     >
                       <ImagePlus className="size-3.5 sm:size-4" />
-                      <span>{referenceImages.length > 0 ? "添加参考图" : "上传"}</span>
+                      <span>上传</span>
                     </Button>
                     <div className="shrink-0 whitespace-nowrap rounded-full bg-stone-100 px-2 py-1 text-[10px] font-medium text-stone-600 sm:px-3 sm:py-2 sm:text-xs">
                       <span>剩余额度</span> {availableQuota}

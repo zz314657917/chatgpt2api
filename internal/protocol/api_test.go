@@ -153,6 +153,25 @@ func TestStreamImageResponseErrorsWhenNoImageOutput(t *testing.T) {
 	}
 }
 
+func TestCollectImageOutputsMarksTextResponse(t *testing.T) {
+	outputs := make(chan ImageOutput)
+	close(outputs)
+	errCh := make(chan error, 1)
+	errCh <- &ImageGenerationError{Message: "text response", StatusCode: 400, Type: "invalid_request_error", Code: "image_generation_text_response"}
+	close(errCh)
+
+	result, err := (&Engine{}).CollectImageOutputs(outputs, errCh)
+	if err == nil {
+		t.Fatal("CollectImageOutputs() err = nil, want text response error")
+	}
+	if result["output_type"] != "text" {
+		t.Fatalf("output_type = %#v, want text in %#v", result["output_type"], result)
+	}
+	if result["message"] != "text response" {
+		t.Fatalf("message = %#v, want text response", result["message"])
+	}
+}
+
 func TestStreamTextResponseEventsPropagatesUpstreamError(t *testing.T) {
 	deltas := make(chan string, 1)
 	upstreamErr := make(chan error, 1)

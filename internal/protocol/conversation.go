@@ -330,7 +330,7 @@ func (e *Engine) StreamImageOutputsWithPool(ctx context.Context, request Convers
 					}
 					if output.Kind == "message" && request.MessageAsError {
 						e.Accounts.MarkImageResult(token, false)
-						errCh <- &ImageGenerationError{Message: firstNonEmpty(output.Text, "Image generation was rejected by upstream policy."), StatusCode: 400, Type: "invalid_request_error", Code: "content_policy_violation"}
+						errCh <- &ImageGenerationError{Message: firstNonEmpty(output.Text, "Image generation returned a text response instead of image data."), StatusCode: 400, Type: "invalid_request_error", Code: "image_generation_text_response"}
 						return
 					}
 					emitted = true
@@ -474,6 +474,9 @@ func (e *Engine) CollectImageOutputs(outputs <-chan ImageOutput, errCh <-chan er
 		}
 	}
 	if streamErr != nil {
+		if imageErr, ok := streamErr.(*ImageGenerationError); ok && imageErr.Code == "image_generation_text_response" {
+			result["output_type"] = "text"
+		}
 		if result["message"] == nil {
 			result["message"] = streamErr.Error()
 		}
