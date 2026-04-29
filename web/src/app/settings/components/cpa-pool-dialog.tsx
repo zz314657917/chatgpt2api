@@ -11,9 +11,11 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 
 import { useSettingsStore } from "../store";
+import { settingsDialogInputClassName } from "./settings-ui";
 
 export function CPAPoolDialog() {
   const dialogOpen = useSettingsStore((state) => state.dialogOpen);
@@ -36,69 +38,88 @@ export function CPAPoolDialog() {
         <DialogHeader className="gap-2">
           <DialogTitle>{editingPool ? "编辑连接" : "添加连接"}</DialogTitle>
           <DialogDescription className="text-sm leading-6">
-            {editingPool ? "修改 CPA 连接信息" : "添加一个新的 CLIProxyAPI 连接"}
+            {editingPool
+              ? "修改 CPA 连接信息"
+              : "添加一个新的 CLIProxyAPI 连接"}
           </DialogDescription>
         </DialogHeader>
-        <div className="space-y-4">
-          <div className="space-y-2">
-            <label className="text-sm font-medium text-stone-700">名称（可选）</label>
+        <FieldGroup>
+          <Field>
+            <FieldLabel htmlFor="cpa-pool-name">名称（可选）</FieldLabel>
             <Input
+              id="cpa-pool-name"
               value={formName}
               onChange={(event) => setFormName(event.target.value)}
               placeholder="例如：主号池、备用池"
-              className="h-11 rounded-xl border-stone-200 bg-white"
+              className={settingsDialogInputClassName}
             />
-          </div>
-          <div className="space-y-2">
-            <label className="flex items-center gap-1.5 text-sm font-medium text-stone-700">
+          </Field>
+          <Field>
+            <FieldLabel
+              htmlFor="cpa-pool-base-url"
+              className="flex items-center gap-1.5"
+            >
               <Link2 className="size-3.5" />
               CPA 地址
-            </label>
+            </FieldLabel>
             <Input
+              id="cpa-pool-base-url"
               value={formBaseUrl}
               onChange={(event) => setFormBaseUrl(event.target.value)}
               placeholder="http://your-cpa-host:8317"
-              className="h-11 rounded-xl border-stone-200 bg-white"
+              className={settingsDialogInputClassName}
             />
-          </div>
-          <div className="space-y-2">
-            <label className="flex items-center gap-1.5 text-sm font-medium text-stone-700">
+          </Field>
+          <Field>
+            <FieldLabel
+              htmlFor="cpa-pool-secret-key"
+              className="flex items-center gap-1.5"
+            >
               <Unplug className="size-3.5" />
               Management Secret Key
-            </label>
+            </FieldLabel>
             <div className="relative">
               <Input
+                id="cpa-pool-secret-key"
                 type={showSecret ? "text" : "password"}
                 value={formSecretKey}
                 onChange={(event) => setFormSecretKey(event.target.value)}
                 placeholder={editingPool ? "留空则不修改密钥" : "CPA 管理密钥"}
-                className="h-11 rounded-xl border-stone-200 bg-white pr-10"
+                className={`${settingsDialogInputClassName} pr-10`}
               />
               <button
                 type="button"
-                className="absolute top-1/2 right-3 -translate-y-1/2 text-stone-400 transition hover:text-stone-600"
+                className="absolute top-1/2 right-3 -translate-y-1/2 text-muted-foreground transition hover:text-foreground"
                 onClick={() => setShowSecret(!showSecret)}
               >
-                {showSecret ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+                {showSecret ? (
+                  <EyeOff className="size-4" />
+                ) : (
+                  <Eye className="size-4" />
+                )}
               </button>
             </div>
-          </div>
-        </div>
+          </Field>
+        </FieldGroup>
         <DialogFooter className="pt-2">
           <Button
             variant="secondary"
-            className="h-10 rounded-xl bg-stone-100 px-5 text-stone-700 hover:bg-stone-200"
+            size="lg"
             onClick={() => setDialogOpen(false)}
             disabled={isSavingPool}
           >
             取消
           </Button>
           <Button
-            className="h-10 rounded-xl bg-stone-950 px-5 text-white hover:bg-stone-800"
+            size="lg"
             onClick={() => void savePool()}
             disabled={isSavingPool}
           >
-            {isSavingPool ? <LoaderCircle className="size-4 animate-spin" /> : <Save className="size-4" />}
+            {isSavingPool ? (
+              <LoaderCircle data-icon="inline-start" className="animate-spin" />
+            ) : (
+              <Save data-icon="inline-start" />
+            )}
             {editingPool ? "保存修改" : "添加"}
           </Button>
         </DialogFooter>

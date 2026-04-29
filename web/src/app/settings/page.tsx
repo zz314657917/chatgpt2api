@@ -50,10 +50,10 @@ function SettingsDataController() {
 
 function AdminSettingsPageContent() {
   return (
-    <>
+    <div className="mx-auto flex w-full max-w-[1180px] flex-col gap-5 pb-8">
       <SettingsDataController />
       <SettingsHeader />
-      <section className="flex flex-col gap-4">
+      <section className="flex flex-col gap-5">
         <ConfigCard />
         <LinuxDoLoginCard />
         <AnnouncementsCard />
@@ -62,7 +62,7 @@ function AdminSettingsPageContent() {
       </section>
       <CPAPoolDialog />
       <ImportBrowserDialog />
-    </>
+    </div>
   );
 }
 
@@ -72,7 +72,7 @@ export default function SettingsPage() {
   if (isCheckingAuth || !session) {
     return (
       <div className="flex min-h-[40vh] items-center justify-center">
-        <LoaderCircle className="size-5 animate-spin text-stone-400" />
+        <LoaderCircle className="size-5 animate-spin text-muted-foreground" />
       </div>
     );
   }

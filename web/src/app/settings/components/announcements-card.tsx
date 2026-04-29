@@ -1,12 +1,18 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Edit3, LoaderCircle, Megaphone, Plus, Save, Trash2 } from "lucide-react";
+import {
+  Edit3,
+  LoaderCircle,
+  Megaphone,
+  Plus,
+  Save,
+  Trash2,
+} from "lucide-react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
@@ -16,6 +22,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  Field,
+  FieldDescription,
+  FieldGroup,
+  FieldLabel,
+} from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -25,6 +37,14 @@ import {
   updateAnnouncement,
   type Announcement,
 } from "@/lib/api";
+
+import {
+  SettingsCard,
+  SettingsEmptyState,
+  settingsDialogInputClassName,
+  settingsListItemClassName,
+  settingsToggleClassName,
+} from "./settings-ui";
 
 type AnnouncementForm = {
   title: string;
@@ -164,7 +184,9 @@ export function AnnouncementsCard() {
   const handleToggleEnabled = async (item: Announcement) => {
     setItemPending(item.id, true);
     try {
-      const data = await updateAnnouncement(item.id, { enabled: !item.enabled });
+      const data = await updateAnnouncement(item.id, {
+        enabled: !item.enabled,
+      });
       setItems(data.items);
       toast.success(item.enabled ? "公告已停用" : "公告已启用");
     } catch (error) {
@@ -194,81 +216,92 @@ export function AnnouncementsCard() {
 
   return (
     <>
-      <Card>
-        <CardContent className="flex flex-col gap-6 p-6">
-          <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
-            <div className="flex items-center gap-3">
-              <div className="flex size-10 items-center justify-center rounded-xl bg-amber-100">
-                <Megaphone className="size-5 text-amber-800" />
-              </div>
-              <div>
-                <h2 className="text-lg font-semibold tracking-tight">公告管理</h2>
-                <p className="text-sm text-stone-500">创建多条公告，并分别选择显示在登录页或创作台。</p>
-              </div>
-            </div>
-            <Button className="h-9 rounded-xl bg-stone-950 px-4 text-white hover:bg-stone-800" onClick={openCreateDialog}>
-              <Plus className="size-4" />
-              添加公告
-            </Button>
-          </div>
-
+      <SettingsCard
+        icon={Megaphone}
+        title="公告管理"
+        description="创建多条公告，并分别选择显示在登录页或创作台。"
+        tone="amber"
+        action={
+          <Button onClick={openCreateDialog}>
+            <Plus data-icon="inline-start" />
+            添加公告
+          </Button>
+        }
+      >
+        <div className="flex flex-col gap-6">
           {isLoading ? (
             <div className="flex items-center justify-center py-10">
-              <LoaderCircle className="size-5 animate-spin text-stone-400" />
+              <LoaderCircle className="size-5 animate-spin text-muted-foreground" />
             </div>
           ) : items.length === 0 ? (
-            <div className="rounded-xl bg-stone-50 px-6 py-10 text-center text-sm text-stone-500">
-              暂无公告。添加后可选择在登录页、创作台或两个位置同时展示。
-            </div>
+            <SettingsEmptyState
+              icon={Megaphone}
+              title="暂无公告"
+              description="添加后可选择在登录页、创作台或两个位置同时展示。"
+            />
           ) : (
             <div className="flex flex-col gap-3">
               {items.map((item) => {
                 const isPending = pendingIds.has(item.id);
                 return (
-                  <div key={item.id} className="flex flex-col gap-4 rounded-xl border border-stone-200 bg-white px-4 py-4 lg:flex-row lg:items-center lg:justify-between">
+                  <div
+                    key={item.id}
+                    className={`flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between ${settingsListItemClassName}`}
+                  >
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-2">
-                        <div className="truncate text-sm font-semibold text-stone-900">{item.title || "公告"}</div>
-                        <Badge variant={item.enabled ? "success" : "secondary"} className="rounded-md">
+                        <div className="truncate text-sm font-semibold text-foreground">
+                          {item.title || "公告"}
+                        </div>
+                        <Badge variant={item.enabled ? "success" : "secondary"}>
                           {item.enabled ? "已启用" : "已停用"}
                         </Badge>
-                        {item.show_login ? <Badge variant="warning" className="rounded-md">登录页</Badge> : null}
-                        {item.show_image ? <Badge variant="info" className="rounded-md">创作台</Badge> : null}
+                        {item.show_login ? (
+                          <Badge variant="warning">登录页</Badge>
+                        ) : null}
+                        {item.show_image ? (
+                          <Badge variant="info">创作台</Badge>
+                        ) : null}
                       </div>
-                      <p className="mt-2 line-clamp-2 whitespace-pre-wrap break-words text-sm leading-6 text-stone-600">
+                      <p className="mt-2 line-clamp-2 whitespace-pre-wrap break-words text-sm leading-6 text-muted-foreground">
                         {item.content}
                       </p>
-                      <div className="mt-2 text-xs text-stone-400">更新于 {formatDateTime(item.updated_at)}</div>
+                      <div className="mt-2 text-xs text-muted-foreground/80">
+                        更新于 {formatDateTime(item.updated_at)}
+                      </div>
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
                       <Button
                         type="button"
                         variant="outline"
-                        className="h-9 rounded-xl border-stone-200 bg-white px-4 text-stone-700"
                         onClick={() => void handleToggleEnabled(item)}
                         disabled={isPending}
                       >
-                        {isPending ? <LoaderCircle className="size-4 animate-spin" /> : null}
+                        {isPending ? (
+                          <LoaderCircle
+                            data-icon="inline-start"
+                            className="animate-spin"
+                          />
+                        ) : null}
                         {item.enabled ? "停用" : "启用"}
                       </Button>
                       <Button
                         type="button"
                         variant="outline"
-                        className="h-9 rounded-xl border-stone-200 bg-white px-4 text-stone-700"
                         onClick={() => openEditDialog(item)}
                         disabled={isPending}
                       >
-                        <Edit3 className="size-4" />
+                        <Edit3 data-icon="inline-start" />
                         编辑
                       </Button>
                       <Button
                         type="button"
                         variant="outline"
-                        className="h-9 rounded-xl border-rose-200 bg-white px-4 text-rose-600 hover:bg-rose-50 hover:text-rose-700"
+                        className="border-rose-200 text-rose-600 hover:bg-rose-50 hover:text-rose-700"
                         onClick={() => setDeletingItem(item)}
                         disabled={isPending}
                       >
-                        <Trash2 className="size-4" />
+                        <Trash2 data-icon="inline-start" />
                         删除
                       </Button>
                     </div>
@@ -277,8 +310,8 @@ export function AnnouncementsCard() {
               })}
             </div>
           )}
-        </CardContent>
-      </Card>
+        </div>
+      </SettingsCard>
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent className="rounded-2xl p-6">
@@ -288,45 +321,67 @@ export function AnnouncementsCard() {
               公告内容会按勾选位置显示给对应页面的用户。
             </DialogDescription>
           </DialogHeader>
-          <div className="flex flex-col gap-4">
-            <div className="flex flex-col gap-2">
-              <label className="text-sm font-medium text-stone-700">标题</label>
+          <FieldGroup>
+            <Field>
+              <FieldLabel htmlFor="announcement-title">标题</FieldLabel>
               <Input
+                id="announcement-title"
                 value={form.title}
                 onChange={(event) => updateForm({ title: event.target.value })}
                 placeholder="公告"
-                className="h-11 rounded-xl border-stone-200 bg-white"
+                className={settingsDialogInputClassName}
               />
-            </div>
-            <div className="flex flex-col gap-2">
-              <label className="text-sm font-medium text-stone-700">内容</label>
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="announcement-content">内容</FieldLabel>
               <Textarea
+                id="announcement-content"
                 value={form.content}
-                onChange={(event) => updateForm({ content: event.target.value })}
+                onChange={(event) =>
+                  updateForm({ content: event.target.value })
+                }
                 placeholder="填写公告内容"
-                className="min-h-36 rounded-xl border-stone-200 bg-white"
+                className="min-h-36 bg-background"
               />
-            </div>
+              <FieldDescription>
+                保存前会去除首尾空白，内容不能为空。
+              </FieldDescription>
+            </Field>
             <div className="grid gap-3 md:grid-cols-3">
-              <label className="flex items-center gap-2 rounded-xl border border-stone-200 bg-white px-3 py-3 text-sm text-stone-700">
-                <Checkbox checked={form.enabled} onCheckedChange={(checked) => updateForm({ enabled: Boolean(checked) })} />
+              <label className={settingsToggleClassName}>
+                <Checkbox
+                  checked={form.enabled}
+                  onCheckedChange={(checked) =>
+                    updateForm({ enabled: Boolean(checked) })
+                  }
+                />
                 启用公告
               </label>
-              <label className="flex items-center gap-2 rounded-xl border border-stone-200 bg-white px-3 py-3 text-sm text-stone-700">
-                <Checkbox checked={form.show_login} onCheckedChange={(checked) => updateForm({ show_login: Boolean(checked) })} />
+              <label className={settingsToggleClassName}>
+                <Checkbox
+                  checked={form.show_login}
+                  onCheckedChange={(checked) =>
+                    updateForm({ show_login: Boolean(checked) })
+                  }
+                />
                 登录页显示
               </label>
-              <label className="flex items-center gap-2 rounded-xl border border-stone-200 bg-white px-3 py-3 text-sm text-stone-700">
-                <Checkbox checked={form.show_image} onCheckedChange={(checked) => updateForm({ show_image: Boolean(checked) })} />
+              <label className={settingsToggleClassName}>
+                <Checkbox
+                  checked={form.show_image}
+                  onCheckedChange={(checked) =>
+                    updateForm({ show_image: Boolean(checked) })
+                  }
+                />
                 创作台显示
               </label>
             </div>
-          </div>
+          </FieldGroup>
           <DialogFooter>
             <Button
               type="button"
               variant="secondary"
-              className="h-10 rounded-xl bg-stone-100 px-5 text-stone-700 hover:bg-stone-200"
+              size="lg"
               onClick={() => setDialogOpen(false)}
               disabled={isSaving}
             >
@@ -334,30 +389,41 @@ export function AnnouncementsCard() {
             </Button>
             <Button
               type="button"
-              className="h-10 rounded-xl bg-stone-950 px-5 text-white hover:bg-stone-800"
+              size="lg"
               onClick={() => void handleSave()}
               disabled={isSaving}
             >
-              {isSaving ? <LoaderCircle className="size-4 animate-spin" /> : <Save className="size-4" />}
+              {isSaving ? (
+                <LoaderCircle
+                  data-icon="inline-start"
+                  className="animate-spin"
+                />
+              ) : (
+                <Save data-icon="inline-start" />
+              )}
               保存
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
-      <Dialog open={Boolean(deletingItem)} onOpenChange={(open) => (!open ? setDeletingItem(null) : null)}>
+      <Dialog
+        open={Boolean(deletingItem)}
+        onOpenChange={(open) => (!open ? setDeletingItem(null) : null)}
+      >
         <DialogContent className="rounded-2xl p-6">
           <DialogHeader className="gap-2">
             <DialogTitle>删除公告</DialogTitle>
             <DialogDescription className="text-sm leading-6">
-              确认删除公告「{deletingItem?.title || "公告"}」吗？删除后不会再显示在任何页面。
+              确认删除公告「{deletingItem?.title || "公告"}
+              」吗？删除后不会再显示在任何页面。
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button
               type="button"
               variant="secondary"
-              className="h-10 rounded-xl bg-stone-100 px-5 text-stone-700 hover:bg-stone-200"
+              size="lg"
               onClick={() => setDeletingItem(null)}
               disabled={deletingItem ? pendingIds.has(deletingItem.id) : false}
             >
@@ -365,11 +431,19 @@ export function AnnouncementsCard() {
             </Button>
             <Button
               type="button"
-              className="h-10 rounded-xl bg-rose-600 px-5 text-white hover:bg-rose-700"
+              variant="destructive"
+              size="lg"
               onClick={() => void handleDelete()}
               disabled={deletingItem ? pendingIds.has(deletingItem.id) : false}
             >
-              {deletingItem && pendingIds.has(deletingItem.id) ? <LoaderCircle className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
+              {deletingItem && pendingIds.has(deletingItem.id) ? (
+                <LoaderCircle
+                  data-icon="inline-start"
+                  className="animate-spin"
+                />
+              ) : (
+                <Trash2 data-icon="inline-start" />
+              )}
               删除
             </Button>
           </DialogFooter>
