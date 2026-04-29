@@ -501,6 +501,13 @@ func readMultipartImageBody(r *http.Request) (map[string]any, []protocol.Uploade
 		"response_format": firstNonEmpty(firstForm(r.MultipartForm, "response_format"), "b64_json"),
 		"stream":          util.ToBool(firstForm(r.MultipartForm, "stream")),
 	}
+	if rawMessages := strings.TrimSpace(firstForm(r.MultipartForm, "messages")); rawMessages != "" {
+		var messages any
+		if err := json.Unmarshal([]byte(rawMessages), &messages); err != nil {
+			return nil, nil, fmt.Errorf("invalid messages")
+		}
+		body["messages"] = messages
+	}
 	var images []protocol.UploadedImage
 	for _, field := range []string{"image", "image[]"} {
 		for _, header := range r.MultipartForm.File[field] {

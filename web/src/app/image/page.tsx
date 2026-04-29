@@ -41,6 +41,7 @@ import {
   type Account,
   type ImageModel,
   type ImageTask,
+  type ImageTaskMessage,
 } from "@/lib/api";
 import { useAuthGuard } from "@/lib/use-auth-guard";
 import {
@@ -407,6 +408,33 @@ function getComposerConversationMode(referenceImages: StoredReferenceImage[]): I
     return "generate";
   }
   return referenceImages.some((image) => image.source === "conversation") ? "edit" : "image";
+}
+
+function buildImageTaskMessages(conversation: ImageConversation, activeTurnId: string): ImageTaskMessage[] {
+  const messages: ImageTaskMessage[] = [];
+  for (const turn of conversation.turns) {
+    const prompt = turn.prompt.trim();
+    if (prompt) {
+      messages.push({ role: "user", content: prompt });
+    }
+    if (turn.id === activeTurnId) {
+      break;
+    }
+
+    const assistantParts = turn.images.flatMap((image) => {
+      if (image.status === "message" && image.text_response?.trim()) {
+        return [image.text_response.trim()];
+      }
+      if (image.status === "success" && image.revised_prompt?.trim()) {
+        return [`Generated image: ${image.revised_prompt.trim()}`];
+      }
+      return [];
+    });
+    if (assistantParts.length > 0) {
+      messages.push({ role: "assistant", content: assistantParts.join("\n\n") });
+    }
+  }
+  return messages;
 }
 
 async function syncConversationImageTasks(items: ImageConversation[]) {
@@ -1099,6 +1127,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
         if (usesReferenceImages(activeTurn.mode) && referenceFiles.length === 0) {
           throw new Error("未找到可用的参考图");
         }
+        const taskMessages = buildImageTaskMessages(snapshot, activeTurn.id);
         const pendingTaskGroups = activeTurn.images.reduce<Array<{ taskId: string; count: number }>>(
           (groups, image, imageIndex) => {
             if (image.status !== "loading") {
@@ -1122,8 +1151,8 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
         const submitted = await Promise.all(
           pendingTaskGroups.map((group) =>
             usesReferenceImages(activeTurn.mode)
-              ? createImageEditTask(group.taskId, referenceFiles, activeTurn.prompt, activeTurn.model, activeTurn.size, group.count)
-              : createImageGenerationTask(group.taskId, activeTurn.prompt, activeTurn.model, activeTurn.size, group.count),
+              ? createImageEditTask(group.taskId, referenceFiles, activeTurn.prompt, activeTurn.model, activeTurn.size, group.count, taskMessages)
+              : createImageGenerationTask(group.taskId, activeTurn.prompt, activeTurn.model, activeTurn.size, group.count, taskMessages),
           ),
         );
         await applyTasks(submitted);
@@ -1167,8 +1196,8 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
             const resubmitted = await Promise.all(
               missingTaskGroups.map((group) =>
                 usesReferenceImages(activeTurn.mode)
-                  ? createImageEditTask(group.taskId, referenceFiles, activeTurn.prompt, activeTurn.model, activeTurn.size, group.count)
-                  : createImageGenerationTask(group.taskId, activeTurn.prompt, activeTurn.model, activeTurn.size, group.count),
+                  ? createImageEditTask(group.taskId, referenceFiles, activeTurn.prompt, activeTurn.model, activeTurn.size, group.count, taskMessages)
+                  : createImageGenerationTask(group.taskId, activeTurn.prompt, activeTurn.model, activeTurn.size, group.count, taskMessages),
               ),
             );
             if (resubmitted.length > 0) {

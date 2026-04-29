@@ -117,6 +117,11 @@ export type ImageTask = {
   output_type?: "text";
 };
 
+export type ImageTaskMessage = {
+  role: "system" | "user" | "assistant" | "tool";
+  content: string;
+};
+
 type ImageTaskListResponse = {
   items?: ImageTask[] | null;
   missing_ids?: string[] | null;
@@ -329,6 +334,7 @@ export async function createImageGenerationTask(
   model?: ImageModel,
   size?: string,
   count = 1,
+  messages?: ImageTaskMessage[],
 ) {
   return httpRequest<ImageTask>("/api/image-tasks/generations", {
     method: "POST",
@@ -337,6 +343,7 @@ export async function createImageGenerationTask(
       prompt,
       ...(model ? { model } : {}),
       ...(size ? { size } : {}),
+      ...(messages?.length ? { messages } : {}),
       n: count,
     },
   });
@@ -349,6 +356,7 @@ export async function createImageEditTask(
   model?: ImageModel,
   size?: string,
   count = 1,
+  messages?: ImageTaskMessage[],
 ) {
   const formData = new FormData();
   const uploadFiles = Array.isArray(files) ? files : [files];
@@ -363,6 +371,9 @@ export async function createImageEditTask(
   }
   if (size) {
     formData.append("size", size);
+  }
+  if (messages?.length) {
+    formData.append("messages", JSON.stringify(messages));
   }
   formData.append("n", String(count));
 

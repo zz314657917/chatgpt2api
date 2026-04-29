@@ -35,7 +35,7 @@ func (e *Engine) HandleImageGenerations(ctx context.Context, body map[string]any
 	size := util.Clean(body["size"])
 	responseFormat := firstNonEmpty(util.Clean(body["response_format"]), "b64_json")
 	baseURL := util.Clean(body["base_url"])
-	request := ConversationRequest{Prompt: prompt, Model: model, N: n, Size: size, ResponseFormat: responseFormat, BaseURL: baseURL, MessageAsError: true}
+	request := ConversationRequest{Prompt: prompt, Model: model, Messages: NormalizeMessages(util.AsMapSlice(body["messages"]), nil), N: n, Size: size, ResponseFormat: responseFormat, BaseURL: baseURL, MessageAsError: true}
 	outputs, errCh := e.StreamImageOutputsWithPool(ctx, request)
 	if util.ToBool(body["stream"]) {
 		return nil, &StreamResult{Items: StreamImageChunks(outputs), Err: errCh, Kind: "openai"}, nil
@@ -56,6 +56,7 @@ func (e *Engine) HandleImageEdits(ctx context.Context, body map[string]any, imag
 		Size:           util.Clean(body["size"]),
 		ResponseFormat: firstNonEmpty(util.Clean(body["response_format"]), "b64_json"),
 		BaseURL:        util.Clean(body["base_url"]),
+		Messages:       NormalizeMessages(util.AsMapSlice(body["messages"]), nil),
 		Images:         encoded,
 		MessageAsError: true,
 	}

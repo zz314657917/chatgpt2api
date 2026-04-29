@@ -52,21 +52,27 @@ func NewImageTaskService(path string, generation ImageTaskHandler, edit ImageTas
 	return s
 }
 
-func (s *ImageTaskService) SubmitGeneration(ctx context.Context, identity Identity, clientTaskID, prompt, model, size, baseURL string, n int) (map[string]any, error) {
+func (s *ImageTaskService) SubmitGeneration(ctx context.Context, identity Identity, clientTaskID, prompt, model, size, baseURL string, n int, messages any) (map[string]any, error) {
 	prompt = strings.TrimSpace(prompt)
 	if prompt == "" {
 		return nil, fmt.Errorf("prompt is required")
 	}
 	payload := map[string]any{"prompt": prompt, "model": model, "n": normalizedImageTaskCount(n), "size": size, "response_format": "url", "base_url": baseURL}
+	if messages != nil {
+		payload["messages"] = messages
+	}
 	return s.submit(ctx, identity, clientTaskID, "generate", payload)
 }
 
-func (s *ImageTaskService) SubmitEdit(ctx context.Context, identity Identity, clientTaskID, prompt, model, size, baseURL string, images any, n int) (map[string]any, error) {
+func (s *ImageTaskService) SubmitEdit(ctx context.Context, identity Identity, clientTaskID, prompt, model, size, baseURL string, images any, n int, messages any) (map[string]any, error) {
 	prompt = strings.TrimSpace(prompt)
 	if prompt == "" {
 		return nil, fmt.Errorf("prompt is required")
 	}
 	payload := map[string]any{"prompt": prompt, "images": images, "model": model, "n": normalizedImageTaskCount(n), "size": size, "response_format": "url", "base_url": baseURL}
+	if messages != nil {
+		payload["messages"] = messages
+	}
 	return s.submit(ctx, identity, clientTaskID, "edit", payload)
 }
 
