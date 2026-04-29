@@ -483,6 +483,23 @@ func TestImageThumbnailsAreGeneratedOnDemand(t *testing.T) {
 	}
 }
 
+func TestImageThumbnailRejectsTraversal(t *testing.T) {
+	app := newTestApp(t)
+	defer app.Close()
+
+	outsideThumbnailRoot := filepath.Join(app.config.DataDir, "secret.png.webp")
+	if err := os.WriteFile(outsideThumbnailRoot, []byte("secret"), 0o644); err != nil {
+		t.Fatalf("write outside thumbnail root: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/image-thumbnails/../secret.png.webp", nil)
+	res := httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusNotFound {
+		t.Fatalf("thumbnail traversal status = %d body = %q, want 404", res.Code, res.Body.String())
+	}
+}
+
 func TestLinuxDoUserCanManageOwnKeys(t *testing.T) {
 	app := newTestApp(t)
 	defer app.Close()

@@ -629,20 +629,20 @@ func (a *App) handleImageThumbnail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sourceRel, sourceErr := a.images.SourceImageRelativePathFromThumbnail(thumbnailRel)
-	if sourceErr == nil {
-		_ = a.images.EnsureThumbnail(thumbnailRel)
+	if sourceErr != nil {
+		http.NotFound(w, r)
+		return
 	}
+	_ = a.images.EnsureThumbnail(thumbnailRel)
 	thumbPath := filepath.Join(a.config.ImageThumbnailsDir(), filepath.FromSlash(thumbnailRel))
 	if info, err := os.Stat(thumbPath); err == nil && !info.IsDir() {
 		http.ServeFile(w, r, thumbPath)
 		return
 	}
-	if sourceErr == nil {
-		sourcePath := filepath.Join(a.config.ImagesDir(), filepath.FromSlash(sourceRel))
-		if info, err := os.Stat(sourcePath); err == nil && !info.IsDir() {
-			http.ServeFile(w, r, sourcePath)
-			return
-		}
+	sourcePath := filepath.Join(a.config.ImagesDir(), filepath.FromSlash(sourceRel))
+	if info, err := os.Stat(sourcePath); err == nil && !info.IsDir() {
+		http.ServeFile(w, r, sourcePath)
+		return
 	}
 	http.NotFound(w, r)
 }

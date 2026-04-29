@@ -118,7 +118,6 @@ function useOrderedImageMasonryColumns(items: ManagedImage[]) {
 }
 
 function ImageManagerContent({ canDeleteImages }: { canDeleteImages: boolean }) {
-  const didLoadRef = useRef(false);
   const activeLoadRef = useRef<AbortController | null>(null);
   const [items, setItems] = useState<ManagedImage[]>([]);
   const [selectedImageIds, setSelectedImageIds] = useState<Record<string, boolean>>({});
@@ -270,10 +269,6 @@ function ImageManagerContent({ canDeleteImages }: { canDeleteImages: boolean }) 
   };
 
   useEffect(() => {
-    if (didLoadRef.current) {
-      return;
-    }
-    didLoadRef.current = true;
     void loadImages();
   }, [loadImages]);
 
