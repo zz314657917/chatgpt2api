@@ -74,6 +74,14 @@ function providerLabel(provider?: string) {
   return provider || "未知";
 }
 
+function linuxDoLevelLabel(user: ManagedUser) {
+  if (user.provider !== "linuxdo") {
+    return "—";
+  }
+  const level = String(user.linuxdo_level || "").trim();
+  return level ? `等级 ${level}` : "未获取";
+}
+
 function maskToken(hasToken: boolean) {
   return hasToken ? "••••••••••••••••••••••••" : "未生成";
 }
@@ -119,6 +127,7 @@ function userSearchText(user: ManagedUser) {
     user.owner_id,
     user.owner_name,
     user.provider,
+    user.linuxdo_level,
     user.api_key_id,
     user.api_key_name,
     user.session_id,
@@ -386,11 +395,12 @@ function UsersContent() {
             </div>
           </div>
           <div className="overflow-x-auto">
-            <Table className="min-w-[1220px]">
+            <Table className="min-w-[1280px]">
               <TableHeader>
                 <TableRow>
                   <TableHead>用户</TableHead>
                   <TableHead>来源</TableHead>
+                  <TableHead>等级</TableHead>
                   <TableHead>状态</TableHead>
                   <TableHead>额度消耗</TableHead>
                   <TableHead>调用曲线</TableHead>
@@ -418,8 +428,16 @@ function UsersContent() {
                           <Badge variant={user.provider === "linuxdo" ? "info" : "secondary"} className="rounded-md">
                             {providerLabel(user.provider)}
                           </Badge>
-                          {user.owner_name ? <span className="text-xs text-muted-foreground">{user.owner_name}</span> : null}
                         </div>
+                      </TableCell>
+                      <TableCell>
+                        {user.provider === "linuxdo" ? (
+                          <Badge variant={user.linuxdo_level ? "warning" : "secondary"} className="rounded-md">
+                            {linuxDoLevelLabel(user)}
+                          </Badge>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">—</span>
+                        )}
                       </TableCell>
                       <TableCell>
                         <Badge variant={user.enabled ? "success" : "danger"} className="rounded-md">

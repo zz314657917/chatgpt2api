@@ -318,7 +318,7 @@ func TestLinuxDoUserCanManageOwnKeys(t *testing.T) {
 	app := newTestApp(t)
 	defer app.Close()
 
-	owner := service.AuthOwner{ID: "linuxdo:123", Name: "linuxdo_user", Provider: service.AuthProviderLinuxDo}
+	owner := service.AuthOwner{ID: "linuxdo:123", Name: "linuxdo_user", Provider: service.AuthProviderLinuxDo, LinuxDoLevel: "3"}
 	_, sessionKey, err := app.auth.UpsertLinuxDoSession(owner)
 	if err != nil {
 		t.Fatalf("UpsertLinuxDoSession() error = %v", err)
@@ -425,7 +425,7 @@ func TestAdminUsersManageLinuxDoUsers(t *testing.T) {
 	app := newTestApp(t)
 	defer app.Close()
 
-	owner := service.AuthOwner{ID: "linuxdo:123", Name: "linuxdo_user", Provider: service.AuthProviderLinuxDo}
+	owner := service.AuthOwner{ID: "linuxdo:123", Name: "linuxdo_user", Provider: service.AuthProviderLinuxDo, LinuxDoLevel: "3"}
 	_, sessionKey, err := app.auth.UpsertLinuxDoSession(owner)
 	if err != nil {
 		t.Fatalf("UpsertLinuxDoSession() error = %v", err)
@@ -481,6 +481,9 @@ func TestAdminUsersManageLinuxDoUsers(t *testing.T) {
 	linuxdoUser := findHTTPItem(logItems(list), owner.ID)
 	if linuxdoUser == nil || linuxdoUser["provider"] != service.AuthProviderLinuxDo || linuxdoUser["has_session"] != true || linuxdoUser["has_api_key"] != true {
 		t.Fatalf("linuxdo managed user = %#v in %#v", linuxdoUser, list)
+	}
+	if linuxdoUser["linuxdo_level"] != "3" {
+		t.Fatalf("linuxdo level = %#v", linuxdoUser)
 	}
 	localUser := findHTTPItem(logItems(list), localID)
 	if localUser == nil || localUser["provider"] != service.AuthProviderLocal || localUser["has_api_key"] != true {
@@ -643,7 +646,7 @@ func TestLinuxDoOAuthCallbackCreatesSession(t *testing.T) {
 			if r.Header.Get("Authorization") != "Bearer linuxdo-access" {
 				t.Fatalf("userinfo authorization = %q", r.Header.Get("Authorization"))
 			}
-			util.WriteJSON(w, http.StatusOK, map[string]any{"id": 123, "username": "linuxdo_user"})
+			util.WriteJSON(w, http.StatusOK, map[string]any{"id": 123, "username": "linuxdo_user", "trust_level": 2})
 		default:
 			http.NotFound(w, r)
 		}
@@ -716,6 +719,22 @@ func TestLinuxDoOAuthCallbackCreatesSession(t *testing.T) {
 	}
 	if login["subject_id"] != "linuxdo:123" || login["provider"] != service.AuthProviderLinuxDo || login["name"] != "linuxdo_user" {
 		t.Fatalf("login response = %#v", login)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/admin/users", nil)
+	req.Header.Set("Authorization", "Bearer admin-secret")
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("admin users after linuxdo oauth status = %d body = %s", res.Code, res.Body.String())
+	}
+	var users map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &users); err != nil {
+		t.Fatalf("admin users json: %v", err)
+	}
+	linuxdoUser := findHTTPItem(logItems(users), "linuxdo:123")
+	if linuxdoUser == nil || linuxdoUser["linuxdo_level"] != "2" {
+		t.Fatalf("oauth linuxdo user level = %#v", linuxdoUser)
 	}
 }
 

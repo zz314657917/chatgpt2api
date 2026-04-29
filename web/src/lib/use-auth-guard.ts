@@ -8,7 +8,7 @@ import {
   type AuthRole,
   type StoredAuthSession,
 } from "@/store/auth";
-import { getVerifiedAuthSession } from "@/lib/session";
+import { getCachedAuthSession, getVerifiedAuthSession } from "@/lib/session";
 
 type UseAuthGuardResult = {
   isCheckingAuth: boolean;
@@ -17,8 +17,8 @@ type UseAuthGuardResult = {
 
 export function useAuthGuard(allowedRoles?: AuthRole[]): UseAuthGuardResult {
   const navigate = useNavigate();
-  const [session, setSession] = useState<StoredAuthSession | null>(null);
-  const [isCheckingAuth, setIsCheckingAuth] = useState(true);
+  const [session, setSession] = useState<StoredAuthSession | null>(() => getCachedAuthSession() ?? null);
+  const [isCheckingAuth, setIsCheckingAuth] = useState(() => getCachedAuthSession() === undefined);
   const allowedRolesKey = (allowedRoles || []).join(",");
 
   useEffect(() => {
@@ -60,7 +60,7 @@ export function useAuthGuard(allowedRoles?: AuthRole[]): UseAuthGuardResult {
 
 export function useRedirectIfAuthenticated() {
   const navigate = useNavigate();
-  const [isCheckingAuth, setIsCheckingAuth] = useState(true);
+  const [isCheckingAuth, setIsCheckingAuth] = useState(() => getCachedAuthSession() !== null);
 
   useEffect(() => {
     let active = true;

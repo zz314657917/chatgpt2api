@@ -11,8 +11,9 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import webConfig from "@/constants/common-env";
 import { fetchAuthProviders, login } from "@/lib/api";
+import { setVerifiedAuthSession } from "@/lib/session";
 import { useRedirectIfAuthenticated } from "@/lib/use-auth-guard";
-import { getDefaultRouteForRole, setStoredAuthSession } from "@/store/auth";
+import { getDefaultRouteForRole } from "@/store/auth";
 
 export default function LoginPage() {
   const navigate = useNavigate();
@@ -51,7 +52,7 @@ export default function LoginPage() {
     setIsSubmitting(true);
     try {
       const data = await login(normalizedAuthKey);
-      await setStoredAuthSession({
+      await setVerifiedAuthSession({
         key: normalizedAuthKey,
         role: data.role,
         subjectId: data.subject_id,

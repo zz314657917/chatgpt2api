@@ -4,9 +4,10 @@ import { useEffect, useState } from "react";
 import { Github, Moon, Sun } from "lucide-react";
 import { Link, NavLink, useLocation, useNavigate } from "react-router-dom";
 
+import { AnnouncementNotifications } from "@/components/announcement-banner";
 import webConfig from "@/constants/common-env";
-import { getVerifiedAuthSession } from "@/lib/session";
-import { clearStoredAuthSession, type StoredAuthSession } from "@/store/auth";
+import { clearVerifiedAuthSession, getCachedAuthSession, getVerifiedAuthSession } from "@/lib/session";
+import type { StoredAuthSession } from "@/store/auth";
 import { Button } from "@/components/ui/button";
 import { fetchAccounts, type Account } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -72,7 +73,7 @@ export function TopNav() {
   const location = useLocation();
   const navigate = useNavigate();
   const pathname = location.pathname.replace(/\/+$/, "") || "/";
-  const [session, setSession] = useState<StoredAuthSession | null | undefined>(undefined);
+  const [session, setSession] = useState<StoredAuthSession | null | undefined>(() => getCachedAuthSession());
   const [theme, setTheme] = useState<ColorTheme>(() => getPreferredColorTheme());
   const [availableQuota, setAvailableQuota] = useState("--");
 
@@ -137,10 +138,10 @@ export function TopNav() {
       window.removeEventListener("focus", handleRefresh);
       window.removeEventListener(QUOTA_REFRESH_EVENT, handleRefresh);
     };
-  }, [pathname, session]);
+  }, [session]);
 
   const handleLogout = async () => {
-    await clearStoredAuthSession();
+    await clearVerifiedAuthSession();
     navigate("/login", { replace: true });
   };
 
@@ -182,6 +183,7 @@ export function TopNav() {
             <span className="hidden md:inline">GitHub</span>
           </a>
           <div className="ml-auto flex shrink-0 items-center gap-1 sm:hidden">
+            <AnnouncementNotifications target="image" className="size-8" />
             <ThemeToggleButton theme={theme} onToggle={handleThemeToggle} />
             <button
               type="button"
@@ -214,6 +216,7 @@ export function TopNav() {
           })}
         </nav>
         <div className="hidden items-center justify-end gap-2 sm:flex sm:gap-3">
+          <AnnouncementNotifications target="image" className="size-8" />
           <ThemeToggleButton theme={theme} onToggle={handleThemeToggle} />
           <span className="hidden rounded-full bg-[#f0f0f0] px-2.5 py-1 text-[11px] font-medium text-[#45515e] sm:inline-block dark:bg-secondary dark:text-secondary-foreground">
             {roleLabel}

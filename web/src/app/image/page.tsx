@@ -11,7 +11,6 @@ import type { BananaPrompt } from "@/app/image/banana-prompts";
 import { IMAGE_QUALITY_OPTIONS, IMAGE_SIZE_OPTIONS } from "@/app/image/image-options";
 import { IMAGE_PROMPT_PRESETS, type ImagePromptPreset } from "@/app/image/image-presets";
 import { ImageSidebar } from "@/app/image/components/image-sidebar";
-import { AnnouncementNotifications } from "@/components/announcement-banner";
 import { ImageLightbox } from "@/components/image-lightbox";
 import { Button } from "@/components/ui/button";
 import {
@@ -2324,15 +2323,12 @@ function ImagePageContent() {
                 <Trash2 className="size-4" />
               </Button>
             </div>
-            <div className="flex shrink-0 items-center gap-2 lg:absolute lg:top-0 lg:right-4 lg:z-20">
-              {activeTaskCount > 0 ? (
-                <div className="flex h-10 shrink-0 items-center gap-1.5 rounded-full bg-amber-50 px-3 text-xs font-medium text-amber-700 ring-1 ring-amber-100">
-                  <LoaderCircle className="size-3.5 animate-spin" />
-                  {activeTaskCount}<span className="hidden sm:inline"> 个任务处理中</span>
-                </div>
-              ) : null}
-              <AnnouncementNotifications target="image" className="shrink-0" />
-            </div>
+            {activeTaskCount > 0 ? (
+              <div className="flex h-10 shrink-0 items-center gap-1.5 rounded-full bg-amber-50 px-3 text-xs font-medium text-amber-700 ring-1 ring-amber-100 lg:absolute lg:top-0 lg:right-4 lg:z-20">
+                <LoaderCircle className="size-3.5 animate-spin" />
+                {activeTaskCount}<span className="hidden sm:inline"> 个任务处理中</span>
+              </div>
+            ) : null}
           </div>
 
           <div

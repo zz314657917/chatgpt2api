@@ -226,6 +226,7 @@ export type ManagedUser = {
   provider: "local" | "linuxdo" | string;
   owner_id?: string;
   owner_name?: string;
+  linuxdo_level?: string;
   enabled: boolean;
   has_api_key: boolean;
   has_session: boolean;

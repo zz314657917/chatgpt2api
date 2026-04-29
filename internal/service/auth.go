@@ -46,9 +46,10 @@ func (i Identity) Map() map[string]any {
 }
 
 type AuthOwner struct {
-	ID       string
-	Name     string
-	Provider string
+	ID           string
+	Name         string
+	Provider     string
+	LinuxDoLevel string
 }
 
 type AuthKeyFilter struct {
@@ -219,6 +220,7 @@ func (s *AuthService) UpsertLinuxDoSession(owner AuthOwner) (map[string]any, str
 		next["key_hash"] = util.SHA256Hex(raw)
 		next["enabled"] = sessionEnabled
 		next["owner_name"] = name
+		next["linuxdo_level"] = owner.LinuxDoLevel
 		next["last_used_at"] = nil
 		next["updated_at"] = now
 		s.items[index] = next
@@ -425,6 +427,7 @@ func (s *AuthService) ResetUserAPIKey(id, name string) (map[string]any, map[stri
 			updated["name"] = name
 			updated["provider"] = owner.Provider
 			updated["owner_name"] = owner.Name
+			updated["linuxdo_level"] = owner.LinuxDoLevel
 			updated["key"] = raw
 			updated["key_hash"] = util.SHA256Hex(raw)
 			updated["enabled"] = enabled
@@ -579,18 +582,19 @@ func newAuthItem(role, kind, name string, owner AuthOwner, raw string) map[strin
 		provider = AuthProviderLocal
 	}
 	return map[string]any{
-		"id":           util.NewHex(12),
-		"name":         name,
-		"role":         role,
-		"kind":         kind,
-		"provider":     provider,
-		"owner_id":     owner.ID,
-		"owner_name":   owner.Name,
-		"key":          raw,
-		"key_hash":     util.SHA256Hex(raw),
-		"enabled":      true,
-		"created_at":   util.NowISO(),
-		"last_used_at": nil,
+		"id":            util.NewHex(12),
+		"name":          name,
+		"role":          role,
+		"kind":          kind,
+		"provider":      provider,
+		"owner_id":      owner.ID,
+		"owner_name":    owner.Name,
+		"linuxdo_level": owner.LinuxDoLevel,
+		"key":           raw,
+		"key_hash":      util.SHA256Hex(raw),
+		"enabled":       true,
+		"created_at":    util.NowISO(),
+		"last_used_at":  nil,
 	}
 }
 
@@ -623,9 +627,10 @@ func normalizeAuthItem(raw map[string]any) map[string]any {
 		name = defaultCredentialName(role, kind)
 	}
 	owner := AuthOwner{
-		ID:       util.Clean(raw["owner_id"]),
-		Name:     util.Clean(raw["owner_name"]),
-		Provider: normalizeAuthProvider(util.Clean(raw["provider"])),
+		ID:           util.Clean(raw["owner_id"]),
+		Name:         util.Clean(raw["owner_name"]),
+		Provider:     normalizeAuthProvider(util.Clean(raw["provider"])),
+		LinuxDoLevel: util.Clean(raw["linuxdo_level"]),
 	}
 	if owner.Provider == "" {
 		owner.Provider = AuthProviderLocal
@@ -639,18 +644,19 @@ func normalizeAuthItem(raw map[string]any) map[string]any {
 		lastUsed = nil
 	}
 	out := map[string]any{
-		"id":           id,
-		"name":         name,
-		"role":         role,
-		"kind":         kind,
-		"provider":     owner.Provider,
-		"owner_id":     owner.ID,
-		"owner_name":   owner.Name,
-		"key":          key,
-		"key_hash":     hash,
-		"enabled":      util.ToBool(util.ValueOr(raw["enabled"], true)),
-		"created_at":   created,
-		"last_used_at": lastUsed,
+		"id":            id,
+		"name":          name,
+		"role":          role,
+		"kind":          kind,
+		"provider":      owner.Provider,
+		"owner_id":      owner.ID,
+		"owner_name":    owner.Name,
+		"linuxdo_level": owner.LinuxDoLevel,
+		"key":           key,
+		"key_hash":      hash,
+		"enabled":       util.ToBool(util.ValueOr(raw["enabled"], true)),
+		"created_at":    created,
+		"last_used_at":  lastUsed,
 	}
 	if updated := util.Clean(raw["updated_at"]); updated != "" {
 		out["updated_at"] = updated
@@ -660,16 +666,17 @@ func normalizeAuthItem(raw map[string]any) map[string]any {
 
 func publicAuthItem(item map[string]any) map[string]any {
 	return map[string]any{
-		"id":           item["id"],
-		"name":         item["name"],
-		"role":         item["role"],
-		"kind":         item["kind"],
-		"provider":     item["provider"],
-		"owner_id":     item["owner_id"],
-		"owner_name":   item["owner_name"],
-		"enabled":      util.ToBool(util.ValueOr(item["enabled"], true)),
-		"created_at":   item["created_at"],
-		"last_used_at": item["last_used_at"],
+		"id":            item["id"],
+		"name":          item["name"],
+		"role":          item["role"],
+		"kind":          item["kind"],
+		"provider":      item["provider"],
+		"owner_id":      item["owner_id"],
+		"owner_name":    item["owner_name"],
+		"linuxdo_level": item["linuxdo_level"],
+		"enabled":       util.ToBool(util.ValueOr(item["enabled"], true)),
+		"created_at":    item["created_at"],
+		"last_used_at":  item["last_used_at"],
 	}
 }
 
@@ -735,6 +742,7 @@ func listManagedAuthUsersLocked(items []map[string]any) []map[string]any {
 				"provider":         util.Clean(item["provider"]),
 				"owner_id":         util.Clean(item["owner_id"]),
 				"owner_name":       util.Clean(item["owner_name"]),
+				"linuxdo_level":    util.Clean(item["linuxdo_level"]),
 				"enabled":          false,
 				"has_api_key":      false,
 				"has_session":      false,
@@ -797,6 +805,9 @@ func managedAuthOwnerLocked(items []map[string]any, id string) (AuthOwner, bool)
 		if owner.Provider == "" {
 			owner.Provider = normalizeAuthProvider(util.Clean(item["provider"]))
 		}
+		if owner.LinuxDoLevel == "" {
+			owner.LinuxDoLevel = util.Clean(item["linuxdo_level"])
+		}
 	}
 	return normalizeAuthOwner(owner), found
 }
@@ -837,6 +848,9 @@ func mergeManagedAuthUser(user, item map[string]any) {
 		user["name"] = ownerName
 	} else if util.Clean(user["name"]) == "" {
 		user["name"] = managedAuthUserName(item)
+	}
+	if linuxDoLevel := util.Clean(item["linuxdo_level"]); linuxDoLevel != "" {
+		user["linuxdo_level"] = linuxDoLevel
 	}
 	if util.ToBool(util.ValueOr(item["enabled"], true)) {
 		user["enabled"] = true
@@ -911,8 +925,13 @@ func normalizeAuthOwner(owner AuthOwner) AuthOwner {
 	owner.ID = util.Clean(owner.ID)
 	owner.Name = util.Clean(owner.Name)
 	owner.Provider = normalizeAuthProvider(util.Clean(owner.Provider))
+	owner.LinuxDoLevel = util.Clean(owner.LinuxDoLevel)
 	if owner.ID == "" {
 		owner.Provider = AuthProviderLocal
+		owner.LinuxDoLevel = ""
+	}
+	if owner.Provider != AuthProviderLinuxDo {
+		owner.LinuxDoLevel = ""
 	}
 	return owner
 }

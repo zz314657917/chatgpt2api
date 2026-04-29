@@ -42,6 +42,12 @@ type linuxDoTokenResponse struct {
 	Scope        string
 }
 
+type linuxDoUserInfo struct {
+	Username string
+	Subject  string
+	Level    string
+}
+
 func (a *App) handleAuthProviders(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -147,17 +153,18 @@ func (a *App) handleLinuxDoOAuthCallback(w http.ResponseWriter, r *http.Request)
 		redirectLinuxDoOAuthError(w, r, frontendCallback, "token_exchange_failed", "failed to exchange oauth code", singleLine(err.Error()))
 		return
 	}
-	username, subject, err := linuxDoFetchUserInfo(r.Context(), a.proxy.HTTPClient(30*time.Second), cfg, token)
+	userInfo, err := linuxDoFetchUserInfo(r.Context(), a.proxy.HTTPClient(30*time.Second), cfg, token)
 	if err != nil {
 		redirectLinuxDoOAuthError(w, r, frontendCallback, "userinfo_failed", "failed to fetch user info", singleLine(err.Error()))
 		return
 	}
 
-	ownerID := linuxDoOwnerID(subject)
+	ownerID := linuxDoOwnerID(userInfo.Subject)
 	sessionItem, rawSessionKey, err := a.auth.UpsertLinuxDoSession(service.AuthOwner{
-		ID:       ownerID,
-		Name:     username,
-		Provider: service.AuthProviderLinuxDo,
+		ID:           ownerID,
+		Name:         userInfo.Username,
+		Provider:     service.AuthProviderLinuxDo,
+		LinuxDoLevel: userInfo.Level,
 	})
 	if err != nil {
 		redirectLinuxDoOAuthError(w, r, frontendCallback, "login_failed", "failed to create local session", "")
@@ -172,7 +179,7 @@ func (a *App) handleLinuxDoOAuthCallback(w http.ResponseWriter, r *http.Request)
 	fragment.Set("key", rawSessionKey)
 	fragment.Set("role", service.AuthRoleUser)
 	fragment.Set("subject_id", ownerID)
-	fragment.Set("name", username)
+	fragment.Set("name", userInfo.Username)
 	fragment.Set("version", version.Get())
 	fragment.Set("redirect", redirectTo)
 	redirectWithFragment(w, r, frontendCallback, fragment)
@@ -270,37 +277,37 @@ func linuxDoExchangeCode(ctx context.Context, client *http.Client, cfg config.Li
 	return token, nil
 }
 
-func linuxDoFetchUserInfo(ctx context.Context, client *http.Client, cfg config.LinuxDoOAuthConfig, token *linuxDoTokenResponse) (username string, subject string, err error) {
+func linuxDoFetchUserInfo(ctx context.Context, client *http.Client, cfg config.LinuxDoOAuthConfig, token *linuxDoTokenResponse) (linuxDoUserInfo, error) {
 	authorization, err := buildBearerAuthorization(token.TokenType, token.AccessToken)
 	if err != nil {
-		return "", "", err
+		return linuxDoUserInfo{}, err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, cfg.UserInfoURL, nil)
 	if err != nil {
-		return "", "", err
+		return linuxDoUserInfo{}, err
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Authorization", authorization)
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", "", fmt.Errorf("request userinfo: %w", err)
+		return linuxDoUserInfo{}, fmt.Errorf("request userinfo: %w", err)
 	}
 	defer resp.Body.Close()
 	bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", "", fmt.Errorf("userinfo status=%d", resp.StatusCode)
+		return linuxDoUserInfo{}, fmt.Errorf("userinfo status=%d", resp.StatusCode)
 	}
 	return linuxDoParseUserInfo(string(bodyBytes), cfg)
 }
 
-func linuxDoParseUserInfo(body string, cfg config.LinuxDoOAuthConfig) (username string, subject string, err error) {
+func linuxDoParseUserInfo(body string, cfg config.LinuxDoOAuthConfig) (linuxDoUserInfo, error) {
 	var payload any
 	decoder := json.NewDecoder(strings.NewReader(body))
 	decoder.UseNumber()
 	if err := decoder.Decode(&payload); err != nil {
-		return "", "", fmt.Errorf("decode userinfo: %w", err)
+		return linuxDoUserInfo{}, fmt.Errorf("decode userinfo: %w", err)
 	}
-	subject = firstNonEmpty(
+	subject := firstNonEmpty(
 		jsonPathString(payload, cfg.UserInfoIDPath),
 		jsonPathString(payload, "sub"),
 		jsonPathString(payload, "id"),
@@ -311,12 +318,12 @@ func linuxDoParseUserInfo(body string, cfg config.LinuxDoOAuthConfig) (username 
 	)
 	subject = strings.TrimSpace(subject)
 	if subject == "" {
-		return "", "", errors.New("userinfo missing id field")
+		return linuxDoUserInfo{}, errors.New("userinfo missing id field")
 	}
 	if !isSafeLinuxDoSubject(subject) {
-		return "", "", errors.New("userinfo returned invalid id field")
+		return linuxDoUserInfo{}, errors.New("userinfo returned invalid id field")
 	}
-	username = firstNonEmpty(
+	username := firstNonEmpty(
 		jsonPathString(payload, cfg.UserInfoUsernamePath),
 		jsonPathString(payload, "username"),
 		jsonPathString(payload, "preferred_username"),
@@ -330,7 +337,22 @@ func linuxDoParseUserInfo(body string, cfg config.LinuxDoOAuthConfig) (username 
 	if username == "" {
 		username = "linuxdo_" + subject
 	}
-	return username, subject, nil
+	level := firstNonEmpty(
+		jsonPathString(payload, "trust_level"),
+		jsonPathString(payload, "trustLevel"),
+		jsonPathString(payload, "level"),
+		jsonPathString(payload, "user.trust_level"),
+		jsonPathString(payload, "user.trustLevel"),
+		jsonPathString(payload, "user.level"),
+		jsonPathString(payload, "data.trust_level"),
+		jsonPathString(payload, "data.trustLevel"),
+		jsonPathString(payload, "data.level"),
+	)
+	return linuxDoUserInfo{
+		Username: username,
+		Subject:  subject,
+		Level:    strings.TrimSpace(level),
+	}, nil
 }
 
 func parseLinuxDoTokenResponse(body string) (*linuxDoTokenResponse, bool) {

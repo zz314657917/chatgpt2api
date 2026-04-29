@@ -5,7 +5,6 @@ import {
   useLocation,
 } from "react-router-dom";
 import {
-  AnimatePresence,
   motion,
   useReducedMotion,
   type Transition,
@@ -25,7 +24,7 @@ import UsersPage from "@/app/users/page";
 import { TopNav } from "@/components/top-nav";
 
 const routeTransition: Transition = {
-  duration: 0.24,
+  duration: 0.16,
   ease: [0.22, 1, 0.36, 1],
 };
 
@@ -36,25 +35,17 @@ const reducedRouteTransition: Transition = {
 const routeVariants: Variants = {
   initial: {
     opacity: 0,
-    y: 12,
-    scale: 0.995,
+    y: 6,
   },
   animate: {
     opacity: 1,
     y: 0,
-    scale: 1,
-  },
-  exit: {
-    opacity: 0,
-    y: -8,
-    scale: 0.998,
   },
 };
 
 const reducedRouteVariants: Variants = {
   initial: { opacity: 0 },
   animate: { opacity: 1 },
-  exit: { opacity: 0 },
 };
 
 function AnimatedRoutes() {
@@ -62,31 +53,28 @@ function AnimatedRoutes() {
   const prefersReducedMotion = useReducedMotion();
 
   return (
-    <AnimatePresence mode="wait" initial={false}>
-      <motion.div
-        key={location.pathname}
-        variants={prefersReducedMotion ? reducedRouteVariants : routeVariants}
-        initial="initial"
-        animate="animate"
-        exit="exit"
-        transition={prefersReducedMotion ? reducedRouteTransition : routeTransition}
-        className="min-w-0"
-      >
-        <Routes location={location}>
-          <Route path="/" element={<HomePage />} />
-          <Route path="/login" element={<LoginPage />} />
-          <Route path="/auth/linuxdo/callback" element={<LinuxDoCallbackPage />} />
-          <Route path="/accounts" element={<AccountsPage />} />
-          <Route path="/register" element={<RegisterPage />} />
-          <Route path="/image-manager" element={<ImageManagerPage />} />
-          <Route path="/users" element={<UsersPage />} />
-          <Route path="/logs" element={<LogsPage />} />
-          <Route path="/settings" element={<SettingsPage />} />
-          <Route path="/image" element={<ImagePage />} />
-          <Route path="*" element={<HomePage />} />
-        </Routes>
-      </motion.div>
-    </AnimatePresence>
+    <motion.div
+      key={location.pathname}
+      variants={prefersReducedMotion ? reducedRouteVariants : routeVariants}
+      initial="initial"
+      animate="animate"
+      transition={prefersReducedMotion ? reducedRouteTransition : routeTransition}
+      className="min-w-0"
+    >
+      <Routes location={location}>
+        <Route path="/" element={<HomePage />} />
+        <Route path="/login" element={<LoginPage />} />
+        <Route path="/auth/linuxdo/callback" element={<LinuxDoCallbackPage />} />
+        <Route path="/accounts" element={<AccountsPage />} />
+        <Route path="/register" element={<RegisterPage />} />
+        <Route path="/image-manager" element={<ImageManagerPage />} />
+        <Route path="/users" element={<UsersPage />} />
+        <Route path="/logs" element={<LogsPage />} />
+        <Route path="/settings" element={<SettingsPage />} />
+        <Route path="/image" element={<ImagePage />} />
+        <Route path="*" element={<HomePage />} />
+      </Routes>
+    </motion.div>
   );
 }
 

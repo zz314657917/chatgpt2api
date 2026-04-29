@@ -66,7 +66,7 @@ func TestAuthServiceLinuxDoSessionOwnsAPIKeys(t *testing.T) {
 	)
 	auth := NewAuthService(backend)
 
-	owner := AuthOwner{ID: "linuxdo:123", Name: "linuxdo_user", Provider: AuthProviderLinuxDo}
+	owner := AuthOwner{ID: "linuxdo:123", Name: "linuxdo_user", Provider: AuthProviderLinuxDo, LinuxDoLevel: "3"}
 	_, rawSession, err := auth.UpsertLinuxDoSession(owner)
 	if err != nil || rawSession == "" {
 		t.Fatalf("UpsertLinuxDoSession() raw=%q err=%v", rawSession, err)
@@ -112,7 +112,7 @@ func TestAuthServiceUpsertAPIKeyForOwnerKeepsOneToken(t *testing.T) {
 	)
 	auth := NewAuthService(backend)
 
-	owner := AuthOwner{ID: "linuxdo:123", Name: "linuxdo_user", Provider: AuthProviderLinuxDo}
+	owner := AuthOwner{ID: "linuxdo:123", Name: "linuxdo_user", Provider: AuthProviderLinuxDo, LinuxDoLevel: "3"}
 	if items := auth.ListSingleAPIKeyForOwner(owner.ID); len(items) != 0 {
 		t.Fatalf("new owner should start with no token, got %#v", items)
 	}
@@ -150,7 +150,7 @@ func TestAuthServiceListSingleAPIKeyForOwnerPrunesDuplicates(t *testing.T) {
 	)
 	auth := NewAuthService(backend)
 
-	owner := AuthOwner{ID: "linuxdo:123", Name: "linuxdo_user", Provider: AuthProviderLinuxDo}
+	owner := AuthOwner{ID: "linuxdo:123", Name: "linuxdo_user", Provider: AuthProviderLinuxDo, LinuxDoLevel: "3"}
 	first, firstRaw, err := auth.CreateAPIKey(AuthRoleUser, "first", owner)
 	if err != nil {
 		t.Fatalf("CreateAPIKey(first) error = %v", err)
@@ -178,7 +178,7 @@ func TestAuthServiceManagedUsersGroupAndControlCredentials(t *testing.T) {
 	)
 	auth := NewAuthService(backend)
 
-	owner := AuthOwner{ID: "linuxdo:123", Name: "linuxdo_user", Provider: AuthProviderLinuxDo}
+	owner := AuthOwner{ID: "linuxdo:123", Name: "linuxdo_user", Provider: AuthProviderLinuxDo, LinuxDoLevel: "3"}
 	_, sessionRaw, err := auth.UpsertLinuxDoSession(owner)
 	if err != nil {
 		t.Fatalf("UpsertLinuxDoSession() error = %v", err)
@@ -202,6 +202,9 @@ func TestAuthServiceManagedUsersGroupAndControlCredentials(t *testing.T) {
 	}
 	if linuxdoUser["name"] != owner.Name || linuxdoUser["provider"] != AuthProviderLinuxDo || linuxdoUser["has_session"] != true || linuxdoUser["has_api_key"] != true {
 		t.Fatalf("linuxdo user = %#v", linuxdoUser)
+	}
+	if linuxdoUser["linuxdo_level"] != "3" {
+		t.Fatalf("linuxdo level = %#v", linuxdoUser)
 	}
 	if _, ok := linuxdoUser["key"]; ok {
 		t.Fatalf("managed user leaked key: %#v", linuxdoUser)

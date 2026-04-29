@@ -8,7 +8,8 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { login } from "@/lib/api";
-import { clearStoredAuthSession, getDefaultRouteForRole, setStoredAuthSession } from "@/store/auth";
+import { clearVerifiedAuthSession, setVerifiedAuthSession } from "@/lib/session";
+import { getDefaultRouteForRole } from "@/store/auth";
 
 function fragmentParams() {
   const hash = typeof window === "undefined" ? "" : window.location.hash.replace(/^#/, "");
@@ -37,7 +38,7 @@ export default function LinuxDoCallbackPage() {
       const params = fragmentParams();
       const query = searchParams();
       if (!params.toString() && (query.get("code") || query.get("state"))) {
-        await clearStoredAuthSession();
+        await clearVerifiedAuthSession();
         if (active) {
           setErrorMessage("Linuxdo OAuth 回调地址配置错误：请把 Linuxdo Connect 应用后台的回调地址设置为后端 /auth/linuxdo/oauth/callback，而不是前端 /auth/linuxdo/callback。");
         }
@@ -46,7 +47,7 @@ export default function LinuxDoCallbackPage() {
 
       const error = params.get("error");
       if (error) {
-        await clearStoredAuthSession();
+        await clearVerifiedAuthSession();
         const message = params.get("error_description") || params.get("error_message") || error;
         if (active) {
           setErrorMessage(message);
@@ -56,7 +57,7 @@ export default function LinuxDoCallbackPage() {
 
       const key = params.get("key") || "";
       if (!key) {
-        await clearStoredAuthSession();
+        await clearVerifiedAuthSession();
         if (active) {
           setErrorMessage("Linuxdo 登录回调缺少本地会话密钥");
         }
@@ -65,7 +66,7 @@ export default function LinuxDoCallbackPage() {
 
       try {
         const data = await login(key);
-        await setStoredAuthSession({
+        await setVerifiedAuthSession({
           key,
           role: data.role,
           subjectId: data.subject_id,
@@ -76,7 +77,7 @@ export default function LinuxDoCallbackPage() {
         const redirect = sanitizeRedirectPath(params.get("redirect")) || getDefaultRouteForRole(data.role);
         navigate(redirect, { replace: true });
       } catch (error) {
-        await clearStoredAuthSession();
+        await clearVerifiedAuthSession();
         if (active) {
           setErrorMessage(error instanceof Error ? error.message : "Linuxdo 登录失败");
         }
