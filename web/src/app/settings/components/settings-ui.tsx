@@ -58,7 +58,7 @@ export function SettingsCard({
   return (
     <Card
       className={cn(
-        "overflow-hidden rounded-[20px] border-[#f2f3f5]",
+        "overflow-hidden rounded-[20px] border-border/80",
         className,
       )}
     >

@@ -4,8 +4,8 @@ import { Copy, LoaderCircle, LogIn, Save } from "lucide-react";
 import { useMemo } from "react";
 import { toast } from "sonner";
 
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import webConfig from "@/constants/common-env";
@@ -15,7 +15,6 @@ import {
   SettingsCard,
   settingsDialogInputClassName,
   settingsInlineCodeClassName,
-  settingsToggleClassName,
 } from "./settings-ui";
 
 function trimTrailingSlash(value: string) {
@@ -126,128 +125,131 @@ export function LinuxDoLoginCard() {
       description="配置 Linuxdo Connect OAuth 后，登录页会显示第三方登录入口。"
       tone="violet"
       action={
-        <label className={settingsToggleClassName}>
-          <Checkbox
-            checked={enabled}
-            onCheckedChange={(checked) => setLinuxDoEnabled(Boolean(checked))}
-          />
-          启用登录
-        </label>
+        <>
+          <Badge variant={enabled ? "success" : "secondary"}>
+            {enabled ? "登录入口已开启" : "登录入口已关闭"}
+          </Badge>
+          <Button
+            type="button"
+            variant={enabled ? "outline" : "default"}
+            onClick={() => setLinuxDoEnabled(!enabled)}
+          >
+            {enabled ? "关闭登录入口" : "启用登录入口"}
+          </Button>
+        </>
       }
     >
       <div className="flex flex-col gap-5">
-        {enabled ? (
-          <div className="grid gap-4 md:grid-cols-2">
-            <Field>
-              <FieldLabel htmlFor="linuxdo-client-id">Client ID</FieldLabel>
-              <Input
-                id="linuxdo-client-id"
-                value={String(config?.linuxdo_client_id || "")}
-                onChange={(event) => setLinuxDoClientId(event.target.value)}
-                placeholder="Linuxdo Connect Client ID"
-                className={`${settingsDialogInputClassName} font-mono text-sm`}
-              />
-              <FieldDescription>
-                来自 Linuxdo Connect 应用后台。
-              </FieldDescription>
-            </Field>
+        <div className="grid gap-4 md:grid-cols-2">
+          <Field>
+            <FieldLabel htmlFor="linuxdo-client-id">Client ID</FieldLabel>
+            <Input
+              id="linuxdo-client-id"
+              value={String(config?.linuxdo_client_id || "")}
+              onChange={(event) => setLinuxDoClientId(event.target.value)}
+              placeholder="Linuxdo Connect Client ID"
+              className={`${settingsDialogInputClassName} font-mono text-sm`}
+            />
+            <FieldDescription>
+              来自 Linuxdo Connect 应用后台。
+            </FieldDescription>
+          </Field>
 
-            <Field>
-              <FieldLabel htmlFor="linuxdo-client-secret">
-                Client Secret
-              </FieldLabel>
-              <Input
-                id="linuxdo-client-secret"
-                type="password"
-                value={String(config?.linuxdo_client_secret || "")}
-                onChange={(event) => setLinuxDoClientSecret(event.target.value)}
-                placeholder={
-                  secretConfigured
-                    ? "已配置，留空则保留当前密钥"
-                    : "Linuxdo Connect Client Secret"
-                }
-                className={`${settingsDialogInputClassName} font-mono text-sm`}
-              />
-              <FieldDescription>
-                {secretConfigured
-                  ? "仅在需要更换密钥时填写；保存后不会在页面回显。"
-                  : "启用 Linuxdo 登录时必须填写。"}
-              </FieldDescription>
-            </Field>
+          <Field>
+            <FieldLabel htmlFor="linuxdo-client-secret">
+              Client Secret
+            </FieldLabel>
+            <Input
+              id="linuxdo-client-secret"
+              type="password"
+              value={String(config?.linuxdo_client_secret || "")}
+              onChange={(event) => setLinuxDoClientSecret(event.target.value)}
+              placeholder={
+                secretConfigured
+                  ? "已配置，留空则保留当前密钥"
+                  : "Linuxdo Connect Client Secret"
+              }
+              className={`${settingsDialogInputClassName} font-mono text-sm`}
+            />
+            <FieldDescription>
+              {secretConfigured
+                ? "仅在需要更换密钥时填写；保存后不会在页面回显。"
+                : "启用 Linuxdo 登录时必须填写。"}
+            </FieldDescription>
+          </Field>
 
-            <Field className="md:col-span-2">
-              <FieldLabel htmlFor="linuxdo-backend-redirect-url">
-                后端 OAuth 回调地址
-              </FieldLabel>
-              <Input
-                id="linuxdo-backend-redirect-url"
-                value={String(config?.linuxdo_redirect_url || "")}
-                onChange={(event) => setLinuxDoRedirectUrl(event.target.value)}
-                placeholder="https://example.com/auth/linuxdo/oauth/callback"
-                className={`${settingsDialogInputClassName} font-mono text-sm`}
-              />
-              <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="w-fit"
-                  onClick={() => void handleUseSuggestedRedirectUrl()}
-                  disabled={!redirectUrlSuggestion}
-                >
-                  <Copy data-icon="inline-start" />
-                  填入并复制建议地址
-                </Button>
-                {redirectUrlSuggestion ? (
-                  <code className={settingsInlineCodeClassName}>
-                    {redirectUrlSuggestion}
-                  </code>
-                ) : null}
-              </div>
-              <FieldDescription>
-                这个后端地址需要填写到 Linuxdo Connect 应用后台；不要填写前端的
-                /auth/linuxdo/callback 页面地址。
-              </FieldDescription>
-            </Field>
+          <Field className="md:col-span-2">
+            <FieldLabel htmlFor="linuxdo-backend-redirect-url">
+              后端 OAuth 回调地址
+            </FieldLabel>
+            <Input
+              id="linuxdo-backend-redirect-url"
+              value={String(config?.linuxdo_redirect_url || "")}
+              onChange={(event) => setLinuxDoRedirectUrl(event.target.value)}
+              placeholder="https://example.com/auth/linuxdo/oauth/callback"
+              className={`${settingsDialogInputClassName} font-mono text-sm`}
+            />
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="w-fit"
+                onClick={() => void handleUseSuggestedRedirectUrl()}
+                disabled={!redirectUrlSuggestion}
+              >
+                <Copy data-icon="inline-start" />
+                填入并复制建议地址
+              </Button>
+              {redirectUrlSuggestion ? (
+                <code className={settingsInlineCodeClassName}>
+                  {redirectUrlSuggestion}
+                </code>
+              ) : null}
+            </div>
+            <FieldDescription>
+              这个后端地址需要填写到 Linuxdo Connect 应用后台；不要填写前端的
+              /auth/linuxdo/callback 页面地址。
+            </FieldDescription>
+          </Field>
 
-            <Field className="md:col-span-2">
-              <FieldLabel htmlFor="linuxdo-frontend-redirect-url">
-                前端登录完成页
-              </FieldLabel>
-              <Input
-                id="linuxdo-frontend-redirect-url"
-                value={String(config?.linuxdo_frontend_redirect_url || "")}
-                onChange={(event) =>
-                  setLinuxDoFrontendRedirectUrl(event.target.value)
-                }
-                placeholder="/auth/linuxdo/callback"
-                className={`${settingsDialogInputClassName} font-mono text-sm`}
-              />
-              <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="w-fit"
-                  onClick={() => void handleUseSuggestedFrontendRedirectUrl()}
-                  disabled={!frontendRedirectUrlSuggestion}
-                >
-                  <Copy data-icon="inline-start" />
-                  填入并复制当前前端地址
-                </Button>
-                {frontendRedirectUrlSuggestion ? (
-                  <code className={settingsInlineCodeClassName}>
-                    {frontendRedirectUrlSuggestion}
-                  </code>
-                ) : null}
-              </div>
-              <FieldDescription>
-                同源部署可保持 /auth/linuxdo/callback；本地 Vite
-                或前后端分离部署时填完整前端地址。
-              </FieldDescription>
-            </Field>
-          </div>
-        ) : null}
+          <Field className="md:col-span-2">
+            <FieldLabel htmlFor="linuxdo-frontend-redirect-url">
+              前端登录完成页
+            </FieldLabel>
+            <Input
+              id="linuxdo-frontend-redirect-url"
+              value={String(config?.linuxdo_frontend_redirect_url || "")}
+              onChange={(event) =>
+                setLinuxDoFrontendRedirectUrl(event.target.value)
+              }
+              placeholder="/auth/linuxdo/callback"
+              className={`${settingsDialogInputClassName} font-mono text-sm`}
+            />
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="w-fit"
+                onClick={() => void handleUseSuggestedFrontendRedirectUrl()}
+                disabled={!frontendRedirectUrlSuggestion}
+              >
+                <Copy data-icon="inline-start" />
+                填入并复制当前前端地址
+              </Button>
+              {frontendRedirectUrlSuggestion ? (
+                <code className={settingsInlineCodeClassName}>
+                  {frontendRedirectUrlSuggestion}
+                </code>
+              ) : null}
+            </div>
+            <FieldDescription>
+              同源部署可保持 /auth/linuxdo/callback；本地 Vite
+              或前后端分离部署时填完整前端地址。
+            </FieldDescription>
+          </Field>
+        </div>
 
         <div className="flex justify-end">
           <Button

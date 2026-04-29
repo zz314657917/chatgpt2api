@@ -48,23 +48,23 @@
 
 :root {
   --radius: 0.8125rem;
-  --background: #ffffff;
+  --background: #f6f8fc;
   --foreground: #222222;
-  --card: #ffffff;
+  --card: #fbfdff;
   --card-foreground: #222222;
-  --popover: #ffffff;
+  --popover: #fbfdff;
   --popover-foreground: #222222;
   --primary: #181e25;
   --primary-foreground: #ffffff;
-  --secondary: #f0f0f0;
+  --secondary: #edf2f8;
   --secondary-foreground: #333333;
-  --muted: #f7f8fa;
+  --muted: #f0f4f9;
   --muted-foreground: #45515e;
-  --accent: #f2f3f5;
+  --accent: #eaf1fa;
   --accent-foreground: #18181b;
   --destructive: oklch(0.577 0.245 27.325);
-  --border: #e5e7eb;
-  --input: #e5e7eb;
+  --border: #dfe7f1;
+  --input: #dce5ef;
   --ring: #3b82f6;
   --brand-6: #1456f0;
   --brand-3: #17437d;
@@ -73,9 +73,10 @@
   --surface-dark: #181e25;
   --text-secondary: #45515e;
   --text-tertiary: #8e8e93;
-  --border-soft: #f2f3f5;
-  --shadow-card: 0 4px 6px rgba(0, 0, 0, 0.08);
-  --shadow-ambient: 0 0 22.576px rgba(0, 0, 0, 0.08);
+  --border-soft: #e9eef6;
+  --surface-card-gradient: linear-gradient(180deg, color-mix(in srgb, var(--card) 94%, #edf4ff 6%) 0%, color-mix(in srgb, var(--card) 96%, #fff0fb 4%) 100%);
+  --shadow-card: 0 8px 24px rgba(24, 40, 72, 0.07);
+  --shadow-ambient: 0 18px 54px rgba(44, 74, 116, 0.09);
   --shadow-brand: 0 0 15px rgba(44, 30, 116, 0.16);
   --shadow-elevated: 0 12px 16px -4px rgba(36, 36, 36, 0.08);
   --chart-1: oklch(0.646 0.222 41.116);
@@ -133,6 +134,7 @@
   }
   body {
     @apply bg-background font-sans text-foreground antialiased;
+    background-image: linear-gradient(180deg, #f8fbff 0%, var(--background) 42%, #f2f6fb 100%);
     line-height: 1.5;
   }
   button:not(:disabled),
@@ -156,6 +158,10 @@
 
   .elevated-shadow {
     box-shadow: var(--shadow-elevated);
+  }
+
+  .card-surface {
+    background: var(--surface-card-gradient);
   }
 
   .hide-scrollbar {

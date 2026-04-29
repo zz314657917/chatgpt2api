@@ -161,7 +161,7 @@ export function TopNav() {
   const roleLabel = session.role === "admin" ? "管理员" : session.provider === "linuxdo" ? "Linuxdo 用户" : "普通用户";
 
   return (
-    <header className="sticky top-3 z-40 rounded-[24px] border border-[#f2f3f5] bg-white/92 shadow-[0_0_22.576px_rgba(0,0,0,0.08)] backdrop-blur dark:border-border dark:bg-card/92">
+    <header className="sticky top-3 z-40 rounded-[24px] border border-border bg-card/90 shadow-[0_0_22.576px_rgba(44,74,116,0.09)] backdrop-blur dark:border-border dark:bg-card/92">
       <div className="flex min-h-14 flex-col gap-2 px-3 py-2 sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:px-4">
         <div className="flex items-center justify-between gap-3 sm:justify-start">
           <Link
