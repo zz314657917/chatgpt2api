@@ -36,7 +36,7 @@ type ImageResultsProps = {
   progressNow: number;
   promptPresets: readonly ImagePromptPreset[];
   onOpenLightbox: (images: ImageLightboxItem[], index: number) => void;
-  onApplyPromptPreset: (preset: ImagePromptPreset) => void;
+  onApplyPromptPreset: (preset: ImagePromptPreset) => void | Promise<void>;
   onContinueEdit: (conversationId: string, image: StoredImage | StoredReferenceImage) => void;
   onEditTurn: (conversationId: string, turnId: string) => void;
   onCancelTurn: (conversationId: string, turnId: string) => void | Promise<void>;
@@ -240,7 +240,7 @@ export function ImageResults({
                 key={preset.id}
                 type="button"
                 className="group w-[250px] shrink-0 overflow-hidden rounded-[22px] border border-[#f2f3f5] bg-white transition hover:-translate-y-0.5 hover:shadow-[0_12px_16px_-4px_rgba(36,36,36,0.08)] sm:w-auto"
-                onClick={() => onApplyPromptPreset(preset)}
+                onClick={() => void onApplyPromptPreset(preset)}
                 aria-label={`套用预设：${preset.title}`}
               >
                 <div className="relative aspect-[16/9] overflow-hidden bg-[#f0f0f0]">

@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -26,6 +27,11 @@ var settingEnvKeys = map[string]string{
 	"auto_remove_invalid_accounts":      "CHATGPT2API_AUTO_REMOVE_INVALID_ACCOUNTS",
 	"auto_remove_rate_limited_accounts": "CHATGPT2API_AUTO_REMOVE_RATE_LIMITED_ACCOUNTS",
 	"log_levels":                        "CHATGPT2API_LOG_LEVELS",
+	"linuxdo_enabled":                   "CHATGPT2API_LINUXDO_ENABLED",
+	"linuxdo_client_id":                 "CHATGPT2API_LINUXDO_CLIENT_ID",
+	"linuxdo_client_secret":             "CHATGPT2API_LINUXDO_CLIENT_SECRET",
+	"linuxdo_redirect_url":              "CHATGPT2API_LINUXDO_REDIRECT_URL",
+	"linuxdo_frontend_redirect_url":     "CHATGPT2API_LINUXDO_FRONTEND_REDIRECT_URL",
 }
 
 var envKeyRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
@@ -208,20 +214,28 @@ func (s *Store) LogLevels() []string {
 }
 
 func (s *Store) LinuxDoOAuth() LinuxDoOAuthConfig {
-	redirectURL := envString("CHATGPT2API_LINUXDO_REDIRECT_URL", "")
-	if redirectURL == "" && s.BaseURL() != "" {
-		redirectURL = s.BaseURL() + "/auth/linuxdo/oauth/callback"
+	s.mu.RLock()
+	data := util.CopyMap(s.data)
+	s.mu.RUnlock()
+	return s.linuxDoOAuthFromData(data)
+}
+
+func (s *Store) linuxDoOAuthFromData(data map[string]any) LinuxDoOAuthConfig {
+	redirectURL := strings.TrimSpace(fmt.Sprint(s.settingValueFromData(data, "linuxdo_redirect_url", "")))
+	baseURL := strings.TrimRight(strings.TrimSpace(fmt.Sprint(s.settingValueFromData(data, "base_url", ""))), "/")
+	if redirectURL == "" && baseURL != "" {
+		redirectURL = baseURL + "/auth/linuxdo/oauth/callback"
 	}
 	return LinuxDoOAuthConfig{
-		Enabled:              envBool("CHATGPT2API_LINUXDO_ENABLED", false),
-		ClientID:             envString("CHATGPT2API_LINUXDO_CLIENT_ID", ""),
-		ClientSecret:         envString("CHATGPT2API_LINUXDO_CLIENT_SECRET", ""),
+		Enabled:              util.ToBool(s.settingValueFromData(data, "linuxdo_enabled", false)),
+		ClientID:             strings.TrimSpace(fmt.Sprint(s.settingValueFromData(data, "linuxdo_client_id", ""))),
+		ClientSecret:         strings.TrimSpace(fmt.Sprint(s.settingValueFromData(data, "linuxdo_client_secret", ""))),
 		AuthorizeURL:         envString("CHATGPT2API_LINUXDO_AUTHORIZE_URL", "https://connect.linux.do/oauth2/authorize"),
 		TokenURL:             envString("CHATGPT2API_LINUXDO_TOKEN_URL", "https://connect.linux.do/oauth2/token"),
 		UserInfoURL:          envString("CHATGPT2API_LINUXDO_USERINFO_URL", "https://connect.linux.do/api/user"),
 		Scopes:               envString("CHATGPT2API_LINUXDO_SCOPES", "user"),
 		RedirectURL:          redirectURL,
-		FrontendRedirectURL:  envString("CHATGPT2API_LINUXDO_FRONTEND_REDIRECT_URL", "/auth/linuxdo/callback"),
+		FrontendRedirectURL:  strings.TrimSpace(fmt.Sprint(s.settingValueFromData(data, "linuxdo_frontend_redirect_url", "/auth/linuxdo/callback"))),
 		TokenAuthMethod:      strings.ToLower(envString("CHATGPT2API_LINUXDO_TOKEN_AUTH_METHOD", "client_secret_post")),
 		UsePKCE:              envBool("CHATGPT2API_LINUXDO_USE_PKCE", false),
 		UserInfoEmailPath:    envString("CHATGPT2API_LINUXDO_USERINFO_EMAIL_PATH", ""),
@@ -277,15 +291,34 @@ func (s *Store) Get() map[string]any {
 	data["log_levels"] = s.LogLevels()
 	data["proxy"] = s.Proxy()
 	data["base_url"] = s.BaseURL()
+	linuxdo := s.LinuxDoOAuth()
+	data["linuxdo_enabled"] = linuxdo.Enabled
+	data["linuxdo_client_id"] = linuxdo.ClientID
+	data["linuxdo_client_secret_configured"] = linuxdo.ClientSecret != ""
+	data["linuxdo_redirect_url"] = linuxdo.RedirectURL
+	data["linuxdo_frontend_redirect_url"] = linuxdo.FrontendRedirectURL
 	delete(data, "auth-key")
+	delete(data, "linuxdo_client_secret")
 	return data
 }
 
 func (s *Store) Update(data map[string]any) (map[string]any, error) {
 	s.mu.Lock()
+	next := util.CopyMap(s.data)
 	for key, value := range data {
-		s.data[key] = value
+		if key == "linuxdo_client_secret_configured" {
+			continue
+		}
+		if key == "linuxdo_client_secret" && strings.TrimSpace(fmt.Sprint(value)) == "" {
+			continue
+		}
+		next[key] = value
 	}
+	if err := s.validateSettingsUpdateLocked(next); err != nil {
+		s.mu.Unlock()
+		return nil, err
+	}
+	s.data = next
 	err := s.saveLocked()
 	s.mu.Unlock()
 	if err != nil {
@@ -340,6 +373,101 @@ func (s *Store) settingValue(key string, fallback any) any {
 		return value
 	}
 	return fallback
+}
+
+func (s *Store) settingValueFromData(data map[string]any, key string, fallback any) any {
+	envKey := settingEnvKeys[key]
+	if envKey != "" {
+		if value, ok := os.LookupEnv(envKey); ok {
+			if _, external := s.externalEnvKeys[envKey]; external {
+				return value
+			}
+		}
+	}
+	if data != nil {
+		if value, ok := data[key]; ok {
+			return value
+		}
+	}
+	if envKey != "" {
+		if value, ok := os.LookupEnv(envKey); ok {
+			return value
+		}
+	}
+	return fallback
+}
+
+func (s *Store) validateSettingsUpdateLocked(data map[string]any) error {
+	linuxdo := s.linuxDoOAuthFromData(data)
+	if !linuxdo.Enabled {
+		return nil
+	}
+	if linuxdo.ClientID == "" {
+		return errors.New("Linuxdo Client ID is required when enabled")
+	}
+	if linuxdo.RedirectURL == "" {
+		return errors.New("Linuxdo Redirect URL is required when enabled")
+	}
+	if linuxdo.FrontendRedirectURL == "" {
+		return errors.New("Linuxdo Frontend Redirect URL is required when enabled")
+	}
+	if err := validateAbsoluteHTTPURL(linuxdo.RedirectURL); err != nil {
+		return errors.New("Linuxdo Redirect URL must be an absolute http(s) URL")
+	}
+	if err := validateFrontendRedirectURL(linuxdo.FrontendRedirectURL); err != nil {
+		return errors.New("Linuxdo Frontend Redirect URL must be an absolute http(s) URL or a relative path")
+	}
+	switch linuxdo.TokenAuthMethod {
+	case "", "client_secret_post", "client_secret_basic":
+		if linuxdo.ClientSecret == "" {
+			return errors.New("Linuxdo Client Secret is required when enabled")
+		}
+	case "none":
+		if !linuxdo.UsePKCE {
+			return errors.New("Linuxdo PKCE must be enabled when token auth method is none")
+		}
+	default:
+		return errors.New("Linuxdo token auth method must be one of client_secret_post, client_secret_basic, none")
+	}
+	return nil
+}
+
+func validateAbsoluteHTTPURL(value string) error {
+	parsed, err := url.Parse(strings.TrimSpace(value))
+	if err != nil {
+		return err
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return errors.New("scheme must be http or https")
+	}
+	if parsed.Host == "" {
+		return errors.New("host is required")
+	}
+	return nil
+}
+
+func validateFrontendRedirectURL(value string) error {
+	value = strings.TrimSpace(value)
+	if strings.ContainsAny(value, "\r\n") {
+		return errors.New("newlines are not allowed")
+	}
+	parsed, err := url.Parse(value)
+	if err != nil {
+		return err
+	}
+	if parsed.Scheme != "" {
+		if parsed.Scheme != "http" && parsed.Scheme != "https" {
+			return errors.New("scheme must be http or https")
+		}
+		if parsed.Host == "" {
+			return errors.New("host is required")
+		}
+		return nil
+	}
+	if !strings.HasPrefix(value, "/") || strings.HasPrefix(value, "//") {
+		return errors.New("relative path must start with one slash")
+	}
+	return nil
 }
 
 func (s *Store) saveLocked() error {

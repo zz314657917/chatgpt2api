@@ -161,26 +161,38 @@ async function fetchImageAsFile(url: string, fileName: string) {
   return new File([blob], fileName, { type: blob.type || "image/png" });
 }
 
-function buildMarketReferenceFileName(url: string, index: number) {
+function buildReferenceFileName(url: string, index: number, fallbackPrefix: string) {
+  const path = url.split(/[?#]/, 1)[0] || "";
+  const rawName = path.split("/").filter(Boolean).pop() || "";
+  let name = rawName;
   try {
-    const name = decodeURIComponent(new URL(url).pathname.split("/").filter(Boolean).pop() || "");
-    if (name) {
-      return name.includes(".") ? name : `${name}.png`;
-    }
+    name = rawName ? decodeURIComponent(rawName) : "";
   } catch {
-    // Keep a deterministic fallback for malformed source links.
+    name = rawName;
   }
-  return `banana-reference-${index + 1}.png`;
+  if (name) {
+    return name.includes(".") ? name : `${name}.png`;
+  }
+  return `${fallbackPrefix}-${index + 1}.png`;
 }
 
-async function buildMarketReferenceImage(url: string, index: number): Promise<StoredReferenceImage> {
-  const file = await fetchImageAsFile(url, buildMarketReferenceFileName(url, index));
+async function buildReferenceImageFromUrl(
+  url: string,
+  index: number,
+  fallbackPrefix: string,
+): Promise<StoredReferenceImage> {
+  const file = await fetchImageAsFile(url, buildReferenceFileName(url, index, fallbackPrefix));
   return {
     name: file.name,
     type: file.type || "image/png",
     dataUrl: await readFileAsDataUrl(file),
     source: "upload",
   };
+}
+
+function getPromptReferenceImageUrls(prompt: BananaPrompt) {
+  const urls = prompt.referenceImageUrls.length > 0 ? prompt.referenceImageUrls : [prompt.preview];
+  return Array.from(new Set(urls.map((url) => url.trim()).filter(Boolean)));
 }
 
 async function buildReferenceImageFromStoredImage(image: StoredImage, fileName: string) {
@@ -678,6 +690,7 @@ function ImagePageContent() {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const editFileInputRef = useRef<HTMLInputElement>(null);
+  const promptApplyRequestIdRef = useRef(0);
 
   const [imagePrompt, setImagePrompt] = useState("");
   const [composerMode, setComposerMode] = useState<ComposerMode>(getStoredComposerMode);
@@ -963,6 +976,7 @@ function ImagePageContent() {
   }, []);
 
   const clearComposerInputs = useCallback(() => {
+    promptApplyRequestIdRef.current += 1;
     setImagePrompt("");
     setImageCount("1");
     setReferenceImages([]);
@@ -978,6 +992,7 @@ function ImagePageContent() {
   const handleComposerModeChange = useCallback((mode: ComposerMode) => {
     setComposerMode(mode);
     if (mode === "chat") {
+      promptApplyRequestIdRef.current += 1;
       setReferenceImages([]);
       if (fileInputRef.current) {
         fileInputRef.current.value = "";
@@ -991,7 +1006,9 @@ function ImagePageContent() {
     textareaRef.current?.focus();
   };
 
-  const handleApplyPromptPreset = useCallback((preset: ImagePromptPreset) => {
+  const handleApplyPromptPreset = useCallback(async (preset: ImagePromptPreset) => {
+    const requestId = promptApplyRequestIdRef.current + 1;
+    promptApplyRequestIdRef.current = requestId;
     setSelectedConversationId(null);
     setComposerMode("image");
     setImagePrompt(preset.prompt);
@@ -1002,9 +1019,32 @@ function ImagePageContent() {
       fileInputRef.current.value = "";
     }
     textareaRef.current?.focus();
+
+    const toastId = toast.loading("正在读取参考图");
+    try {
+      const referenceImage = await buildReferenceImageFromUrl(preset.imageSrc, 0, "preset-reference");
+      if (promptApplyRequestIdRef.current !== requestId) {
+        toast.dismiss(toastId);
+        return;
+      }
+      setReferenceImages([referenceImage]);
+      toast.dismiss(toastId);
+      toast.success("已套用提示词和参考图");
+    } catch {
+      if (promptApplyRequestIdRef.current !== requestId) {
+        toast.dismiss(toastId);
+        return;
+      }
+      toast.dismiss(toastId);
+      toast.error("已套用提示词，但参考图读取失败");
+    }
   }, []);
 
   const handleApplyMarketPrompt = useCallback(async (prompt: BananaPrompt) => {
+    const referenceImageUrls = getPromptReferenceImageUrls(prompt);
+    const requestId = promptApplyRequestIdRef.current + 1;
+    promptApplyRequestIdRef.current = requestId;
+
     setSelectedConversationId(null);
     setComposerMode("image");
     setImagePrompt(prompt.prompt);
@@ -1017,25 +1057,28 @@ function ImagePageContent() {
     }
     textareaRef.current?.focus();
 
-    if (prompt.referenceImageUrls.length === 0) {
+    if (referenceImageUrls.length === 0) {
       toast.success("已套用提示词");
       return;
     }
 
-    const toastId = toast.loading(`正在读取 ${prompt.referenceImageUrls.length} 张参考图`);
+    const toastId = toast.loading(`正在读取 ${referenceImageUrls.length} 张参考图`);
     const results = await Promise.allSettled(
-      prompt.referenceImageUrls.map((url, index) => buildMarketReferenceImage(url, index)),
+      referenceImageUrls.map((url, index) => buildReferenceImageFromUrl(url, index, "prompt-reference")),
     );
     const loadedReferences = results.flatMap((result) => (result.status === "fulfilled" ? [result.value] : []));
 
     toast.dismiss(toastId);
+    if (promptApplyRequestIdRef.current !== requestId) {
+      return;
+    }
     if (loadedReferences.length > 0) {
       setReferenceImages(loadedReferences);
     }
-    if (loadedReferences.length === prompt.referenceImageUrls.length) {
+    if (loadedReferences.length === referenceImageUrls.length) {
       toast.success("已套用提示词和参考图");
     } else if (loadedReferences.length > 0) {
-      toast.error(`已套用提示词，${prompt.referenceImageUrls.length - loadedReferences.length} 张参考图读取失败`);
+      toast.error(`已套用提示词，${referenceImageUrls.length - loadedReferences.length} 张参考图读取失败`);
     } else {
       toast.error("已套用提示词，但参考图读取失败");
     }
@@ -1102,6 +1145,7 @@ function ImagePageContent() {
     if (files.length === 0) {
       return;
     }
+    promptApplyRequestIdRef.current += 1;
 
     try {
       const previews = await Promise.all(

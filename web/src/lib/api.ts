@@ -111,6 +111,12 @@ export type SettingsConfig = {
   auto_remove_invalid_accounts?: boolean;
   auto_remove_rate_limited_accounts?: boolean;
   log_levels?: string[];
+  linuxdo_enabled?: boolean;
+  linuxdo_client_id?: string;
+  linuxdo_client_secret?: string;
+  linuxdo_client_secret_configured?: boolean;
+  linuxdo_redirect_url?: string;
+  linuxdo_frontend_redirect_url?: string;
   [key: string]: unknown;
 };
 

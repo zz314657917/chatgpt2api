@@ -11,6 +11,7 @@ import { ConfigCard } from "./components/config-card";
 import { CPAPoolDialog } from "./components/cpa-pool-dialog";
 import { CPAPoolsCard } from "./components/cpa-pools-card";
 import { ImportBrowserDialog } from "./components/import-browser-dialog";
+import { LinuxDoLoginCard } from "./components/linuxdo-login-card";
 import { SettingsHeader } from "./components/settings-header";
 import { Sub2APIConnections } from "./components/sub2api-connections";
 import { useSettingsStore } from "./store";
@@ -54,6 +55,7 @@ function AdminSettingsPageContent() {
       <SettingsHeader />
       <section className="flex flex-col gap-4">
         <ConfigCard />
+        <LinuxDoLoginCard />
         <AnnouncementsCard />
         <CPAPoolsCard />
         <Sub2APIConnections />

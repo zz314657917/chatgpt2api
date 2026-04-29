@@ -38,6 +38,13 @@ function normalizeConfig(config: SettingsConfig): SettingsConfig {
     log_levels: Array.isArray(config.log_levels) ? config.log_levels : [],
     proxy: typeof config.proxy === "string" ? config.proxy : "",
     base_url: typeof config.base_url === "string" ? config.base_url : "",
+    linuxdo_enabled: Boolean(config.linuxdo_enabled),
+    linuxdo_client_id: typeof config.linuxdo_client_id === "string" ? config.linuxdo_client_id : "",
+    linuxdo_client_secret: "",
+    linuxdo_client_secret_configured: Boolean(config.linuxdo_client_secret_configured),
+    linuxdo_redirect_url: typeof config.linuxdo_redirect_url === "string" ? config.linuxdo_redirect_url : "",
+    linuxdo_frontend_redirect_url:
+      typeof config.linuxdo_frontend_redirect_url === "string" ? config.linuxdo_frontend_redirect_url : "/auth/linuxdo/callback",
   };
 }
 
@@ -100,6 +107,11 @@ type SettingsStore = {
   setLogLevel: (level: string, enabled: boolean) => void;
   setProxy: (value: string) => void;
   setBaseUrl: (value: string) => void;
+  setLinuxDoEnabled: (value: boolean) => void;
+  setLinuxDoClientId: (value: string) => void;
+  setLinuxDoClientSecret: (value: string) => void;
+  setLinuxDoRedirectUrl: (value: string) => void;
+  setLinuxDoFrontendRedirectUrl: (value: string) => void;
 
   loadRegister: (silent?: boolean) => Promise<void>;
   setRegisterConfig: (config: RegisterConfig) => void;
@@ -196,7 +208,8 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
 
     set({ isSavingConfig: true });
     try {
-      const data = await updateSettingsConfig({
+      const linuxDoClientSecret = String(config.linuxdo_client_secret || "").trim();
+      const payload: SettingsConfig = {
         ...config,
         refresh_account_interval_minute: Math.max(1, Number(config.refresh_account_interval_minute) || 1),
         image_concurrent_limit: Math.max(1, Number(config.image_concurrent_limit) || 4),
@@ -205,7 +218,18 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         auto_remove_rate_limited_accounts: Boolean(config.auto_remove_rate_limited_accounts),
         proxy: config.proxy.trim(),
         base_url: String(config.base_url || "").trim(),
-      });
+        linuxdo_enabled: Boolean(config.linuxdo_enabled),
+        linuxdo_client_id: String(config.linuxdo_client_id || "").trim(),
+        linuxdo_client_secret: linuxDoClientSecret,
+        linuxdo_redirect_url: String(config.linuxdo_redirect_url || "").trim(),
+        linuxdo_frontend_redirect_url: String(config.linuxdo_frontend_redirect_url || "").trim(),
+      };
+      if (!linuxDoClientSecret) {
+        delete payload.linuxdo_client_secret;
+      }
+      delete payload.linuxdo_client_secret_configured;
+
+      const data = await updateSettingsConfig(payload);
       set({
         config: normalizeConfig(data.config),
       });
@@ -283,6 +307,26 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         },
       };
     });
+  },
+
+  setLinuxDoEnabled: (value) => {
+    set((state) => state.config ? { config: { ...state.config, linuxdo_enabled: value } } : {});
+  },
+
+  setLinuxDoClientId: (value) => {
+    set((state) => state.config ? { config: { ...state.config, linuxdo_client_id: value } } : {});
+  },
+
+  setLinuxDoClientSecret: (value) => {
+    set((state) => state.config ? { config: { ...state.config, linuxdo_client_secret: value } } : {});
+  },
+
+  setLinuxDoRedirectUrl: (value) => {
+    set((state) => state.config ? { config: { ...state.config, linuxdo_redirect_url: value } } : {});
+  },
+
+  setLinuxDoFrontendRedirectUrl: (value) => {
+    set((state) => state.config ? { config: { ...state.config, linuxdo_frontend_redirect_url: value } } : {});
   },
 
   loadRegister: async (silent = false) => {
