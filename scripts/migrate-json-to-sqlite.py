@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Migrate chatgpt2api file storage to the SQLite database backend."""
+"""Migrate chatgpt2api JSON file storage to the SQLite database backend."""
 
 from __future__ import annotations
 
@@ -25,8 +25,8 @@ def parse_args() -> argparse.Namespace:
         default_data_dir = str(Path(__file__).resolve().parent.parent / "data")
     parser = argparse.ArgumentParser(
         description=(
-            "Migrate data JSON files and logs.jsonl into the SQLite schema "
-            "used by STORAGE_BACKEND=sqlite."
+            "Migrate data JSON files into the SQLite schema used by "
+            "STORAGE_BACKEND=sqlite. Historical logs.jsonl is intentionally skipped."
         )
     )
     parser.add_argument(
@@ -57,7 +57,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--allow-empty",
         action="store_true",
-        help="allow migration when no JSON or JSONL input files exist",
+        help="allow migration when no JSON input files exist",
     )
     return parser.parse_args()
 
@@ -150,39 +150,6 @@ def collect_json_documents(data_dir: Path) -> list[tuple[str, Any]]:
     return docs
 
 
-def log_day(value: Any) -> str:
-    text = str(value or "").strip()
-    if len(text) < 10:
-        return ""
-    return text[:10]
-
-
-def load_logs(path: Path) -> list[dict[str, Any]]:
-    if not path.exists():
-        return []
-    if path.is_dir():
-        raise MigrationError(f"{path} is a directory, expected a JSONL file")
-    logs: list[dict[str, Any]] = []
-    try:
-        with path.open("r", encoding="utf-8") as handle:
-            for line_no, line in enumerate(handle, start=1):
-                line = line.strip()
-                if line == "":
-                    continue
-                try:
-                    item = json.loads(line)
-                except json.JSONDecodeError as exc:
-                    raise MigrationError(
-                        f"invalid JSON in {path} line {line_no}: {exc}"
-                    ) from exc
-                if not isinstance(item, dict):
-                    raise MigrationError(f"{path} line {line_no} is not a JSON object")
-                logs.append(item)
-    except OSError as exc:
-        raise MigrationError(f"failed to read {path}: {exc}") from exc
-    return logs
-
-
 def configure_sqlite(conn: sqlite3.Connection) -> None:
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
@@ -198,7 +165,6 @@ def write_database(
     auth_keys: list[dict[str, Any]],
     auth_key_ids: list[str],
     documents: list[tuple[str, Any]],
-    logs: list[dict[str, Any]],
 ) -> dict[str, int]:
     conn = sqlite3.connect(str(db_path))
     try:
@@ -246,18 +212,6 @@ def write_database(
             "INSERT INTO json_documents (name, data, updated_at) VALUES (?, ?, ?)",
             [(name, encode_value(value), now) for name, value in documents],
         )
-        conn.executemany(
-            "INSERT INTO logs (created_at, type, day, data) VALUES (?, ?, ?, ?)",
-            [
-                (
-                    str(item.get("time") or ""),
-                    str(item.get("type") or "").strip(),
-                    log_day(item.get("time")),
-                    encode_value(item),
-                )
-                for item in logs
-            ],
-        )
         conn.commit()
         return {
             "accounts": int(conn.execute("SELECT COUNT(*) FROM accounts").fetchone()[0]),
@@ -291,7 +245,6 @@ def build_temp_database(
     auth_keys: list[dict[str, Any]],
     auth_key_ids: list[str],
     documents: list[tuple[str, Any]],
-    logs: list[dict[str, Any]],
 ) -> tuple[Path, dict[str, int]]:
     target.parent.mkdir(parents=True, exist_ok=True)
     handle, temp_name = tempfile.mkstemp(
@@ -309,7 +262,6 @@ def build_temp_database(
             auth_keys,
             auth_key_ids,
             documents,
-            logs,
         )
     except Exception:
         temp_path.unlink(missing_ok=True)
@@ -330,20 +282,15 @@ def migrate(args: argparse.Namespace) -> None:
         else data_dir / "auth_keys.json"
     )
     db_path = Path(args.db).expanduser() if args.db else data_dir / "chatgpt2api.db"
-    logs_path = data_dir / "logs.jsonl"
     documents = collect_json_documents(data_dir)
-    logs = load_logs(logs_path)
 
     if (
         not args.allow_empty
         and not accounts_path.exists()
         and not auth_keys_path.exists()
         and not documents
-        and not logs
     ):
-        raise MigrationError(
-            f"no JSON or JSONL input files found under {data_dir}"
-        )
+        raise MigrationError(f"no JSON input files found under {data_dir}")
 
     accounts = load_accounts(accounts_path)
     auth_keys = load_auth_keys(auth_keys_path)
@@ -351,14 +298,15 @@ def migrate(args: argparse.Namespace) -> None:
     auth_key_ids = validate_unique(auth_keys, "id", "auth_keys")
 
     temp_path, counts = build_temp_database(
-        db_path, accounts, account_keys, auth_keys, auth_key_ids, documents, logs
+        db_path, accounts, account_keys, auth_keys, auth_key_ids, documents
     )
     if args.dry_run:
         temp_path.unlink(missing_ok=True)
         print(
             "Dry run OK: "
             f"{counts['accounts']} accounts, {counts['auth_keys']} auth keys, "
-            f"{counts['documents']} JSON documents, and {counts['logs']} logs validated."
+            f"and {counts['documents']} JSON documents validated. "
+            "Historical logs.jsonl is skipped."
         )
         return
 
@@ -375,7 +323,7 @@ def migrate(args: argparse.Namespace) -> None:
     print(f"Migrated accounts: {counts['accounts']}")
     print(f"Migrated auth keys: {counts['auth_keys']}")
     print(f"Migrated JSON documents: {counts['documents']}")
-    print(f"Migrated logs: {counts['logs']}")
+    print("Skipped logs: logs.jsonl is not migrated")
     print(f"SQLite database: {db_path}")
     if backup is not None:
         print(f"Previous database backup: {backup}")

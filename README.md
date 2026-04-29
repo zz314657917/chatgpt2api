@@ -79,7 +79,7 @@ python3 scripts/migrate-json-to-sqlite.py --data-dir ./data --db ./data/chatgpt2
 docker compose up -d
 ```
 
-迁移脚本会导入 `data` 下的 JSON 文件、`logs.jsonl`、账号和 auth key 数据；如果目标库已存在，会先生成同目录 `.bak-时间戳` 备份。
+迁移脚本会导入 `data` 下的 JSON 文件、账号和 auth key 数据；历史 `logs.jsonl` 不迁移，新日志会在 SQLite 后端启用后重新写入数据库。如果目标库已存在，会先生成同目录 `.bak-时间戳` 备份。
 
 示例：使用 PostgreSQL
 ```yaml
