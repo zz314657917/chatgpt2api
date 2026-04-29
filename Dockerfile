@@ -2,33 +2,35 @@
 
 ARG VERSION=0.0.0-dev
 
-FROM --platform=$BUILDPLATFORM node:22-alpine AS web-build
+FROM --platform=$BUILDPLATFORM oven/bun:1-alpine AS web-deps
 
 WORKDIR /app/web
 
-ARG VERSION=0.0.0-dev
-ENV VITE_APP_VERSION=${VERSION}
-
 COPY web/package.json web/bun.lock ./
-RUN --mount=type=cache,target=/root/.npm npm install
+RUN --mount=type=cache,target=/root/.bun/install/cache,sharing=locked \
+    bun install --frozen-lockfile
+
+
+FROM web-deps AS web-build
 
 COPY web ./
-RUN npm run build
+ARG VERSION=0.0.0-dev
+ENV VITE_APP_VERSION=${VERSION}
+RUN bun run build
 
 
 FROM --platform=$BUILDPLATFORM golang:1.26.2-bookworm AS go-build
 
-ARG TARGETOS
-ARG TARGETARCH
-ARG VERSION=0.0.0-dev
-
 WORKDIR /src
 
 COPY go.mod go.sum ./
-RUN --mount=type=cache,target=/go/pkg/mod go mod download
+RUN --mount=type=cache,target=/go/pkg/mod,sharing=locked go mod download
 
 COPY cmd ./cmd
 COPY internal ./internal
+ARG TARGETOS
+ARG TARGETARCH
+ARG VERSION=0.0.0-dev
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build -trimpath -ldflags="-s -w -X chatgpt2api/internal/version.Version=${VERSION}" -o /out/chatgpt2api ./cmd/chatgpt2api

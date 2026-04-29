@@ -7,6 +7,7 @@
 .claude
 .omx
 .ace-tool
+.github
 
 .env
 .env.*
@@ -40,6 +41,11 @@ web/pnpm-debug.log*
 assets
 docs
 README.md
+AGENTS.md
+DESIGN.md
+LICENSE
+docker-compose*.yml
+scripts
 
 .venv
 __pycache__
