@@ -1,12 +1,15 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { History, ImagePlus, LoaderCircle, Plus, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { ImageComposer } from "@/app/image/components/image-composer";
+import { ImagePromptMarket } from "@/app/image/components/image-prompt-market";
 import { ImageResults, type ImageLightboxItem, type ImageTurnProgress } from "@/app/image/components/image-results";
-import { IMAGE_SIZE_OPTIONS } from "@/app/image/image-options";
+import type { BananaPrompt } from "@/app/image/banana-prompts";
+import { IMAGE_QUALITY_OPTIONS, IMAGE_SIZE_OPTIONS } from "@/app/image/image-options";
+import { IMAGE_PROMPT_PRESETS, type ImagePromptPreset } from "@/app/image/image-presets";
 import { ImageSidebar } from "@/app/image/components/image-sidebar";
 import { AnnouncementNotifications } from "@/components/announcement-banner";
 import { ImageLightbox } from "@/components/image-lightbox";
@@ -38,8 +41,10 @@ import {
   fetchImageTasks,
   IMAGE_MODEL_OPTIONS,
   isImageModel,
+  isImageQuality,
   type Account,
   type ImageModel,
+  type ImageQuality,
   type ImageTask,
   type ImageTaskMessage,
 } from "@/lib/api";
@@ -62,6 +67,8 @@ import {
 const ACTIVE_CONVERSATION_STORAGE_KEY = "chatgpt2api:image_active_conversation_id";
 const IMAGE_MODEL_STORAGE_KEY = "chatgpt2api:image_last_model";
 const IMAGE_SIZE_STORAGE_KEY = "chatgpt2api:image_last_size";
+const IMAGE_QUALITY_STORAGE_KEY = "chatgpt2api:image_last_quality";
+const DEFAULT_IMAGE_QUALITY: ImageQuality = "high";
 const activeConversationQueueIds = new Set<string>();
 const EMPTY_IMAGE_SIZE_SELECT_VALUE = "__empty__";
 
@@ -72,6 +79,7 @@ type EditingTurnDraft = {
   model: ImageModel;
   count: string;
   size: string;
+  quality: ImageQuality;
   referenceImages: StoredReferenceImage[];
 };
 
@@ -147,6 +155,28 @@ async function fetchImageAsFile(url: string, fileName: string) {
   }
   const blob = await response.blob();
   return new File([blob], fileName, { type: blob.type || "image/png" });
+}
+
+function buildMarketReferenceFileName(url: string, index: number) {
+  try {
+    const name = decodeURIComponent(new URL(url).pathname.split("/").filter(Boolean).pop() || "");
+    if (name) {
+      return name.includes(".") ? name : `${name}.png`;
+    }
+  } catch {
+    // Keep a deterministic fallback for malformed source links.
+  }
+  return `banana-reference-${index + 1}.png`;
+}
+
+async function buildMarketReferenceImage(url: string, index: number): Promise<StoredReferenceImage> {
+  const file = await fetchImageAsFile(url, buildMarketReferenceFileName(url, index));
+  return {
+    name: file.name,
+    type: file.type || "image/png",
+    dataUrl: await readFileAsDataUrl(file),
+    source: "upload",
+  };
 }
 
 async function buildReferenceImageFromStoredImage(image: StoredImage, fileName: string) {
@@ -323,6 +353,14 @@ function getStoredImageModel(): ImageModel {
   }
   const storedModel = window.localStorage.getItem(IMAGE_MODEL_STORAGE_KEY);
   return isImageModel(storedModel) ? storedModel : DEFAULT_IMAGE_MODEL;
+}
+
+function getStoredImageQuality(): ImageQuality {
+  if (typeof window === "undefined") {
+    return DEFAULT_IMAGE_QUALITY;
+  }
+  const storedQuality = window.localStorage.getItem(IMAGE_QUALITY_STORAGE_KEY);
+  return isImageQuality(storedQuality) ? storedQuality : DEFAULT_IMAGE_QUALITY;
 }
 
 function buildTurnOutcomeMessage(successCount: number, failedCount: number, cancelledCount: number) {
@@ -599,6 +637,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
   const retryingImageIdsRef = useRef(new Set<string>());
   const conversationsRef = useRef<ImageConversation[]>([]);
   const resultsViewportRef = useRef<HTMLDivElement>(null);
+  const composerDockRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const editFileInputRef = useRef<HTMLInputElement>(null);
@@ -607,7 +646,9 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
   const [imageModel, setImageModel] = useState<ImageModel>(getStoredImageModel);
   const [imageCount, setImageCount] = useState("1");
   const [imageSize, setImageSize] = useState("");
+  const [imageQuality, setImageQuality] = useState<ImageQuality>(getStoredImageQuality);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+  const [isPromptMarketOpen, setIsPromptMarketOpen] = useState(false);
   const [referenceImages, setReferenceImages] = useState<StoredReferenceImage[]>([]);
   const [conversations, setConversations] = useState<ImageConversation[]>([]);
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
@@ -620,6 +661,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
   const [editingTurnDraft, setEditingTurnDraft] = useState<EditingTurnDraft | null>(null);
   const [progressByTurnKey, setProgressByTurnKey] = useState<Record<string, ImageTurnProgress>>({});
   const [progressNow, setProgressNow] = useState(Date.now());
+  const [composerDockHeight, setComposerDockHeight] = useState(0);
 
   const parsedCount = useMemo(() => normalizeRequestedImageCount(imageCount), [imageCount]);
   const selectedConversation = useMemo(
@@ -641,10 +683,52 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
       : deleteConfirm?.type === "one"
         ? "确认删除这条图片对话吗？删除后无法恢复。"
         : "";
+  const imageOutputHint = useMemo(
+    () => (
+      <>
+        <div>
+          <span className="font-semibold text-stone-800">质量说明：</span>
+          Low / Medium / High 会随请求下发，并补充到生成提示中；实际生效仍取决于当前账号和上游链路能力。
+        </div>
+        <div className="mt-2">
+          <span className="font-semibold text-stone-800">分辨率限制：</span>
+          Free 账号建议按约 1.57M 像素总量控制；Paid 账号的图片最长边最高支持 3840。需要 2K / 4K 时，请在提示词中明确目标尺寸。
+        </div>
+        <div className="mt-2">
+          <span className="font-semibold text-stone-800">账号要求：</span>
+          2K 及以上像素档建议使用 Plus / Pro / Team 等 Paid 账号。
+        </div>
+        <div className="mt-2">
+          <span className="font-semibold text-stone-800">Auto 模式补充：</span>
+          Auto 不会强制指定比例和分辨率，请直接在提示词里写明横竖版、画幅比例和目标输出尺寸。
+        </div>
+      </>
+    ),
+    [],
+  );
 
   useEffect(() => {
     conversationsRef.current = conversations;
   }, [conversations]);
+
+  useEffect(() => {
+    const node = composerDockRef.current;
+    if (!node) {
+      return;
+    }
+
+    const updateComposerHeight = () => {
+      const nextHeight = Math.ceil(node.getBoundingClientRect().height);
+      setComposerDockHeight((currentHeight) => (currentHeight === nextHeight ? currentHeight : nextHeight));
+    };
+
+    updateComposerHeight();
+    const observer = new ResizeObserver(updateComposerHeight);
+    observer.observe(node);
+    return () => {
+      observer.disconnect();
+    };
+  }, []);
 
   useEffect(() => {
     if (activeTaskCount === 0 && Object.keys(progressByTurnKey).length === 0) {
@@ -773,6 +857,14 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
   }, [imageSize]);
 
   useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    window.localStorage.setItem(IMAGE_QUALITY_STORAGE_KEY, imageQuality);
+  }, [imageQuality]);
+
+  useEffect(() => {
     if (selectedConversationId && !conversations.some((conversation) => conversation.id === selectedConversationId)) {
       setSelectedConversationId(pickFallbackConversationId(conversations));
     }
@@ -853,6 +945,54 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
     resetComposer();
     textareaRef.current?.focus();
   };
+
+  const handleApplyPromptPreset = useCallback((preset: ImagePromptPreset) => {
+    setSelectedConversationId(null);
+    setImagePrompt(preset.prompt);
+    setImageCount(String(preset.count));
+    setImageSize(preset.size);
+    setReferenceImages([]);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+    textareaRef.current?.focus();
+  }, []);
+
+  const handleApplyMarketPrompt = useCallback(async (prompt: BananaPrompt) => {
+    setSelectedConversationId(null);
+    setImagePrompt(prompt.prompt);
+    setImageCount("1");
+    setImageSize("");
+    setReferenceImages([]);
+    setIsPromptMarketOpen(false);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+    textareaRef.current?.focus();
+
+    if (prompt.referenceImageUrls.length === 0) {
+      toast.success("已套用提示词");
+      return;
+    }
+
+    const toastId = toast.loading(`正在读取 ${prompt.referenceImageUrls.length} 张参考图`);
+    const results = await Promise.allSettled(
+      prompt.referenceImageUrls.map((url, index) => buildMarketReferenceImage(url, index)),
+    );
+    const loadedReferences = results.flatMap((result) => (result.status === "fulfilled" ? [result.value] : []));
+
+    toast.dismiss(toastId);
+    if (loadedReferences.length > 0) {
+      setReferenceImages(loadedReferences);
+    }
+    if (loadedReferences.length === prompt.referenceImageUrls.length) {
+      toast.success("已套用提示词和参考图");
+    } else if (loadedReferences.length > 0) {
+      toast.error(`已套用提示词，${prompt.referenceImageUrls.length - loadedReferences.length} 张参考图读取失败`);
+    } else {
+      toast.error("已套用提示词，但参考图读取失败");
+    }
+  }, []);
 
   const handleDeleteConversation = async (id: string) => {
     const nextConversations = conversations.filter((item) => item.id !== id);
@@ -1017,6 +1157,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
       model: targetTurn.model,
       count: String(normalizeRequestedImageCount(targetTurn.count || targetTurn.images.length || 1)),
       size: targetTurn.size,
+      quality: targetTurn.quality || DEFAULT_IMAGE_QUALITY,
       referenceImages: targetTurn.referenceImages,
     });
   }, []);
@@ -1178,8 +1319,25 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
         const submitted = await Promise.all(
           pendingTaskGroups.map((group) =>
             usesReferenceImages(activeTurn.mode)
-              ? createImageEditTask(group.taskId, referenceFiles, activeTurn.prompt, activeTurn.model, activeTurn.size, group.count, taskMessages)
-              : createImageGenerationTask(group.taskId, activeTurn.prompt, activeTurn.model, activeTurn.size, group.count, taskMessages),
+              ? createImageEditTask(
+                  group.taskId,
+                  referenceFiles,
+                  activeTurn.prompt,
+                  activeTurn.model,
+                  activeTurn.size,
+                  activeTurn.quality || DEFAULT_IMAGE_QUALITY,
+                  group.count,
+                  taskMessages,
+                )
+              : createImageGenerationTask(
+                  group.taskId,
+                  activeTurn.prompt,
+                  activeTurn.model,
+                  activeTurn.size,
+                  activeTurn.quality || DEFAULT_IMAGE_QUALITY,
+                  group.count,
+                  taskMessages,
+                ),
           ),
         );
         await applyTasks(submitted);
@@ -1223,8 +1381,25 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
             const resubmitted = await Promise.all(
               missingTaskGroups.map((group) =>
                 usesReferenceImages(activeTurn.mode)
-                  ? createImageEditTask(group.taskId, referenceFiles, activeTurn.prompt, activeTurn.model, activeTurn.size, group.count, taskMessages)
-                  : createImageGenerationTask(group.taskId, activeTurn.prompt, activeTurn.model, activeTurn.size, group.count, taskMessages),
+                  ? createImageEditTask(
+                      group.taskId,
+                      referenceFiles,
+                      activeTurn.prompt,
+                      activeTurn.model,
+                      activeTurn.size,
+                      activeTurn.quality || DEFAULT_IMAGE_QUALITY,
+                      group.count,
+                      taskMessages,
+                    )
+                  : createImageGenerationTask(
+                      group.taskId,
+                      activeTurn.prompt,
+                      activeTurn.model,
+                      activeTurn.size,
+                      activeTurn.quality || DEFAULT_IMAGE_QUALITY,
+                      group.count,
+                      taskMessages,
+                    ),
               ),
             );
             if (resubmitted.length > 0) {
@@ -1543,6 +1718,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
               referenceImages,
               count: imageCount,
               size: draft.size,
+              quality: draft.quality,
             };
             if (!regenerate) {
               return baseTurn;
@@ -1608,6 +1784,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
         referenceImages: usesReferenceImages(effectiveImageMode) ? referenceImages : [],
         count: parsedCount,
         size: imageSize,
+        quality: imageQuality,
         images: Array.from({ length: parsedCount }, (_, index) => {
           const imageId = `${turnId}-${index}`;
           return {
@@ -1793,7 +1970,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
                     ) : null}
                   </div>
 
-                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-[120px_minmax(0,1fr)_minmax(0,1fr)]">
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-[120px_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)]">
                     <label className="flex flex-col gap-2 text-sm font-medium text-stone-700">
                       张数
                       <Input
@@ -1866,6 +2043,30 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
                         </SelectContent>
                       </Select>
                     </label>
+                    <label className="flex flex-col gap-2 text-sm font-medium text-stone-700">
+                      质量
+                      <Select
+                        value={editingTurnDraft.quality}
+                        onValueChange={(value) =>
+                          setEditingTurnDraft((current) =>
+                            current && isImageQuality(value) ? { ...current, quality: value } : current,
+                          )
+                        }
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectGroup>
+                            {IMAGE_QUALITY_OPTIONS.map((option) => (
+                              <SelectItem key={option.value} value={option.value}>
+                                {option.label}
+                              </SelectItem>
+                            ))}
+                          </SelectGroup>
+                        </SelectContent>
+                      </Select>
+                    </label>
                   </div>
                 </div>
               </div>
@@ -1909,18 +2110,29 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
                 <Trash2 className="size-4" />
               </Button>
             </div>
-            <AnnouncementNotifications target="image" className="shrink-0 lg:absolute lg:top-0 lg:right-4 lg:z-20" />
+            <div className="flex shrink-0 items-center gap-2 lg:absolute lg:top-0 lg:right-4 lg:z-20">
+              {activeTaskCount > 0 ? (
+                <div className="flex h-10 shrink-0 items-center gap-1.5 rounded-full bg-amber-50 px-3 text-xs font-medium text-amber-700 ring-1 ring-amber-100">
+                  <LoaderCircle className="size-3.5 animate-spin" />
+                  {activeTaskCount}<span className="hidden sm:inline"> 个任务处理中</span>
+                </div>
+              ) : null}
+              <AnnouncementNotifications target="image" className="shrink-0" />
+            </div>
           </div>
 
           <div
             ref={resultsViewportRef}
-            className="hide-scrollbar min-h-0 flex-1 overflow-y-auto px-1 py-2 sm:px-4 sm:py-4"
+            className="hide-scrollbar min-h-0 flex-1 overflow-y-auto px-1 pt-2 pb-[14rem] sm:px-4 sm:pt-4 sm:pb-[15rem]"
+            style={composerDockHeight > 0 ? { paddingBottom: composerDockHeight + 24 } : undefined}
           >
             <ImageResults
               selectedConversation={selectedConversation}
               progressByTurnKey={progressByTurnKey}
               progressNow={progressNow}
+              promptPresets={IMAGE_PROMPT_PRESETS}
               onOpenLightbox={openLightbox}
+              onApplyPromptPreset={handleApplyPromptPreset}
               onContinueEdit={handleContinueEdit}
               onEditTurn={openEditTurnDialog}
               onCancelTurn={handleCancelTurn}
@@ -1930,28 +2142,52 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
             />
           </div>
 
-          <ImageComposer
-            prompt={imagePrompt}
-            imageCount={imageCount}
-            imageModel={imageModel}
-            imageModelOptions={IMAGE_MODEL_OPTIONS}
-            imageSize={imageSize}
-            availableQuota={availableQuota}
-            activeTaskCount={activeTaskCount}
-            referenceImages={referenceImages}
-            textareaRef={textareaRef}
-            fileInputRef={fileInputRef}
-            onPromptChange={setImagePrompt}
-            onImageCountChange={setImageCount}
-            onImageModelChange={setImageModel}
-            onImageSizeChange={setImageSize}
-            onSubmit={handleSubmit}
-            onPickReferenceImage={() => fileInputRef.current?.click()}
-            onReferenceImageChange={handleReferenceImageChange}
-            onRemoveReferenceImage={handleRemoveReferenceImage}
-          />
+          <div
+            ref={composerDockRef}
+            className="pointer-events-none absolute inset-x-0 bottom-0 z-30 px-1 pb-[calc(env(safe-area-inset-bottom)+0.5rem)] sm:px-4 sm:pb-2"
+            style={
+              {
+                "--image-composer-dock-height": `${composerDockHeight}px`,
+              } as CSSProperties
+            }
+          >
+            <div className="pointer-events-auto mx-auto w-full max-w-[900px]">
+              <ImageComposer
+                prompt={imagePrompt}
+                imageCount={imageCount}
+                imageModel={imageModel}
+                imageModelOptions={IMAGE_MODEL_OPTIONS}
+                imageSize={imageSize}
+                imageQuality={imageQuality}
+                imageQualityOptions={IMAGE_QUALITY_OPTIONS}
+                imageOutputHint={imageOutputHint}
+                availableQuota={availableQuota}
+                referenceImages={referenceImages}
+                promptPresets={IMAGE_PROMPT_PRESETS}
+                textareaRef={textareaRef}
+                fileInputRef={fileInputRef}
+                onPromptChange={setImagePrompt}
+                onImageCountChange={setImageCount}
+                onImageModelChange={setImageModel}
+                onImageSizeChange={setImageSize}
+                onImageQualityChange={setImageQuality}
+                onSubmit={handleSubmit}
+                onPickReferenceImage={() => fileInputRef.current?.click()}
+                onOpenPromptMarket={() => setIsPromptMarketOpen(true)}
+                onApplyPromptPreset={handleApplyPromptPreset}
+                onReferenceImageChange={handleReferenceImageChange}
+                onRemoveReferenceImage={handleRemoveReferenceImage}
+              />
+            </div>
+          </div>
         </div>
       </section>
+
+      <ImagePromptMarket
+        open={isPromptMarketOpen}
+        onOpenChange={setIsPromptMarketOpen}
+        onApplyPrompt={handleApplyMarketPrompt}
+      />
 
       <ImageLightbox
         images={lightboxImages}

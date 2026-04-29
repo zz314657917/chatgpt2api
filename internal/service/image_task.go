@@ -52,24 +52,24 @@ func NewImageTaskService(path string, generation ImageTaskHandler, edit ImageTas
 	return s
 }
 
-func (s *ImageTaskService) SubmitGeneration(ctx context.Context, identity Identity, clientTaskID, prompt, model, size, baseURL string, n int, messages any) (map[string]any, error) {
+func (s *ImageTaskService) SubmitGeneration(ctx context.Context, identity Identity, clientTaskID, prompt, model, size, quality, baseURL string, n int, messages any) (map[string]any, error) {
 	prompt = strings.TrimSpace(prompt)
 	if prompt == "" {
 		return nil, fmt.Errorf("prompt is required")
 	}
-	payload := map[string]any{"prompt": prompt, "model": model, "n": normalizedImageTaskCount(n), "size": size, "response_format": "url", "base_url": baseURL}
+	payload := map[string]any{"prompt": prompt, "model": model, "n": normalizedImageTaskCount(n), "size": size, "quality": quality, "response_format": "url", "base_url": baseURL}
 	if messages != nil {
 		payload["messages"] = messages
 	}
 	return s.submit(ctx, identity, clientTaskID, "generate", payload)
 }
 
-func (s *ImageTaskService) SubmitEdit(ctx context.Context, identity Identity, clientTaskID, prompt, model, size, baseURL string, images any, n int, messages any) (map[string]any, error) {
+func (s *ImageTaskService) SubmitEdit(ctx context.Context, identity Identity, clientTaskID, prompt, model, size, quality, baseURL string, images any, n int, messages any) (map[string]any, error) {
 	prompt = strings.TrimSpace(prompt)
 	if prompt == "" {
 		return nil, fmt.Errorf("prompt is required")
 	}
-	payload := map[string]any{"prompt": prompt, "images": images, "model": model, "n": normalizedImageTaskCount(n), "size": size, "response_format": "url", "base_url": baseURL}
+	payload := map[string]any{"prompt": prompt, "images": images, "model": model, "n": normalizedImageTaskCount(n), "size": size, "quality": quality, "response_format": "url", "base_url": baseURL}
 	if messages != nil {
 		payload["messages"] = messages
 	}
@@ -163,7 +163,7 @@ func (s *ImageTaskService) submit(ctx context.Context, identity Identity, client
 		return result, nil
 	}
 	taskCtx, cancel := context.WithCancel(context.Background())
-	task := map[string]any{"id": taskID, "owner_id": owner, "status": TaskStatusQueued, "mode": mode, "model": firstNonEmpty(util.Clean(payload["model"]), util.ImageModelAuto), "size": util.Clean(payload["size"]), "created_at": now, "updated_at": now}
+	task := map[string]any{"id": taskID, "owner_id": owner, "status": TaskStatusQueued, "mode": mode, "model": firstNonEmpty(util.Clean(payload["model"]), util.ImageModelAuto), "size": util.Clean(payload["size"]), "quality": util.Clean(payload["quality"]), "created_at": now, "updated_at": now}
 	s.tasks[key] = task
 	s.cancels[key] = cancel
 	_ = s.saveLocked()
@@ -321,7 +321,7 @@ func (s *ImageTaskService) loadLocked() map[string]map[string]any {
 		if task["mode"] == "edit" {
 			mode = "edit"
 		}
-		normalized := map[string]any{"id": id, "owner_id": owner, "status": status, "mode": mode, "model": firstNonEmpty(util.Clean(task["model"]), util.ImageModelAuto), "size": util.Clean(task["size"]), "created_at": firstNonEmpty(util.Clean(task["created_at"]), util.NowLocal()), "updated_at": firstNonEmpty(util.Clean(task["updated_at"]), util.Clean(task["created_at"]), util.NowLocal())}
+		normalized := map[string]any{"id": id, "owner_id": owner, "status": status, "mode": mode, "model": firstNonEmpty(util.Clean(task["model"]), util.ImageModelAuto), "size": util.Clean(task["size"]), "quality": util.Clean(task["quality"]), "created_at": firstNonEmpty(util.Clean(task["created_at"]), util.NowLocal()), "updated_at": firstNonEmpty(util.Clean(task["updated_at"]), util.Clean(task["created_at"]), util.NowLocal())}
 		if data := util.AsMapSlice(task["data"]); data != nil {
 			normalized["data"] = data
 		}
@@ -391,6 +391,9 @@ func (s *ImageTaskService) cleanupLocked() bool {
 
 func publicTask(task map[string]any) map[string]any {
 	item := map[string]any{"id": task["id"], "status": task["status"], "mode": task["mode"], "model": task["model"], "size": task["size"], "created_at": task["created_at"], "updated_at": task["updated_at"]}
+	if quality := util.Clean(task["quality"]); quality != "" {
+		item["quality"] = quality
+	}
 	if task["data"] != nil {
 		item["data"] = task["data"]
 	}

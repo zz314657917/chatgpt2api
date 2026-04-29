@@ -33,9 +33,10 @@ func (e *Engine) HandleImageGenerations(ctx context.Context, body map[string]any
 		return nil, nil, err
 	}
 	size := util.Clean(body["size"])
+	quality := util.Clean(body["quality"])
 	responseFormat := firstNonEmpty(util.Clean(body["response_format"]), "b64_json")
 	baseURL := util.Clean(body["base_url"])
-	request := ConversationRequest{Prompt: prompt, Model: model, Messages: NormalizeMessages(util.AsMapSlice(body["messages"]), nil), N: n, Size: size, ResponseFormat: responseFormat, BaseURL: baseURL, MessageAsError: true}
+	request := ConversationRequest{Prompt: prompt, Model: model, Messages: NormalizeMessages(util.AsMapSlice(body["messages"]), nil), N: n, Size: size, Quality: quality, ResponseFormat: responseFormat, BaseURL: baseURL, MessageAsError: true}
 	outputs, errCh := e.StreamImageOutputsWithPool(ctx, request)
 	if util.ToBool(body["stream"]) {
 		return nil, &StreamResult{Items: StreamImageChunks(outputs), Err: errCh, Kind: "openai"}, nil
@@ -54,6 +55,7 @@ func (e *Engine) HandleImageEdits(ctx context.Context, body map[string]any, imag
 		Model:          firstNonEmpty(util.Clean(body["model"]), util.ImageModelAuto),
 		N:              util.ToInt(body["n"], 1),
 		Size:           util.Clean(body["size"]),
+		Quality:        util.Clean(body["quality"]),
 		ResponseFormat: firstNonEmpty(util.Clean(body["response_format"]), "b64_json"),
 		BaseURL:        util.Clean(body["base_url"]),
 		Messages:       NormalizeMessages(util.AsMapSlice(body["messages"]), nil),
@@ -201,7 +203,7 @@ func (e *Engine) ImageChatResponse(ctx context.Context, body map[string]any) (ma
 	if err != nil {
 		return nil, nil, err
 	}
-	outputs, errCh := e.StreamImageOutputsWithPool(ctx, ConversationRequest{Prompt: prompt, Model: model, Messages: messages, N: n, ResponseFormat: "b64_json", Images: EncodeImages(images)})
+	outputs, errCh := e.StreamImageOutputsWithPool(ctx, ConversationRequest{Prompt: prompt, Model: model, Messages: messages, N: n, Size: util.Clean(body["size"]), Quality: util.Clean(body["quality"]), ResponseFormat: "b64_json", Images: EncodeImages(images)})
 	result, err := e.CollectImageOutputs(outputs, errCh)
 	if err != nil {
 		return nil, nil, err
@@ -220,7 +222,7 @@ func (e *Engine) ImageChatEvents(ctx context.Context, body map[string]any) (<-ch
 			errOut <- err
 			return
 		}
-		outputs, errCh := e.StreamImageOutputsWithPool(ctx, ConversationRequest{Prompt: prompt, Model: model, Messages: messages, N: n, ResponseFormat: "b64_json", Images: EncodeImages(images)})
+		outputs, errCh := e.StreamImageOutputsWithPool(ctx, ConversationRequest{Prompt: prompt, Model: model, Messages: messages, N: n, Size: util.Clean(body["size"]), Quality: util.Clean(body["quality"]), ResponseFormat: "b64_json", Images: EncodeImages(images)})
 		id := "chatcmpl-" + util.NewHex(32)
 		created := time.Now().Unix()
 		sentRole := false
@@ -480,17 +482,19 @@ func (e *Engine) ResponseEvents(ctx context.Context, body map[string]any) (<-cha
 	}
 	images := append([]string(nil), previous.Images...)
 	var currentImages []string
-	size := "1:1"
+	size := firstNonEmpty(util.Clean(body["size"]), "1:1")
 	if inputImages := ExtractResponseImages(body["input"]); len(inputImages) > 0 {
 		currentImages = EncodeImages(inputImages)
 		images = append(images, currentImages...)
-		size = ""
+		if util.Clean(body["size"]) == "" {
+			size = ""
+		}
 	}
 	if len(images) > maxContextImages {
 		images = images[len(images)-maxContextImages:]
 	}
 	baseContext = MergeResponseContext(previous, currentMessages, currentImages)
-	outputs, errCh := e.StreamImageOutputsWithPool(ctx, ConversationRequest{Prompt: prompt, Model: imageModel, Messages: baseContext.Messages, N: n, Size: size, ResponseFormat: "b64_json", Images: images})
+	outputs, errCh := e.StreamImageOutputsWithPool(ctx, ConversationRequest{Prompt: prompt, Model: imageModel, Messages: baseContext.Messages, N: n, Size: size, Quality: util.Clean(body["quality"]), ResponseFormat: "b64_json", Images: images})
 	events, responseErr := StreamImageResponse(outputs, prompt, responseModel)
 	events = e.rememberResponseContextEvents(events, baseContext)
 	return events, combineErrorChannels(errCh, responseErr), nil

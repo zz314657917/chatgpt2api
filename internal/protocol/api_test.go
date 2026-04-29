@@ -81,10 +81,19 @@ func TestImageContextPromptIncludesHistory(t *testing.T) {
 		{"role": "assistant", "content": "Generated image: 白猫坐在窗边"},
 		{"role": "user", "content": "把它改成夜晚"},
 	}
-	prompt := BuildImageContextPrompt(messages, LatestUserPrompt(messages), "1:1")
-	for _, want := range []string{"保持水彩风格", "画一只白猫", "白猫坐在窗边", "当前请求:\n把它改成夜晚", "输出为 1:1"} {
+	prompt := BuildImageContextPrompt(messages, LatestUserPrompt(messages), "1:1", "high")
+	for _, want := range []string{"保持水彩风格", "画一只白猫", "白猫坐在窗边", "当前请求:\n把它改成夜晚", "输出为 1:1", "画质使用 High 档"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("context prompt missing %q: %s", want, prompt)
+		}
+	}
+}
+
+func TestBuildImagePromptIncludesThreeTwoAndQualityHints(t *testing.T) {
+	prompt := BuildImagePrompt("画一张产品照片", "3:2", "medium")
+	for _, want := range []string{"画一张产品照片", "3:2 横版构图", "画质使用 Medium 档"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("image prompt missing %q: %s", want, prompt)
 		}
 	}
 }

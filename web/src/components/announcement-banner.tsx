@@ -45,21 +45,22 @@ export function AnnouncementNotifications({
 
   return (
     <Popover>
-      <div className={cn("flex justify-end", className)}>
-        <PopoverTrigger asChild>
-          <Button
-            type="button"
-            variant="outline"
-            className="relative size-10 rounded-full border-amber-200 bg-amber-50/95 p-0 text-amber-800 shadow-sm hover:bg-amber-100 hover:text-amber-900"
-            aria-label={`查看 ${announcements.length} 条公告`}
-          >
-            <Bell className="size-4" />
-            <span className="absolute -right-1 -top-1 flex min-w-5 items-center justify-center rounded-full bg-amber-600 px-1.5 text-[10px] font-semibold leading-5 text-white">
-              {announcements.length}
-            </span>
-          </Button>
-        </PopoverTrigger>
-      </div>
+      <PopoverTrigger asChild>
+        <Button
+          type="button"
+          variant="outline"
+          className={cn(
+            "relative size-10 rounded-full border-amber-200 bg-amber-50/95 p-0 text-amber-800 shadow-sm hover:bg-amber-100 hover:text-amber-900",
+            className,
+          )}
+          aria-label={`查看 ${announcements.length} 条公告`}
+        >
+          <Bell className="size-4" />
+          <span className="absolute -right-1 -top-1 flex min-w-5 items-center justify-center rounded-full bg-amber-600 px-1.5 text-[10px] font-semibold leading-5 text-white">
+            {announcements.length}
+          </span>
+        </Button>
+      </PopoverTrigger>
       <PopoverContent align="end" className="w-[min(calc(100vw-2rem),400px)] p-0">
         <div className="border-b border-stone-100 px-4 py-3">
           <div className="flex items-center gap-2 text-sm font-semibold text-stone-900">

@@ -73,6 +73,45 @@ type DeleteImageTarget = {
   paths: string[];
 };
 
+const IMAGE_MASONRY_BREAKPOINTS = [
+  { minWidth: 1280, columns: 4 },
+  { minWidth: 1024, columns: 3 },
+  { minWidth: 640, columns: 2 },
+] as const;
+
+function getImageMasonryColumnCount() {
+  if (typeof window === "undefined") {
+    return 1;
+  }
+
+  return IMAGE_MASONRY_BREAKPOINTS.find(({ minWidth }) =>
+    window.matchMedia(`(min-width: ${minWidth}px)`).matches,
+  )?.columns ?? 1;
+}
+
+function useOrderedImageMasonryColumns(items: ManagedImage[]) {
+  const [columnCount, setColumnCount] = useState(getImageMasonryColumnCount);
+
+  useEffect(() => {
+    const updateColumnCount = () => setColumnCount(getImageMasonryColumnCount());
+    const mediaQueries = IMAGE_MASONRY_BREAKPOINTS.map(({ minWidth }) =>
+      window.matchMedia(`(min-width: ${minWidth}px)`),
+    );
+
+    updateColumnCount();
+    mediaQueries.forEach((query) => query.addEventListener("change", updateColumnCount));
+    return () => mediaQueries.forEach((query) => query.removeEventListener("change", updateColumnCount));
+  }, []);
+
+  return useMemo(() => {
+    const columns = Array.from({ length: columnCount }, () => [] as Array<{ item: ManagedImage; index: number }>);
+    items.forEach((item, index) => {
+      columns[index % columnCount].push({ item, index });
+    });
+    return columns;
+  }, [columnCount, items]);
+}
+
 function ImageManagerContent() {
   const [items, setItems] = useState<ManagedImage[]>([]);
   const [selectedImageIds, setSelectedImageIds] = useState<Record<string, boolean>>({});
@@ -101,6 +140,7 @@ function ImageManagerContent() {
   const selectedCount = selectedItems.length;
   const allSelected = items.length > 0 && selectedCount === items.length;
   const isMutatingImages = downloadingKey !== null || isDeleting;
+  const imageColumns = useOrderedImageMasonryColumns(items);
 
   const loadImages = useCallback(async () => {
     setIsLoading(true);
@@ -283,98 +323,105 @@ function ImageManagerContent() {
           </div>
         </div>
 
-        <div className="columns-1 gap-3 sm:columns-2 sm:gap-4 lg:columns-3 xl:columns-4">
-          {items.map((item, index) => {
-            const selected = Boolean(selectedImageIds[managedImageKey(item)]);
-            const dimensions = item.width && item.height ? `${item.width} x ${item.height}` : "";
-            const sizeLabel = formatImageFileSize(item.size);
-            const imageMeta = [dimensions, sizeLabel].filter(Boolean).join(" | ");
-            return (
-              <figure
-                key={item.url}
-                className={`group relative mb-3 inline-block w-full break-inside-avoid overflow-hidden rounded-[22px] bg-muted shadow-[0_0_15px_rgba(44,30,116,0.16)] sm:mb-4 ${selected ? "ring-2 ring-[#1456f0]/80 ring-offset-2" : ""}`}
-                style={{
-                  contentVisibility: "auto",
-                  containIntrinsicSize: item.width && item.height ? `${Math.min(360, item.width)}px ${Math.min(480, item.height)}px` : "320px 320px",
-                }}
-              >
-                <div className="block w-full overflow-hidden">
-                  <img
-                    src={item.thumbnail_url || item.url}
-                    alt={item.name}
-                    width={item.width || undefined}
-                    height={item.height || undefined}
-                    loading="lazy"
-                    decoding="async"
-                    sizes="(min-width: 1280px) 25vw, (min-width: 1024px) 33vw, (min-width: 640px) 50vw, 100vw"
-                    className="block h-auto w-full transition duration-200 group-hover:brightness-95"
-                  />
-                </div>
-                <button
-                  type="button"
-                  onClick={() => toggleImageSelection(item)}
-                  className={`absolute top-2 left-2 z-10 inline-flex size-6 items-center justify-center rounded-full border transition duration-150 ${
-                    selected
-                      ? "border-[#1456f0] bg-[#1456f0] text-white opacity-100 shadow-sm"
-                      : "pointer-events-none border-white/90 bg-black/20 text-transparent opacity-0 shadow-sm group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 hover:bg-black/30"
-                  }`}
-                  aria-label={selected ? "取消选择图片" : "选择图片"}
-                >
-                  {selected ? <Check className="size-3.5" /> : null}
-                </button>
-                <div className="pointer-events-none absolute top-2 right-2 z-10 flex items-center gap-1 opacity-0 transition duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setLightboxIndex(index);
-                      setLightboxOpen(true);
+        <div
+          className="grid gap-3 sm:gap-4"
+          style={{ gridTemplateColumns: `repeat(${imageColumns.length}, minmax(0, 1fr))` }}
+        >
+          {imageColumns.map((column, columnIndex) => (
+            <div key={columnIndex} className="flex min-w-0 flex-col gap-3 sm:gap-4">
+              {column.map(({ item, index }) => {
+                const selected = Boolean(selectedImageIds[managedImageKey(item)]);
+                const dimensions = item.width && item.height ? `${item.width} x ${item.height}` : "";
+                const sizeLabel = formatImageFileSize(item.size);
+                const imageMeta = [dimensions, sizeLabel].filter(Boolean).join(" | ");
+                return (
+                  <figure
+                    key={item.url}
+                    className={`group relative w-full overflow-hidden rounded-[22px] bg-muted shadow-[0_0_15px_rgba(44,30,116,0.16)] ${selected ? "ring-2 ring-[#1456f0]/80 ring-offset-2" : ""}`}
+                    style={{
+                      contentVisibility: "auto",
+                      containIntrinsicSize: item.width && item.height ? `${Math.min(360, item.width)}px ${Math.min(480, item.height)}px` : "320px 320px",
                     }}
-                    className="inline-flex h-7 items-center gap-1 rounded-full bg-white/95 px-2 text-[11px] font-medium text-stone-800 shadow-sm transition hover:bg-white hover:text-stone-950"
-                    aria-label="View Original"
-                    title="View Original"
                   >
-                    <Eye className="size-3" />
-                    View Original
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      void navigator.clipboard.writeText(item.url);
-                      toast.success("图片地址已复制");
-                    }}
-                    className="inline-flex size-7 items-center justify-center rounded-full bg-white/95 text-stone-800 shadow-sm transition hover:bg-white hover:text-stone-950"
-                    aria-label="复制图片地址"
-                    title="复制图片地址"
-                  >
-                    <Copy className="size-3.5" />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => openDeleteConfirm([item])}
-                    disabled={isDeleting}
-                    className="inline-flex size-7 items-center justify-center rounded-full bg-white/95 text-rose-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700 disabled:cursor-not-allowed disabled:opacity-60"
-                    aria-label="删除图片"
-                    title="删除图片"
-                  >
-                    {isDeleting && deleteTarget?.paths.includes(item.path) ? (
-                      <LoaderCircle className="size-3.5 animate-spin" />
-                    ) : (
-                      <Trash2 className="size-3.5" />
-                    )}
-                  </button>
-                </div>
-                <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/55 via-black/20 to-transparent px-2.5 pt-8 pb-2 opacity-0 transition duration-150 group-hover:opacity-100 group-focus-within:opacity-100">
-                  <div className="text-left text-white drop-shadow-sm">
-                    <div className="text-[10px] font-bold tracking-wide">{getManagedImageFormatLabel(item)}</div>
-                    <div className="mt-0.5 truncate text-[11px] text-white/90">{item.created_at}</div>
-                    {imageMeta ? (
-                      <div className="mt-0.5 truncate text-[11px] text-white/90">{imageMeta}</div>
-                    ) : null}
-                  </div>
-                </div>
-              </figure>
-            );
-          })}
+                    <div className="block w-full overflow-hidden">
+                      <img
+                        src={item.thumbnail_url || item.url}
+                        alt={item.name}
+                        width={item.width || undefined}
+                        height={item.height || undefined}
+                        loading="lazy"
+                        decoding="async"
+                        sizes="(min-width: 1280px) 25vw, (min-width: 1024px) 33vw, (min-width: 640px) 50vw, 100vw"
+                        className="block h-auto w-full transition duration-200 group-hover:brightness-95"
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => toggleImageSelection(item)}
+                      className={`absolute top-2 left-2 z-10 inline-flex size-6 items-center justify-center rounded-full border transition duration-150 ${
+                        selected
+                          ? "border-[#1456f0] bg-[#1456f0] text-white opacity-100 shadow-sm"
+                          : "pointer-events-none border-white/90 bg-black/20 text-transparent opacity-0 shadow-sm group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 hover:bg-black/30"
+                      }`}
+                      aria-label={selected ? "取消选择图片" : "选择图片"}
+                    >
+                      {selected ? <Check className="size-3.5" /> : null}
+                    </button>
+                    <div className="pointer-events-none absolute top-2 right-2 z-10 flex items-center gap-1 opacity-0 transition duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setLightboxIndex(index);
+                          setLightboxOpen(true);
+                        }}
+                        className="inline-flex h-7 items-center gap-1 rounded-full bg-white/95 px-2 text-[11px] font-medium text-stone-800 shadow-sm transition hover:bg-white hover:text-stone-950"
+                        aria-label="View Original"
+                        title="View Original"
+                      >
+                        <Eye className="size-3" />
+                        View Original
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          void navigator.clipboard.writeText(item.url);
+                          toast.success("图片地址已复制");
+                        }}
+                        className="inline-flex size-7 items-center justify-center rounded-full bg-white/95 text-stone-800 shadow-sm transition hover:bg-white hover:text-stone-950"
+                        aria-label="复制图片地址"
+                        title="复制图片地址"
+                      >
+                        <Copy className="size-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => openDeleteConfirm([item])}
+                        disabled={isDeleting}
+                        className="inline-flex size-7 items-center justify-center rounded-full bg-white/95 text-rose-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700 disabled:cursor-not-allowed disabled:opacity-60"
+                        aria-label="删除图片"
+                        title="删除图片"
+                      >
+                        {isDeleting && deleteTarget?.paths.includes(item.path) ? (
+                          <LoaderCircle className="size-3.5 animate-spin" />
+                        ) : (
+                          <Trash2 className="size-3.5" />
+                        )}
+                      </button>
+                    </div>
+                    <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/55 via-black/20 to-transparent px-2.5 pt-8 pb-2 opacity-0 transition duration-150 group-hover:opacity-100 group-focus-within:opacity-100">
+                      <div className="text-left text-white drop-shadow-sm">
+                        <div className="text-[10px] font-bold tracking-wide">{getManagedImageFormatLabel(item)}</div>
+                        <div className="mt-0.5 truncate text-[11px] text-white/90">{item.created_at}</div>
+                        {imageMeta ? (
+                          <div className="mt-0.5 truncate text-[11px] text-white/90">{imageMeta}</div>
+                        ) : null}
+                      </div>
+                    </div>
+                  </figure>
+                );
+              })}
+            </div>
+          ))}
         </div>
 
         {!isLoading && items.length === 0 ? <div className="px-6 py-14 text-center text-sm text-stone-500">没有找到图片</div> : null}

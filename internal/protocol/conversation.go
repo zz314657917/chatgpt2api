@@ -42,6 +42,7 @@ type ConversationRequest struct {
 	Images         []string
 	N              int
 	Size           string
+	Quality        string
 	ResponseFormat string
 	BaseURL        string
 	MessageAsError bool
@@ -163,7 +164,7 @@ func (e *Engine) StreamTextDeltas(ctx context.Context, client *backend.Client, r
 	go func() {
 		defer close(out)
 		defer close(errCh)
-		events, convErr := e.ConversationEvents(ctx, client, request.Messages, request.Model, request.Prompt, nil, "")
+		events, convErr := e.ConversationEvents(ctx, client, request.Messages, request.Model, request.Prompt, nil, "", "")
 		for event := range events {
 			if event["type"] != "conversation.delta" {
 				continue
@@ -197,7 +198,7 @@ func (e *Engine) CollectText(ctx context.Context, client *backend.Client, reques
 	return strings.Join(parts, ""), <-errCh
 }
 
-func (e *Engine) ConversationEvents(ctx context.Context, client *backend.Client, messages []map[string]any, model, prompt string, images []string, size string) (<-chan ConversationEvent, <-chan error) {
+func (e *Engine) ConversationEvents(ctx context.Context, client *backend.Client, messages []map[string]any, model, prompt string, images []string, size, quality string) (<-chan ConversationEvent, <-chan error) {
 	out := make(chan ConversationEvent)
 	errCh := make(chan error, 1)
 	go func() {
@@ -214,7 +215,7 @@ func (e *Engine) ConversationEvents(ctx context.Context, client *backend.Client,
 		systemHints := []string{}
 		streamImages := []string(nil)
 		if imageModel {
-			finalPrompt = BuildImageContextPrompt(normalized, prompt, size)
+			finalPrompt = BuildImageContextPrompt(normalized, prompt, size, quality)
 			systemHints = []string{"picture_v2"}
 			streamImages = images
 		} else {
@@ -385,7 +386,7 @@ func (e *Engine) StreamImageOutputs(ctx context.Context, client *backend.Client,
 		defer close(out)
 		defer close(errCh)
 		var last ConversationEvent
-		events, convErr := e.ConversationEvents(ctx, client, request.Messages, request.Model, request.Prompt, request.Images, request.Size)
+		events, convErr := e.ConversationEvents(ctx, client, request.Messages, request.Model, request.Prompt, request.Images, request.Size, request.Quality)
 		for event := range events {
 			last = event
 			if event["type"] == "conversation.delta" {
@@ -596,21 +597,36 @@ func AssistantHistoryMessages(messages []map[string]any) []string {
 	return out
 }
 
-func BuildImagePrompt(prompt, size string) string {
-	if size == "" {
-		return prompt
-	}
+func BuildImagePrompt(prompt, size, quality string) string {
+	prompt = strings.TrimSpace(prompt)
+	var hintsList []string
 	hints := map[string]string{
 		"1:1":  "输出为 1:1 正方形构图，主体居中，适合正方形画幅。",
+		"3:2":  "输出为 3:2 横版构图，适合摄影、产品展示和横向叙事画幅。",
 		"16:9": "输出为 16:9 横屏构图，适合宽画幅展示。",
 		"9:16": "输出为 9:16 竖屏构图，适合竖版画幅展示。",
 		"4:3":  "输出为 4:3 比例，兼顾宽度与高度，适合展示画面细节。",
 		"3:4":  "输出为 3:4 比例，纵向构图，适合人物肖像或竖向场景。",
 	}
-	if hint, ok := hints[size]; ok {
-		return strings.TrimSpace(prompt) + "\n\n" + hint
+	if size != "" {
+		if hint, ok := hints[size]; ok {
+			hintsList = append(hintsList, hint)
+		} else {
+			hintsList = append(hintsList, "输出图片，目标尺寸或宽高比为 "+size+"。")
+		}
 	}
-	return strings.TrimSpace(prompt) + "\n\n输出图片，宽高比为 " + size + "。"
+	qualityHints := map[string]string{
+		"low":    "画质使用 Low 档，优先更快出图，细节可以适度简化。",
+		"medium": "画质使用 Medium 档，在速度、细节和整体完成度之间保持平衡。",
+		"high":   "画质使用 High 档，提升细节、纹理、光影和整体完成度。",
+	}
+	if hint, ok := qualityHints[strings.ToLower(strings.TrimSpace(quality))]; ok {
+		hintsList = append(hintsList, hint)
+	}
+	if len(hintsList) == 0 {
+		return prompt
+	}
+	return prompt + "\n\n" + strings.Join(hintsList, "\n")
 }
 
 func CountMessageTokens(messages []map[string]any, model string) int {

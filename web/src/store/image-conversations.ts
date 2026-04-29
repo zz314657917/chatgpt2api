@@ -2,7 +2,7 @@
 
 import localforage from "localforage";
 
-import { DEFAULT_IMAGE_MODEL, isImageModel, type ImageModel } from "@/lib/api";
+import { DEFAULT_IMAGE_MODEL, isImageModel, isImageQuality, type ImageModel, type ImageQuality } from "@/lib/api";
 
 export type ImageConversationMode = "generate" | "image" | "edit";
 export type StoredReferenceImageSource = "upload" | "conversation";
@@ -35,6 +35,7 @@ export type ImageTurn = {
   referenceImages: StoredReferenceImage[];
   count: number;
   size: string;
+  quality?: ImageQuality;
   images: StoredImage[];
   createdAt: string;
   status: ImageTurnStatus;
@@ -162,6 +163,7 @@ function normalizeTurn(turn: ImageTurn & Record<string, unknown>): ImageTurn {
     referenceImages,
     count: Math.max(1, Number(turn.count || normalizedImages.length || 1)),
     size: typeof turn.size === "string" ? turn.size : "",
+    quality: isImageQuality(turn.quality) ? turn.quality : undefined,
     images: normalizedImages,
     createdAt: String(turn.createdAt || new Date().toISOString()),
     status:
@@ -190,6 +192,7 @@ function normalizeConversation(conversation: ImageConversation & Record<string, 
           referenceImages: legacyReferenceImages,
           count: Number(conversation.count || 1),
           size: typeof conversation.size === "string" ? conversation.size : "",
+          quality: isImageQuality(conversation.quality) ? conversation.quality : undefined,
           images: Array.isArray(conversation.images) ? (conversation.images as StoredImage[]) : [],
           createdAt: String(conversation.createdAt || new Date().toISOString()),
           status:

@@ -1,9 +1,10 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { Check, CircleStop, Clock3, Download, Eye, LoaderCircle, PencilLine, Plus, RotateCcw } from "lucide-react";
+import { Check, CircleStop, Clock3, Download, Eye, LoaderCircle, PencilLine, Plus, RotateCcw, Sparkles } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import type { ImagePromptPreset } from "@/app/image/image-presets";
 import { formatBase64ImageFileSize, formatImageFileSize } from "@/lib/image-size";
 import { cn } from "@/lib/utils";
 import type { ImageConversation, ImageTurn, ImageTurnStatus, StoredImage, StoredReferenceImage } from "@/store/image-conversations";
@@ -33,7 +34,9 @@ type ImageResultsProps = {
   selectedConversation: ImageConversation | null;
   progressByTurnKey: Record<string, ImageTurnProgress>;
   progressNow: number;
+  promptPresets: readonly ImagePromptPreset[];
   onOpenLightbox: (images: ImageLightboxItem[], index: number) => void;
+  onApplyPromptPreset: (preset: ImagePromptPreset) => void;
   onContinueEdit: (conversationId: string, image: StoredImage | StoredReferenceImage) => void;
   onEditTurn: (conversationId: string, turnId: string) => void;
   onCancelTurn: (conversationId: string, turnId: string) => void | Promise<void>;
@@ -139,7 +142,9 @@ export function ImageResults({
   selectedConversation,
   progressByTurnKey,
   progressNow,
+  promptPresets,
   onOpenLightbox,
+  onApplyPromptPreset,
   onContinueEdit,
   onEditTurn,
   onCancelTurn,
@@ -215,19 +220,53 @@ export function ImageResults({
 
   if (!selectedConversation) {
     return (
-      <div className="flex h-full min-h-[260px] items-center justify-center text-center sm:min-h-[420px]">
-        <div className="w-full max-w-4xl">
-          <div className="mx-auto mb-6 grid max-w-[520px] grid-cols-3 gap-3">
-            <div className="h-24 rounded-[24px] bg-[linear-gradient(135deg,#1456f0,#3daeff)] shadow-[0_0_15px_rgba(44,30,116,0.16)] sm:h-32" />
-            <div className="h-24 rounded-[24px] bg-[linear-gradient(135deg,#ea5ec1,#7c3aed)] shadow-[0_0_15px_rgba(44,30,116,0.16)] sm:h-32" />
-            <div className="h-24 rounded-[24px] bg-[linear-gradient(135deg,#f59e0b,#fb7185)] shadow-[0_0_15px_rgba(44,30,116,0.16)] sm:h-32" />
+      <div className="flex h-full min-h-[300px] items-center justify-center px-0 py-3 text-center sm:min-h-[420px] sm:py-6">
+        <div className="mx-auto flex w-full max-w-[1180px] flex-col gap-5">
+          <div className="mx-auto flex max-w-[640px] flex-col items-center">
+            <div className="mb-3 inline-flex items-center gap-2 rounded-full bg-[#f0f0f0] px-3 py-1 text-xs font-medium text-[#45515e]">
+              <Sparkles className="size-4 text-[#1456f0]" />
+              生图预设
+            </div>
+            <h1 className="font-display text-3xl leading-[1.08] font-medium text-[#222222] sm:text-5xl">
+              Turn ideas into images
+            </h1>
+            <p className="mx-auto mt-3 max-w-[460px] text-sm leading-6 text-[#45515e] sm:text-[15px]">
+              选择一组真实案例预设快速开始，也可以直接在下方输入自己的画面描述。
+            </p>
           </div>
-          <h1 className="font-display text-2xl leading-[1.1] font-medium text-[#222222] sm:text-4xl md:text-5xl">
-            Turn ideas into images
-          </h1>
-          <p className="mx-auto mt-3 max-w-[420px] text-sm leading-6 text-[#45515e] sm:mt-4 sm:text-[15px]">
-            在同一窗口里保留本地历史与任务状态，并从已有结果图继续发起新的无状态编辑。
-          </p>
+          <div className="hide-scrollbar flex gap-3 overflow-x-auto px-1 pb-1 text-left sm:grid sm:grid-cols-2 sm:overflow-visible lg:grid-cols-4">
+            {promptPresets.map((preset) => (
+              <button
+                key={preset.id}
+                type="button"
+                className="group w-[250px] shrink-0 overflow-hidden rounded-[22px] border border-[#f2f3f5] bg-white transition hover:-translate-y-0.5 hover:shadow-[0_12px_16px_-4px_rgba(36,36,36,0.08)] sm:w-auto"
+                onClick={() => onApplyPromptPreset(preset)}
+                aria-label={`套用预设：${preset.title}`}
+              >
+                <div className="relative aspect-[16/9] overflow-hidden bg-[#f0f0f0]">
+                  <img
+                    src={preset.imageSrc}
+                    alt={preset.title}
+                    loading="lazy"
+                    className="h-full w-full object-cover transition duration-300 group-hover:scale-[1.03]"
+                  />
+                  <div className="absolute inset-x-0 bottom-0 flex items-center justify-between gap-2 bg-gradient-to-t from-black/70 via-black/25 to-transparent px-3 pt-8 pb-2">
+                    <span className="rounded-full bg-white/92 px-2 py-0.5 text-[11px] font-medium text-[#18181b] shadow-sm">
+                      {preset.size || "Auto"}
+                    </span>
+                    <span className="rounded-full bg-white/18 px-2 py-0.5 text-[11px] font-medium text-white shadow-sm backdrop-blur">
+                      {preset.count} 张
+                    </span>
+                  </div>
+                </div>
+                <div className="flex flex-col gap-2 px-4 py-3.5">
+                  <div className="font-display text-sm font-semibold text-[#222222]">{preset.title}</div>
+                  <div className="line-clamp-2 text-sm leading-6 text-[#45515e]">{preset.hint}</div>
+                  <div className="border-t border-[#f2f3f5] pt-2 text-xs font-medium text-[#1456f0]">套用这个预设</div>
+                </div>
+              </button>
+            ))}
+          </div>
         </div>
       </div>
     );
@@ -289,6 +328,50 @@ export function ImageResults({
           : "";
         const progressMessage =
           progress?.message || (turn.status === "queued" ? "等待前序任务" : turnBusy ? "正在处理图片" : "");
+        const downloadActions =
+          downloadableImages.length > 0 ? (
+            <>
+              <Button
+                type="button"
+                size="sm"
+                className="h-8 rounded-full bg-[#1456f0] px-2.5 text-[11px] text-white shadow-sm hover:bg-[#2563eb]"
+                disabled={selectedDownloadableImages.length === 0 || downloadingKey !== null}
+                onClick={() =>
+                  void downloadItems(
+                    `selected:${selectedConversation.id}:${turn.id}`,
+                    selectedDownloadableImages,
+                  )
+                }
+              >
+                {downloadingKey === `selected:${selectedConversation.id}:${turn.id}` ? (
+                  <LoaderCircle className="size-3 animate-spin" />
+                ) : (
+                  <Download className="size-3" />
+                )}
+                下载已选 ({selectedDownloadableImages.length})
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-8 rounded-full border-[#e5e7eb] bg-white px-2.5 text-[11px] text-[#45515e] shadow-sm hover:bg-black/[0.05]"
+                disabled={downloadingKey !== null}
+                onClick={() =>
+                  void downloadItems(
+                    `all:${selectedConversation.id}:${turn.id}`,
+                    downloadableImages,
+                  )
+                }
+              >
+                {downloadingKey === `all:${selectedConversation.id}:${turn.id}` ? (
+                  <LoaderCircle className="size-3 animate-spin" />
+                ) : (
+                  <Download className="size-3" />
+                )}
+                下载全部
+              </Button>
+            </>
+          ) : null;
 
         return (
           <div key={turn.id} className="flex flex-col gap-3 sm:gap-4">
@@ -374,7 +457,7 @@ export function ImageResults({
             <div className="flex justify-start">
               <section className="w-full px-1">
                 {showResultSummary ? (
-                  <div className="mb-3 flex flex-col gap-2 sm:mb-4 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="mb-3 flex flex-wrap items-center justify-between gap-2 sm:mb-4">
                     <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-[#45515e] sm:gap-2 sm:text-xs">
                       <span className="font-medium text-[#222222]">生成结果</span>
                       <span className="rounded-full bg-[#f0f0f0] px-3 py-1">{resultCount} 张</span>
@@ -382,60 +465,24 @@ export function ImageResults({
                         <span className="rounded-full bg-[#f0f0f0] px-3 py-1">目标 {turn.count} 张</span>
                       ) : null}
                       {turn.size ? <span className="rounded-full bg-[#f0f0f0] px-3 py-1">{turn.size}</span> : null}
+                      {turn.quality ? (
+                        <span className="rounded-full bg-[#f0f0f0] px-3 py-1">Quality {turn.quality}</span>
+                      ) : null}
                       {outcomeLabel ? <span className="rounded-full bg-[#f0f0f0] px-3 py-1">{outcomeLabel}</span> : null}
                       <span className={cn("rounded-full px-3 py-1", getStatusChipClass(turn.status))}>
                         {getTurnStatusLabel(turn.status)}
                       </span>
                     </div>
-                    {turnBusy ? (
-                      <span className="w-fit whitespace-nowrap rounded-full bg-amber-50 px-3 py-1 text-[11px] text-amber-700 sm:text-xs">
-                        {progressMessage}
-                      </span>
+                    {turnBusy || downloadActions ? (
+                      <div className="flex flex-wrap items-center justify-end gap-2">
+                        {turnBusy ? (
+                          <span className="w-fit whitespace-nowrap rounded-full bg-amber-50 px-3 py-1 text-[11px] text-amber-700 sm:text-xs">
+                            {progressMessage}
+                          </span>
+                        ) : null}
+                        {downloadActions}
+                      </div>
                     ) : null}
-                  </div>
-                ) : null}
-
-                {downloadableImages.length > 0 ? (
-                  <div className="mb-3 flex flex-wrap items-center justify-end gap-2">
-                    <Button
-                      type="button"
-                      size="sm"
-                      className="h-8 rounded-full bg-[#1456f0] px-2.5 text-[11px] text-white shadow-sm hover:bg-[#2563eb]"
-                      disabled={selectedDownloadableImages.length === 0 || downloadingKey !== null}
-                      onClick={() =>
-                        void downloadItems(
-                          `selected:${selectedConversation.id}:${turn.id}`,
-                          selectedDownloadableImages,
-                        )
-                      }
-                    >
-                      {downloadingKey === `selected:${selectedConversation.id}:${turn.id}` ? (
-                        <LoaderCircle className="size-3 animate-spin" />
-                      ) : (
-                        <Download className="size-3" />
-                      )}
-                      下载已选 ({selectedDownloadableImages.length})
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      className="h-8 rounded-full border-[#e5e7eb] bg-white px-2.5 text-[11px] text-[#45515e] shadow-sm hover:bg-black/[0.05]"
-                      disabled={downloadingKey !== null}
-                      onClick={() =>
-                        void downloadItems(
-                          `all:${selectedConversation.id}:${turn.id}`,
-                          downloadableImages,
-                        )
-                      }
-                    >
-                      {downloadingKey === `all:${selectedConversation.id}:${turn.id}` ? (
-                        <LoaderCircle className="size-3 animate-spin" />
-                      ) : (
-                        <Download className="size-3" />
-                      )}
-                      下载全部
-                    </Button>
                   </div>
                 ) : null}
 

@@ -166,4 +166,175 @@
   .hide-scrollbar::-webkit-scrollbar {
     display: none;
   }
+
+  .dark .bg-white,
+  .dark .bg-stone-50,
+  .dark .bg-\[\#ffffff\] {
+    background-color: var(--card) !important;
+  }
+
+  .dark .bg-white\/70,
+  .dark .bg-white\/80,
+  .dark .bg-white\/92,
+  .dark .bg-white\/95 {
+    background-color: oklch(0.205 0 0 / 88%) !important;
+  }
+
+  .dark .bg-white\/16,
+  .dark .bg-white\/18 {
+    background-color: oklch(0.205 0 0 / 68%) !important;
+  }
+
+  .dark .bg-\[\#f0f0f0\],
+  .dark .bg-\[\#f2f3f5\],
+  .dark .bg-\[\#e8e8e8\],
+  .dark .bg-stone-100,
+  .dark .bg-stone-100\/60,
+  .dark .bg-stone-100\/80,
+  .dark .bg-stone-200 {
+    background-color: var(--secondary) !important;
+  }
+
+  .dark .bg-\[\#edf4ff\],
+  .dark .bg-blue-50,
+  .dark .bg-sky-50 {
+    background-color: oklch(0.35 0.09 260 / 35%) !important;
+  }
+
+  .dark .bg-emerald-50 {
+    background-color: oklch(0.36 0.08 155 / 32%) !important;
+  }
+
+  .dark .bg-amber-50,
+  .dark .bg-amber-50\/90,
+  .dark .bg-amber-50\/95,
+  .dark .bg-amber-100 {
+    background-color: oklch(0.38 0.08 80 / 34%) !important;
+  }
+
+  .dark .bg-rose-50 {
+    background-color: oklch(0.36 0.08 25 / 34%) !important;
+  }
+
+  .dark .bg-violet-50 {
+    background-color: oklch(0.36 0.08 305 / 34%) !important;
+  }
+
+  .dark .border-\[\#f2f3f5\],
+  .dark .border-\[\#e5e7eb\],
+  .dark .border-stone-100,
+  .dark .border-stone-200,
+  .dark .border-stone-200\/80,
+  .dark .border-stone-300,
+  .dark .border-white\/80 {
+    border-color: var(--border) !important;
+  }
+
+  .dark .border-amber-100,
+  .dark .border-amber-200,
+  .dark .border-amber-200\/80 {
+    border-color: oklch(0.68 0.14 80 / 42%) !important;
+  }
+
+  .dark .border-rose-100,
+  .dark .border-rose-200 {
+    border-color: oklch(0.63 0.18 25 / 42%) !important;
+  }
+
+  .dark .border-emerald-200 {
+    border-color: oklch(0.67 0.14 155 / 42%) !important;
+  }
+
+  .dark .border-blue-200,
+  .dark .border-sky-200 {
+    border-color: oklch(0.68 0.13 250 / 42%) !important;
+  }
+
+  .dark .border-violet-200 {
+    border-color: oklch(0.67 0.14 305 / 42%) !important;
+  }
+
+  .dark .text-\[\#222222\],
+  .dark .text-\[\#18181b\],
+  .dark .text-stone-700,
+  .dark .text-stone-800,
+  .dark .text-stone-900,
+  .dark .text-stone-950 {
+    color: var(--foreground) !important;
+  }
+
+  .dark .text-\[\#45515e\],
+  .dark .text-\[\#8e8e93\],
+  .dark .text-stone-300,
+  .dark .text-stone-400,
+  .dark .text-stone-500,
+  .dark .text-stone-600 {
+    color: var(--muted-foreground) !important;
+  }
+
+  .dark .text-\[\#1456f0\],
+  .dark .text-blue-600 {
+    color: oklch(0.74 0.16 250) !important;
+  }
+
+  .dark .text-sky-300,
+  .dark .text-sky-600,
+  .dark .text-sky-700 {
+    color: oklch(0.78 0.13 230) !important;
+  }
+
+  .dark .text-emerald-700,
+  .dark .text-emerald-800,
+  .dark .text-emerald-900 {
+    color: oklch(0.79 0.13 155) !important;
+  }
+
+  .dark .text-amber-700,
+  .dark .text-amber-800,
+  .dark .text-amber-900 {
+    color: oklch(0.82 0.14 80) !important;
+  }
+
+  .dark .text-rose-500,
+  .dark .text-rose-600,
+  .dark .text-rose-700,
+  .dark .text-rose-800 {
+    color: oklch(0.76 0.16 25) !important;
+  }
+
+  .dark .text-violet-700 {
+    color: oklch(0.78 0.14 305) !important;
+  }
+
+  .dark .ring-amber-100 {
+    --tw-ring-color: oklch(0.68 0.14 80 / 35%) !important;
+  }
+
+  .dark .hover\:bg-black\/\[0\.05\]:hover,
+  .dark .hover\:bg-white:hover,
+  .dark .hover\:bg-stone-50:hover,
+  .dark .hover\:bg-stone-100:hover,
+  .dark .hover\:bg-\[\#e8e8e8\]:hover {
+    background-color: var(--accent) !important;
+  }
+
+  .dark .hover\:bg-blue-50:hover,
+  .dark .hover\:bg-sky-50:hover {
+    background-color: oklch(0.35 0.09 260 / 42%) !important;
+  }
+
+  .dark .hover\:bg-emerald-50:hover,
+  .dark .hover\:bg-emerald-100:hover {
+    background-color: oklch(0.36 0.08 155 / 42%) !important;
+  }
+
+  .dark .hover\:bg-amber-50:hover,
+  .dark .hover\:bg-amber-100:hover {
+    background-color: oklch(0.38 0.08 80 / 46%) !important;
+  }
+
+  .dark .hover\:bg-rose-50:hover,
+  .dark .hover\:bg-rose-100:hover {
+    background-color: oklch(0.36 0.08 25 / 46%) !important;
+  }
 }

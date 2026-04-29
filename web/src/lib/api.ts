@@ -20,6 +20,15 @@ const IMAGE_MODEL_VALUES = new Set<string>(IMAGE_MODEL_OPTIONS.map((option) => o
 export function isImageModel(value: unknown): value is ImageModel {
   return typeof value === "string" && IMAGE_MODEL_VALUES.has(value);
 }
+
+export type ImageQuality = "low" | "medium" | "high";
+
+const IMAGE_QUALITY_VALUES = new Set<string>(["low", "medium", "high"]);
+
+export function isImageQuality(value: unknown): value is ImageQuality {
+  return typeof value === "string" && IMAGE_QUALITY_VALUES.has(value);
+}
+
 export type AuthRole = "admin" | "user";
 export type AnnouncementTarget = "login" | "image";
 
@@ -111,6 +120,7 @@ export type ImageTask = {
   mode: "generate" | "edit";
   model?: ImageModel;
   size?: string;
+  quality?: ImageQuality;
   created_at: string;
   updated_at: string;
   data?: Array<{ b64_json?: string; url?: string; revised_prompt?: string }>;
@@ -288,7 +298,7 @@ export async function updateAccount(
   });
 }
 
-export async function generateImage(prompt: string, model?: ImageModel, size?: string) {
+export async function generateImage(prompt: string, model?: ImageModel, size?: string, quality?: ImageQuality) {
   return httpRequest<ImageResponse>(
     "/v1/images/generations",
     {
@@ -297,6 +307,7 @@ export async function generateImage(prompt: string, model?: ImageModel, size?: s
         prompt,
         ...(model ? { model } : {}),
         ...(size ? { size } : {}),
+        ...(quality ? { quality } : {}),
         n: 1,
         response_format: "b64_json",
       },
@@ -304,7 +315,7 @@ export async function generateImage(prompt: string, model?: ImageModel, size?: s
   );
 }
 
-export async function editImage(files: File | File[], prompt: string, model?: ImageModel, size?: string) {
+export async function editImage(files: File | File[], prompt: string, model?: ImageModel, size?: string, quality?: ImageQuality) {
   const formData = new FormData();
   const uploadFiles = Array.isArray(files) ? files : [files];
 
@@ -317,6 +328,9 @@ export async function editImage(files: File | File[], prompt: string, model?: Im
   }
   if (size) {
     formData.append("size", size);
+  }
+  if (quality) {
+    formData.append("quality", quality);
   }
   formData.append("n", "1");
 
@@ -334,6 +348,7 @@ export async function createImageGenerationTask(
   prompt: string,
   model?: ImageModel,
   size?: string,
+  quality?: ImageQuality,
   count = 1,
   messages?: ImageTaskMessage[],
 ) {
@@ -344,6 +359,7 @@ export async function createImageGenerationTask(
       prompt,
       ...(model ? { model } : {}),
       ...(size ? { size } : {}),
+      ...(quality ? { quality } : {}),
       ...(messages?.length ? { messages } : {}),
       n: count,
     },
@@ -356,6 +372,7 @@ export async function createImageEditTask(
   prompt: string,
   model?: ImageModel,
   size?: string,
+  quality?: ImageQuality,
   count = 1,
   messages?: ImageTaskMessage[],
 ) {
@@ -372,6 +389,9 @@ export async function createImageEditTask(
   }
   if (size) {
     formData.append("size", size);
+  }
+  if (quality) {
+    formData.append("quality", quality);
   }
   if (messages?.length) {
     formData.append("messages", JSON.stringify(messages));
