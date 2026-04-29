@@ -20,6 +20,7 @@ import {
 import { deleteManagedImages, fetchManagedImages, type ManagedImage } from "@/lib/api";
 import { formatImageFileSize } from "@/lib/image-size";
 import { useAuthGuard } from "@/lib/use-auth-guard";
+import type { StoredAuthSession } from "@/store/auth";
 
 function getManagedImageFormatLabel(item: ManagedImage) {
   const normalized = (item.name || item.url).split("?")[0]?.match(/\.([a-z0-9]+)$/i)?.[1] || "image";
@@ -78,6 +79,40 @@ type DeleteImageTarget = {
   paths: string[];
 };
 
+type ImageManagerCacheEntry = {
+  items: ManagedImage[];
+  updatedAt: number;
+};
+
+const IMAGE_MANAGER_CACHE_TTL_MS = 30 * 1000;
+const imageManagerCache = new Map<string, ImageManagerCacheEntry>();
+
+function imageManagerCacheScope(session: StoredAuthSession) {
+  return [session.provider || "local", session.role, session.subjectId || session.key].join(":");
+}
+
+function imageManagerCacheKey(cacheScope: string, startDate: string, endDate: string) {
+  return [cacheScope, startDate, endDate].join("|");
+}
+
+function isFreshImageManagerCache(entry: ImageManagerCacheEntry) {
+  return Date.now() - entry.updatedAt < IMAGE_MANAGER_CACHE_TTL_MS;
+}
+
+function updateImageManagerCache(cacheKey: string, items: ManagedImage[]) {
+  imageManagerCache.set(cacheKey, { items, updatedAt: Date.now() });
+}
+
+function removeCachedManagedImages(paths: string[]) {
+  const pathSet = new Set(paths);
+  for (const [key, entry] of imageManagerCache) {
+    const items = entry.items.filter((item) => !pathSet.has(item.path));
+    if (items.length !== entry.items.length) {
+      imageManagerCache.set(key, { items, updatedAt: Date.now() });
+    }
+  }
+}
+
 const IMAGE_MASONRY_BREAKPOINTS = [
   { minWidth: 1280, columns: 4 },
   { minWidth: 1024, columns: 3 },
@@ -117,18 +152,26 @@ function useOrderedImageMasonryColumns(items: ManagedImage[]) {
   }, [columnCount, items]);
 }
 
-function ImageManagerContent({ canDeleteImages }: { canDeleteImages: boolean }) {
+function ImageManagerContent({
+  cacheScope,
+  canDeleteImages,
+}: {
+  cacheScope: string;
+  canDeleteImages: boolean;
+}) {
   const activeLoadRef = useRef<AbortController | null>(null);
-  const [items, setItems] = useState<ManagedImage[]>([]);
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
+  const currentCacheKey = imageManagerCacheKey(cacheScope, startDate, endDate);
+  const initialCache = imageManagerCache.get(currentCacheKey);
+  const [items, setItems] = useState<ManagedImage[]>(() => initialCache?.items ?? []);
   const [selectedImageIds, setSelectedImageIds] = useState<Record<string, boolean>>({});
   const [downloadingKey, setDownloadingKey] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<DeleteImageTarget | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
-  const [startDate, setStartDate] = useState("");
-  const [endDate, setEndDate] = useState("");
   const [lightboxIndex, setLightboxIndex] = useState(0);
   const [lightboxOpen, setLightboxOpen] = useState(false);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(() => !initialCache);
   const [loadError, setLoadError] = useState("");
   const lightboxImages = useMemo(
     () =>
@@ -152,7 +195,18 @@ function ImageManagerContent({ canDeleteImages }: { canDeleteImages: boolean }) 
   const showImageErrorState = !isLoading && loadError !== "" && items.length === 0;
   const showImageEmptyState = !isLoading && loadError === "" && items.length === 0;
 
-  const loadImages = useCallback(async () => {
+  const loadImages = useCallback(async ({ force = false }: { force?: boolean } = {}) => {
+    const cached = imageManagerCache.get(currentCacheKey);
+    if (!force && cached) {
+      setItems(cached.items);
+      setSelectedImageIds({});
+      setLoadError("");
+      if (isFreshImageManagerCache(cached)) {
+        setIsLoading(false);
+        return;
+      }
+    }
+
     activeLoadRef.current?.abort();
     const controller = new AbortController();
     activeLoadRef.current = controller;
@@ -163,6 +217,7 @@ function ImageManagerContent({ canDeleteImages }: { canDeleteImages: boolean }) 
         { start_date: startDate, end_date: endDate },
         { signal: controller.signal },
       );
+      updateImageManagerCache(currentCacheKey, data.items);
       setItems(data.items);
       setSelectedImageIds({});
     } catch (error) {
@@ -170,15 +225,17 @@ function ImageManagerContent({ canDeleteImages }: { canDeleteImages: boolean }) 
         return;
       }
       const message = error instanceof Error ? error.message : "加载图片失败";
-      setLoadError(message);
-      toast.error(message);
+      if (force || !cached) {
+        setLoadError(message);
+        toast.error(message);
+      }
     } finally {
       if (activeLoadRef.current === controller) {
         activeLoadRef.current = null;
         setIsLoading(false);
       }
     }
-  }, [endDate, startDate]);
+  }, [currentCacheKey, endDate, startDate]);
 
   const clearFilters = () => {
     setStartDate("");
@@ -245,6 +302,7 @@ function ImageManagerContent({ canDeleteImages }: { canDeleteImages: boolean }) 
     setIsDeleting(true);
     try {
       const data = await deleteManagedImages(paths);
+      removeCachedManagedImages(paths);
       setItems((current) => current.filter((item) => !pathSet.has(item.path)));
       setSelectedImageIds((current) => {
         const next = { ...current };
@@ -285,7 +343,7 @@ function ImageManagerContent({ canDeleteImages }: { canDeleteImages: boolean }) 
           <Button variant="outline" onClick={clearFilters} className="h-10 rounded-lg">
             清除筛选条件
           </Button>
-          <Button onClick={() => void loadImages()} disabled={isLoading || isMutatingImages} className="h-10 rounded-lg">
+          <Button onClick={() => void loadImages({ force: true })} disabled={isLoading || isMutatingImages} className="h-10 rounded-lg">
             {isLoading ? <LoaderCircle className="size-4 animate-spin" /> : <Search className="size-4" />}
             查询
           </Button>
@@ -348,7 +406,7 @@ function ImageManagerContent({ canDeleteImages }: { canDeleteImages: boolean }) 
               )}
               下载全部
             </Button>
-            <Button variant="outline" className="h-8 rounded-lg px-3 text-xs" onClick={() => void loadImages()} disabled={isLoading || isMutatingImages}>
+            <Button variant="outline" className="h-8 rounded-lg px-3 text-xs" onClick={() => void loadImages({ force: true })} disabled={isLoading || isMutatingImages}>
               <RefreshCw className={`size-4 ${isLoading ? "animate-spin" : ""}`} />
               刷新
             </Button>
@@ -378,7 +436,7 @@ function ImageManagerContent({ canDeleteImages }: { canDeleteImages: boolean }) 
                 <p className="text-sm font-medium text-foreground">图片库加载失败</p>
                 <p className="max-w-[32rem] text-sm leading-6 text-muted-foreground">{loadError}</p>
               </div>
-              <Button variant="outline" className="h-9 rounded-lg px-3" onClick={() => void loadImages()}>
+              <Button variant="outline" className="h-9 rounded-lg px-3" onClick={() => void loadImages({ force: true })}>
                 <RefreshCw className="size-4" />
                 重试
               </Button>
@@ -563,5 +621,5 @@ export default function ImageManagerPage() {
     return <div className="flex min-h-[40vh] items-center justify-center"><LoaderCircle className="size-5 animate-spin text-stone-400" /></div>;
   }
   const canDeleteImages = session.role === "admin" || session.provider !== "linuxdo";
-  return <ImageManagerContent canDeleteImages={canDeleteImages} />;
+  return <ImageManagerContent cacheScope={imageManagerCacheScope(session)} canDeleteImages={canDeleteImages} />;
 }
