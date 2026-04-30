@@ -204,13 +204,13 @@ export type ImageResponse = {
 export type ImageTask = {
   id: string;
   status: "queued" | "running" | "success" | "error" | "cancelled";
-  mode: "generate" | "edit";
+  mode: "generate" | "edit" | "chat";
   model?: ImageModel;
   size?: string;
   quality?: ImageQuality;
   created_at: string;
   updated_at: string;
-  data?: Array<{ b64_json?: string; url?: string; revised_prompt?: string }>;
+  data?: Array<{ b64_json?: string; url?: string; revised_prompt?: string; text_response?: string }>;
   error?: string;
   output_type?: "text";
   visibility?: ImageVisibility;
@@ -604,6 +604,23 @@ export async function createImageEditTask(
   return httpRequest<ImageTask>("/api/image-tasks/edits", {
     method: "POST",
     body: formData,
+  });
+}
+
+export async function createChatTask(
+  clientTaskId: string,
+  prompt: string,
+  model: ImageModel,
+  messages: ImageTaskMessage[],
+) {
+  return httpRequest<ImageTask>("/api/image-tasks/chat", {
+    method: "POST",
+    body: {
+      client_task_id: clientTaskId,
+      prompt,
+      model,
+      messages,
+    },
   });
 }
 

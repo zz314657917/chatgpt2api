@@ -72,8 +72,16 @@ const imageConversationStorage = localforage.createInstance({
   storeName: "image_conversations",
 });
 
+export const IMAGE_CONVERSATIONS_CHANGED_EVENT = "chatgpt2api:image-conversations-changed";
 const IMAGE_CONVERSATIONS_KEY_PREFIX = "items";
 let imageConversationWriteQueue: Promise<void> = Promise.resolve();
+
+function dispatchImageConversationsChanged() {
+  if (typeof window === "undefined") {
+    return;
+  }
+  window.dispatchEvent(new Event(IMAGE_CONVERSATIONS_CHANGED_EVENT));
+}
 
 function conversationScopeFromSession(session: StoredAuthSession | null) {
   if (!session) {
@@ -307,6 +315,7 @@ export async function saveImageConversations(conversations: ImageConversation[])
       storageKey,
       sortImageConversations([...conversationMap.values()]),
     );
+    dispatchImageConversationsChanged();
   });
 }
 
@@ -322,6 +331,7 @@ export async function saveImageConversation(conversation: ImageConversation): Pr
       ...items.filter((item) => item.id !== persistedConversation.id),
     ]);
     await imageConversationStorage.setItem(storageKey, nextItems);
+    dispatchImageConversationsChanged();
   });
 }
 
@@ -333,12 +343,14 @@ export async function deleteImageConversation(id: string): Promise<void> {
       storageKey,
       items.filter((item) => item.id !== id),
     );
+    dispatchImageConversationsChanged();
   });
 }
 
 export async function clearImageConversations(): Promise<void> {
   await queueImageConversationWrite(async () => {
     await imageConversationStorage.removeItem(await imageConversationsStorageKey());
+    dispatchImageConversationsChanged();
   });
 }
 

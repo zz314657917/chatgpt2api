@@ -34,7 +34,7 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   cancelImageTask,
   CHAT_MODEL_OPTIONS,
-  createChatCompletion,
+  createChatTask,
   createImageEditTask,
   createImageGenerationTask,
   DEFAULT_CHAT_MODEL,
@@ -57,6 +57,7 @@ import {
   clearImageConversations,
   deleteImageConversation,
   getImageConversationStats,
+  IMAGE_CONVERSATIONS_CHANGED_EVENT,
   listImageConversations,
   saveImageConversation,
   saveImageConversations,
@@ -77,6 +78,7 @@ const QUOTA_REFRESH_EVENT = "chatgpt2api:quota-refresh";
 const DEFAULT_IMAGE_QUALITY: ImageQuality = "high";
 const activeConversationQueueIds = new Set<string>();
 const EMPTY_IMAGE_SIZE_SELECT_VALUE = "__empty__";
+const MISSING_RECOVERABLE_TASK_ID_ERROR = "页面刷新或任务中断，未找到可恢复的任务 ID";
 
 type ComposerMode = "chat" | "image";
 
@@ -263,6 +265,17 @@ function updateStoredImage(image: StoredImage, updates: Partial<StoredImage>): S
 
 function taskDataToStoredImage(image: StoredImage, task: ImageTask, dataIndex = 0): StoredImage {
   if (task.status === "success") {
+    if (task.output_type === "text") {
+      return updateStoredImage(image, {
+        taskId: task.id,
+        status: "message",
+        text_response: task.data?.[dataIndex]?.text_response || task.error || "",
+        b64_json: undefined,
+        url: undefined,
+        revised_prompt: undefined,
+        error: undefined,
+      });
+    }
     const item = task.data?.[dataIndex];
     if (!item?.b64_json && !item?.url) {
       if (dataIndex > 0 && image.taskId !== image.id) {
@@ -472,6 +485,10 @@ function isMissingBatchImageDataError(error?: string) {
   return typeof error === "string" && error.startsWith("未返回第 ") && error.endsWith(" 张图片数据");
 }
 
+function isMissingRecoverableTaskIdError(error?: string) {
+  return error === MISSING_RECOVERABLE_TASK_ID_ERROR;
+}
+
 function getComposerConversationMode(composerMode: ComposerMode, referenceImages: StoredReferenceImage[]): ImageConversationMode {
   if (composerMode === "chat") {
     return "chat";
@@ -480,29 +497,6 @@ function getComposerConversationMode(composerMode: ComposerMode, referenceImages
     return "generate";
   }
   return referenceImages.some((image) => image.source === "conversation") ? "edit" : "image";
-}
-
-function chatCompletionContentToText(content: unknown): string {
-  if (typeof content === "string") {
-    return content;
-  }
-  if (!Array.isArray(content)) {
-    return "";
-  }
-  return content
-    .map((item) => {
-      if (!item || typeof item !== "object") {
-        return "";
-      }
-      const block = item as { text?: unknown };
-      return typeof block.text === "string" ? block.text : "";
-    })
-    .filter(Boolean)
-    .join("\n");
-}
-
-function chatCompletionResponseText(response: Awaited<ReturnType<typeof createChatCompletion>>) {
-  return chatCompletionContentToText(response.choices?.[0]?.message?.content).trim();
 }
 
 function buildImageTaskMessages(conversation: ImageConversation, activeTurnId: string): ImageTaskMessage[] {
@@ -613,7 +607,7 @@ async function recoverConversationHistory(items: ImageConversation[]) {
   const normalized = items.map((conversation) => {
     const turns = conversation.turns.map((turn) => {
       let turnChanged = false;
-      const recoveredImages = turn.images.map((image) => {
+      const recoveredImages = turn.images.map((image, imageIndex) => {
         if (image.status === "error" && isMissingBatchImageDataError(image.error)) {
           turnChanged = true;
           return {
@@ -621,6 +615,22 @@ async function recoverConversationHistory(items: ImageConversation[]) {
             taskId: image.id,
             status: "loading" as const,
             error: undefined,
+          };
+        }
+        if (turn.mode === "chat" && image.status === "error" && isMissingRecoverableTaskIdError(image.error)) {
+          turnChanged = true;
+          return {
+            ...image,
+            taskId: imageTaskIdForImage(turn.id, turn.images, imageIndex),
+            status: "loading" as const,
+            error: undefined,
+          };
+        }
+        if (turn.mode === "chat" && image.status === "loading" && !image.taskId) {
+          turnChanged = true;
+          return {
+            ...image,
+            taskId: imageTaskIdForImage(turn.id, turn.images, imageIndex),
           };
         }
         return image;
@@ -647,7 +657,7 @@ async function recoverConversationHistory(items: ImageConversation[]) {
         return {
           ...image,
           status: "error" as const,
-          error: "页面刷新或任务中断，未找到可恢复的任务 ID",
+          error: MISSING_RECOVERABLE_TASK_ID_ERROR,
         };
       });
       const derived = deriveTurnStatus({ ...turn, images });
@@ -780,6 +790,33 @@ function ImagePageContent() {
     observer.observe(node);
     return () => {
       observer.disconnect();
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const refreshConversations = async () => {
+      try {
+        const items = await listImageConversations();
+        if (cancelled) {
+          return;
+        }
+        conversationsRef.current = items;
+        setConversations(items);
+      } catch {
+        // Background updates should not surface noisy toasts while the user is on another workflow.
+      }
+    };
+
+    const handleConversationsChanged = () => {
+      void refreshConversations();
+    };
+
+    window.addEventListener(IMAGE_CONVERSATIONS_CHANGED_EVENT, handleConversationsChanged);
+    return () => {
+      cancelled = true;
+      window.removeEventListener(IMAGE_CONVERSATIONS_CHANGED_EVENT, handleConversationsChanged);
     };
   }, []);
 
@@ -1390,10 +1427,7 @@ function ImagePageContent() {
                       image.status === "loading"
                         ? {
                             ...image,
-                            taskId:
-                              activeTurn.mode === "chat"
-                                ? undefined
-                                : imageTaskIdForImage(turn.id, turn.images, imageIndex),
+                            taskId: imageTaskIdForImage(turn.id, turn.images, imageIndex),
                           }
                         : image,
                     ),
@@ -1403,57 +1437,15 @@ function ImagePageContent() {
           };
         });
 
-        if (activeTurn.mode === "chat") {
-          updateTurnProgress(conversationId, activeTurn.id, {
-            message: "正在请求对话回复",
-            detail: "请求已提交，等待模型返回文本",
-          });
-          const response = await createChatCompletion(activeTurn.model, buildImageTaskMessages(snapshot, activeTurn.id));
-          if (cancelledTurnIdsRef.current.has(activeTurnKey)) {
-            return;
-          }
-          const text = chatCompletionResponseText(response);
-          if (!text) {
-            throw new Error("模型没有返回文本内容");
-          }
-          await updateConversation(conversationId, (current) => {
-            const conversation = current ?? snapshot;
-            return {
-              ...conversation,
-              updatedAt: new Date().toISOString(),
-              turns: conversation.turns.map((turn) => {
-                if (turn.id !== activeTurn.id) {
-                  return turn;
-                }
-                const images = turn.images.map((image) =>
-                  image.status === "loading"
-                    ? {
-                        ...image,
-                        taskId: undefined,
-                        status: "message" as const,
-                        text_response: text,
-                        error: undefined,
-                      }
-                    : image,
-                );
-                return {
-                  ...turn,
-                  ...deriveTurnStatus({ ...turn, images }),
-                  images,
-                };
-              }),
-            };
-          });
-          updateTurnProgress(conversationId, activeTurn.id, {
-            message: "回复完成",
-            detail: "正在刷新会话",
-          });
-          return;
-        }
-
         updateTurnProgress(conversationId, activeTurn.id, {
-          message: usesReferenceImages(activeTurn.mode) ? "正在整理参考图" : "正在准备生成请求",
-          detail: usesReferenceImages(activeTurn.mode) ? "正在读取参考图并准备上传" : "正在创建图片生成任务",
+          message:
+            activeTurn.mode === "chat" ? "正在准备对话请求" : usesReferenceImages(activeTurn.mode) ? "正在整理参考图" : "正在准备生成请求",
+          detail:
+            activeTurn.mode === "chat"
+              ? "正在整理上下文并创建后台任务"
+              : usesReferenceImages(activeTurn.mode)
+                ? "正在读取参考图并准备上传"
+                : "正在创建图片生成任务",
         });
         const referenceFiles = activeTurn.referenceImages.map((image, index) =>
           dataUrlToFile(image.dataUrl, image.name || `${activeTurn.id}-${index + 1}.png`, image.type),
@@ -1478,39 +1470,42 @@ function ImagePageContent() {
           },
           [],
         );
+        const submitTaskGroup = (group: { taskId: string; count: number }) => {
+          if (activeTurn.mode === "chat") {
+            return createChatTask(group.taskId, activeTurn.prompt, activeTurn.model, taskMessages);
+          }
+          if (usesReferenceImages(activeTurn.mode)) {
+            return createImageEditTask(
+              group.taskId,
+              referenceFiles,
+              activeTurn.prompt,
+              activeTurn.model,
+              activeTurn.size,
+              activeTurn.quality || DEFAULT_IMAGE_QUALITY,
+              group.count,
+              taskMessages,
+              activeTurn.visibility || "private",
+            );
+          }
+          return createImageGenerationTask(
+            group.taskId,
+            activeTurn.prompt,
+            activeTurn.model,
+            activeTurn.size,
+            activeTurn.quality || DEFAULT_IMAGE_QUALITY,
+            group.count,
+            taskMessages,
+            activeTurn.visibility || "private",
+          );
+        };
         updateTurnProgress(conversationId, activeTurn.id, {
-          message: "正在提交生成请求",
-          detail: `${pendingTaskGroups.length} 个图片任务正在入队`,
+          message: activeTurn.mode === "chat" ? "正在提交对话请求" : "正在提交生成请求",
+          detail: activeTurn.mode === "chat" ? "对话任务正在入队" : `${pendingTaskGroups.length} 个图片任务正在入队`,
         });
-        const submitted = await Promise.all(
-          pendingTaskGroups.map((group) =>
-            usesReferenceImages(activeTurn.mode)
-              ? createImageEditTask(
-                  group.taskId,
-                  referenceFiles,
-                  activeTurn.prompt,
-                  activeTurn.model,
-                  activeTurn.size,
-                  activeTurn.quality || DEFAULT_IMAGE_QUALITY,
-                  group.count,
-                  taskMessages,
-                  activeTurn.visibility || "private",
-                )
-              : createImageGenerationTask(
-                  group.taskId,
-                  activeTurn.prompt,
-                  activeTurn.model,
-                  activeTurn.size,
-                  activeTurn.quality || DEFAULT_IMAGE_QUALITY,
-                  group.count,
-                  taskMessages,
-                  activeTurn.visibility || "private",
-                ),
-          ),
-        );
+        const submitted = await Promise.all(pendingTaskGroups.map(submitTaskGroup));
         await applyTasks(submitted);
         updateTurnProgress(conversationId, activeTurn.id, {
-          message: "等待生成结果",
+          message: activeTurn.mode === "chat" ? "等待对话回复" : "等待生成结果",
           detail: "请求已提交，正在轮询任务状态",
         });
 
@@ -1529,8 +1524,8 @@ function ImagePageContent() {
           }
 
           updateTurnProgress(conversationId, activeTurn.id, {
-            message: "等待生成结果",
-            detail: `还有 ${loadingTaskIds.length} 张图片处理中`,
+            message: activeTurn.mode === "chat" ? "等待对话回复" : "等待生成结果",
+            detail: activeTurn.mode === "chat" ? "对话任务处理中" : `还有 ${loadingTaskIds.length} 张图片处理中`,
           });
           await sleep(2000);
           const taskList = await fetchImageTasks(loadingTaskIds);
@@ -1539,39 +1534,14 @@ function ImagePageContent() {
           }
           if (taskList.missing_ids.length > 0 && latestTurn) {
             updateTurnProgress(conversationId, activeTurn.id, {
-              message: "正在恢复生成任务",
+              message: activeTurn.mode === "chat" ? "正在恢复对话任务" : "正在恢复生成任务",
               detail: `${taskList.missing_ids.length} 个任务状态丢失，正在重新提交`,
             });
             const missingTaskGroups = taskList.missing_ids.flatMap((taskId) => {
               const count = latestTurn.images.filter((image) => image.status === "loading" && image.taskId === taskId).length;
               return count > 0 ? [{ taskId, count }] : [];
             });
-            const resubmitted = await Promise.all(
-              missingTaskGroups.map((group) =>
-                usesReferenceImages(activeTurn.mode)
-                  ? createImageEditTask(
-                      group.taskId,
-                      referenceFiles,
-                      activeTurn.prompt,
-                      activeTurn.model,
-                      activeTurn.size,
-                      activeTurn.quality || DEFAULT_IMAGE_QUALITY,
-                      group.count,
-                      taskMessages,
-                      activeTurn.visibility || "private",
-                    )
-                  : createImageGenerationTask(
-                      group.taskId,
-                      activeTurn.prompt,
-                      activeTurn.model,
-                      activeTurn.size,
-                      activeTurn.quality || DEFAULT_IMAGE_QUALITY,
-                      group.count,
-                      taskMessages,
-                      activeTurn.visibility || "private",
-                    ),
-              ),
-            );
+            const resubmitted = await Promise.all(missingTaskGroups.map(submitTaskGroup));
             if (resubmitted.length > 0) {
               await applyTasks(resubmitted);
             }
@@ -1579,10 +1549,12 @@ function ImagePageContent() {
         }
 
         updateTurnProgress(conversationId, activeTurn.id, {
-          message: "生成完成",
+          message: activeTurn.mode === "chat" ? "回复完成" : "生成完成",
           detail: "正在刷新会话",
         });
-        window.dispatchEvent(new Event(QUOTA_REFRESH_EVENT));
+        if (activeTurn.mode !== "chat") {
+          window.dispatchEvent(new Event(QUOTA_REFRESH_EVENT));
+        }
       } catch (error) {
         const message = formatImageTaskError(error, activeTurn.mode === "chat" ? "对话请求失败" : "生成图片失败");
         await updateConversation(conversationId, (current) => {
@@ -1785,7 +1757,7 @@ function ImagePageContent() {
                 index === imageIndex
                   ? {
                       ...image,
-                      taskId: turn.mode === "chat" ? undefined : retryTaskId,
+                      taskId: retryTaskId,
                       status: "loading" as const,
                       b64_json: undefined,
                       url: undefined,
@@ -1860,7 +1832,7 @@ function ImagePageContent() {
                 const imageId = `${turn.id}-${regenerationId}-${index}`;
                 return {
                   id: imageId,
-                  taskId: turn.mode === "chat" ? undefined : imageTaskBatchId(`${turn.id}-${regenerationId}`, index),
+                  taskId: imageTaskBatchId(`${turn.id}-${regenerationId}`, index),
                   status: "loading" as const,
                 };
               }),
@@ -1936,7 +1908,7 @@ function ImagePageContent() {
                 const imageId = `${turn.id}-${regenerationId}-${index}`;
                 return {
                   id: imageId,
-                  taskId: mode === "chat" ? undefined : imageTaskBatchId(`${turn.id}-${regenerationId}`, index),
+                  taskId: imageTaskBatchId(`${turn.id}-${regenerationId}`, index),
                   status: "loading" as const,
                 };
               }),
@@ -2004,7 +1976,7 @@ function ImagePageContent() {
           const imageId = `${turnId}-${index}`;
           return {
             id: imageId,
-            taskId: effectiveImageMode === "chat" ? undefined : imageTaskBatchId(turnId, index),
+            taskId: imageTaskBatchId(turnId, index),
             status: "loading" as const,
           };
         }),

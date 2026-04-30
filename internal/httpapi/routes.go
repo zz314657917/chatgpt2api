@@ -831,6 +831,16 @@ func (a *App) handleImageTasks(w http.ResponseWriter, r *http.Request) {
 		util.WriteJSON(w, http.StatusOK, task)
 		return
 	}
+	if r.URL.Path == "/api/image-tasks/chat" && r.Method == http.MethodPost {
+		body, _ := readJSONMap(r)
+		task, err := a.tasks.SubmitChat(r.Context(), identity, util.Clean(body["client_task_id"]), util.Clean(body["prompt"]), firstNonEmpty(util.Clean(body["model"]), util.ImageModelAuto), body["messages"])
+		if err != nil {
+			writeImageTaskSubmitError(w, err)
+			return
+		}
+		util.WriteJSON(w, http.StatusOK, task)
+		return
+	}
 	if r.URL.Path == "/api/image-tasks/edits" && r.Method == http.MethodPost {
 		body, images, err := readMultipartImageBody(r)
 		if err != nil {

@@ -99,6 +99,9 @@ func NewApp() (*App, error) {
 				return result, err
 			})
 		},
+		func(ctx context.Context, identity service.Identity, payload map[string]any) (map[string]any, error) {
+			return app.runLoggedChatTask(ctx, identity, payload)
+		},
 		cfg.ImageRetentionDays,
 		cfg.ImageConcurrentLimit,
 		cfg.UserDefaultConcurrentLimit,
@@ -1067,6 +1070,57 @@ func (a *App) runLoggedImageTask(ctx context.Context, identity service.Identity,
 	}
 	a.logCall(identity, summary, endpoint, model, start, "success", "", urls)
 	return result, nil
+}
+
+func (a *App) runLoggedChatTask(ctx context.Context, identity service.Identity, payload map[string]any) (map[string]any, error) {
+	start := time.Now()
+	payload["owner_id"] = identityScope(identity)
+	payload["stream"] = false
+	model := firstNonEmpty(util.Clean(payload["model"]), util.ImageModelAuto)
+	result, stream, err := a.engine.HandleChatCompletions(ctx, payload)
+	if stream != nil {
+		err = errors.New("chat task streaming is not supported")
+	}
+	if err != nil {
+		a.logCall(identity, "文本生成", "/api/image-tasks/chat", model, start, "failed", err.Error(), nil)
+		return result, err
+	}
+	text := chatCompletionResultText(result)
+	if text == "" {
+		err = errors.New("模型没有返回文本内容")
+		a.logCall(identity, "文本生成", "/api/image-tasks/chat", model, start, "failed", err.Error(), nil)
+		return result, err
+	}
+	a.logCall(identity, "文本生成", "/api/image-tasks/chat", model, start, "success", "", nil)
+	return map[string]any{
+		"created":     result["created"],
+		"output_type": "text",
+		"data":        []map[string]any{{"text_response": text}},
+	}, nil
+}
+
+func chatCompletionResultText(result map[string]any) string {
+	for _, choice := range util.AsMapSlice(result["choices"]) {
+		message := util.StringMap(choice["message"])
+		if text := chatCompletionContentText(message["content"]); text != "" {
+			return text
+		}
+	}
+	return ""
+}
+
+func chatCompletionContentText(content any) string {
+	if text, ok := content.(string); ok {
+		return strings.TrimSpace(text)
+	}
+	var parts []string
+	for _, item := range anyList(content) {
+		block := util.StringMap(item)
+		if text := util.Clean(block["text"]); text != "" {
+			parts = append(parts, text)
+		}
+	}
+	return strings.TrimSpace(strings.Join(parts, "\n"))
 }
 
 func collectURLs(v any) []string {
