@@ -24,13 +24,15 @@ This repository is a Go backend with a Vite/React admin UI. The backend entry po
 
 Use `gofmt` for Go code and keep package names short, lowercase, and domain-oriented. Place tests beside the code they exercise as `*_test.go`. Frontend code uses TypeScript, React 19, Vite, ESLint, Tailwind CSS, and shadcn-style components. Prefer kebab-case filenames for React components (`image-composer.tsx`) and PascalCase exports. Reuse helpers from `web/src/lib/` and primitives from `web/src/components/ui/` before adding abstractions.
 
+Admin async creation-task routes use `/api/creation-tasks` as the resource root. Submit task-type-specific work through explicit child resources: `image-generations`, `image-edits`, and `chat-completions`. Do not introduce image-named task aliases or chat routes under image-named resources.
+
 ## Design Guidelines
 
 For frontend UI and visual design work, consult `DESIGN.md` for the project design system and apply those rules unless the user explicitly requests a different direction.
 
 ## Testing Guidelines
 
-Backend coverage is Go test based; add focused unit tests in the relevant `internal/**` package when changing service, protocol, config, or route behavior. Keep test names descriptive, for example `TestRegisterFlow...` or `TestImageTask...`. Frontend changes should pass `npm run build` and `npm run lint`; add UI tests only if a framework is introduced later.
+Backend coverage is Go test based; add focused unit tests in the relevant `internal/**` package when changing service, protocol, config, or route behavior. Keep test names descriptive, for example `TestRegisterFlow...` or `TestCreationTask...`. Frontend changes should pass `npm run build` and `npm run lint`; add UI tests only if a framework is introduced later.
 
 ## Commit & Pull Request Guidelines
 

@@ -22,7 +22,7 @@
 
 ## 项目介绍
 
-ChatGPT2API 是一个 Go 后端与 Vite / React 管理端组成的自托管服务。后端负责对外提供 OpenAI 兼容图片 API、账号池调度、图片任务与日志存储；前端提供登录、创作台、号池管理、图片库、用户管理、日志和设置等后台页面。
+ChatGPT2API 是一个 Go 后端与 Vite / React 管理端组成的自托管服务。后端负责对外提供 OpenAI 兼容图片 API、账号池调度、创作任务与日志存储；前端提供登录、创作台、号池管理、图片库、用户管理、日志和设置等后台页面。
 
 管理端的后台框架、登录页布局、暗色模式切换动画、设置页交互和整体组件风格参考 [ZyphrZero/react-go-admin](https://github.com/ZyphrZero/react-go-admin)，并结合本项目的图片生成、账号池和自托管运维场景做了定制。
 
@@ -109,6 +109,7 @@ environment:
 - 兼容 `POST /v1/images/edits` 图片编辑接口
 - 兼容面向图片场景的 `POST /v1/chat/completions`
 - 兼容面向图片场景的 `POST /v1/responses`
+- 管理端异步创作任务接口统一使用 `/api/creation-tasks` 作为资源根路径，提交子接口按任务类型区分为 `image-generations`、`image-edits`、`chat-completions`
 - `GET /v1/models` 返回 `gpt-image-2`、`codex-gpt-image-2`、`auto`、`gpt-5-mini`、`gpt-5-3-mini`、`gpt-5`、`gpt-5-1`、
   `gpt-5-2`、`gpt-5-3`、`gpt-5.4`、`gpt-5.5`
 - 支持通过 `n` 返回多张生成结果
@@ -169,6 +170,18 @@ New Api 接入：
 ```http
 Authorization: Bearer <session-or-api-token>
 ```
+
+管理端创作台使用异步创作任务接口提交、轮询和取消任务。这组接口不是 OpenAI 兼容接口，而是后台 UI 使用的任务资源接口：
+
+| 方法 | 路径 | 说明 |
+|:--|:--|:--|
+| `GET` | `/api/creation-tasks?ids=<id1,id2>` | 按任务 ID 轮询创作任务状态 |
+| `POST` | `/api/creation-tasks/image-generations` | 提交图片生成任务 |
+| `POST` | `/api/creation-tasks/image-edits` | 提交图片编辑任务，使用 multipart/form-data 上传参考图 |
+| `POST` | `/api/creation-tasks/chat-completions` | 提交文本/对话补全任务 |
+| `POST` | `/api/creation-tasks/{id}/cancel` | 取消排队中或运行中的创作任务 |
+
+权限系统中对应的 API 权限为 `GET /api/creation-tasks` 和 `POST /api/creation-tasks`，并按子路径生效。
 
 <details>
 <summary><code>GET /v1/models</code></summary>

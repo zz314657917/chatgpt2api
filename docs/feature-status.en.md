@@ -8,6 +8,7 @@
 | OpenAI 兼容 `POST /v1/images/edits` | ✅  | 已支持，可上传图片进行编辑。 |
 | 面向图片工作流的 `POST /v1/chat/completions` | ✅  | 已支持图片相关请求。 |
 | 面向图片工作流的 `POST /v1/responses` | ✅  | 已支持图片生成工具调用。 |
+| 管理端异步创作任务 API | ✅  | 统一使用 `/api/creation-tasks` 资源根路径；提交子接口为 `image-generations`、`image-edits`、`chat-completions`，并支持任务轮询与取消。 |
 | `GET /v1/models` 接口 | ✅  | 当前返回 `gpt-image-2`、`codex-gpt-image-2`、`auto`、`gpt-5-mini`、`gpt-5-3-mini`、`gpt-5`、`gpt-5-1`、`gpt-5-2`、`gpt-5-3`、`gpt-5.4`、`gpt-5.5`。 |
 | 同时生成多张图片 | ✅  | 已支持，后端与前端都可进行多图生成。 |
 | 前端创作台 | ✅  | 已支持手动切换对话 / 作画模式；作画模式支持图片生成、图片编辑、模型选择、历史记录与查看大图。 |
