@@ -5,6 +5,7 @@ import { ChevronDown, Github, LogOut, Moon, Send, Sun, UserCircle2 } from "lucid
 import { Link, NavLink, useLocation, useNavigate } from "react-router-dom";
 
 import { AnnouncementNotifications } from "@/components/announcement-banner";
+import { ImageTaskQueue } from "@/components/image-task-queue";
 import webConfig from "@/constants/common-env";
 import {
   AUTH_SESSION_CHANGE_EVENT,
@@ -344,6 +345,7 @@ export function TopNav() {
   const visibleNavItems = navItems.filter((item) => canAccessPath(session, item.href));
   const homePath = getDefaultRouteForSession(session);
   const roleLabel = session.role === "admin" ? "管理员" : session.roleName || (session.provider === "linuxdo" ? "Linuxdo 用户" : "普通用户");
+  const canAccessImageTasks = canAccessPath(session, "/image");
 
   return (
     <header className="sticky top-3 z-40 rounded-[24px] border border-border bg-card/90 shadow-[0_0_22.576px_rgba(44,74,116,0.09)] backdrop-blur dark:border-border dark:bg-card/92">
@@ -362,6 +364,7 @@ export function TopNav() {
             chatgpt2api
           </Link>
           <div className="ml-auto flex shrink-0 items-center gap-1 lg:hidden">
+            {canAccessImageTasks ? <ImageTaskQueue className="size-8 px-0" /> : null}
             <AnnouncementNotifications target="image" className="size-8" />
             <ThemeToggleButton theme={theme} onToggle={handleThemeToggle} />
             <AccountMenu
@@ -385,6 +388,7 @@ export function TopNav() {
           <ExternalIconButton href="https://github.com/ZyphrZero/chatgpt2api" label="GitHub repository">
             <Github />
           </ExternalIconButton>
+          {canAccessImageTasks ? <ImageTaskQueue /> : null}
           <AnnouncementNotifications target="image" className="size-8" />
           <ThemeToggleButton theme={theme} onToggle={handleThemeToggle} />
           <AccountMenu

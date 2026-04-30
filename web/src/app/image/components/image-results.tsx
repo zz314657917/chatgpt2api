@@ -8,18 +8,13 @@ import type { ImagePromptPreset } from "@/app/image/image-presets";
 import { formatBase64ImageFileSize, formatImageFileSize } from "@/lib/image-size";
 import { cn } from "@/lib/utils";
 import type { ImageConversation, ImageTurn, ImageTurnStatus, StoredImage, StoredReferenceImage } from "@/store/image-conversations";
+import type { ImageTurnProgress } from "@/store/image-turn-progress";
 
 export type ImageLightboxItem = {
   id: string;
   src: string;
   sizeLabel?: string;
   dimensions?: string;
-};
-
-export type ImageTurnProgress = {
-  message: string;
-  detail?: string;
-  startedAt: number;
 };
 
 type DownloadableImage = {

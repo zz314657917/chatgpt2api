@@ -144,32 +144,146 @@ function numeric(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
-function todayQuotaUsed(user: ManagedUser) {
-  const points = Array.isArray(user.usage_curve) ? user.usage_curve : [];
-  if (points.length === 0) {
-    return 0;
+const compactNumberFormatter = new Intl.NumberFormat("zh-CN", {
+  maximumFractionDigits: 1,
+  notation: "compact",
+});
+
+const usageDateFormatter = new Intl.DateTimeFormat("zh-CN", {
+  day: "2-digit",
+  month: "2-digit",
+});
+
+type NormalizedUsagePoint = {
+  date: string;
+  calls: number;
+  success: number;
+  failure: number;
+  quotaUsed: number;
+};
+
+function formatCompactNumber(value: unknown) {
+  return compactNumberFormatter.format(numeric(value));
+}
+
+function formatUsageDate(value?: string) {
+  if (!value) {
+    return "—";
   }
-  return numeric(points[points.length - 1]?.quota_used);
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  return usageDateFormatter.format(date);
+}
+
+function normalizeUsageCurve(points?: ManagedUser["usage_curve"]): NormalizedUsagePoint[] {
+  if (!Array.isArray(points)) {
+    return [];
+  }
+  return points
+    .filter((point) => Boolean(point.date))
+    .map((point) => ({
+      date: point.date,
+      calls: numeric(point.calls),
+      success: numeric(point.success),
+      failure: numeric(point.failure),
+      quotaUsed: numeric(point.quota_used),
+    }))
+    .sort((left, right) => left.date.localeCompare(right.date));
+}
+
+function latestUsagePoint(points?: ManagedUser["usage_curve"]) {
+  const safePoints = normalizeUsageCurve(points);
+  return safePoints[safePoints.length - 1];
+}
+
+function todayQuotaUsed(user: ManagedUser) {
+  return latestUsagePoint(user.usage_curve)?.quotaUsed ?? 0;
+}
+
+function todayCallCount(user: ManagedUser) {
+  return latestUsagePoint(user.usage_curve)?.calls ?? 0;
 }
 
 function UsageSparkline({ points }: { points?: ManagedUser["usage_curve"] }) {
-  const safePoints = Array.isArray(points) ? points : [];
-  const maxCalls = Math.max(1, ...safePoints.map((point) => numeric(point.calls)));
+  const safePoints = useMemo(() => normalizeUsageCurve(points), [points]);
+
+  if (safePoints.length === 0) {
+    return (
+      <div
+        className="flex h-16 w-[230px] items-center justify-center rounded-lg border border-dashed border-border bg-muted/20 text-xs text-muted-foreground"
+        aria-label="调用曲线暂无数据"
+      >
+        暂无调用
+      </div>
+    );
+  }
+
+  const width = 220;
+  const height = 64;
+  const paddingX = 8;
+  const paddingTop = 8;
+  const paddingBottom = 12;
+  const baselineY = height - paddingBottom;
+  const plotWidth = width - paddingX * 2;
+  const plotHeight = height - paddingTop - paddingBottom;
+  const calls = safePoints.map((point) => point.calls);
+  const maxCalls = Math.max(...calls);
+  const minCalls = Math.min(...calls);
+  const hasVariation = maxCalls > minCalls;
+  const valueRange = Math.max(1, maxCalls - minCalls);
+  const chartPoints = safePoints.map((point, index) => {
+    const x = safePoints.length === 1 ? width / 2 : paddingX + (index / (safePoints.length - 1)) * plotWidth;
+    const y = hasVariation
+      ? paddingTop + ((maxCalls - point.calls) / valueRange) * plotHeight
+      : maxCalls === 0
+        ? baselineY
+        : paddingTop + plotHeight / 2;
+    return { point, x, y };
+  });
+  const firstPoint = chartPoints[0];
+  const lastPoint = chartPoints[chartPoints.length - 1];
+  const linePath = chartPoints.length === 1
+    ? `M ${firstPoint.x - 12} ${firstPoint.y} L ${firstPoint.x + 12} ${firstPoint.y}`
+    : chartPoints.map(({ x, y }, index) => `${index === 0 ? "M" : "L"} ${x} ${y}`).join(" ");
+  const areaPath = chartPoints.length === 1
+    ? `M ${firstPoint.x - 12} ${baselineY} L ${firstPoint.x - 12} ${firstPoint.y} L ${firstPoint.x + 12} ${firstPoint.y} L ${firstPoint.x + 12} ${baselineY} Z`
+    : `${linePath} L ${lastPoint.x} ${baselineY} L ${firstPoint.x} ${baselineY} Z`;
+  const peakPoint = safePoints.reduce((peak, point) => (point.calls > peak.calls ? point : peak), safePoints[0]);
+  const latestPoint = lastPoint.point;
+  const label = `近 ${safePoints.length} 日调用曲线，今日 ${latestPoint.calls} 次，峰值 ${peakPoint.calls} 次`;
 
   return (
-    <div className="flex h-12 w-[170px] items-end gap-1" aria-label="调用曲线">
-      {safePoints.map((point) => {
-        const calls = numeric(point.calls);
-        const height = Math.max(4, Math.round((calls / maxCalls) * 40));
-        return (
-          <div
-            key={point.date}
-            className="w-2 rounded-t-sm bg-sky-500/70 dark:bg-sky-400/70"
-            style={{ height }}
-            title={`${point.date} 调用 ${calls} 次，额度 ${numeric(point.quota_used)}`}
-          />
-        );
-      })}
+    <div className="w-[230px] space-y-1.5" aria-label={label}>
+      <div className="h-16 overflow-hidden rounded-lg border border-border/70 bg-background">
+        <svg viewBox={`0 0 ${width} ${height}`} role="img" className="h-full w-full">
+          <title>{label}</title>
+          <line x1={paddingX} x2={width - paddingX} y1={paddingTop} y2={paddingTop} className="stroke-border/70" strokeDasharray="3 5" />
+          <line x1={paddingX} x2={width - paddingX} y1={baselineY} y2={baselineY} className="stroke-border/70" />
+          <path d={areaPath} className="fill-[#3b82f6] opacity-10 dark:opacity-15" />
+          <path d={linePath} fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" className="text-[#1456f0] dark:text-sky-300" />
+          {chartPoints.map(({ point, x, y }, index) => {
+            const isLatest = index === chartPoints.length - 1;
+            return (
+              <circle
+                key={point.date}
+                cx={x}
+                cy={y}
+                r={isLatest ? 3.4 : 2.4}
+                className={isLatest ? "fill-[#1456f0] dark:fill-sky-300" : "fill-background stroke-[#1456f0] dark:stroke-sky-300"}
+                strokeWidth={isLatest ? 0 : 1.6}
+              >
+                <title>{`${point.date} 调用 ${point.calls} 次，成功 ${point.success} 次，失败 ${point.failure} 次，额度 ${point.quotaUsed}`}</title>
+              </circle>
+            );
+          })}
+        </svg>
+      </div>
+      <div className="flex items-center justify-between gap-2 text-[11px] leading-4 text-muted-foreground">
+        <span>{formatUsageDate(safePoints[0].date)}-{formatUsageDate(latestPoint.date)}</span>
+        <span>峰值 {formatCompactNumber(peakPoint.calls)}</span>
+      </div>
     </div>
   );
 }
@@ -444,7 +558,7 @@ function UsersContent() {
             </div>
           </div>
           <div className="overflow-x-auto">
-            <Table className="min-w-[1240px]">
+            <Table className="min-w-[1340px]">
               <TableHeader>
                 <TableRow>
                   <TableHead>用户</TableHead>
@@ -452,7 +566,7 @@ function UsersContent() {
                   <TableHead>来源</TableHead>
                   <TableHead>状态</TableHead>
                   <TableHead>额度消耗</TableHead>
-                  <TableHead>调用曲线</TableHead>
+                  <TableHead className="w-[340px]">调用曲线</TableHead>
                   <TableHead>时间</TableHead>
                   <TableHead className="w-[260px]">操作</TableHead>
                 </TableRow>
@@ -508,12 +622,13 @@ function UsersContent() {
                           <div className="text-xs text-muted-foreground">今日 {todayQuotaUsed(user)}</div>
                         </div>
                       </TableCell>
-                      <TableCell>
-                        <div className="flex items-center gap-3">
+                      <TableCell className="w-[340px]">
+                        <div className="flex items-center gap-4">
                           <UsageSparkline points={user.usage_curve} />
-                          <div className="space-y-1 text-xs text-muted-foreground">
-                            <div>调用 {numeric(user.call_count)}</div>
-                            <div>失败 {numeric(user.failure_count)}</div>
+                          <div className="min-w-[72px] space-y-1 text-xs text-muted-foreground">
+                            <div>总计 {formatCompactNumber(user.call_count)}</div>
+                            <div>今日 {formatCompactNumber(todayCallCount(user))}</div>
+                            <div>失败 {formatCompactNumber(user.failure_count)}</div>
                           </div>
                         </div>
                       </TableCell>

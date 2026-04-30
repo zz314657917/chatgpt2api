@@ -73,6 +73,8 @@ const imageConversationStorage = localforage.createInstance({
 });
 
 export const IMAGE_CONVERSATIONS_CHANGED_EVENT = "chatgpt2api:image-conversations-changed";
+export const ACTIVE_IMAGE_CONVERSATION_STORAGE_KEY = "chatgpt2api:image_active_conversation_id";
+export const IMAGE_ACTIVE_CONVERSATION_REQUEST_EVENT = "chatgpt2api:image-open-conversation";
 const IMAGE_CONVERSATIONS_KEY_PREFIX = "items";
 let imageConversationWriteQueue: Promise<void> = Promise.resolve();
 

@@ -6,7 +6,7 @@ import { toast } from "sonner";
 
 import { ImageComposer } from "@/app/image/components/image-composer";
 import { ImagePromptMarket } from "@/app/image/components/image-prompt-market";
-import { ImageResults, type ImageLightboxItem, type ImageTurnProgress } from "@/app/image/components/image-results";
+import { ImageResults, type ImageLightboxItem } from "@/app/image/components/image-results";
 import type { BananaPrompt } from "@/app/image/banana-prompts";
 import { IMAGE_QUALITY_OPTIONS, IMAGE_SIZE_OPTIONS } from "@/app/image/image-options";
 import { IMAGE_PROMPT_PRESETS, type ImagePromptPreset } from "@/app/image/image-presets";
@@ -54,9 +54,11 @@ import {
 import { cn } from "@/lib/utils";
 import { useAuthGuard } from "@/lib/use-auth-guard";
 import {
+  ACTIVE_IMAGE_CONVERSATION_STORAGE_KEY,
   clearImageConversations,
   deleteImageConversation,
   getImageConversationStats,
+  IMAGE_ACTIVE_CONVERSATION_REQUEST_EVENT,
   IMAGE_CONVERSATIONS_CHANGED_EVENT,
   listImageConversations,
   saveImageConversation,
@@ -68,8 +70,15 @@ import {
   type StoredImage,
   type StoredReferenceImage,
 } from "@/store/image-conversations";
+import {
+  clearImageTurnProgress,
+  getImageTurnProgressSnapshot,
+  imageTurnProgressKey,
+  setImageTurnProgress,
+  subscribeImageTurnProgress,
+  type ImageTurnProgress,
+} from "@/store/image-turn-progress";
 
-const ACTIVE_CONVERSATION_STORAGE_KEY = "chatgpt2api:image_active_conversation_id";
 const COMPOSER_MODE_STORAGE_KEY = "chatgpt2api:image_composer_mode";
 const IMAGE_MODEL_STORAGE_KEY = "chatgpt2api:image_last_model";
 const IMAGE_SIZE_STORAGE_KEY = "chatgpt2api:image_last_size";
@@ -229,10 +238,6 @@ function normalizeRequestedImageCount(value: string | number) {
 
 function imageTaskBatchId(turnId: string, imageIndex: number) {
   return `${turnId}-task-${Math.floor(imageIndex / IMAGE_TASK_IMAGE_COUNT)}`;
-}
-
-function imageTurnProgressKey(conversationId: string, turnId: string) {
-  return `${conversationId}:${turnId}`;
 }
 
 function imageTaskIdForImage(turnId: string, images: StoredImage[], imageIndex: number) {
@@ -721,7 +726,9 @@ function ImagePageContent() {
   const [lightboxIndex, setLightboxIndex] = useState(0);
   const [deleteConfirm, setDeleteConfirm] = useState<{ type: "one"; id: string } | { type: "all" } | null>(null);
   const [editingTurnDraft, setEditingTurnDraft] = useState<EditingTurnDraft | null>(null);
-  const [progressByTurnKey, setProgressByTurnKey] = useState<Record<string, ImageTurnProgress>>({});
+  const [progressByTurnKey, setProgressByTurnKey] = useState<Record<string, ImageTurnProgress>>(
+    getImageTurnProgressSnapshot,
+  );
   const [progressNow, setProgressNow] = useState(Date.now());
   const [composerDockHeight, setComposerDockHeight] = useState(0);
 
@@ -820,6 +827,14 @@ function ImagePageContent() {
     };
   }, []);
 
+  useEffect(
+    () =>
+      subscribeImageTurnProgress(() => {
+        setProgressByTurnKey(getImageTurnProgressSnapshot());
+      }),
+    [],
+  );
+
   useEffect(() => {
     if (activeTaskCount === 0 && Object.keys(progressByTurnKey).length === 0) {
       return;
@@ -851,7 +866,7 @@ function ImagePageContent() {
         conversationsRef.current = normalizedItems;
         setConversations(normalizedItems);
         const storedConversationId =
-          typeof window !== "undefined" ? window.localStorage.getItem(ACTIVE_CONVERSATION_STORAGE_KEY) : null;
+          typeof window !== "undefined" ? window.localStorage.getItem(ACTIVE_IMAGE_CONVERSATION_STORAGE_KEY) : null;
         const nextSelectedConversationId =
           (storedConversationId && normalizedItems.some((conversation) => conversation.id === storedConversationId)
             ? storedConversationId
@@ -890,11 +905,25 @@ function ImagePageContent() {
     }
 
     if (selectedConversationId) {
-      window.localStorage.setItem(ACTIVE_CONVERSATION_STORAGE_KEY, selectedConversationId);
+      window.localStorage.setItem(ACTIVE_IMAGE_CONVERSATION_STORAGE_KEY, selectedConversationId);
     } else {
-      window.localStorage.removeItem(ACTIVE_CONVERSATION_STORAGE_KEY);
+      window.localStorage.removeItem(ACTIVE_IMAGE_CONVERSATION_STORAGE_KEY);
     }
   }, [selectedConversationId]);
+
+  useEffect(() => {
+    const handleOpenConversation = (event: Event) => {
+      const conversationId = (event as CustomEvent<{ conversationId?: string }>).detail?.conversationId;
+      if (conversationId) {
+        setSelectedConversationId(conversationId);
+      }
+    };
+
+    window.addEventListener(IMAGE_ACTIVE_CONVERSATION_REQUEST_EVENT, handleOpenConversation);
+    return () => {
+      window.removeEventListener(IMAGE_ACTIVE_CONVERSATION_REQUEST_EVENT, handleOpenConversation);
+    };
+  }, []);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -990,28 +1019,13 @@ function ImagePageContent() {
 
   const updateTurnProgress = useCallback(
     (conversationId: string, turnId: string, updates: Omit<ImageTurnProgress, "startedAt"> & { startedAt?: number }) => {
-      const key = imageTurnProgressKey(conversationId, turnId);
-      setProgressByTurnKey((current) => ({
-        ...current,
-        [key]: {
-          ...updates,
-          startedAt: updates.startedAt ?? current[key]?.startedAt ?? Date.now(),
-        },
-      }));
+      setImageTurnProgress(conversationId, turnId, updates);
     },
     [],
   );
 
   const clearTurnProgress = useCallback((conversationId: string, turnId: string) => {
-    const key = imageTurnProgressKey(conversationId, turnId);
-    setProgressByTurnKey((current) => {
-      if (!current[key]) {
-        return current;
-      }
-      const next = { ...current };
-      delete next[key];
-      return next;
-    });
+    clearImageTurnProgress(conversationId, turnId);
   }, []);
 
   const clearComposerInputs = useCallback(() => {
@@ -2309,12 +2323,6 @@ function ImagePageContent() {
                 <Trash2 className="size-4" />
               </Button>
             </div>
-            {activeTaskCount > 0 ? (
-              <div className="flex h-10 shrink-0 items-center gap-1.5 rounded-full bg-amber-50 px-3 text-xs font-medium text-amber-700 ring-1 ring-amber-100 lg:absolute lg:top-0 lg:right-4 lg:z-20">
-                <LoaderCircle className="size-3.5 animate-spin" />
-                {activeTaskCount}<span className="hidden sm:inline"> 个任务处理中</span>
-              </div>
-            ) : null}
           </div>
 
           <div
