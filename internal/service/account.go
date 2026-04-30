@@ -290,15 +290,19 @@ func (s *AccountService) GetTextAccessToken() string {
 }
 
 func (s *AccountService) GetAvailableAccessToken(ctx context.Context) (string, error) {
+	return s.GetAvailableAccessTokenFor(ctx, nil)
+}
+
+func (s *AccountService) GetAvailableAccessTokenFor(ctx context.Context, allow func(map[string]any) bool) (string, error) {
 	attempted := map[string]struct{}{}
 	for {
-		reservation, err := s.reserveNextCandidateToken(attempted)
+		reservation, err := s.reserveNextCandidateToken(attempted, allow)
 		if err != nil {
 			return "", err
 		}
 		attempted[reservation.token] = struct{}{}
 		account := s.RefreshAccountState(ctx, reservation.token)
-		if account != nil && s.reservedImageSlotAvailable(reservation) {
+		if account != nil && (allow == nil || allow(account)) && s.reservedImageSlotAvailable(reservation) {
 			return reservation.token, nil
 		}
 		s.releaseImageReservation(reservation.token)
@@ -600,7 +604,7 @@ type imageTokenReservation struct {
 	slot  int
 }
 
-func (s *AccountService) reserveNextCandidateToken(excluded map[string]struct{}) (imageTokenReservation, error) {
+func (s *AccountService) reserveNextCandidateToken(excluded map[string]struct{}, allow func(map[string]any) bool) (imageTokenReservation, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var tokens []string
@@ -610,6 +614,9 @@ func (s *AccountService) reserveNextCandidateToken(excluded map[string]struct{})
 			continue
 		}
 		if _, ok := excluded[token]; ok {
+			continue
+		}
+		if allow != nil && !allow(item) {
 			continue
 		}
 		if s.availableImageSlotsLocked(item) > 0 {
@@ -822,6 +829,15 @@ func IsImageAccountAvailable(account map[string]any) bool {
 		return true
 	}
 	return util.ToInt(account["quota"], 0) > 0
+}
+
+func IsPaidImageAccount(account map[string]any) bool {
+	switch util.Clean(account["type"]) {
+	case "Plus", "ProLite", "Pro", "Team":
+		return true
+	default:
+		return false
+	}
 }
 
 func IsAccountInvalidErrorMessage(message string) bool {

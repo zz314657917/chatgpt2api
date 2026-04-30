@@ -17,7 +17,12 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Textarea } from "@/components/ui/textarea";
-import { IMAGE_SIZE_OPTIONS } from "@/app/image/image-options";
+import {
+  IMAGE_ASPECT_RATIO_OPTIONS,
+  IMAGE_RESOLUTION_OPTIONS,
+  type ImageAspectRatio,
+  type ImageResolution,
+} from "@/app/image/image-options";
 import type { ImageModel, ImageQuality } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
@@ -27,7 +32,8 @@ type ImageComposerProps = {
   imageCount: string;
   imageModel: ImageModel;
   imageModelOptions: ReadonlyArray<{ value: ImageModel; label: string }>;
-  imageSize: string;
+  imageAspectRatio: ImageAspectRatio;
+  imageResolution: ImageResolution;
   imageQuality: ImageQuality;
   imageQualityOptions: ReadonlyArray<{ value: ImageQuality; label: string; description: string }>;
   imageOutputHint: ReactNode;
@@ -38,7 +44,8 @@ type ImageComposerProps = {
   onPromptChange: (value: string) => void;
   onImageCountChange: (value: string) => void;
   onImageModelChange: (value: ImageModel) => void;
-  onImageSizeChange: (value: string) => void;
+  onImageAspectRatioChange: (value: ImageAspectRatio) => void;
+  onImageResolutionChange: (value: ImageResolution) => void;
   onImageQualityChange: (value: ImageQuality) => void;
   onSubmit: () => void | Promise<void>;
   onPickReferenceImage: () => void;
@@ -75,7 +82,8 @@ export function ImageComposer({
   imageCount,
   imageModel,
   imageModelOptions,
-  imageSize,
+  imageAspectRatio,
+  imageResolution,
   imageQuality,
   imageQualityOptions,
   imageOutputHint,
@@ -86,7 +94,8 @@ export function ImageComposer({
   onPromptChange,
   onImageCountChange,
   onImageModelChange,
-  onImageSizeChange,
+  onImageAspectRatioChange,
+  onImageResolutionChange,
   onImageQualityChange,
   onSubmit,
   onPickReferenceImage,
@@ -97,14 +106,17 @@ export function ImageComposer({
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [lightboxIndex, setLightboxIndex] = useState(0);
   const [isModelMenuOpen, setIsModelMenuOpen] = useState(false);
-  const [isSizeMenuOpen, setIsSizeMenuOpen] = useState(false);
+  const [isAspectRatioMenuOpen, setIsAspectRatioMenuOpen] = useState(false);
+  const [isResolutionMenuOpen, setIsResolutionMenuOpen] = useState(false);
   const [isQualityMenuOpen, setIsQualityMenuOpen] = useState(false);
+  const [isOutputHintOpen, setIsOutputHintOpen] = useState(false);
   const [promptAreaHeight, setPromptAreaHeight] = useState(PROMPT_AREA_DEFAULT_HEIGHT);
   const [isPromptAreaResizing, setIsPromptAreaResizing] = useState(false);
   const composerPanelRef = useRef<HTMLDivElement>(null);
   const composerToolbarRef = useRef<HTMLDivElement>(null);
   const modelMenuRef = useRef<HTMLDivElement>(null);
-  const sizeMenuRef = useRef<HTMLDivElement>(null);
+  const aspectRatioMenuRef = useRef<HTMLDivElement>(null);
+  const resolutionMenuRef = useRef<HTMLDivElement>(null);
   const qualityMenuRef = useRef<HTMLDivElement>(null);
   const promptAreaResizeRef = useRef<{ pointerOffsetY: number } | null>(null);
   const lightboxImages = useMemo(
@@ -112,12 +124,15 @@ export function ImageComposer({
     [referenceImages],
   );
   const imageModelLabel = imageModelOptions.find((option) => option.value === imageModel)?.label || imageModel;
-  const imageSizeLabel = IMAGE_SIZE_OPTIONS.find((option) => option.value === imageSize)?.label || "未指定";
+  const imageAspectRatioLabel =
+    IMAGE_ASPECT_RATIO_OPTIONS.find((option) => option.value === imageAspectRatio)?.label || "Auto";
+  const imageResolutionLabel =
+    IMAGE_RESOLUTION_OPTIONS.find((option) => option.value === imageResolution)?.label || "Auto";
   const imageQualityLabel =
     imageQualityOptions.find((option) => option.value === imageQuality)?.label || imageQuality;
 
   useEffect(() => {
-    if (!isModelMenuOpen && !isSizeMenuOpen && !isQualityMenuOpen) {
+    if (!isModelMenuOpen && !isAspectRatioMenuOpen && !isResolutionMenuOpen && !isQualityMenuOpen) {
       return;
     }
     const handlePointerDown = (event: MouseEvent) => {
@@ -125,8 +140,11 @@ export function ImageComposer({
       if (!modelMenuRef.current?.contains(target)) {
         setIsModelMenuOpen(false);
       }
-      if (!sizeMenuRef.current?.contains(target)) {
-        setIsSizeMenuOpen(false);
+      if (!aspectRatioMenuRef.current?.contains(target)) {
+        setIsAspectRatioMenuOpen(false);
+      }
+      if (!resolutionMenuRef.current?.contains(target)) {
+        setIsResolutionMenuOpen(false);
       }
       if (!qualityMenuRef.current?.contains(target)) {
         setIsQualityMenuOpen(false);
@@ -136,7 +154,7 @@ export function ImageComposer({
     return () => {
       window.removeEventListener("mousedown", handlePointerDown);
     };
-  }, [isModelMenuOpen, isQualityMenuOpen, isSizeMenuOpen]);
+  }, [isAspectRatioMenuOpen, isModelMenuOpen, isQualityMenuOpen, isResolutionMenuOpen]);
 
   useEffect(() => {
     const handleResize = () => {
@@ -412,7 +430,8 @@ export function ImageComposer({
                       className="flex h-7 w-[86px] items-center justify-between bg-transparent text-left text-xs font-semibold text-[#18181b] min-[390px]:w-[112px] sm:w-[148px]"
                       onClick={() => {
                         setIsModelMenuOpen((open) => !open);
-                        setIsSizeMenuOpen(false);
+                        setIsAspectRatioMenuOpen(false);
+                        setIsResolutionMenuOpen(false);
                         setIsQualityMenuOpen(false);
                       }}
                     >
@@ -459,63 +478,113 @@ export function ImageComposer({
                           className="h-7 w-[36px] border-0 bg-transparent px-0 text-center text-xs font-semibold text-[#18181b] shadow-none focus-visible:ring-0 sm:w-[46px]"
                         />
                       </div>
-                  <div
-                    ref={sizeMenuRef}
-                    className="relative flex h-8 min-w-0 items-center gap-1.5 rounded-full border border-[#e5e7eb] bg-white px-2.5 text-[11px] sm:text-xs"
-                  >
-                    <span className="font-medium text-[#45515e]">比例</span>
-                    <button
-                      type="button"
-                      className="flex h-7 w-[78px] items-center justify-between bg-transparent text-left text-xs font-semibold text-[#18181b] min-[390px]:w-[96px] sm:w-[126px]"
-                      onClick={() => {
-                        setIsSizeMenuOpen((open) => !open);
-                        setIsModelMenuOpen(false);
-                        setIsQualityMenuOpen(false);
-                      }}
-                    >
-                      <span className="truncate">{imageSizeLabel}</span>
-                      <ChevronDown className={cn("size-4 shrink-0 opacity-60 transition", isSizeMenuOpen && "rotate-180")} />
-                    </button>
-                    {isSizeMenuOpen ? (
-                      <div className="fixed inset-x-4 bottom-[calc(env(safe-area-inset-bottom)+var(--image-composer-dock-height)+0.75rem)] z-[80] max-h-[45dvh] overflow-y-auto rounded-[20px] border border-[#e5e7eb] bg-white p-1.5 shadow-[0_24px_80px_-32px_rgba(15,23,42,0.35)] sm:absolute sm:inset-x-auto sm:bottom-[calc(100%+8px)] sm:left-0 sm:w-[186px]">
-                        {IMAGE_SIZE_OPTIONS.map((option) => {
-                          const active = option.value === imageSize;
-                          return (
-                            <button
-                              key={option.label}
-                              type="button"
-                              className={cn(
-                                "flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm text-[#45515e] transition hover:bg-black/[0.05]",
-                                active && "bg-black/[0.05] font-medium text-[#18181b]",
-                              )}
-                              onClick={() => {
-                                onImageSizeChange(option.value);
-                                setIsSizeMenuOpen(false);
-                              }}
-                            >
-                              <span>{option.label}</span>
-                              {active ? <Check className="size-4" /> : null}
-                            </button>
-                          );
-                        })}
+                      <div
+                        ref={aspectRatioMenuRef}
+                        className="relative flex h-8 min-w-0 items-center gap-1.5 rounded-full border border-[#e5e7eb] bg-white px-2.5 text-[11px] sm:text-xs"
+                      >
+                        <span className="font-medium text-[#45515e]">比例</span>
+                        <button
+                          type="button"
+                          className="flex h-7 w-[72px] items-center justify-between bg-transparent text-left text-xs font-semibold text-[#18181b] min-[390px]:w-[86px] sm:w-[116px]"
+                          onClick={() => {
+                            setIsAspectRatioMenuOpen((open) => !open);
+                            setIsModelMenuOpen(false);
+                            setIsResolutionMenuOpen(false);
+                            setIsQualityMenuOpen(false);
+                          }}
+                        >
+                          <span className="truncate">{imageAspectRatioLabel}</span>
+                          <ChevronDown className={cn("size-4 shrink-0 opacity-60 transition", isAspectRatioMenuOpen && "rotate-180")} />
+                        </button>
+                        {isAspectRatioMenuOpen ? (
+                          <div className="fixed inset-x-4 bottom-[calc(env(safe-area-inset-bottom)+var(--image-composer-dock-height)+0.75rem)] z-[80] max-h-[45dvh] overflow-y-auto rounded-[20px] border border-[#e5e7eb] bg-white p-1.5 shadow-[0_24px_80px_-32px_rgba(15,23,42,0.35)] sm:absolute sm:inset-x-auto sm:bottom-[calc(100%+8px)] sm:left-0 sm:w-[186px]">
+                            {IMAGE_ASPECT_RATIO_OPTIONS.map((option) => {
+                              const active = option.value === imageAspectRatio;
+                              return (
+                                <button
+                                  key={option.label}
+                                  type="button"
+                                  className={cn(
+                                    "flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm text-[#45515e] transition hover:bg-black/[0.05]",
+                                    active && "bg-black/[0.05] font-medium text-[#18181b]",
+                                  )}
+                                  onClick={() => {
+                                    onImageAspectRatioChange(option.value);
+                                    setIsAspectRatioMenuOpen(false);
+                                  }}
+                                >
+                                  <span className="min-w-0 truncate">{option.label}</span>
+                                  {active ? <Check className="size-4 shrink-0" /> : null}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        ) : null}
                       </div>
-                    ) : null}
-                  </div>
-                  <Popover>
+                      <div
+                        ref={resolutionMenuRef}
+                        className="relative flex h-8 min-w-0 items-center gap-1.5 rounded-full border border-[#e5e7eb] bg-white px-2.5 text-[11px] sm:text-xs"
+                      >
+                        <span className="font-medium text-[#45515e]">分辨率</span>
+                        <button
+                          type="button"
+                          className="flex h-7 w-[58px] items-center justify-between bg-transparent text-left text-xs font-semibold text-[#18181b] sm:w-[68px]"
+                          onClick={() => {
+                            setIsResolutionMenuOpen((open) => !open);
+                            setIsModelMenuOpen(false);
+                            setIsAspectRatioMenuOpen(false);
+                            setIsQualityMenuOpen(false);
+                          }}
+                        >
+                          <span className="truncate">{imageResolutionLabel}</span>
+                          <ChevronDown className={cn("size-4 shrink-0 opacity-60 transition", isResolutionMenuOpen && "rotate-180")} />
+                        </button>
+                        {isResolutionMenuOpen ? (
+                          <div className="fixed inset-x-4 bottom-[calc(env(safe-area-inset-bottom)+var(--image-composer-dock-height)+0.75rem)] z-[80] max-h-[45dvh] overflow-y-auto rounded-[20px] border border-[#e5e7eb] bg-white p-1.5 shadow-[0_24px_80px_-32px_rgba(15,23,42,0.35)] sm:absolute sm:inset-x-auto sm:bottom-[calc(100%+8px)] sm:left-0 sm:w-[148px]">
+                            {IMAGE_RESOLUTION_OPTIONS.map((option) => {
+                              const active = option.value === imageResolution;
+                              return (
+                                <button
+                                  key={option.value}
+                                  type="button"
+                                  className={cn(
+                                    "flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm text-[#45515e] transition hover:bg-black/[0.05]",
+                                    active && "bg-black/[0.05] font-medium text-[#18181b]",
+                                  )}
+                                  onClick={() => {
+                                    onImageResolutionChange(option.value);
+                                    setIsResolutionMenuOpen(false);
+                                  }}
+                                >
+                                  <span className="min-w-0 truncate">{option.label}</span>
+                                  {active ? <Check className="size-4 shrink-0" /> : null}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        ) : null}
+                      </div>
+                  <Popover open={isOutputHintOpen} onOpenChange={setIsOutputHintOpen}>
                     <PopoverTrigger asChild>
                       <button
                         type="button"
-                        className="inline-flex size-8 shrink-0 items-center justify-center rounded-full border border-[#e5e7eb] bg-white text-[#8e8e93] transition hover:bg-black/[0.05] hover:text-[#45515e]"
+                        className="inline-flex size-4 shrink-0 items-center justify-center text-[#8e8e93] transition hover:text-[#45515e] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                         aria-label="查看图片输出说明"
-                        title="查看图片输出说明"
+                        onBlur={() => setIsOutputHintOpen(false)}
+                        onFocus={() => setIsOutputHintOpen(true)}
+                        onPointerEnter={() => setIsOutputHintOpen(true)}
+                        onPointerLeave={() => setIsOutputHintOpen(false)}
                       >
                         <CircleHelp className="size-4" />
                       </button>
                     </PopoverTrigger>
                     <PopoverContent
-                      align="end"
+                      align="center"
                       side="top"
-                      className="w-[min(calc(100vw-2rem),20rem)] rounded-[18px] border-[#e5e7eb] px-4 py-3 text-xs leading-6 text-[#45515e] shadow-[0_24px_80px_-32px_rgba(15,23,42,0.35)]"
+                      sideOffset={6}
+                      arrowClassName="fill-white stroke-[#e5e7eb] dark:fill-card dark:stroke-border"
+                      className="w-[min(calc(100vw-2rem),20rem)] rounded-xl border-[#e5e7eb] bg-white px-4 py-3 text-xs leading-6 text-[#45515e] shadow-[0_24px_80px_-32px_rgba(15,23,42,0.35)] dark:bg-card dark:text-muted-foreground"
+                      onOpenAutoFocus={(event) => event.preventDefault()}
                     >
                       {imageOutputHint}
                     </PopoverContent>
@@ -531,7 +600,8 @@ export function ImageComposer({
                       onClick={() => {
                         setIsQualityMenuOpen((open) => !open);
                         setIsModelMenuOpen(false);
-                        setIsSizeMenuOpen(false);
+                        setIsAspectRatioMenuOpen(false);
+                        setIsResolutionMenuOpen(false);
                       }}
                       title={imageQualityOptions.find((option) => option.value === imageQuality)?.description}
                     >

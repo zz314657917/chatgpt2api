@@ -125,6 +125,39 @@ func TestBuildImagePromptIncludesThreeTwoAndQualityHints(t *testing.T) {
 	}
 }
 
+func TestBuildImagePromptIncludesExactResolutionHint(t *testing.T) {
+	prompt := BuildImagePrompt("画一张城市海报", "3840x2160", "high")
+	for _, want := range []string{"画一张城市海报", "3840 x 2160 像素", "画质使用 High 档"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("image prompt missing %q: %s", want, prompt)
+		}
+	}
+}
+
+func TestRequiresPaidImageSize(t *testing.T) {
+	tests := []struct {
+		name string
+		size string
+		want bool
+	}{
+		{name: "empty", size: "", want: false},
+		{name: "aspect ratio", size: "16:9", want: false},
+		{name: "free pixel budget", size: "1248x1248", want: false},
+		{name: "1080p square below paid budget", size: "1080x1080", want: false},
+		{name: "1080p widescreen above paid budget", size: "1920x1080", want: true},
+		{name: "2k", size: "2560x1440", want: true},
+		{name: "4k", size: "3840x2160", want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := RequiresPaidImageSize(tt.size); got != tt.want {
+				t.Fatalf("RequiresPaidImageSize(%q) = %v, want %v", tt.size, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestResponsesInputKeepsAssistantAndGeneratedImageContext(t *testing.T) {
 	imageData := base64.StdEncoding.EncodeToString([]byte("previous-image"))
 	input := []any{

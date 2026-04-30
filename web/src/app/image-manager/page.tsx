@@ -176,8 +176,10 @@ const IMAGE_MASONRY_BREAKPOINTS = [
 const IMAGE_MANAGER_BATCH_SIZE = 40;
 const IMAGE_MANAGER_LOAD_MORE_DELAY_MS = 220;
 const AUTO_REFRESH_INTERVAL_OPTIONS = [60, 30, 10, 5] as const;
+const AUTO_REFRESH_DISABLED_VALUE = "off";
 
-type ImageAutoRefreshInterval = (typeof AUTO_REFRESH_INTERVAL_OPTIONS)[number];
+type ImageAutoRefreshInterval = (typeof AUTO_REFRESH_INTERVAL_OPTIONS)[number] | typeof AUTO_REFRESH_DISABLED_VALUE;
+type EnabledImageAutoRefreshInterval = Exclude<ImageAutoRefreshInterval, typeof AUTO_REFRESH_DISABLED_VALUE>;
 
 function getImageMasonryColumnCount() {
   if (typeof window === "undefined") {
@@ -462,9 +464,13 @@ function ImageManagerContent({
   };
 
   const updateAutoRefreshInterval = (value: string) => {
+    if (value === AUTO_REFRESH_DISABLED_VALUE) {
+      setAutoRefreshInterval(AUTO_REFRESH_DISABLED_VALUE);
+      return;
+    }
     const interval = Number(value);
-    if (AUTO_REFRESH_INTERVAL_OPTIONS.includes(interval as ImageAutoRefreshInterval)) {
-      setAutoRefreshInterval(interval as ImageAutoRefreshInterval);
+    if (AUTO_REFRESH_INTERVAL_OPTIONS.includes(interval as EnabledImageAutoRefreshInterval)) {
+      setAutoRefreshInterval(interval as EnabledImageAutoRefreshInterval);
     }
   };
 
@@ -643,6 +649,11 @@ function ImageManagerContent({
   }, [loadImages]);
 
   useEffect(() => {
+    if (autoRefreshInterval === AUTO_REFRESH_DISABLED_VALUE) {
+      autoRefreshAbortRef.current?.abort();
+      setIsAutoRefreshing(false);
+      return;
+    }
     const timer = window.setInterval(() => {
       void refreshNewImages();
     }, autoRefreshInterval * 1000);
@@ -689,23 +700,9 @@ function ImageManagerContent({
       <PageHeader eyebrow="Images" title="图片库" />
 
       <div className="flex flex-col gap-4">
-        <section className="flex flex-col gap-3 rounded-[18px] border border-border bg-background/80 p-3 shadow-[0_6px_20px_rgba(15,23,42,0.04)]">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex flex-col gap-1">
-              <div className="text-sm font-medium text-foreground">筛选项</div>
-              <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-                <ImageIcon className="size-4" />
-                {galleryView === "mine" ? "个人图库" : "公开图库"}
-                {hasLocalFilters ? `显示 ${filteredItems.length} / ${items.length} 张` : `共 ${items.length} 张`}
-                {isAutoRefreshing ? (
-                  <span className="inline-flex items-center gap-1 text-[#1456f0]">
-                    <LoaderCircle className="size-3 animate-spin" />
-                    自动刷新中
-                  </span>
-                ) : null}
-              </div>
-            </div>
-            <div className="inline-flex rounded-lg border border-border bg-muted/50 p-1">
+        <section className="grid gap-4 rounded-[18px] border border-border bg-background/80 p-3 shadow-[0_6px_20px_rgba(15,23,42,0.04)] sm:p-4 lg:grid-cols-[minmax(180px,220px)_minmax(0,1fr)] lg:items-start">
+          <div className="flex min-w-0 flex-col gap-2">
+            <div className="inline-flex w-full rounded-lg border border-border bg-muted/50 p-1">
               {[
                 { value: "mine" as const, label: "个人图库", icon: ImageIcon },
                 { value: "public" as const, label: "公开图库", icon: Globe2 },
@@ -716,7 +713,7 @@ function ImageManagerContent({
                   <button
                     key={option.value}
                     type="button"
-                    className={`inline-flex h-8 items-center gap-1.5 rounded-md px-3 text-sm font-medium transition ${
+                    className={`inline-flex h-8 flex-1 items-center justify-center gap-1.5 whitespace-nowrap rounded-md px-3 text-sm font-medium transition ${
                       active
                         ? "bg-background text-foreground shadow-sm"
                         : "text-muted-foreground hover:text-foreground"
@@ -730,102 +727,118 @@ function ImageManagerContent({
                 );
               })}
             </div>
-          </div>
-
-          <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-[240px_minmax(220px,1fr)_150px_140px_140px_140px]">
-            <DateRangeFilter
-              startDate={startDate}
-              endDate={endDate}
-              onChange={(start, end) => {
-                setStartDate(start);
-                setEndDate(end);
-                setSelectedImageIds({});
-              }}
-            />
-            <div className="relative">
-              <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                value={searchKeyword}
-                onChange={(event) => updateSearchKeyword(event.target.value)}
-                placeholder="搜索文件、路径、作者、日期"
-                className="h-10 rounded-lg pr-9 pl-9"
-              />
-              {searchKeyword ? (
-                <button
-                  type="button"
-                  className="absolute top-1/2 right-2 inline-flex size-6 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground transition hover:bg-muted hover:text-foreground"
-                  onClick={() => updateSearchKeyword("")}
-                  aria-label="清空搜索"
-                  title="清空搜索"
-                >
-                  <X className="size-3.5" />
-                </button>
+            <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
+              <ImageIcon className="size-4 shrink-0" />
+              <span>{galleryView === "mine" ? "个人图库" : "公开图库"}</span>
+              <span>{hasLocalFilters ? `显示 ${filteredItems.length} / ${items.length} 张` : `共 ${items.length} 张`}</span>
+              {isAutoRefreshing ? (
+                <span className="inline-flex items-center gap-1 text-[#1456f0]">
+                  <LoaderCircle className="size-3 animate-spin" />
+                  自动刷新中
+                </span>
               ) : null}
             </div>
-            <Select value={visibilityFilter} onValueChange={(value) => updateVisibilityFilter(value as ImageVisibilityFilter)}>
-              <SelectTrigger className="h-10 rounded-lg">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectGroup>
-                  <SelectItem value="all">全部状态</SelectItem>
-                  <SelectItem value="public">已公开</SelectItem>
-                  <SelectItem value="private">私有</SelectItem>
-                </SelectGroup>
-              </SelectContent>
-            </Select>
-            <Select value={formatFilter} onValueChange={(value) => updateFormatFilter(value as ImageFormatFilter)}>
-              <SelectTrigger className="h-10 rounded-lg">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectGroup>
-                  <SelectItem value="all">全部格式</SelectItem>
-                  <SelectItem value="png">PNG</SelectItem>
-                  <SelectItem value="jpg">JPG</SelectItem>
-                  <SelectItem value="webp">WEBP</SelectItem>
-                  <SelectItem value="gif">GIF</SelectItem>
-                  <SelectItem value="other">其他</SelectItem>
-                </SelectGroup>
-              </SelectContent>
-            </Select>
-            <Select value={orientationFilter} onValueChange={(value) => updateOrientationFilter(value as ImageOrientationFilter)}>
-              <SelectTrigger className="h-10 rounded-lg">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectGroup>
-                  <SelectItem value="all">全部方向</SelectItem>
-                  <SelectItem value="landscape">横图</SelectItem>
-                  <SelectItem value="portrait">竖图</SelectItem>
-                  <SelectItem value="square">方图</SelectItem>
-                  <SelectItem value="unknown">未知尺寸</SelectItem>
-                </SelectGroup>
-              </SelectContent>
-            </Select>
-            <Select value={String(autoRefreshInterval)} onValueChange={updateAutoRefreshInterval}>
-              <SelectTrigger className="h-10 rounded-lg">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectGroup>
-                  <SelectItem value="60">60 秒刷新</SelectItem>
-                  <SelectItem value="30">30 秒刷新</SelectItem>
-                  <SelectItem value="10">10 秒刷新</SelectItem>
-                  <SelectItem value="5">5 秒刷新</SelectItem>
-                </SelectGroup>
-              </SelectContent>
-            </Select>
+          </div>
+
+          <div className="flex min-w-0 flex-col gap-2">
+            <div className="text-sm font-medium text-foreground">筛选项</div>
+            <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-[240px_minmax(240px,1fr)_150px_140px_140px_140px]">
+              <DateRangeFilter
+                className="w-full 2xl:w-[240px]"
+                startDate={startDate}
+                endDate={endDate}
+                onChange={(start, end) => {
+                  setStartDate(start);
+                  setEndDate(end);
+                  setSelectedImageIds({});
+                }}
+              />
+              <div className="relative sm:col-span-2 xl:col-span-2 2xl:col-span-1">
+                <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  value={searchKeyword}
+                  onChange={(event) => updateSearchKeyword(event.target.value)}
+                  placeholder="搜索文件、路径、作者、日期"
+                  className="h-10 rounded-lg pr-9 pl-9"
+                />
+                {searchKeyword ? (
+                  <button
+                    type="button"
+                    className="absolute top-1/2 right-2 inline-flex size-6 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground transition hover:bg-muted hover:text-foreground"
+                    onClick={() => updateSearchKeyword("")}
+                    aria-label="清空搜索"
+                    title="清空搜索"
+                  >
+                    <X className="size-3.5" />
+                  </button>
+                ) : null}
+              </div>
+              <Select value={visibilityFilter} onValueChange={(value) => updateVisibilityFilter(value as ImageVisibilityFilter)}>
+                <SelectTrigger className="h-10 rounded-lg">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    <SelectItem value="all">全部状态</SelectItem>
+                    <SelectItem value="public">已公开</SelectItem>
+                    <SelectItem value="private">私有</SelectItem>
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+              <Select value={formatFilter} onValueChange={(value) => updateFormatFilter(value as ImageFormatFilter)}>
+                <SelectTrigger className="h-10 rounded-lg">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    <SelectItem value="all">全部格式</SelectItem>
+                    <SelectItem value="png">PNG</SelectItem>
+                    <SelectItem value="jpg">JPG</SelectItem>
+                    <SelectItem value="webp">WEBP</SelectItem>
+                    <SelectItem value="gif">GIF</SelectItem>
+                    <SelectItem value="other">其他</SelectItem>
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+              <Select value={orientationFilter} onValueChange={(value) => updateOrientationFilter(value as ImageOrientationFilter)}>
+                <SelectTrigger className="h-10 rounded-lg">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    <SelectItem value="all">全部方向</SelectItem>
+                    <SelectItem value="landscape">横图</SelectItem>
+                    <SelectItem value="portrait">竖图</SelectItem>
+                    <SelectItem value="square">方图</SelectItem>
+                    <SelectItem value="unknown">未知尺寸</SelectItem>
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+              <Select value={String(autoRefreshInterval)} onValueChange={updateAutoRefreshInterval}>
+                <SelectTrigger className="h-10 rounded-lg">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    <SelectItem value={AUTO_REFRESH_DISABLED_VALUE}>不自动刷新</SelectItem>
+                    <SelectItem value="60">60 秒刷新</SelectItem>
+                    <SelectItem value="30">30 秒刷新</SelectItem>
+                    <SelectItem value="10">10 秒刷新</SelectItem>
+                    <SelectItem value="5">5 秒刷新</SelectItem>
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+            </div>
           </div>
 
         </section>
 
-        <div className="flex flex-wrap items-center justify-end gap-3">
-          <div className="flex flex-wrap items-center justify-end gap-2">
+        <div className="flex justify-end">
+          <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:flex-wrap sm:items-center sm:justify-end">
             <Button
               type="button"
               variant="outline"
-              className="h-8 rounded-lg px-3 text-xs"
+              className="h-8 w-full justify-center rounded-lg px-3 text-xs sm:w-auto"
               disabled={filteredItems.length === 0 || isMutatingImages}
               onClick={toggleAllImages}
             >
@@ -836,7 +849,7 @@ function ImageManagerContent({
                 <Button
                   type="button"
                   variant="outline"
-                  className="h-8 rounded-lg px-2.5 text-[11px]"
+                  className="h-8 w-full justify-center rounded-lg px-2.5 text-[11px] sm:w-auto"
                   disabled={selectedPrivateItems.length === 0 || isMutatingImages}
                   onClick={() => void handleBulkVisibilityChange(selectedPrivateItems, "public")}
                 >
@@ -850,7 +863,7 @@ function ImageManagerContent({
                 <Button
                   type="button"
                   variant="outline"
-                  className="h-8 rounded-lg px-2.5 text-[11px]"
+                  className="h-8 w-full justify-center rounded-lg px-2.5 text-[11px] sm:w-auto"
                   disabled={selectedPublicItems.length === 0 || isMutatingImages}
                   onClick={() => void handleBulkVisibilityChange(selectedPublicItems, "private")}
                 >
@@ -865,7 +878,7 @@ function ImageManagerContent({
             ) : null}
             <Button
               type="button"
-              className="h-8 rounded-lg px-2.5 text-[11px]"
+              className="h-8 w-full justify-center rounded-lg px-2.5 text-[11px] sm:w-auto"
               disabled={selectedCount === 0 || isMutatingImages}
               onClick={() => void downloadItems("selected", selectedItems)}
             >
@@ -880,7 +893,7 @@ function ImageManagerContent({
               <Button
                 type="button"
                 variant="outline"
-                className="h-8 rounded-lg px-2.5 text-[11px] text-rose-600 hover:bg-rose-50 hover:text-rose-700"
+                className="h-8 w-full justify-center rounded-lg px-2.5 text-[11px] text-rose-600 hover:bg-rose-50 hover:text-rose-700 sm:w-auto"
                 disabled={selectedCount === 0 || isMutatingImages}
                 onClick={() => openDeleteConfirm(selectedItems)}
               >
@@ -891,7 +904,7 @@ function ImageManagerContent({
             <Button
               type="button"
               variant="outline"
-              className="h-8 rounded-lg px-2.5 text-[11px]"
+              className="h-8 w-full justify-center rounded-lg px-2.5 text-[11px] sm:w-auto"
               disabled={filteredItems.length === 0 || isMutatingImages}
               onClick={() => void downloadItems("all", filteredItems)}
             >
@@ -902,7 +915,7 @@ function ImageManagerContent({
               )}
               下载全部 ({filteredItems.length})
             </Button>
-            <Button variant="outline" className="h-8 rounded-lg px-3 text-xs" onClick={() => void loadImages({ force: true })} disabled={isLoading || isMutatingImages}>
+            <Button variant="outline" className="h-8 w-full justify-center rounded-lg px-3 text-xs sm:w-auto" onClick={() => void loadImages({ force: true })} disabled={isLoading || isMutatingImages}>
               <RefreshCw className={`size-4 ${isLoading ? "animate-spin" : ""}`} />
               刷新
             </Button>

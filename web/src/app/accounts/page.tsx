@@ -570,7 +570,7 @@ function AccountsPageContent({ session }: { session: StoredAuthSession }) {
         </DialogContent>
       </Dialog>
 
-      <section className="flex flex-col gap-3">
+      <section className="mt-5 flex flex-col gap-3">
         <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
           {metricCards.map((item) => {
             const Icon = item.icon;

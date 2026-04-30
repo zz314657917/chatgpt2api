@@ -8,14 +8,16 @@ import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
 import { Field } from "@/components/ui/field";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { cn } from "@/lib/utils";
 
 type DateRangeFilterProps = {
   startDate: string;
   endDate: string;
   onChange: (startDate: string, endDate: string) => void;
+  className?: string;
 };
 
-export function DateRangeFilter({ startDate, endDate, onChange }: DateRangeFilterProps) {
+export function DateRangeFilter({ startDate, endDate, onChange, className }: DateRangeFilterProps) {
   const selected: DateRange | undefined = startDate
     ? {
         from: parse(startDate, "yyyy-MM-dd", new Date()),
@@ -26,12 +28,12 @@ export function DateRangeFilter({ startDate, endDate, onChange }: DateRangeFilte
   const label = startDate ? `${startDate} 至 ${endDate || startDate}` : "选择日期范围";
 
   return (
-    <Field className="w-[240px]">
+    <Field className={cn("w-[240px]", className)}>
       <Popover>
         <PopoverTrigger asChild>
-          <Button variant="outline" className="h-10 justify-start rounded-lg px-3 font-normal">
-            <CalendarIcon className="size-4 text-muted-foreground" />
-            {label}
+          <Button variant="outline" className="h-10 w-full min-w-0 justify-start rounded-lg px-3 font-normal">
+            <CalendarIcon className="size-4 shrink-0 text-muted-foreground" />
+            <span className="truncate">{label}</span>
           </Button>
         </PopoverTrigger>
         <PopoverContent className="w-auto p-3" align="start">

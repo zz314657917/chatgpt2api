@@ -41,17 +41,18 @@ type Engine struct {
 }
 
 type ConversationRequest struct {
-	Model          string
-	Prompt         string
-	Messages       []map[string]any
-	Images         []string
-	N              int
-	Size           string
-	Quality        string
-	ResponseFormat string
-	BaseURL        string
-	OwnerID        string
-	MessageAsError bool
+	Model              string
+	Prompt             string
+	Messages           []map[string]any
+	Images             []string
+	N                  int
+	Size               string
+	Quality            string
+	ResponseFormat     string
+	BaseURL            string
+	OwnerID            string
+	MessageAsError     bool
+	RequirePaidAccount bool
 }
 
 type ConversationState struct {
@@ -317,12 +318,20 @@ func (e *Engine) StreamImageOutputsWithPool(ctx context.Context, request Convers
 		}
 		emitted := false
 		lastError := ""
+		var allowAccount func(map[string]any) bool
+		if request.RequirePaidAccount {
+			allowAccount = service.IsPaidImageAccount
+		}
 		for index := 1; index <= request.N; index++ {
 			for {
-				token, err := e.Accounts.GetAvailableAccessToken(ctx)
+				token, err := e.Accounts.GetAvailableAccessTokenFor(ctx, allowAccount)
 				if err != nil {
 					if emitted {
 						errCh <- nil
+						return
+					}
+					if request.RequirePaidAccount {
+						errCh <- NewImageGenerationError("当前没有可用的 Paid 图片账号，1080P/2K/4K 等高分辨率出图需要 Plus / Pro / Team 账号")
 						return
 					}
 					errCh <- NewImageGenerationError(err.Error())
@@ -638,6 +647,26 @@ func AssistantHistoryMessages(messages []map[string]any) []string {
 	return out
 }
 
+const maxFreeGeneratePixels = 1577536
+
+func RequiresPaidImageSize(size string) bool {
+	width, height, ok := imageSizeDimensions(size)
+	return ok && width*height > maxFreeGeneratePixels
+}
+
+func imageSizeDimensions(size string) (int, int, bool) {
+	matches := regexp.MustCompile(`^(\d+)x(\d+)$`).FindStringSubmatch(strings.ToLower(strings.TrimSpace(size)))
+	if len(matches) != 3 {
+		return 0, 0, false
+	}
+	width := util.ToInt(matches[1], 0)
+	height := util.ToInt(matches[2], 0)
+	if width <= 0 || height <= 0 {
+		return 0, 0, false
+	}
+	return width, height, true
+}
+
 func BuildImagePrompt(prompt, size, quality string) string {
 	prompt = strings.TrimSpace(prompt)
 	var hintsList []string
@@ -645,12 +674,15 @@ func BuildImagePrompt(prompt, size, quality string) string {
 		"1:1":  "输出为 1:1 正方形构图，主体居中，适合正方形画幅。",
 		"3:2":  "输出为 3:2 横版构图，适合摄影、产品展示和横向叙事画幅。",
 		"16:9": "输出为 16:9 横屏构图，适合宽画幅展示。",
+		"21:9": "输出为 21:9 超宽横版构图，适合电影感全景和宽银幕画幅。",
 		"9:16": "输出为 9:16 竖屏构图，适合竖版画幅展示。",
 		"4:3":  "输出为 4:3 比例，兼顾宽度与高度，适合展示画面细节。",
 		"3:4":  "输出为 3:4 比例，纵向构图，适合人物肖像或竖向场景。",
 	}
 	if size != "" {
-		if hint, ok := hints[size]; ok {
+		if width, height, ok := imageSizeDimensions(size); ok {
+			hintsList = append(hintsList, fmt.Sprintf("输出图片目标分辨率为 %d x %d 像素，并严格按该尺寸对应的宽高比构图。", width, height))
+		} else if hint, ok := hints[size]; ok {
 			hintsList = append(hintsList, hint)
 		} else {
 			hintsList = append(hintsList, "输出图片，目标尺寸或宽高比为 "+size+"。")

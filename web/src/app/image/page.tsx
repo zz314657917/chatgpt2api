@@ -8,7 +8,18 @@ import { ImageComposer } from "@/app/image/components/image-composer";
 import { ImagePromptMarket } from "@/app/image/components/image-prompt-market";
 import { ImageResults, type ImageLightboxItem } from "@/app/image/components/image-results";
 import type { BananaPrompt } from "@/app/image/banana-prompts";
-import { IMAGE_QUALITY_OPTIONS, IMAGE_SIZE_OPTIONS } from "@/app/image/image-options";
+import {
+  IMAGE_ASPECT_RATIO_OPTIONS,
+  IMAGE_QUALITY_OPTIONS,
+  IMAGE_RESOLUTION_OPTIONS,
+  buildImageSize,
+  getImageAspectRatioFromSize,
+  getImageResolutionFromSize,
+  isImageAspectRatio,
+  isImageResolution,
+  type ImageAspectRatio,
+  type ImageResolution,
+} from "@/app/image/image-options";
 import { IMAGE_PROMPT_PRESETS, type ImagePromptPreset } from "@/app/image/image-presets";
 import { ImageSidebar } from "@/app/image/components/image-sidebar";
 import { ImageLightbox } from "@/components/image-lightbox";
@@ -85,11 +96,13 @@ import {
 const COMPOSER_MODE_STORAGE_KEY = "chatgpt2api:image_composer_mode";
 const IMAGE_MODEL_STORAGE_KEY = "chatgpt2api:image_last_model";
 const IMAGE_SIZE_STORAGE_KEY = "chatgpt2api:image_last_size";
+const IMAGE_ASPECT_RATIO_STORAGE_KEY = "chatgpt2api:image_last_aspect_ratio";
+const IMAGE_RESOLUTION_STORAGE_KEY = "chatgpt2api:image_last_resolution";
 const IMAGE_QUALITY_STORAGE_KEY = "chatgpt2api:image_last_quality";
 const QUOTA_REFRESH_EVENT = "chatgpt2api:quota-refresh";
 const DEFAULT_IMAGE_QUALITY: ImageQuality = "high";
 const activeConversationQueueIds = new Set<string>();
-const EMPTY_IMAGE_SIZE_SELECT_VALUE = "__empty__";
+const EMPTY_IMAGE_ASPECT_RATIO_SELECT_VALUE = "__empty_aspect_ratio__";
 const MISSING_RECOVERABLE_TASK_ID_ERROR = "页面刷新或任务中断，未找到可恢复的任务 ID";
 
 type ComposerMode = "chat" | "image";
@@ -101,7 +114,8 @@ type EditingTurnDraft = {
   model: ImageModel;
   mode: ImageConversationMode;
   count: string;
-  size: string;
+  aspectRatio: ImageAspectRatio;
+  resolution: ImageResolution;
   quality: ImageQuality;
   visibility: ImageVisibility;
   referenceImages: StoredReferenceImage[];
@@ -402,6 +416,28 @@ function getStoredImageQuality(): ImageQuality {
   }
   const storedQuality = window.localStorage.getItem(IMAGE_QUALITY_STORAGE_KEY);
   return isImageQuality(storedQuality) ? storedQuality : DEFAULT_IMAGE_QUALITY;
+}
+
+function imageSizeSelectionFromSize(size: string): { aspectRatio: ImageAspectRatio; resolution: ImageResolution } {
+  return {
+    aspectRatio: getImageAspectRatioFromSize(size),
+    resolution: getImageResolutionFromSize(size),
+  };
+}
+
+function getStoredImageSizeSelection() {
+  if (typeof window === "undefined") {
+    return imageSizeSelectionFromSize("");
+  }
+  const storedAspectRatio = window.localStorage.getItem(IMAGE_ASPECT_RATIO_STORAGE_KEY);
+  const storedResolution = window.localStorage.getItem(IMAGE_RESOLUTION_STORAGE_KEY);
+  if (isImageAspectRatio(storedAspectRatio) && isImageResolution(storedResolution)) {
+    return {
+      aspectRatio: storedAspectRatio,
+      resolution: storedResolution,
+    };
+  }
+  return imageSizeSelectionFromSize(window.localStorage.getItem(IMAGE_SIZE_STORAGE_KEY) || "");
 }
 
 function buildTurnOutcomeMessage(successCount: number, failedCount: number, cancelledCount: number) {
@@ -711,7 +747,8 @@ function ImagePageContent() {
   const [composerMode, setComposerMode] = useState<ComposerMode>(getStoredComposerMode);
   const [imageModel, setImageModel] = useState<ImageModel>(getStoredImageModel);
   const [imageCount, setImageCount] = useState("1");
-  const [imageSize, setImageSize] = useState("");
+  const [imageAspectRatio, setImageAspectRatio] = useState<ImageAspectRatio>(() => getStoredImageSizeSelection().aspectRatio);
+  const [imageResolution, setImageResolution] = useState<ImageResolution>(() => getStoredImageSizeSelection().resolution);
   const [imageQuality, setImageQuality] = useState<ImageQuality>(getStoredImageQuality);
   const [defaultImageVisibility, setDefaultImageVisibility] = useState<ImageVisibility>("private");
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
@@ -733,6 +770,10 @@ function ImagePageContent() {
   const [visibilityMutatingImageKey, setVisibilityMutatingImageKey] = useState("");
 
   const parsedCount = useMemo(() => normalizeRequestedImageCount(imageCount), [imageCount]);
+  const imageSize = useMemo(
+    () => buildImageSize(imageAspectRatio, imageResolution),
+    [imageAspectRatio, imageResolution],
+  );
   const composerModelOptions = composerMode === "chat" ? CHAT_MODEL_OPTIONS : IMAGE_TASK_MODEL_OPTIONS;
   const selectedConversation = useMemo(
     () => conversations.find((item) => item.id === selectedConversationId) ?? null,
@@ -762,11 +803,11 @@ function ImagePageContent() {
         </div>
         <div className="mt-2">
           <span className="font-semibold text-stone-800">分辨率限制：</span>
-          Free 账号建议按约 1.57M 像素总量控制；Paid 账号的图片最长边最高支持 3840。需要 2K / 4K 时，请在提示词中明确目标尺寸。
+          Free 账号建议按约 1.57M 像素总量控制；Paid 账号的图片最长边最高支持 3840。选择 1080P / 2K / 4K 会把具体像素尺寸下发并补充到生成提示中。
         </div>
         <div className="mt-2">
           <span className="font-semibold text-stone-800">账号要求：</span>
-          2K 及以上像素档建议使用 Plus / Pro / Team 等 Paid 账号。
+          超过 Free 像素预算的分辨率档会优先使用 Plus / Pro / Team 等 Paid 账号；没有可用 Paid 账号时任务会直接提示失败原因。
         </div>
         <div className="mt-2">
           <span className="font-semibold text-stone-800">Auto 模式补充：</span>
@@ -854,8 +895,9 @@ function ImagePageContent() {
 
     const loadHistory = async () => {
       try {
-        const storedSize = typeof window !== "undefined" ? window.localStorage.getItem(IMAGE_SIZE_STORAGE_KEY) : null;
-        setImageSize(storedSize || "");
+        const storedSelection = getStoredImageSizeSelection();
+        setImageAspectRatio(storedSelection.aspectRatio);
+        setImageResolution(storedSelection.resolution);
 
         const items = await listImageConversations();
         const normalizedItems = await recoverConversationHistory(items);
@@ -965,12 +1007,18 @@ function ImagePageContent() {
       return;
     }
 
+    if (imageAspectRatio) {
+      window.localStorage.setItem(IMAGE_ASPECT_RATIO_STORAGE_KEY, imageAspectRatio);
+    } else {
+      window.localStorage.removeItem(IMAGE_ASPECT_RATIO_STORAGE_KEY);
+    }
+    window.localStorage.setItem(IMAGE_RESOLUTION_STORAGE_KEY, imageResolution);
     if (imageSize) {
       window.localStorage.setItem(IMAGE_SIZE_STORAGE_KEY, imageSize);
       return;
     }
     window.localStorage.removeItem(IMAGE_SIZE_STORAGE_KEY);
-  }, [imageSize]);
+  }, [imageAspectRatio, imageResolution, imageSize]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -1068,7 +1116,9 @@ function ImagePageContent() {
     setComposerMode("image");
     setImagePrompt(preset.prompt);
     setImageCount(String(preset.count));
-    setImageSize(preset.size);
+    const presetSizeSelection = imageSizeSelectionFromSize(preset.size);
+    setImageAspectRatio(presetSizeSelection.aspectRatio);
+    setImageResolution(presetSizeSelection.resolution);
     setDefaultImageVisibility("private");
     setReferenceImages([]);
     if (fileInputRef.current) {
@@ -1105,7 +1155,8 @@ function ImagePageContent() {
     setComposerMode("image");
     setImagePrompt(prompt.prompt);
     setImageCount("1");
-    setImageSize("");
+    setImageAspectRatio("");
+    setImageResolution("auto");
     setDefaultImageVisibility("private");
     setReferenceImages([]);
     setIsPromptMarketOpen(false);
@@ -1365,6 +1416,7 @@ function ImagePageContent() {
       toast.error("当前轮次正在处理，稍后再编辑");
       return;
     }
+    const sizeSelection = imageSizeSelectionFromSize(targetTurn.size);
     setEditingTurnDraft({
       conversationId,
       turnId,
@@ -1379,7 +1431,8 @@ function ImagePageContent() {
             : DEFAULT_IMAGE_MODEL,
       mode: targetTurn.mode,
       count: targetTurn.mode === "chat" ? "1" : String(normalizeRequestedImageCount(targetTurn.count || targetTurn.images.length || 1)),
-      size: targetTurn.mode === "chat" ? "" : targetTurn.size,
+      aspectRatio: targetTurn.mode === "chat" ? "" : sizeSelection.aspectRatio,
+      resolution: targetTurn.mode === "chat" ? "auto" : sizeSelection.resolution,
       quality: targetTurn.quality || DEFAULT_IMAGE_QUALITY,
       visibility: targetTurn.visibility || "private",
       referenceImages: targetTurn.mode === "chat" ? [] : targetTurn.referenceImages,
@@ -1954,7 +2007,12 @@ function ImagePageContent() {
 
       const imageCount = draft.mode === "chat" ? 1 : normalizeRequestedImageCount(draft.count);
       const mode = draft.mode === "chat" ? "chat" : getComposerConversationMode("image", draft.referenceImages);
+      if (mode !== "chat" && draft.resolution !== "auto" && !draft.aspectRatio) {
+        toast.error("使用 1080P / 2K / 4K 分辨率前请先选择比例");
+        return;
+      }
       const referenceImages = usesReferenceImages(mode) ? draft.referenceImages : [];
+      const draftImageSize = mode === "chat" ? "" : buildImageSize(draft.aspectRatio, draft.resolution);
       const now = new Date().toISOString();
       const regenerationId = createId();
       await updateConversation(draft.conversationId, (current) => {
@@ -1976,7 +2034,7 @@ function ImagePageContent() {
               mode,
               referenceImages,
               count: imageCount,
-              size: mode === "chat" ? "" : draft.size,
+              size: draftImageSize,
               quality: mode === "chat" ? undefined : draft.quality,
               visibility: mode === "chat" ? "private" : draft.visibility,
             };
@@ -2023,6 +2081,10 @@ function ImagePageContent() {
     const prompt = imagePrompt.trim();
     if (!prompt) {
       toast.error("请输入提示词");
+      return;
+    }
+    if (composerMode === "image" && imageResolution !== "auto" && !imageAspectRatio) {
+      toast.error("使用 1080P / 2K / 4K 分辨率前请先选择比例");
       return;
     }
     isSubmitDispatchingRef.current = true;
@@ -2246,7 +2308,7 @@ function ImagePageContent() {
                   </div>
                   ) : null}
 
-                  <div className={cn("grid grid-cols-1 gap-3", editingTurnDraft.mode === "chat" ? "sm:grid-cols-1" : "sm:grid-cols-[120px_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)]")}>
+                  <div className={cn("grid grid-cols-1 gap-3", editingTurnDraft.mode === "chat" ? "sm:grid-cols-1" : "sm:grid-cols-[120px_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)]")}>
                     {editingTurnDraft.mode !== "chat" ? (
                     <label className="flex flex-col gap-2 text-sm font-medium text-stone-700">
                       张数
@@ -2294,13 +2356,18 @@ function ImagePageContent() {
                     <label className="flex flex-col gap-2 text-sm font-medium text-stone-700">
                       比例
                       <Select
-                        value={editingTurnDraft.size || EMPTY_IMAGE_SIZE_SELECT_VALUE}
+                        value={editingTurnDraft.aspectRatio || EMPTY_IMAGE_ASPECT_RATIO_SELECT_VALUE}
                         onValueChange={(value) =>
                           setEditingTurnDraft((current) =>
                             current
                               ? {
                                   ...current,
-                                  size: value === EMPTY_IMAGE_SIZE_SELECT_VALUE ? "" : value,
+                                  aspectRatio:
+                                    value === EMPTY_IMAGE_ASPECT_RATIO_SELECT_VALUE
+                                      ? ""
+                                      : isImageAspectRatio(value)
+                                        ? value
+                                        : current.aspectRatio,
                                 }
                               : current,
                           )
@@ -2311,11 +2378,35 @@ function ImagePageContent() {
                         </SelectTrigger>
                         <SelectContent>
                           <SelectGroup>
-                            {IMAGE_SIZE_OPTIONS.map((option) => (
+                            {IMAGE_ASPECT_RATIO_OPTIONS.map((option) => (
                               <SelectItem
                                 key={option.label}
-                                value={option.value || EMPTY_IMAGE_SIZE_SELECT_VALUE}
+                                value={option.value || EMPTY_IMAGE_ASPECT_RATIO_SELECT_VALUE}
                               >
+                                {option.label}
+                              </SelectItem>
+                            ))}
+                          </SelectGroup>
+                        </SelectContent>
+                      </Select>
+                    </label>
+                    <label className="flex flex-col gap-2 text-sm font-medium text-stone-700">
+                      分辨率
+                      <Select
+                        value={editingTurnDraft.resolution}
+                        onValueChange={(value) =>
+                          setEditingTurnDraft((current) =>
+                            current && isImageResolution(value) ? { ...current, resolution: value } : current,
+                          )
+                        }
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectGroup>
+                            {IMAGE_RESOLUTION_OPTIONS.map((option) => (
+                              <SelectItem key={option.value} value={option.value}>
                                 {option.label}
                               </SelectItem>
                             ))}
@@ -2435,7 +2526,8 @@ function ImagePageContent() {
                 imageCount={imageCount}
                 imageModel={imageModel}
                 imageModelOptions={composerModelOptions}
-                imageSize={imageSize}
+                imageAspectRatio={imageAspectRatio}
+                imageResolution={imageResolution}
                 imageQuality={imageQuality}
                 imageQualityOptions={IMAGE_QUALITY_OPTIONS}
                 imageOutputHint={imageOutputHint}
@@ -2446,7 +2538,8 @@ function ImagePageContent() {
                 onPromptChange={setImagePrompt}
                 onImageCountChange={setImageCount}
                 onImageModelChange={setImageModel}
-                onImageSizeChange={setImageSize}
+                onImageAspectRatioChange={setImageAspectRatio}
+                onImageResolutionChange={setImageResolution}
                 onImageQualityChange={setImageQuality}
                 onSubmit={handleSubmit}
                 onPickReferenceImage={() => fileInputRef.current?.click()}

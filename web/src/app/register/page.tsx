@@ -48,7 +48,7 @@ function RegisterPageContent() {
     <>
       <RegisterDataController />
       <PageHeader eyebrow="Register" title="ChatGPT注册机" />
-      <section>
+      <section className="mt-5">
         <RegisterCard />
       </section>
     </>
