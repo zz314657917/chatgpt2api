@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { format, parse } from "date-fns";
 import { CalendarIcon } from "lucide-react";
 import type { DateRange } from "react-day-picker";
@@ -18,6 +19,7 @@ type DateRangeFilterProps = {
 };
 
 export function DateRangeFilter({ startDate, endDate, onChange, className }: DateRangeFilterProps) {
+  const [numberOfMonths, setNumberOfMonths] = useState(1);
   const selected: DateRange | undefined = startDate
     ? {
         from: parse(startDate, "yyyy-MM-dd", new Date()),
@@ -27,8 +29,17 @@ export function DateRangeFilter({ startDate, endDate, onChange, className }: Dat
 
   const label = startDate ? `${startDate} 至 ${endDate || startDate}` : "选择日期范围";
 
+  useEffect(() => {
+    const query = window.matchMedia("(min-width: 640px)");
+    const updateNumberOfMonths = () => setNumberOfMonths(query.matches ? 2 : 1);
+
+    updateNumberOfMonths();
+    query.addEventListener("change", updateNumberOfMonths);
+    return () => query.removeEventListener("change", updateNumberOfMonths);
+  }, []);
+
   return (
-    <Field className={cn("w-[240px]", className)}>
+    <Field className={cn("w-full sm:w-[240px]", className)}>
       <Popover>
         <PopoverTrigger asChild>
           <Button variant="outline" className="h-10 w-full min-w-0 justify-start rounded-lg px-3 font-normal">
@@ -36,13 +47,13 @@ export function DateRangeFilter({ startDate, endDate, onChange, className }: Dat
             <span className="truncate">{label}</span>
           </Button>
         </PopoverTrigger>
-        <PopoverContent className="w-auto p-3" align="start">
+        <PopoverContent className="w-[calc(100vw-2rem)] max-w-[22rem] overflow-x-auto p-2 sm:w-auto sm:max-w-none sm:p-3" align="start">
           <Calendar
             mode="range"
             defaultMonth={selected?.from}
             selected={selected}
             onSelect={(value) => onChange(value?.from ? format(value.from, "yyyy-MM-dd") : "", value?.to ? format(value.to, "yyyy-MM-dd") : "")}
-            numberOfMonths={2}
+            numberOfMonths={numberOfMonths}
           />
         </PopoverContent>
       </Popover>

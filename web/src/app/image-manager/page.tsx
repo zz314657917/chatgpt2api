@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Check, Copy, Download, Eye, Globe2, ImageIcon, LoaderCircle, Lock, RefreshCw, Search, Trash2, X } from "lucide-react";
+import { Check, Copy, Download, Eye, Globe2, ImageIcon, LoaderCircle, Lock, MoreHorizontal, RefreshCw, Search, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { DateRangeFilter } from "@/components/date-range-filter";
@@ -18,6 +18,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   deleteManagedImages,
@@ -238,11 +239,13 @@ function ImageManagerContent({
   const [deleteTarget, setDeleteTarget] = useState<DeleteImageTarget | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const [visibilityMutatingPath, setVisibilityMutatingPath] = useState<string | null>(null);
+  const [focusedImagePath, setFocusedImagePath] = useState<string | null>(null);
   const [lightboxIndex, setLightboxIndex] = useState(0);
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(() => !initialCache);
   const [loadError, setLoadError] = useState("");
   const [isAutoRefreshing, setIsAutoRefreshing] = useState(false);
+  const [isImageActionsOpen, setIsImageActionsOpen] = useState(false);
   const [autoRefreshInterval, setAutoRefreshInterval] = useState<ImageAutoRefreshInterval>(30);
   const [visibleItemLimit, setVisibleItemLimit] = useState(IMAGE_MANAGER_BATCH_SIZE);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
@@ -270,6 +273,7 @@ function ImageManagerContent({
     [formatFilter, items, orientationFilter, searchKeyword, visibilityFilter],
   );
   const hasLocalFilters = searchKeyword.trim() !== "" || visibilityFilter !== "all" || formatFilter !== "all" || orientationFilter !== "all";
+  const hasActiveFilters = hasLocalFilters || startDate !== "" || endDate !== "";
   const visibleItems = useMemo(
     () => filteredItems.slice(0, visibleItemLimit),
     [filteredItems, visibleItemLimit],
@@ -459,6 +463,17 @@ function ImageManagerContent({
 
   const updateOrientationFilter = (value: ImageOrientationFilter) => {
     setOrientationFilter(value);
+    setSelectedImageIds({});
+    setVisibleItemLimit(IMAGE_MANAGER_BATCH_SIZE);
+  };
+
+  const clearImageFilters = () => {
+    setStartDate("");
+    setEndDate("");
+    setSearchKeyword("");
+    setVisibilityFilter("all");
+    setFormatFilter("all");
+    setOrientationFilter("all");
     setSelectedImageIds({});
     setVisibleItemLimit(IMAGE_MANAGER_BATCH_SIZE);
   };
@@ -696,7 +711,7 @@ function ImageManagerContent({
   }, []);
 
   return (
-    <section className="flex flex-col gap-5">
+    <section className="flex flex-col gap-5 pb-20 sm:pb-24">
       <PageHeader eyebrow="Images" title="图片库" />
 
       <div className="flex flex-col gap-4">
@@ -741,19 +756,32 @@ function ImageManagerContent({
           </div>
 
           <div className="flex min-w-0 flex-col gap-2">
-            <div className="text-sm font-medium text-foreground">筛选项</div>
-            <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-[240px_minmax(240px,1fr)_150px_140px_140px_140px]">
+            <div className="flex items-center justify-between gap-2">
+              <div className="text-sm font-medium text-foreground">筛选项</div>
+              {hasActiveFilters ? (
+                <button
+                  type="button"
+                  className="inline-flex h-7 shrink-0 items-center gap-1 rounded-full px-2 text-xs text-muted-foreground transition hover:bg-muted hover:text-foreground"
+                  onClick={clearImageFilters}
+                >
+                  <X className="size-3.5" />
+                  清空
+                </button>
+              ) : null}
+            </div>
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-[240px_minmax(240px,1fr)_150px_140px_140px_140px]">
               <DateRangeFilter
-                className="w-full 2xl:w-[240px]"
+                className="col-span-2 w-full xl:col-span-1 xl:w-[240px]"
                 startDate={startDate}
                 endDate={endDate}
                 onChange={(start, end) => {
                   setStartDate(start);
                   setEndDate(end);
                   setSelectedImageIds({});
+                  setVisibleItemLimit(IMAGE_MANAGER_BATCH_SIZE);
                 }}
               />
-              <div className="relative sm:col-span-2 xl:col-span-2 2xl:col-span-1">
+              <div className="relative col-span-2 xl:col-span-1">
                 <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
                 <Input
                   value={searchKeyword}
@@ -774,7 +802,7 @@ function ImageManagerContent({
                 ) : null}
               </div>
               <Select value={visibilityFilter} onValueChange={(value) => updateVisibilityFilter(value as ImageVisibilityFilter)}>
-                <SelectTrigger className="h-10 rounded-lg">
+                <SelectTrigger className="h-10 min-w-0 rounded-lg">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -786,7 +814,7 @@ function ImageManagerContent({
                 </SelectContent>
               </Select>
               <Select value={formatFilter} onValueChange={(value) => updateFormatFilter(value as ImageFormatFilter)}>
-                <SelectTrigger className="h-10 rounded-lg">
+                <SelectTrigger className="h-10 min-w-0 rounded-lg">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -801,7 +829,7 @@ function ImageManagerContent({
                 </SelectContent>
               </Select>
               <Select value={orientationFilter} onValueChange={(value) => updateOrientationFilter(value as ImageOrientationFilter)}>
-                <SelectTrigger className="h-10 rounded-lg">
+                <SelectTrigger className="h-10 min-w-0 rounded-lg">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -815,7 +843,7 @@ function ImageManagerContent({
                 </SelectContent>
               </Select>
               <Select value={String(autoRefreshInterval)} onValueChange={updateAutoRefreshInterval}>
-                <SelectTrigger className="h-10 rounded-lg">
+                <SelectTrigger className="h-10 min-w-0 rounded-lg">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -833,94 +861,132 @@ function ImageManagerContent({
 
         </section>
 
-        <div className="flex justify-end">
-          <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:flex-wrap sm:items-center sm:justify-end">
-            <Button
-              type="button"
-              variant="outline"
-              className="h-8 w-full justify-center rounded-lg px-3 text-xs sm:w-auto"
-              disabled={filteredItems.length === 0 || isMutatingImages}
-              onClick={toggleAllImages}
-            >
-              {allSelected ? "取消全选" : "全选"}
-            </Button>
-            {galleryView === "mine" ? (
-              <>
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="h-8 w-full justify-center rounded-lg px-2.5 text-[11px] sm:w-auto"
-                  disabled={selectedPrivateItems.length === 0 || isMutatingImages}
-                  onClick={() => void handleBulkVisibilityChange(selectedPrivateItems, "public")}
-                >
-                  {visibilityMutatingPath === "bulk:public" ? (
-                    <LoaderCircle className="size-3 animate-spin" />
-                  ) : (
-                    <Globe2 className="size-3" />
-                  )}
-                  公开已选 ({selectedPrivateItems.length})
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="h-8 w-full justify-center rounded-lg px-2.5 text-[11px] sm:w-auto"
-                  disabled={selectedPublicItems.length === 0 || isMutatingImages}
-                  onClick={() => void handleBulkVisibilityChange(selectedPublicItems, "private")}
-                >
-                  {visibilityMutatingPath === "bulk:private" ? (
-                    <LoaderCircle className="size-3 animate-spin" />
-                  ) : (
-                    <Lock className="size-3" />
-                  )}
-                  设为私有 ({selectedPublicItems.length})
-                </Button>
-              </>
-            ) : null}
-            <Button
-              type="button"
-              className="h-8 w-full justify-center rounded-lg px-2.5 text-[11px] sm:w-auto"
-              disabled={selectedCount === 0 || isMutatingImages}
-              onClick={() => void downloadItems("selected", selectedItems)}
-            >
-              {downloadingKey === "selected" ? (
-                <LoaderCircle className="size-3 animate-spin" />
-              ) : (
-                <Download className="size-3" />
-              )}
-              下载已选 ({selectedCount})
-            </Button>
-            {canDeleteImages ? (
+        <Popover open={isImageActionsOpen} onOpenChange={setIsImageActionsOpen}>
+          <div className="fixed right-4 bottom-[calc(env(safe-area-inset-bottom)+1rem)] z-40 sm:right-6 sm:bottom-6">
+            <PopoverTrigger asChild>
               <Button
                 type="button"
-                variant="outline"
-                className="h-8 w-full justify-center rounded-lg px-2.5 text-[11px] text-rose-600 hover:bg-rose-50 hover:text-rose-700 sm:w-auto"
-                disabled={selectedCount === 0 || isMutatingImages}
-                onClick={() => openDeleteConfirm(selectedItems)}
+                className="h-12 rounded-full px-4 shadow-[0_18px_50px_-24px_rgba(15,23,42,0.65)]"
+                aria-label="打开图片操作"
               >
-                <Trash2 className="size-3" />
-                删除已选 ({selectedCount})
+                <MoreHorizontal className="size-5" />
+                <span>操作</span>
+                {selectedCount > 0 ? (
+                  <span className="ml-0.5 inline-flex min-w-5 items-center justify-center rounded-full bg-white/20 px-1.5 text-xs font-semibold text-white">
+                    {selectedCount}
+                  </span>
+                ) : null}
               </Button>
-            ) : null}
-            <Button
-              type="button"
-              variant="outline"
-              className="h-8 w-full justify-center rounded-lg px-2.5 text-[11px] sm:w-auto"
-              disabled={filteredItems.length === 0 || isMutatingImages}
-              onClick={() => void downloadItems("all", filteredItems)}
+            </PopoverTrigger>
+            <PopoverContent
+              align="end"
+              side="top"
+              sideOffset={10}
+              className="w-[min(calc(100vw-2rem),20rem)] p-2"
             >
-              {downloadingKey === "all" ? (
-                <LoaderCircle className="size-3 animate-spin" />
-              ) : (
-                <Download className="size-3" />
-              )}
-              下载全部 ({filteredItems.length})
-            </Button>
-            <Button variant="outline" className="h-8 w-full justify-center rounded-lg px-3 text-xs sm:w-auto" onClick={() => void loadImages({ force: true })} disabled={isLoading || isMutatingImages}>
-              <RefreshCw className={`size-4 ${isLoading ? "animate-spin" : ""}`} />
-              刷新
-            </Button>
+              <div className="flex flex-col gap-1">
+                <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground">
+                  {hasLocalFilters ? `显示 ${filteredItems.length} / ${items.length} 张` : `共 ${items.length} 张`}
+                </div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className="h-10 justify-start rounded-lg px-3 text-sm"
+                  disabled={filteredItems.length === 0 || isMutatingImages}
+                  onClick={toggleAllImages}
+                >
+                  <Check className="size-4" />
+                  {allSelected ? "取消全选" : "全选"}
+                </Button>
+                {galleryView === "mine" ? (
+                  <>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      className="h-10 justify-start rounded-lg px-3 text-sm"
+                      disabled={selectedPrivateItems.length === 0 || isMutatingImages}
+                      onClick={() => void handleBulkVisibilityChange(selectedPrivateItems, "public")}
+                    >
+                      {visibilityMutatingPath === "bulk:public" ? (
+                        <LoaderCircle className="size-4 animate-spin" />
+                      ) : (
+                        <Globe2 className="size-4" />
+                      )}
+                      公开已选 ({selectedPrivateItems.length})
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      className="h-10 justify-start rounded-lg px-3 text-sm"
+                      disabled={selectedPublicItems.length === 0 || isMutatingImages}
+                      onClick={() => void handleBulkVisibilityChange(selectedPublicItems, "private")}
+                    >
+                      {visibilityMutatingPath === "bulk:private" ? (
+                        <LoaderCircle className="size-4 animate-spin" />
+                      ) : (
+                        <Lock className="size-4" />
+                      )}
+                      设为私有 ({selectedPublicItems.length})
+                    </Button>
+                  </>
+                ) : null}
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className="h-10 justify-start rounded-lg px-3 text-sm"
+                  disabled={selectedCount === 0 || isMutatingImages}
+                  onClick={() => void downloadItems("selected", selectedItems)}
+                >
+                  {downloadingKey === "selected" ? (
+                    <LoaderCircle className="size-4 animate-spin" />
+                  ) : (
+                    <Download className="size-4" />
+                  )}
+                  下载已选 ({selectedCount})
+                </Button>
+                {canDeleteImages ? (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    className="h-10 justify-start rounded-lg px-3 text-sm text-rose-600 hover:bg-rose-50 hover:text-rose-700"
+                    disabled={selectedCount === 0 || isMutatingImages}
+                    onClick={() => {
+                      setIsImageActionsOpen(false);
+                      openDeleteConfirm(selectedItems);
+                    }}
+                  >
+                    <Trash2 className="size-4" />
+                    删除已选 ({selectedCount})
+                  </Button>
+                ) : null}
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className="h-10 justify-start rounded-lg px-3 text-sm"
+                  disabled={filteredItems.length === 0 || isMutatingImages}
+                  onClick={() => void downloadItems("all", filteredItems)}
+                >
+                  {downloadingKey === "all" ? (
+                    <LoaderCircle className="size-4 animate-spin" />
+                  ) : (
+                    <Download className="size-4" />
+                  )}
+                  下载全部 ({filteredItems.length})
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className="h-10 justify-start rounded-lg px-3 text-sm"
+                  disabled={isLoading || isMutatingImages}
+                  onClick={() => void loadImages({ force: true })}
+                >
+                  <RefreshCw className={`size-4 ${isLoading ? "animate-spin" : ""}`} />
+                  刷新
+                </Button>
+              </div>
+            </PopoverContent>
           </div>
-        </div>
+        </Popover>
 
         {showImageLoadingState ? (
           <Card className="overflow-hidden rounded-[20px]">
@@ -961,7 +1027,9 @@ function ImageManagerContent({
           {imageColumns.map((column, columnIndex) => (
             <div key={columnIndex} className="flex min-w-0 flex-col gap-3 sm:gap-4">
               {column.map(({ item, index }) => {
-                const selected = Boolean(selectedImageIds[managedImageKey(item)]);
+                const imageKey = managedImageKey(item);
+                const selected = Boolean(selectedImageIds[imageKey]);
+                const focused = focusedImagePath === imageKey;
                 const dimensions = item.width && item.height ? `${item.width} x ${item.height}` : "";
                 const sizeLabel = formatImageFileSize(item.size);
                 const imageMeta = [dimensions, sizeLabel].filter(Boolean).join(" | ");
@@ -977,14 +1045,25 @@ function ImageManagerContent({
                       containIntrinsicSize: item.width && item.height ? `${Math.min(360, item.width)}px ${Math.min(480, item.height)}px` : "320px 320px",
                     }}
                     onMouseLeave={(event) => blurFocusedElementInContainer(event.currentTarget)}
+                    onBlurCapture={(event) => {
+                      if (!event.currentTarget.contains(event.relatedTarget)) {
+                        setFocusedImagePath((current) => (current === imageKey ? null : current));
+                      }
+                    }}
                   >
                     <button
                       type="button"
                       onClick={(event) => {
+                        if (!window.matchMedia("(hover: hover)").matches) {
+                          setFocusedImagePath(selected ? null : imageKey);
+                        }
                         toggleImageSelection(item);
-                        event.currentTarget.blur();
+                        if (window.matchMedia("(hover: hover)").matches) {
+                          event.currentTarget.blur();
+                        }
                       }}
                       className="block w-full cursor-pointer overflow-hidden text-left"
+                      onFocus={() => setFocusedImagePath(imageKey)}
                       aria-label={selected ? "取消选择图片" : "选择图片"}
                     >
                       <img
@@ -1001,8 +1080,13 @@ function ImageManagerContent({
                     <button
                       type="button"
                       onClick={(event) => {
+                        if (!window.matchMedia("(hover: hover)").matches) {
+                          setFocusedImagePath(selected ? null : imageKey);
+                        }
                         toggleImageSelection(item);
-                        event.currentTarget.blur();
+                        if (window.matchMedia("(hover: hover)").matches) {
+                          event.currentTarget.blur();
+                        }
                       }}
                       className={`absolute top-2 left-2 z-10 inline-flex size-6 items-center justify-center rounded-full border transition duration-150 ${
                         selected
@@ -1013,7 +1097,13 @@ function ImageManagerContent({
                     >
                       {selected ? <Check className="size-3.5" /> : null}
                     </button>
-                    <div className="pointer-events-none absolute top-2 right-2 z-10 flex items-center gap-1 opacity-0 transition duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100">
+                    <div
+                      className={`absolute top-2 right-2 z-10 flex items-center gap-1 transition duration-150 ${
+                        focused
+                          ? "pointer-events-auto opacity-100"
+                          : "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100"
+                      }`}
+                    >
                       <button
                         type="button"
                         onClick={(event) => {
@@ -1076,7 +1166,9 @@ function ImageManagerContent({
                                 void handleVisibilityChange(item, item.visibility === "public" ? "private" : "public");
                               }}
                               disabled={visibilityMutatingPath !== null || isDeleting}
-                              className={`inline-flex h-7 items-center gap-1.5 rounded-full px-2.5 text-[11px] font-medium opacity-0 shadow-sm transition group-hover:opacity-100 group-focus-within:opacity-100 disabled:cursor-not-allowed disabled:opacity-70 ${imageVisibilityActionClass(item.visibility)}`}
+                              className={`inline-flex h-7 items-center gap-1.5 rounded-full px-2.5 text-[11px] font-medium shadow-sm transition disabled:cursor-not-allowed disabled:opacity-70 ${
+                                focused ? "opacity-100" : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
+                              } ${imageVisibilityActionClass(item.visibility)}`}
                             >
                               {visibilityMutatingPath === item.path ? (
                                 <LoaderCircle className="size-3 animate-spin" />
@@ -1095,7 +1187,11 @@ function ImageManagerContent({
                         </div>
                       ) : null}
                     </div>
-                    <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/55 via-black/20 to-transparent px-2.5 pt-8 pb-10 opacity-0 transition duration-150 group-hover:opacity-100 group-focus-within:opacity-100">
+                    <div
+                      className={`pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/55 via-black/20 to-transparent px-2.5 pt-8 pb-10 transition duration-150 ${
+                        focused ? "opacity-100" : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
+                      }`}
+                    >
                       <div className="text-left text-white drop-shadow-sm">
                         <div className="text-[10px] font-bold tracking-wide">{getManagedImageFormatLabel(item)}</div>
                         <div className="mt-0.5 truncate text-[11px] text-white/90">{item.created_at}</div>
