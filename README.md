@@ -239,6 +239,7 @@ Release 构建可以在设置页的“版本更新”卡片中检查和执行在
 - Docker 场景下，在线更新替换的是当前容器文件系统中的运行时文件，不会更新 Docker 镜像本身。
 - 如果重新创建容器，最终仍以镜像内容为准。长期稳定的 Docker 升级仍建议使用 `docker compose pull && docker compose up -d`。
 - 在线更新访问 GitHub 可通过 `CHATGPT2API_UPDATE_PROXY_URL` 配置代理；未设置时复用 `CHATGPT2API_PROXY`。
+- 正式 Release archive 只发布 Linux `amd64` / `arm64` 构建；Windows 和 macOS 不提供在线更新压缩包。
 - 如果检查更新提示 `GitHub API returned 403`，通常是当前出口 IP 的匿名 GitHub API 额度耗尽。可在设置页“版本更新”卡片中配置 GitHub API Token，或通过 `CHATGPT2API_UPDATE_GITHUB_TOKEN` 使用认证请求。
 - 如果检查更新提示 `GitHub API returned 404`，通常是更新源仓库没有 GitHub Release，或 Token 没有该仓库读取权限。请先发布包含 archive 和 `checksums.txt` 的 Release，或在设置页配置实际发布 Release 的 `owner/repo`。
 - 简化发布只推送 Docker 镜像，不上传二进制压缩包时，在线更新无法找到可下载的 Release archive。
@@ -391,7 +392,7 @@ bun run build
 
 1. 构建前端。
 2. 上传 `web/dist` artifact。
-3. GoReleaser 构建多平台二进制。
+3. GoReleaser 构建 Linux `amd64` / `arm64` 二进制。
 4. 生成 GitHub Release archive 和 `checksums.txt`。
 5. 使用 `Dockerfile.goreleaser` 构建多架构 Docker 镜像。
 6. 推送 GHCR 镜像。

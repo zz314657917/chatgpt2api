@@ -79,6 +79,48 @@ func TestExtractUpdateArchiveFindsRuntimePayload(t *testing.T) {
 	}
 }
 
+func TestGoReleaserArchiveIncludesWebDistRootFiles(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", ".goreleaser.yaml"))
+	if err != nil {
+		t.Fatalf("read .goreleaser.yaml: %v", err)
+	}
+	config := string(data)
+	for _, entry := range []string{"web_dist/*", "web_dist/**/*"} {
+		if !yamlListContains(config, entry) {
+			t.Fatalf(".goreleaser.yaml archive files missing %q", entry)
+		}
+	}
+}
+
+func TestGoReleaserBuildTargetsLinuxOnly(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", ".goreleaser.yaml"))
+	if err != nil {
+		t.Fatalf("read .goreleaser.yaml: %v", err)
+	}
+	config := string(data)
+	if !yamlListContains(config, "linux") {
+		t.Fatal(".goreleaser.yaml build targets must include linux")
+	}
+	for _, entry := range []string{"windows", "darwin"} {
+		if yamlListContains(config, entry) {
+			t.Fatalf(".goreleaser.yaml build targets must not include %s", entry)
+		}
+	}
+	if strings.Contains(config, "format_overrides:") {
+		t.Fatal(".goreleaser.yaml must not keep non-Linux archive format overrides")
+	}
+}
+
+func yamlListContains(config, value string) bool {
+	for _, line := range strings.Split(config, "\n") {
+		switch strings.TrimSpace(line) {
+		case "- " + value, `- "` + value + `"`, "- '" + value + "'":
+			return true
+		}
+	}
+	return false
+}
+
 func TestSafeExtractPathRejectsTraversal(t *testing.T) {
 	if _, err := safeExtractPath(t.TempDir(), "../outside"); err == nil {
 		t.Fatal("safeExtractPath accepted traversal path")
