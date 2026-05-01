@@ -107,11 +107,91 @@ docker compose up -d
 http://localhost:3000
 ```
 
-查看日志：
+查看日志（需要在 `docker-compose.yml` 所在目录执行）：
 
 ```bash
 docker compose logs -f app
 ```
+
+查看自动生成的管理员密码（需要在 `docker-compose.yml` 所在目录执行）：
+
+```bash
+docker compose logs app | grep "bootstrap admin password generated"
+```
+
+日志行格式：
+
+```text
+bootstrap admin password generated: username=admin password=生成的密码
+```
+
+<details>
+<summary>PowerShell、容器日志和查不到密码时的处理方式</summary>
+
+Windows PowerShell：
+
+```powershell
+docker compose logs app | Select-String "bootstrap admin password generated"
+```
+
+默认容器名方式：
+
+```bash
+docker logs chatgpt2api 2>&1 | grep "bootstrap admin password generated"
+```
+
+如果提示 `no configuration file provided: not found`，说明当前目录没有 Compose 配置文件。先进入部署目录再执行 `docker compose logs app`，或直接使用上面的 `docker logs chatgpt2api ...` 命令。
+
+如果查不到日志，先确认 `.env` 或容器环境里是否已经设置了固定密码：
+
+```bash
+grep -n "^CHATGPT2API_ADMIN_PASSWORD=" .env
+docker inspect chatgpt2api --format '{{range .Config.Env}}{{println .}}{{end}}' | grep "^CHATGPT2API_ADMIN_PASSWORD="
+```
+
+如果已经设置了 `CHATGPT2API_ADMIN_PASSWORD`，服务会直接使用该值作为初始管理员密码，不会生成密码，也不会输出 `bootstrap admin password generated` 日志。自动生成的密码只会在首次创建管理员账号时输出一次；如果管理员账号已经存在，重新设置 `.env` 里的 `CHATGPT2API_ADMIN_PASSWORD` 不会覆盖现有管理员密码。容器日志被清理后，明文密码无法从已保存的 bcrypt 哈希中反查。
+
+</details>
+
+<details>
+<summary>重置本地管理员密码</summary>
+
+默认 SQLite 部署可按下面步骤重置本地登录账号数据。该操作会删除本地后台登录用户（包括管理员和普通本地用户），但不会删除账号池数据；执行前会先备份 `data` 目录。
+
+```bash
+cd /opt/chatgpt2api
+# 编辑 .env，设置一个新的已知管理员密码：
+# CHATGPT2API_ADMIN_PASSWORD=your_new_password
+
+docker compose down
+cp -a data "data.bak.$(date +%Y%m%d-%H%M%S)"
+python3 - <<'PY'
+import sqlite3
+from pathlib import Path
+
+db = Path("data/chatgpt2api.db")
+if not db.exists():
+    raise SystemExit(f"{db} not found")
+
+con = sqlite3.connect(db)
+cur = con.execute("DELETE FROM json_documents WHERE name = ?", ("auth_users.json",))
+con.commit()
+print(f"removed auth_users.json rows: {cur.rowcount}")
+con.close()
+PY
+docker compose up -d
+```
+
+如果使用 `STORAGE_BACKEND=json`，本地登录账号保存在 `data/auth_users.json`，可在备份后删除该文件再重启：
+
+```bash
+docker compose down
+cp -a data "data.bak.$(date +%Y%m%d-%H%M%S)"
+rm -f data/auth_users.json
+docker compose up -d
+```
+
+</details>
 
 ### 3. 自建镜像
 
@@ -384,22 +464,6 @@ Authorization: Bearer <session-or-api-token>
 ```bash
 curl http://localhost:3000/v1/models \
   -H "Authorization: Bearer <session-or-api-token>"
-```
-
-该接口会返回上游可用模型列表。管理端和图片工作流内置的常用模型选项包括：
-
-```text
-auto
-gpt-image-2
-codex-gpt-image-2
-gpt-5-mini
-gpt-5-3-mini
-gpt-5
-gpt-5-1
-gpt-5-2
-gpt-5-3
-gpt-5.4
-gpt-5.5
 ```
 
 ### `POST /v1/images/generations`
