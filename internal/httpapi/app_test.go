@@ -924,7 +924,13 @@ func TestImageThumbnailsAreGeneratedOnDemand(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse thumbnail URL: %v", err)
 	}
-	thumbPath := filepath.Join(app.config.ImageThumbnailsDir(), filepath.FromSlash(rel)+".webp")
+	if !strings.HasSuffix(parsedThumbnailURL.Path, ".jpg") {
+		t.Fatalf("thumbnail path = %q, want .jpg suffix", parsedThumbnailURL.Path)
+	}
+	if parsedThumbnailURL.Query().Get("v") == "" {
+		t.Fatalf("thumbnail URL = %q, want cache-busting query", thumbnailURL)
+	}
+	thumbPath := filepath.Join(app.config.ImageThumbnailsDir(), filepath.FromSlash(rel)+".jpg")
 	if _, err := os.Stat(thumbPath); !os.IsNotExist(err) {
 		t.Fatalf("/api/images should not create thumbnail synchronously, stat error = %v", err)
 	}
@@ -938,6 +944,12 @@ func TestImageThumbnailsAreGeneratedOnDemand(t *testing.T) {
 	if res.Body.Len() == 0 {
 		t.Fatal("thumbnail body is empty")
 	}
+	if got := res.Header().Get("Cache-Control"); got != imageThumbnailCacheControl {
+		t.Fatalf("thumbnail Cache-Control = %q, want %q", got, imageThumbnailCacheControl)
+	}
+	if got := res.Header().Get("Content-Type"); !strings.Contains(got, "image/jpeg") {
+		t.Fatalf("thumbnail Content-Type = %q, want image/jpeg", got)
+	}
 	if _, err := os.Stat(thumbPath); err != nil {
 		t.Fatalf("thumbnail was not created on demand: %v", err)
 	}
@@ -947,12 +959,12 @@ func TestImageThumbnailRejectsTraversal(t *testing.T) {
 	app := newTestApp(t)
 	defer app.Close()
 
-	outsideThumbnailRoot := filepath.Join(app.config.DataDir, "secret.png.webp")
+	outsideThumbnailRoot := filepath.Join(app.config.DataDir, "secret.png.jpg")
 	if err := os.WriteFile(outsideThumbnailRoot, []byte("secret"), 0o644); err != nil {
 		t.Fatalf("write outside thumbnail root: %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/image-thumbnails/../secret.png.webp", nil)
+	req := httptest.NewRequest(http.MethodGet, "/image-thumbnails/../secret.png.jpg", nil)
 	res := httptest.NewRecorder()
 	app.Handler().ServeHTTP(res, req)
 	if res.Code != http.StatusNotFound {

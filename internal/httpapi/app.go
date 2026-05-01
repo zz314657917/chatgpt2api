@@ -30,7 +30,10 @@ import (
 	_ "github.com/HugoSmits86/nativewebp"
 )
 
-const maxLoginPageImageSize = 10 << 20
+const (
+	maxLoginPageImageSize      = 10 << 20
+	imageThumbnailCacheControl = "public, max-age=31536000, immutable"
+)
 
 type App struct {
 	config     *config.Store
@@ -695,6 +698,7 @@ func (a *App) handleImageThumbnail(w http.ResponseWriter, r *http.Request) {
 	_ = a.images.EnsureThumbnail(thumbnailRel)
 	thumbPath := filepath.Join(a.config.ImageThumbnailsDir(), filepath.FromSlash(thumbnailRel))
 	if info, err := os.Stat(thumbPath); err == nil && !info.IsDir() {
+		w.Header().Set("Cache-Control", imageThumbnailCacheControl)
 		http.ServeFile(w, r, thumbPath)
 		return
 	}

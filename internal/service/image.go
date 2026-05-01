@@ -7,26 +7,26 @@ import (
 	"image/color"
 	"image/draw"
 	_ "image/gif"
-	_ "image/jpeg"
+	"image/jpeg"
 	_ "image/png"
 	"net/url"
 	"os"
 	"path"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"chatgpt2api/internal/storage"
-
-	"github.com/HugoSmits86/nativewebp"
 )
 
 const (
-	ThumbnailSize         = 720
-	thumbnailCacheVersion = 2
-	thumbnailExtension    = ".webp"
+	ThumbnailSize         = 480
+	thumbnailQuality      = 72
+	thumbnailCacheVersion = 3
+	thumbnailExtension    = ".jpg"
 
 	ImageVisibilityPrivate = "private"
 	ImageVisibilityPublic  = "public"
@@ -131,7 +131,7 @@ func (s *ImageService) ListImages(baseURL, startDate, endDate string, scope Imag
 			item["published_at"] = meta.PublishedAt
 		}
 		if thumbRel, ok := thumb["thumbnail_rel"].(string); ok && thumbRel != "" {
-			item["thumbnail_url"] = publicAssetURL(baseURL, "image-thumbnails", thumbRel)
+			item["thumbnail_url"] = thumbnailURL(baseURL, thumbRel, info.ModTime())
 		} else {
 			item["thumbnail_url"] = ""
 		}
@@ -405,12 +405,14 @@ func (s *ImageService) generateThumbnail(ref imageFileRef) map[string]any {
 	bounds := img.Bounds()
 	width, height := bounds.Dx(), bounds.Dy()
 	thumb := resizeToFit(flattenImage(img), ThumbnailSize, ThumbnailSize)
-	if err := writeWebPThumbnail(thumbPath, thumb); err != nil {
+	if err := writeJPEGThumbnail(thumbPath, thumb); err != nil {
 		return map[string]any{}
 	}
 	_ = s.writeThumbnailMetadata(ref.rel, thumbPath+".json", map[string]any{
 		"width":             width,
 		"height":            height,
+		"thumbnail_format":  "jpeg",
+		"thumbnail_quality": thumbnailQuality,
 		"thumbnail_size":    ThumbnailSize,
 		"thumbnail_version": thumbnailCacheVersion,
 	})
@@ -652,7 +654,7 @@ func imageDay(rel string, modTime time.Time) string {
 }
 
 func thumbnailMetadataDocumentName(rel string) string {
-	return "image_thumbnails/" + filepath.ToSlash(rel) + ".webp.json"
+	return "image_thumbnails/" + filepath.ToSlash(rel) + thumbnailExtension + ".json"
 }
 
 func sourceImageRelativePathFromThumbnail(value string) (string, error) {
@@ -680,6 +682,11 @@ func publicAssetURL(baseURL, prefix, rel string) string {
 		parts[i] = url.PathEscape(part)
 	}
 	return strings.TrimRight(baseURL, "/") + "/" + strings.Trim(prefix, "/") + "/" + strings.Join(parts, "/")
+}
+
+func thumbnailURL(baseURL, thumbRel string, sourceModTime time.Time) string {
+	return publicAssetURL(baseURL, "image-thumbnails", thumbRel) +
+		"?v=" + strconv.Itoa(thumbnailCacheVersion) + "-" + strconv.FormatInt(sourceModTime.UnixNano(), 10)
 }
 
 func cleanImageRelativePath(value string) (string, error) {
@@ -725,7 +732,7 @@ func imageRelativePathFromValue(value string) (string, error) {
 }
 
 func removeImageThumbnail(root, rel string) error {
-	thumbPath := filepath.Join(root, filepath.FromSlash(rel)+".webp")
+	thumbPath := filepath.Join(root, filepath.FromSlash(rel)+thumbnailExtension)
 	if !pathInsideRoot(root, thumbPath) {
 		return errors.New("invalid image path")
 	}
@@ -741,7 +748,7 @@ func removeImageThumbnail(root, rel string) error {
 	return nil
 }
 
-func writeWebPThumbnail(path string, img image.Image) error {
+func writeJPEGThumbnail(path string, img image.Image) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
@@ -751,7 +758,7 @@ func writeWebPThumbnail(path string, img image.Image) error {
 		return err
 	}
 	tmpPath := tmp.Name()
-	encodeErr := nativewebp.Encode(tmp, img, nil)
+	encodeErr := jpeg.Encode(tmp, img, &jpeg.Options{Quality: thumbnailQuality})
 	closeErr := tmp.Close()
 	if encodeErr != nil || closeErr != nil {
 		_ = os.Remove(tmpPath)
@@ -820,7 +827,8 @@ func readImageMetadata(path string, sourceMtime time.Time) map[string]any {
 
 func isCurrentThumbnailMetadata(meta map[string]any) bool {
 	return numericMetaValue(meta["thumbnail_version"]) == thumbnailCacheVersion &&
-		numericMetaValue(meta["thumbnail_size"]) == ThumbnailSize
+		numericMetaValue(meta["thumbnail_size"]) == ThumbnailSize &&
+		numericMetaValue(meta["thumbnail_quality"]) == thumbnailQuality
 }
 
 func numericMetaValue(value any) int {
