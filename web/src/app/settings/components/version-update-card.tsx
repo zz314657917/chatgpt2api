@@ -8,11 +8,13 @@ import {
   RefreshCw,
   RotateCcw,
   RotateCw,
+  Save,
 } from "lucide-react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import webConfig from "@/constants/common-env";
 import {
   checkSystemUpdates,
@@ -23,6 +25,7 @@ import {
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
+import { useSettingsStore } from "../store";
 import { SettingsCard, settingsListItemClassName } from "./settings-ui";
 
 type OperationState = "idle" | "checking" | "updating" | "restarting" | "rolling-back";
@@ -71,6 +74,13 @@ export function VersionUpdateCard({
   const [operation, setOperation] = useState<OperationState>("idle");
   const [needsRestart, setNeedsRestart] = useState(false);
   const [lastError, setLastError] = useState("");
+  const config = useSettingsStore((state) => state.config);
+  const isSavingConfig = useSettingsStore((state) => state.isSavingConfig);
+  const setUpdateRepo = useSettingsStore((state) => state.setUpdateRepo);
+  const setUpdateGitHubToken = useSettingsStore(
+    (state) => state.setUpdateGitHubToken,
+  );
+  const saveConfig = useSettingsStore((state) => state.saveConfig);
 
   const currentVersion = updateInfo?.current_version || webConfig.appVersion;
   const latestVersion = updateInfo?.latest_version || "";
@@ -80,7 +90,13 @@ export function VersionUpdateCard({
   );
   const isReleaseBuild = updateInfo?.build_type === "release";
   const hasUpdate = Boolean(updateInfo?.has_update);
+  const hasWarning = Boolean(updateInfo?.warning);
   const isBusy = operation !== "idle";
+  const updateRepo = String(config?.update_repo || "ZyphrZero/chatgpt2api");
+  const updateGitHubToken = String(config?.update_github_token || "");
+  const updateGitHubTokenConfigured = Boolean(
+    config?.update_github_token_configured,
+  );
 
   const refreshUpdates = useCallback(async (force = false) => {
     if (!canManageSystem) {
@@ -92,7 +108,11 @@ export function VersionUpdateCard({
       const data = await checkSystemUpdates(force);
       setUpdateInfo(data);
       if (force) {
-        toast.success(data.has_update ? "发现新版本" : "当前已是最新版本");
+        if (data.warning) {
+          toast.warning(data.warning);
+        } else {
+          toast.success(data.has_update ? "发现新版本" : "当前已是最新版本");
+        }
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : "检查更新失败";
@@ -167,11 +187,11 @@ export function VersionUpdateCard({
       icon={PackageCheck}
       title="版本更新"
       description="查看当前部署版本。"
-      tone={hasUpdate ? "amber" : "slate"}
+      tone={hasWarning || hasUpdate ? "amber" : "slate"}
       meta={
         updateInfo ? (
-          <Badge variant={hasUpdate ? "warning" : "success"}>
-            {hasUpdate ? "有可用更新" : "已是最新"}
+          <Badge variant={hasWarning || hasUpdate ? "warning" : "success"}>
+            {hasWarning ? "检查失败" : hasUpdate ? "有可用更新" : "已是最新"}
           </Badge>
         ) : null
       }
@@ -221,6 +241,66 @@ export function VersionUpdateCard({
         {!canManageSystem ? (
           <StatusPanel tone="warning">只有管理员可以检查和执行系统更新。</StatusPanel>
         ) : null}
+
+        <div className={settingsListItemClassName}>
+          <div className="flex flex-col gap-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <p className="text-sm font-semibold text-foreground">
+                  GitHub Release 源
+                </p>
+                <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                  检查该仓库的 latest release；404 通常表示这里没有可用 Release 或 Token 无权读取。
+                </p>
+              </div>
+              <Badge
+                variant={updateGitHubTokenConfigured ? "success" : "secondary"}
+              >
+                {updateGitHubTokenConfigured ? "已配置" : "未配置"}
+              </Badge>
+            </div>
+            <div className="grid gap-2">
+              <Input
+                value={updateRepo}
+                onChange={(event) => setUpdateRepo(event.target.value)}
+                placeholder="owner/repo"
+                disabled={!canManageSystem || isSavingConfig}
+                className="font-mono text-sm"
+              />
+              <Input
+                type="password"
+                value={updateGitHubToken}
+                onChange={(event) => setUpdateGitHubToken(event.target.value)}
+                placeholder={
+                  updateGitHubTokenConfigured
+                    ? "已配置，留空则保留当前 Token"
+                    : "github_pat_xxx"
+                }
+                disabled={!canManageSystem || isSavingConfig}
+                className="font-mono text-sm"
+              />
+            </div>
+            <div>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={
+                  !canManageSystem ||
+                  isSavingConfig ||
+                  !updateRepo.trim()
+                }
+                onClick={() => void saveConfig()}
+              >
+                {isSavingConfig ? (
+                  <RefreshCw data-icon="inline-start" className="animate-spin" />
+                ) : (
+                  <Save data-icon="inline-start" />
+                )}
+                保存更新源
+              </Button>
+            </div>
+          </div>
+        </div>
 
         <div className="flex flex-wrap gap-2">
           {canManageSystem && hasUpdate && isReleaseBuild && !needsRestart ? (

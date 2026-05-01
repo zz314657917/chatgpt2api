@@ -3,10 +3,14 @@ package service
 import (
 	"archive/tar"
 	"compress/gzip"
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -88,6 +92,93 @@ func TestDownloadFileNameIgnoresQuery(t *testing.T) {
 	}
 	if _, err := url.Parse(raw); err != nil {
 		t.Fatalf("test URL invalid: %v", err)
+	}
+}
+
+func TestFetchLatestReleaseUsesGitHubToken(t *testing.T) {
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer ghp_test_token" {
+			t.Fatalf("Authorization header = %q, want bearer token", got)
+		}
+		if got := r.Header.Get("X-GitHub-Api-Version"); got == "" {
+			t.Fatal("missing GitHub API version header")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"tag_name": "v1.2.0",
+			"name": "v1.2.0",
+			"body": "release notes",
+			"html_url": "https://github.com/ZyphrZero/chatgpt2api/releases/tag/v1.2.0",
+			"published_at": "2026-01-01T00:00:00Z",
+			"assets": []
+		}`))
+	}))
+	defer api.Close()
+
+	service := NewUpdateService(UpdateOptions{
+		APIBaseURL:     api.URL,
+		GitHubToken:    " ghp_test_token ",
+		CurrentVersion: "1.1.0",
+		BuildType:      "release",
+	})
+	info, err := service.fetchLatestRelease(context.Background())
+	if err != nil {
+		t.Fatalf("fetchLatestRelease() error = %v", err)
+	}
+	if info.LatestVersion != "1.2.0" || !info.HasUpdate {
+		t.Fatalf("fetchLatestRelease() = %#v", info)
+	}
+}
+
+func TestGitHubRateLimitErrorIncludesActionableHint(t *testing.T) {
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-RateLimit-Remaining", "0")
+		w.Header().Set("X-RateLimit-Reset", "1777608736")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"message":"API rate limit exceeded for 203.0.113.10."}`))
+	}))
+	defer api.Close()
+
+	service := NewUpdateService(UpdateOptions{APIBaseURL: api.URL})
+	_, err := service.fetchLatestRelease(context.Background())
+	if err == nil {
+		t.Fatal("fetchLatestRelease() succeeded, want rate limit error")
+	}
+	for _, want := range []string{
+		"GitHub API returned 403",
+		"API rate limit exceeded",
+		"GitHub API rate limit exhausted",
+		"CHATGPT2API_UPDATE_GITHUB_TOKEN",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error %q missing %q", err.Error(), want)
+		}
+	}
+}
+
+func TestGitHubNotFoundErrorIncludesReleaseHint(t *testing.T) {
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"message":"Not Found"}`))
+	}))
+	defer api.Close()
+
+	service := NewUpdateService(UpdateOptions{Repo: "owner/project", APIBaseURL: api.URL})
+	_, err := service.fetchLatestRelease(context.Background())
+	if err == nil {
+		t.Fatal("fetchLatestRelease() succeeded, want not found error")
+	}
+	for _, want := range []string{
+		"GitHub API returned 404",
+		"latest GitHub Release was not found for owner/project",
+		"CHATGPT2API_UPDATE_REPO",
+		"GitHub token can read the repository",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error %q missing %q", err.Error(), want)
+		}
 	}
 }
 

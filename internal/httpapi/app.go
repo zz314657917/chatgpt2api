@@ -85,7 +85,7 @@ func NewApp() (*App, error) {
 	}
 	documentStore, _ := storageBackend.(storage.JSONDocumentBackend)
 	engine := &protocol.Engine{Accounts: accounts, Config: cfg, Storage: documentStore, Proxy: proxy, Logger: logger}
-	app := &App{config: cfg, auth: auth, accounts: accounts, logs: logs, logger: logger, proxy: proxy, engine: engine, images: service.NewImageService(cfg, storageBackend), announce: service.NewAnnouncementService(cfg.DataDir, storageBackend), cpa: service.NewCPAConfig(cfg.DataDir, storageBackend), sub2: service.NewSub2APIConfig(cfg.DataDir, storageBackend), update: service.NewUpdateService(service.UpdateOptions{CurrentVersion: version.Get(), BuildType: version.GetBuildType(), WebDistDir: filepath.Join(cfg.RootDir, "web_dist"), ProxyURL: cfg.UpdateProxyURL()}), cancel: cancel}
+	app := &App{config: cfg, auth: auth, accounts: accounts, logs: logs, logger: logger, proxy: proxy, engine: engine, images: service.NewImageService(cfg, storageBackend), announce: service.NewAnnouncementService(cfg.DataDir, storageBackend), cpa: service.NewCPAConfig(cfg.DataDir, storageBackend), sub2: service.NewSub2APIConfig(cfg.DataDir, storageBackend), update: newUpdateService(cfg), cancel: cancel}
 	app.cpaImport = service.NewCPAImportService(app.cpa, accounts, proxy)
 	app.sub2Import = service.NewSub2APIService(app.sub2, accounts)
 	app.register = service.NewRegisterService(cfg.DataDir, accounts, storageBackend)
@@ -114,6 +114,17 @@ func NewApp() (*App, error) {
 	accounts.StartLimitedWatcher(ctx, time.Duration(cfg.RefreshAccountIntervalMinute())*time.Minute)
 	cfg.CleanupOldImages()
 	return app, nil
+}
+
+func newUpdateService(cfg *config.Store) *service.UpdateService {
+	return service.NewUpdateService(service.UpdateOptions{
+		CurrentVersion: version.Get(),
+		BuildType:      version.GetBuildType(),
+		Repo:           cfg.UpdateRepo(),
+		WebDistDir:     filepath.Join(cfg.RootDir, "web_dist"),
+		ProxyURL:       cfg.UpdateProxyURL(),
+		GitHubToken:    cfg.UpdateGitHubToken(),
+	})
 }
 
 func (a *App) Close() {
@@ -420,6 +431,7 @@ func (a *App) handleSettings(w http.ResponseWriter, r *http.Request) {
 			util.WriteError(w, http.StatusBadRequest, err.Error())
 			return
 		}
+		a.update = newUpdateService(a.config)
 		util.WriteJSON(w, http.StatusOK, map[string]any{"config": updated})
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)

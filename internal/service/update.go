@@ -35,6 +35,7 @@ type UpdateService struct {
 	mu             sync.Mutex
 	repo           string
 	apiBaseURL     string
+	githubToken    string
 	currentVersion string
 	buildType      string
 	webDistDir     string
@@ -47,6 +48,7 @@ type UpdateService struct {
 type UpdateOptions struct {
 	Repo           string
 	APIBaseURL     string
+	GitHubToken    string
 	CurrentVersion string
 	BuildType      string
 	WebDistDir     string
@@ -108,6 +110,7 @@ func NewUpdateService(options UpdateOptions) *UpdateService {
 	return &UpdateService{
 		repo:           repo,
 		apiBaseURL:     apiBaseURL,
+		githubToken:    strings.TrimSpace(options.GitHubToken),
 		currentVersion: strings.TrimSpace(options.CurrentVersion),
 		buildType:      buildType,
 		webDistDir:     strings.TrimSpace(options.WebDistDir),
@@ -226,8 +229,12 @@ func (s *UpdateService) fetchLatestRelease(ctx context.Context) (*UpdateInfo, er
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Accept", "application/vnd.github.v3+json")
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 	req.Header.Set("User-Agent", "chatgpt2api-updater")
+	if s.githubToken != "" {
+		req.Header.Set("Authorization", "Bearer "+s.githubToken)
+	}
 
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
@@ -235,7 +242,7 @@ func (s *UpdateService) fetchLatestRelease(ctx context.Context) (*UpdateInfo, er
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("GitHub API returned %d", resp.StatusCode)
+		return nil, githubAPIStatusError(resp, s.repo)
 	}
 	var release githubRelease
 	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
@@ -264,6 +271,45 @@ func (s *UpdateService) fetchLatestRelease(ctx context.Context) (*UpdateInfo, er
 		Cached:    false,
 		BuildType: s.buildType,
 	}, nil
+}
+
+func githubAPIStatusError(resp *http.Response, repo string) error {
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	message := githubErrorMessage(body)
+	parts := []string{fmt.Sprintf("GitHub API returned %d", resp.StatusCode)}
+	if message != "" {
+		parts = append(parts, message)
+	}
+	if resp.StatusCode == http.StatusNotFound {
+		parts = append(parts, fmt.Sprintf("latest GitHub Release was not found for %s; publish a GitHub Release with release archives, configure CHATGPT2API_UPDATE_REPO to the repository that contains releases, or ensure the GitHub token can read the repository", repo))
+	}
+	if resp.StatusCode == http.StatusForbidden && strings.TrimSpace(resp.Header.Get("X-RateLimit-Remaining")) == "0" {
+		hint := "GitHub API rate limit exhausted"
+		if reset := githubRateLimitReset(resp.Header.Get("X-RateLimit-Reset")); reset != "" {
+			hint += "; reset at " + reset
+		}
+		hint += "; set CHATGPT2API_UPDATE_GITHUB_TOKEN to use authenticated GitHub API requests"
+		parts = append(parts, hint)
+	}
+	return errors.New(strings.Join(parts, ": "))
+}
+
+func githubErrorMessage(body []byte) string {
+	var payload struct {
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(body, &payload); err == nil {
+		return strings.TrimSpace(payload.Message)
+	}
+	return strings.TrimSpace(string(body))
+}
+
+func githubRateLimitReset(value string) string {
+	seconds, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+	if err != nil || seconds <= 0 {
+		return ""
+	}
+	return time.Unix(seconds, 0).Format(time.RFC3339)
 }
 
 func (s *UpdateService) downloadFile(ctx context.Context, downloadURL, dest string) error {

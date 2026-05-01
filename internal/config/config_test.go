@@ -32,6 +32,7 @@ func TestStoreUpdatePersistsRuntimeSettings(t *testing.T) {
 	got, err := store.Update(map[string]any{
 		"base_url":                        "https://example.test/root/",
 		"proxy":                           "http://127.0.0.1:8080",
+		"update_repo":                     "owner/project",
 		"refresh_account_interval_minute": 7,
 		"image_concurrent_limit":          3,
 		"user_default_concurrent_limit":   2,
@@ -47,6 +48,9 @@ func TestStoreUpdatePersistsRuntimeSettings(t *testing.T) {
 	if store.BaseURL() != "https://example.test/root" {
 		t.Fatalf("BaseURL() = %q", store.BaseURL())
 	}
+	if store.UpdateRepo() != "owner/project" {
+		t.Fatalf("UpdateRepo() = %q", store.UpdateRepo())
+	}
 	assertConfigValue(t, got, "registration_enabled", true)
 
 	envData, err := os.ReadFile(filepath.Join(root, ".env"))
@@ -57,6 +61,7 @@ func TestStoreUpdatePersistsRuntimeSettings(t *testing.T) {
 	for _, want := range []string{
 		"CHATGPT2API_BASE_URL=https://example.test/root/",
 		"CHATGPT2API_PROXY=http://127.0.0.1:8080",
+		"CHATGPT2API_UPDATE_REPO=owner/project",
 		"CHATGPT2API_REFRESH_ACCOUNT_INTERVAL_MINUTE=7",
 		"CHATGPT2API_IMAGE_CONCURRENT_LIMIT=3",
 		"CHATGPT2API_USER_DEFAULT_CONCURRENT_LIMIT=2",
@@ -333,6 +338,79 @@ func TestNewStoreDiscoversEnvFromParentDirectory(t *testing.T) {
 	}
 	if store.BaseURL() != "https://parent.example" {
 		t.Fatalf("BaseURL() = %q", store.BaseURL())
+	}
+}
+
+func TestStoreReadsUpdateGitHubTokenFromEnvFile(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, ".env"), []byte("CHATGPT2API_UPDATE_GITHUB_TOKEN=ghp_test_token\n"), 0o644); err != nil {
+		t.Fatalf("write .env: %v", err)
+	}
+	t.Setenv("CHATGPT2API_ROOT", root)
+	unsetEnv(t, "CHATGPT2API_UPDATE_GITHUB_TOKEN")
+
+	store, err := NewStore()
+	if err != nil {
+		t.Fatalf("NewStore() error = %v", err)
+	}
+	if got := store.UpdateGitHubToken(); got != "ghp_test_token" {
+		t.Fatalf("UpdateGitHubToken() = %q, want token from .env", got)
+	}
+	if _, ok := store.Get()["update_github_token"]; ok {
+		t.Fatal("Get() leaked update GitHub token")
+	}
+	assertConfigValue(t, store.Get(), "update_github_token_configured", true)
+}
+
+func TestStoreUpdatePersistsUpdateGitHubTokenWithoutLeakingSecret(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("CHATGPT2API_ROOT", root)
+	unsetEnv(t, "CHATGPT2API_UPDATE_GITHUB_TOKEN")
+
+	store, err := NewStore()
+	if err != nil {
+		t.Fatalf("NewStore() error = %v", err)
+	}
+	got, err := store.Update(map[string]any{"update_github_token": "github_pat_test"})
+	if err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+	assertConfigValue(t, got, "update_github_token_configured", true)
+	if _, ok := got["update_github_token"]; ok {
+		t.Fatalf("Update() leaked update_github_token: %#v", got)
+	}
+	if store.UpdateGitHubToken() != "github_pat_test" {
+		t.Fatalf("UpdateGitHubToken() = %q, want persisted token", store.UpdateGitHubToken())
+	}
+	envData, err := os.ReadFile(filepath.Join(root, ".env"))
+	if err != nil {
+		t.Fatalf("read .env: %v", err)
+	}
+	if !strings.Contains(string(envData), "CHATGPT2API_UPDATE_GITHUB_TOKEN=github_pat_test") {
+		t.Fatalf(".env missing update token:\n%s", string(envData))
+	}
+
+	got, err = store.Update(map[string]any{"update_github_token": ""})
+	if err != nil {
+		t.Fatalf("blank token Update() error = %v", err)
+	}
+	assertConfigValue(t, got, "update_github_token_configured", true)
+	if store.UpdateGitHubToken() != "github_pat_test" {
+		t.Fatalf("blank update should preserve token, got %q", store.UpdateGitHubToken())
+	}
+}
+
+func TestStoreRejectsInvalidUpdateRepo(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("CHATGPT2API_ROOT", root)
+
+	store, err := NewStore()
+	if err != nil {
+		t.Fatalf("NewStore() error = %v", err)
+	}
+	_, err = store.Update(map[string]any{"update_repo": "not a repo"})
+	if err == nil || !strings.Contains(err.Error(), "owner/repo") {
+		t.Fatalf("Update() error = %v, want owner/repo validation", err)
 	}
 }
 

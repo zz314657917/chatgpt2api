@@ -159,6 +159,8 @@ Release 构建可以在设置页的“版本更新”卡片中检查和执行在
 - Docker 场景下，在线更新替换的是当前容器文件系统中的运行时文件，不会更新 Docker 镜像本身。
 - 如果重新创建容器，最终仍以镜像内容为准。长期稳定的 Docker 升级仍建议使用 `docker compose pull && docker compose up -d`。
 - 在线更新访问 GitHub 可通过 `CHATGPT2API_UPDATE_PROXY_URL` 配置代理；未设置时复用 `CHATGPT2API_PROXY`。
+- 如果检查更新提示 `GitHub API returned 403`，通常是当前出口 IP 的匿名 GitHub API 额度耗尽。可在设置页“版本更新”卡片中配置 GitHub API Token，或通过 `CHATGPT2API_UPDATE_GITHUB_TOKEN` 使用认证请求。
+- 如果检查更新提示 `GitHub API returned 404`，通常是更新源仓库没有 GitHub Release，或 Token 没有该仓库读取权限。请先发布包含 archive 和 `checksums.txt` 的 Release，或在设置页配置实际发布 Release 的 `owner/repo`。
 - 简化发布只推送 Docker 镜像，不上传二进制压缩包时，在线更新无法找到可下载的 Release archive。
 
 ### 源码部署升级
@@ -185,6 +187,8 @@ go build -ldflags "-X chatgpt2api/internal/version.Version=1.0.0" -o chatgpt2api
 | `CHATGPT2API_BASE_URL` | 空 | 用于生成图片 URL 的外部访问地址 |
 | `CHATGPT2API_PROXY` | 空 | 全局代理，支持 `http`、`https`、`socks5`、`socks5h` |
 | `CHATGPT2API_UPDATE_PROXY_URL` | 空 | 在线更新访问 GitHub Release 的代理；为空时复用全局代理 |
+| `CHATGPT2API_UPDATE_REPO` | `ZyphrZero/chatgpt2api` | 在线更新检查的 GitHub Release 仓库，格式为 `owner/repo`，也可在前端设置页配置 |
+| `CHATGPT2API_UPDATE_GITHUB_TOKEN` | 空 | 在线更新访问 GitHub API 的令牌；用于避免匿名 API 60 次/小时限流，也可在前端设置页配置 |
 | `CHATGPT2API_REFRESH_ACCOUNT_INTERVAL_MINUTE` | `5` | 限流账号检查间隔，单位分钟 |
 | `CHATGPT2API_IMAGE_CONCURRENT_LIMIT` | `4` | 全局同时生成图片任务数量 |
 | `CHATGPT2API_USER_DEFAULT_CONCURRENT_LIMIT` | `0` | 普通用户默认并发限制，`0` 表示不限制 |
