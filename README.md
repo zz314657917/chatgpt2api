@@ -95,7 +95,7 @@ docker compose up -d
 
 默认 Compose 配置：
 
-- 镜像：`ghcr.io/zyphrzero/chatgpt2api:latest`
+- 镜像：`zyphrzero/chatgpt2api:latest`
 - 端口：宿主机 `3000` -> 容器 `80`
 - 数据目录：`./data:/app/data`
 - 环境文件：`./.env:/app/.env`
@@ -212,10 +212,17 @@ docker compose pull
 docker compose up -d
 ```
 
-如果 GHCR 拉取提示 denied，请确认 GitHub Packages 中镜像已设为 Public，或先登录：
+默认 Compose 使用 DockerHub 公共镜像，普通用户不需要配置 GitHub token 或登录 GitHub。也可以按需将 `docker-compose.yml` 的 `image` 改为 GHCR：
 
-```bash
-docker login ghcr.io
+```yaml
+image: ghcr.io/zyphrzero/chatgpt2api:latest
+```
+
+可用镜像：
+
+```text
+zyphrzero/chatgpt2api:latest
+ghcr.io/zyphrzero/chatgpt2api:latest
 ```
 
 ### 管理端在线更新
@@ -240,8 +247,10 @@ Release 构建可以在设置页的“版本更新”卡片中检查和执行在
 - 如果重新创建容器，最终仍以镜像内容为准。长期稳定的 Docker 升级仍建议使用 `docker compose pull && docker compose up -d`。
 - 在线更新访问 GitHub 可通过 `CHATGPT2API_UPDATE_PROXY_URL` 配置代理；未设置时复用 `CHATGPT2API_PROXY`。
 - 正式 Release archive 只发布 Linux `amd64` / `arm64` 构建；Windows 和 macOS 不提供在线更新压缩包。
-- 如果检查更新提示 `GitHub API returned 403`，通常是当前出口 IP 的匿名 GitHub API 额度耗尽。可在设置页“版本更新”卡片中配置 GitHub API Token，或通过 `CHATGPT2API_UPDATE_GITHUB_TOKEN` 使用认证请求。
-- 如果检查更新提示 `GitHub API returned 404`，通常是更新源仓库没有 GitHub Release，或 Token 没有该仓库读取权限。请先发布包含 archive 和 `checksums.txt` 的 Release，或在设置页配置实际发布 Release 的 `owner/repo`。
+- 普通 Docker 部署拉取 DockerHub 公共镜像，不需要 GitHub token。
+- 管理端在线更新检查的是 GitHub Release。公开仓库默认匿名访问即可，不需要配置 Token。
+- 如果检查更新提示 `GitHub API returned 403`，通常是当前出口 IP 的匿名 GitHub API 额度耗尽。此时可在设置页“版本更新”卡片中配置 GitHub API Token，或通过 `CHATGPT2API_UPDATE_GITHUB_TOKEN` 使用认证请求。
+- 如果检查更新提示 `GitHub API returned 404`，通常是更新源仓库没有 GitHub Release，或 Token 无权读取私有仓库。请先发布包含 archive 和 `checksums.txt` 的 Release，或在设置页配置实际发布 Release 的 `owner/repo`。
 - 简化发布只推送 Docker 镜像，不上传二进制压缩包时，在线更新无法找到可下载的 Release archive。
 
 ### 源码部署升级
@@ -271,7 +280,7 @@ go build -tags=embed -ldflags "-X chatgpt2api/internal/version.Version=1.0.0" -o
 | `CHATGPT2API_PROXY` | 空 | 全局代理，支持 `http`、`https`、`socks5`、`socks5h` |
 | `CHATGPT2API_UPDATE_PROXY_URL` | 空 | 在线更新访问 GitHub Release 的代理；为空时复用全局代理 |
 | `CHATGPT2API_UPDATE_REPO` | `ZyphrZero/chatgpt2api` | 在线更新检查的 GitHub Release 仓库，格式为 `owner/repo`，也可在前端设置页配置 |
-| `CHATGPT2API_UPDATE_GITHUB_TOKEN` | 空 | 在线更新访问 GitHub API 的令牌；用于避免匿名 API 60 次/小时限流，也可在前端设置页配置 |
+| `CHATGPT2API_UPDATE_GITHUB_TOKEN` | 空 | 在线更新访问 GitHub API 的可选令牌；公开 Release 默认不需要配置，仅用于避免匿名 API 限流、读取私有仓库或企业 GitHub |
 | `CHATGPT2API_REFRESH_ACCOUNT_INTERVAL_MINUTE` | `5` | 限流账号检查间隔，单位分钟 |
 | `CHATGPT2API_IMAGE_CONCURRENT_LIMIT` | `4` | 全局同时生成图片任务数量 |
 | `CHATGPT2API_USER_DEFAULT_CONCURRENT_LIMIT` | `0` | 普通用户默认并发限制，`0` 表示不限制 |
@@ -400,8 +409,8 @@ bun run build
 4. GoReleaser 使用 `-tags=embed` 构建 Linux `amd64` / `arm64` 二进制。
 5. 生成 GitHub Release archive 和 `checksums.txt`。
 6. 使用 `Dockerfile.goreleaser` 构建多架构 Docker 镜像。
-7. 推送 GHCR 镜像。
-8. 如果配置了 `DOCKERHUB_USERNAME` 和 `DOCKERHUB_TOKEN`，同步推送 DockerHub。
+7. 推送 DockerHub 镜像。
+8. 推送 GHCR 镜像。
 
 发布命令示例：
 
@@ -419,20 +428,20 @@ Release 构建会注入：
 
 ### Docker 镜像标签
 
-默认发布到：
+默认发布到 DockerHub：
+
+```text
+zyphrzero/chatgpt2api:<version>
+zyphrzero/chatgpt2api:latest
+zyphrzero/chatgpt2api:<major>.<minor>
+```
+
+同时发布到 GHCR：
 
 ```text
 ghcr.io/zyphrzero/chatgpt2api:<version>
 ghcr.io/zyphrzero/chatgpt2api:latest
 ghcr.io/zyphrzero/chatgpt2api:<major>.<minor>
-```
-
-配置 DockerHub secrets 后也会发布：
-
-```text
-<DOCKERHUB_USERNAME>/chatgpt2api:<version>
-<DOCKERHUB_USERNAME>/chatgpt2api:latest
-<DOCKERHUB_USERNAME>/chatgpt2api:<major>.<minor>
 ```
 
 ## API 接入

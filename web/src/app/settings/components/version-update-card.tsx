@@ -253,13 +253,14 @@ export function VersionUpdateCard({
                   GitHub Release 源
                 </p>
                 <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                  检查该仓库的 latest release；404 通常表示这里没有可用 Release 或 Token 无权读取。
+                  检查该仓库的 latest release；公开 Release 不需要 Token，403
+                  通常是匿名 API 额度耗尽。
                 </p>
               </div>
               <Badge
                 variant={updateGitHubTokenConfigured ? "success" : "secondary"}
               >
-                {updateGitHubTokenConfigured ? "已配置" : "未配置"}
+                {updateGitHubTokenConfigured ? "Token 已配置" : "Token 可选"}
               </Badge>
             </div>
             <div className="grid gap-2">
@@ -277,7 +278,7 @@ export function VersionUpdateCard({
                 placeholder={
                   updateGitHubTokenConfigured
                     ? "已配置，留空则保留当前 Token"
-                    : "ghp_xxxxxxxxxxxxxxxxxxxxx"
+                    : "可选：GitHub API Token"
                 }
                 disabled={!canManageSystem || isSavingConfig}
                 className="font-mono text-sm"
