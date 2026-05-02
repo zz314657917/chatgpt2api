@@ -354,43 +354,59 @@ func TestStoreReadsUpdateGitHubTokenFromEnvFile(t *testing.T) {
 	if _, ok := store.Get()["update_github_token"]; ok {
 		t.Fatal("Get() leaked update GitHub token")
 	}
-	if _, ok := store.Get()["update_github_token_configured"]; ok {
-		t.Fatal("Get() exposed update GitHub token status")
+	if got := store.Get()["update_github_token_configured"]; got != true {
+		t.Fatalf("Get() update_github_token_configured = %#v, want true", got)
 	}
 }
 
-func TestStoreUpdateIgnoresUpdateGitHubToken(t *testing.T) {
+func TestStoreUpdatePersistsUpdateSettings(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("CHATGPT2API_ROOT", root)
 	unsetEnv(t, "CHATGPT2API_UPDATE_GITHUB_TOKEN")
+	unsetEnv(t, "CHATGPT2API_UPDATE_REPO")
 
 	store, err := NewStore()
 	if err != nil {
 		t.Fatalf("NewStore() error = %v", err)
 	}
-	got, err := store.Update(map[string]any{"update_github_token": "github_pat_test"})
+	got, err := store.Update(map[string]any{
+		"update_repo":         "owner/project",
+		"update_github_token": "github_pat_test",
+	})
 	if err != nil {
 		t.Fatalf("Update() error = %v", err)
 	}
-	if _, ok := got["update_github_token_configured"]; ok {
-		t.Fatalf("Update() exposed update_github_token_configured: %#v", got)
+	if got["update_repo"] != "owner/project" {
+		t.Fatalf("Update() update_repo = %#v, want owner/project", got["update_repo"])
+	}
+	if got["update_github_token_configured"] != true {
+		t.Fatalf("Update() update_github_token_configured = %#v, want true", got["update_github_token_configured"])
 	}
 	if _, ok := got["update_github_token"]; ok {
 		t.Fatalf("Update() leaked update_github_token: %#v", got)
 	}
-	if store.UpdateGitHubToken() != "" {
-		t.Fatalf("UpdateGitHubToken() = %q, want ignored token", store.UpdateGitHubToken())
+	if store.UpdateRepo() != "owner/project" {
+		t.Fatalf("UpdateRepo() = %q, want owner/project", store.UpdateRepo())
+	}
+	if store.UpdateGitHubToken() != "github_pat_test" {
+		t.Fatalf("UpdateGitHubToken() = %q, want saved token", store.UpdateGitHubToken())
 	}
 	envData, err := os.ReadFile(filepath.Join(root, ".env"))
 	if err != nil {
 		t.Fatalf("read .env: %v", err)
 	}
-	if strings.Contains(string(envData), "CHATGPT2API_UPDATE_GITHUB_TOKEN") {
-		t.Fatalf(".env persisted update token:\n%s", string(envData))
+	envText := string(envData)
+	for _, want := range []string{
+		"CHATGPT2API_UPDATE_REPO=owner/project",
+		"CHATGPT2API_UPDATE_GITHUB_TOKEN=github_pat_test",
+	} {
+		if !strings.Contains(envText, want) {
+			t.Fatalf(".env missing %q:\n%s", want, envText)
+		}
 	}
 }
 
-func TestStoreUpdateIgnoresUpdateRepo(t *testing.T) {
+func TestStoreUpdateRejectsInvalidUpdateRepo(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("CHATGPT2API_ROOT", root)
 	unsetEnv(t, "CHATGPT2API_UPDATE_REPO")
@@ -399,15 +415,8 @@ func TestStoreUpdateIgnoresUpdateRepo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewStore() error = %v", err)
 	}
-	got, err := store.Update(map[string]any{"update_repo": "owner/project"})
-	if err != nil {
-		t.Fatalf("Update() error = %v", err)
-	}
-	if _, ok := got["update_repo"]; ok {
-		t.Fatalf("Update() exposed update_repo: %#v", got)
-	}
-	if store.UpdateRepo() != "ZyphrZero/chatgpt2api" {
-		t.Fatalf("UpdateRepo() = %q, want default repo", store.UpdateRepo())
+	if _, err := store.Update(map[string]any{"update_repo": "invalid"}); err == nil {
+		t.Fatal("Update() accepted invalid update_repo")
 	}
 }
 
