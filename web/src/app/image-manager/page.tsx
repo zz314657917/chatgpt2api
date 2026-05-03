@@ -1554,7 +1554,13 @@ function ImageManagerContent({
                         </button>
                       ) : null}
                     </div>
-                    <div className="absolute right-2 bottom-2 left-2 z-20 flex items-center justify-end gap-2">
+                    <div className="absolute right-2 bottom-2 left-2 z-20 flex items-center justify-between gap-2">
+                      <div
+                        className="pointer-events-none inline-flex h-7 min-w-0 max-w-[min(58%,13rem)] items-center rounded-full bg-white/15 px-2.5 text-[11px] font-medium text-white shadow-sm ring-1 ring-white/25 backdrop-blur-md"
+                        title={`作者：${ownerLabel}`}
+                      >
+                        <span className="min-w-0 truncate">{ownerLabel}</span>
+                      </div>
                       {showVisibilityStatus ? (
                         <div className="flex shrink-0 items-center gap-1">
                           {canUpdateVisibility ? (
@@ -1595,7 +1601,6 @@ function ImageManagerContent({
                       <div className="text-left text-white drop-shadow-sm">
                         <div className="text-[10px] font-bold tracking-wide">{getManagedImageFormatLabel(item)}</div>
                         <div className="mt-0.5 truncate text-[11px] text-white/90">{item.created_at}</div>
-                        <div className="mt-0.5 truncate text-[11px] text-white/90">作者：{ownerLabel}</div>
                         {imageMeta ? (
                           <div className="mt-0.5 truncate text-[11px] text-white/90">{imageMeta}</div>
                         ) : null}
