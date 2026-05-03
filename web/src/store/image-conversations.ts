@@ -41,6 +41,14 @@ export type StoredImage = {
 
 export type ImageTurnStatus = "queued" | "generating" | "success" | "error" | "cancelled" | "message";
 
+export type StoredImageSizeSelection = {
+  mode: string;
+  aspectRatio: string;
+  resolution: string;
+  customWidth: string;
+  customHeight: string;
+};
+
 export type ImageTurn = {
   id: string;
   prompt: string;
@@ -49,6 +57,7 @@ export type ImageTurn = {
   referenceImages: StoredReferenceImage[];
   count: number;
   size: string;
+  sizeSelection?: StoredImageSizeSelection;
   quality?: ImageQuality;
   visibility?: ImageVisibility;
   images: StoredImage[];
@@ -159,6 +168,24 @@ function normalizeImageMode(value: unknown, referenceImages: StoredReferenceImag
   return referenceImages.length > 0 ? "image" : "generate";
 }
 
+function normalizeSizeSelection(value: unknown): StoredImageSizeSelection | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const source = value as Record<string, unknown>;
+  const selection = {
+    mode: typeof source.mode === "string" ? source.mode : "",
+    aspectRatio: typeof source.aspectRatio === "string" ? source.aspectRatio : "",
+    resolution: typeof source.resolution === "string" ? source.resolution : "",
+    customWidth: typeof source.customWidth === "string" ? source.customWidth : "",
+    customHeight: typeof source.customHeight === "string" ? source.customHeight : "",
+  };
+  if (!selection.mode && !selection.aspectRatio && !selection.resolution && !selection.customWidth && !selection.customHeight) {
+    return undefined;
+  }
+  return selection;
+}
+
 function dataUrlMimeType(dataUrl: string) {
   const match = dataUrl.match(/^data:(.*?);base64,/);
   return match?.[1] || "image/png";
@@ -198,6 +225,7 @@ function normalizeTurn(turn: ImageTurn & Record<string, unknown>): ImageTurn {
   const normalizedImages = Array.isArray(turn.images) ? turn.images.map(normalizeStoredImage) : [];
   const referenceImages = getLegacyReferenceImages(turn);
   const mode = normalizeImageMode(turn.mode, referenceImages);
+  const sizeSelection = normalizeSizeSelection(turn.sizeSelection);
   const visibility: ImageVisibility = turn.visibility === "public" ? "public" : "private";
   const images = normalizedImages.map((image) =>
     image.visibility ? image : { ...image, visibility },
@@ -229,6 +257,7 @@ function normalizeTurn(turn: ImageTurn & Record<string, unknown>): ImageTurn {
     referenceImages,
     count: Math.max(1, Number(turn.count || images.length || 1)),
     size: typeof turn.size === "string" ? turn.size : "",
+    ...(sizeSelection ? { sizeSelection } : {}),
     quality: isImageQuality(turn.quality) ? turn.quality : undefined,
     visibility,
     images,

@@ -33,8 +33,10 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   IMAGE_ASPECT_RATIO_OPTIONS,
   IMAGE_RESOLUTION_OPTIONS,
+  IMAGE_SIZE_MODE_OPTIONS,
   type ImageAspectRatio,
   type ImageResolution,
+  type ImageSizeMode,
 } from "@/app/image/image-options";
 import type { ImageModel, ImageQuality } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -45,8 +47,11 @@ type ImageComposerProps = {
   imageCount: string;
   imageModel: ImageModel;
   imageModelOptions: ReadonlyArray<{ value: ImageModel; label: string }>;
+  imageSizeMode: ImageSizeMode;
   imageAspectRatio: ImageAspectRatio;
   imageResolution: ImageResolution;
+  imageCustomWidth: string;
+  imageCustomHeight: string;
   imageQuality: ImageQuality;
   imageQualityOptions: ReadonlyArray<{ value: ImageQuality; label: string; description: string }>;
   imageOutputHint: ReactNode;
@@ -57,8 +62,11 @@ type ImageComposerProps = {
   onPromptChange: (value: string) => void;
   onImageCountChange: (value: string) => void;
   onImageModelChange: (value: ImageModel) => void;
+  onImageSizeModeChange: (value: ImageSizeMode) => void;
   onImageAspectRatioChange: (value: ImageAspectRatio) => void;
   onImageResolutionChange: (value: ImageResolution) => void;
+  onImageCustomWidthChange: (value: string) => void;
+  onImageCustomHeightChange: (value: string) => void;
   onImageQualityChange: (value: ImageQuality) => void;
   onSubmit: () => void | Promise<void>;
   onOpenPromptMarket: () => void;
@@ -120,8 +128,11 @@ export function ImageComposer({
   imageCount,
   imageModel,
   imageModelOptions,
+  imageSizeMode,
   imageAspectRatio,
   imageResolution,
+  imageCustomWidth,
+  imageCustomHeight,
   imageQuality,
   imageQualityOptions,
   imageOutputHint,
@@ -132,8 +143,11 @@ export function ImageComposer({
   onPromptChange,
   onImageCountChange,
   onImageModelChange,
+  onImageSizeModeChange,
   onImageAspectRatioChange,
   onImageResolutionChange,
+  onImageCustomWidthChange,
+  onImageCustomHeightChange,
   onImageQualityChange,
   onSubmit,
   onOpenPromptMarket,
@@ -164,6 +178,7 @@ export function ImageComposer({
     [referenceImages],
   );
   const imageModelLabel = imageModelOptions.find((option) => option.value === imageModel)?.label || imageModel;
+  const imageSizeModeLabel = IMAGE_SIZE_MODE_OPTIONS.find((option) => option.value === imageSizeMode)?.label || "Auto";
   const imageAspectRatioLabel =
     IMAGE_ASPECT_RATIO_OPTIONS.find((option) => option.value === imageAspectRatio)?.label || "Auto";
   const imageResolutionLabel =
@@ -640,183 +655,245 @@ export function ImageComposer({
                       align="start"
                       side="top"
                       sideOffset={8}
-                      className="z-[70] w-[min(calc(100vw-2rem),22rem)] overflow-visible rounded-[20px] border-[#e5e7eb] bg-white p-2.5 shadow-[0_24px_80px_-32px_rgba(15,23,42,0.35)] dark:border-border dark:bg-card dark:shadow-[0_24px_80px_-28px_rgba(0,0,0,0.72)]"
+                      className="z-[70] w-[min(calc(100vw-2rem),28rem)] overflow-visible rounded-[20px] border-[#e5e7eb] bg-white p-2.5 shadow-[0_24px_80px_-32px_rgba(15,23,42,0.35)] dark:border-border dark:bg-card dark:shadow-[0_24px_80px_-28px_rgba(0,0,0,0.72)]"
                       onOpenAutoFocus={(event) => event.preventDefault()}
                     >
-                      <div className={cn("grid gap-2", supportsQuality ? "grid-cols-2" : "grid-cols-1")}>
-                      <div className="flex h-9 min-w-0 items-center justify-between gap-1.5 rounded-full border border-[#e5e7eb] bg-white px-2.5 dark:border-border dark:bg-background/70">
-                        <span className="shrink-0 text-[11px] font-medium text-[#45515e] dark:text-muted-foreground">张数</span>
-                        <Input
-                          type="number"
-                          inputMode="numeric"
-                          min="1"
-                          max="10"
-                          step="1"
-                          value={imageCount}
-                          onChange={(event) => onImageCountChange(event.target.value)}
-                          className="h-7 w-[36px] border-0 bg-transparent px-0 text-center text-xs font-semibold text-[#18181b] shadow-none focus-visible:ring-0 dark:text-foreground"
-                        />
-                      </div>
-                      <div
-                        ref={aspectRatioMenuRef}
-                        className="relative flex h-9 min-w-0 items-center justify-between gap-1.5 rounded-full border border-[#e5e7eb] bg-white px-2.5 text-[11px] dark:border-border dark:bg-background/70"
-                      >
-                        <span className="shrink-0 font-medium text-[#45515e] dark:text-muted-foreground">比例</span>
-                        <button
-                          type="button"
-                          className="flex h-7 min-w-0 flex-1 items-center justify-end gap-1 bg-transparent text-right text-xs font-semibold text-[#18181b] dark:text-foreground"
-                          onClick={() => {
-                            setIsAspectRatioMenuOpen((open) => !open);
-                            setIsModelMenuOpen(false);
-                            setIsResolutionMenuOpen(false);
-                            setIsQualityMenuOpen(false);
-                          }}
-                        >
-                          <span className="truncate">{imageAspectRatioLabel}</span>
-                          <ChevronDown className={cn("size-4 shrink-0 opacity-60 transition", isAspectRatioMenuOpen && "rotate-180")} />
-                        </button>
-                        {isAspectRatioMenuOpen ? (
-                          <div className="absolute bottom-[calc(100%+0.5rem)] right-0 z-[90] max-h-[14rem] w-[min(17rem,calc(100vw-3rem))] overflow-y-auto rounded-[16px] border border-[#e5e7eb] bg-white p-1.5 shadow-[0_18px_46px_-26px_rgba(15,23,42,0.35)] dark:border-border dark:bg-card dark:shadow-[0_18px_46px_-24px_rgba(0,0,0,0.72)]">
-                            {IMAGE_ASPECT_RATIO_OPTIONS.map((option) => {
-                              const active = option.value === imageAspectRatio;
-                              return (
-                                <button
-                                  key={option.label}
-                                  type="button"
-                                  className={cn(
-                                    "flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm text-[#45515e] transition hover:bg-black/[0.05] dark:text-muted-foreground dark:hover:bg-accent/60",
-                                    active && "bg-black/[0.05] font-medium text-[#18181b] dark:bg-accent dark:text-foreground",
-                                  )}
-                                  onClick={() => {
-                                    onImageAspectRatioChange(option.value);
-                                    setIsAspectRatioMenuOpen(false);
-                                  }}
-                                >
-                                  <span className="min-w-0 truncate">{option.label}</span>
-                                  {active ? <Check className="size-4 shrink-0" /> : null}
-                                </button>
-                              );
-                            })}
+                      <div className={cn("grid gap-2", supportsQuality ? "grid-cols-2 sm:grid-cols-3" : "grid-cols-2")}>
+                        <div className="flex h-9 min-w-0 items-center justify-between gap-1.5 rounded-full border border-[#e5e7eb] bg-white px-2.5 dark:border-border dark:bg-background/70">
+                          <span className="shrink-0 text-[11px] font-medium text-[#45515e] dark:text-muted-foreground">张数</span>
+                          <Input
+                            type="number"
+                            inputMode="numeric"
+                            min="1"
+                            max="10"
+                            step="1"
+                            value={imageCount}
+                            onChange={(event) => onImageCountChange(event.target.value)}
+                            className="h-7 w-[36px] border-0 bg-transparent px-0 text-center text-xs font-semibold text-[#18181b] shadow-none focus-visible:ring-0 dark:text-foreground"
+                          />
+                        </div>
+                        <div className="flex h-9 min-w-0 items-center justify-between gap-1.5 rounded-full border border-[#e5e7eb] bg-white px-2.5 text-[11px] dark:border-border dark:bg-background/70">
+                          <span className="shrink-0 font-medium text-[#45515e] dark:text-muted-foreground">尺寸</span>
+                          <span className="min-w-0 truncate text-right text-xs font-semibold text-[#18181b] dark:text-foreground">
+                            {imageSizeModeLabel}
+                          </span>
+                        </div>
+                        <div className="col-span-2 grid grid-cols-3 gap-1 rounded-full border border-[#e5e7eb] bg-white p-1 dark:border-border dark:bg-background/70 sm:col-span-3">
+                          {IMAGE_SIZE_MODE_OPTIONS.map((option) => {
+                            const active = option.value === imageSizeMode;
+                            return (
+                              <button
+                                key={option.value}
+                                type="button"
+                                className={cn(
+                                  "h-7 min-w-0 rounded-full px-2 text-xs font-medium text-[#45515e] transition hover:bg-black/[0.05] dark:text-muted-foreground dark:hover:bg-accent/60",
+                                  active && "bg-[#181e25] text-white hover:bg-[#181e25] dark:bg-foreground dark:text-background",
+                                )}
+                                onClick={() => {
+                                  onImageSizeModeChange(option.value);
+                                  setIsAspectRatioMenuOpen(false);
+                                  setIsResolutionMenuOpen(false);
+                                  setIsQualityMenuOpen(false);
+                                }}
+                              >
+                                <span className="truncate">{option.label}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                        {imageSizeMode === "custom" ? (
+                          <div className="col-span-2 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 rounded-2xl border border-[#e5e7eb] bg-white px-3 py-2 dark:border-border dark:bg-background/70 sm:col-span-3">
+                            <label className="min-w-0">
+                              <span className="sr-only">手动输入宽度</span>
+                              <Input
+                                type="number"
+                                inputMode="numeric"
+                                min="1"
+                                step="1"
+                                value={imageCustomWidth}
+                                onChange={(event) => onImageCustomWidthChange(event.target.value)}
+                                className="h-8 min-w-0 border-0 bg-transparent px-0 text-center text-xs font-semibold text-[#18181b] shadow-none focus-visible:ring-0 dark:text-foreground"
+                              />
+                            </label>
+                            <X className="size-3.5 shrink-0 text-[#8e8e93]" />
+                            <label className="min-w-0">
+                              <span className="sr-only">手动输入高度</span>
+                              <Input
+                                type="number"
+                                inputMode="numeric"
+                                min="1"
+                                step="1"
+                                value={imageCustomHeight}
+                                onChange={(event) => onImageCustomHeightChange(event.target.value)}
+                                className="h-8 min-w-0 border-0 bg-transparent px-0 text-center text-xs font-semibold text-[#18181b] shadow-none focus-visible:ring-0 dark:text-foreground"
+                              />
+                            </label>
                           </div>
                         ) : null}
-                      </div>
-                      <div
-                        ref={resolutionMenuRef}
-                        className="relative flex h-9 min-w-0 items-center justify-between gap-1.5 rounded-full border border-[#e5e7eb] bg-white px-2.5 text-[11px] dark:border-border dark:bg-background/70"
-                      >
-                        <span className="shrink-0 font-medium text-[#45515e] dark:text-muted-foreground">分辨率</span>
-                        <button
-                          type="button"
-                          className="flex h-7 min-w-0 flex-1 items-center justify-end gap-1 bg-transparent text-right text-xs font-semibold text-[#18181b] dark:text-foreground"
-                          onClick={() => {
-                            setIsResolutionMenuOpen((open) => !open);
-                            setIsModelMenuOpen(false);
-                            setIsAspectRatioMenuOpen(false);
-                            setIsQualityMenuOpen(false);
-                          }}
-                        >
-                          <span className="truncate">{imageResolutionLabel}</span>
-                          <ChevronDown className={cn("size-4 shrink-0 opacity-60 transition", isResolutionMenuOpen && "rotate-180")} />
-                        </button>
-                        {isResolutionMenuOpen ? (
-                          <div className="absolute bottom-[calc(100%+0.5rem)] left-0 z-[90] max-h-[14rem] w-[min(12rem,calc(100vw-3rem))] overflow-y-auto rounded-[16px] border border-[#e5e7eb] bg-white p-1.5 shadow-[0_18px_46px_-26px_rgba(15,23,42,0.35)] dark:border-border dark:bg-card dark:shadow-[0_18px_46px_-24px_rgba(0,0,0,0.72)]">
-                            {IMAGE_RESOLUTION_OPTIONS.map((option) => {
-                              const active = option.value === imageResolution;
-                              return (
-                                <button
-                                  key={option.value}
-                                  type="button"
-                                  className={cn(
-                                    "flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm text-[#45515e] transition hover:bg-black/[0.05] dark:text-muted-foreground dark:hover:bg-accent/60",
-                                    active && "bg-black/[0.05] font-medium text-[#18181b] dark:bg-accent dark:text-foreground",
-                                  )}
-                                  onClick={() => {
-                                    onImageResolutionChange(option.value);
-                                    setIsResolutionMenuOpen(false);
-                                  }}
-                                >
-                                  <span className="min-w-0 truncate">{option.label}</span>
-                                  {active ? <Check className="size-4 shrink-0" /> : null}
-                                </button>
-                              );
-                            })}
-                          </div>
-                        ) : null}
-                      </div>
-                  {supportsQuality ? (
-                      <div
-                    ref={qualityMenuRef}
-                    className="relative flex h-9 min-w-0 items-center justify-between gap-1.5 rounded-full border border-[#e5e7eb] bg-white px-2.5 text-[11px] dark:border-border dark:bg-background/70"
-                  >
-                    <span className="flex shrink-0 items-center gap-1 font-medium text-[#45515e] dark:text-muted-foreground">
-                      质量
-                      <Popover open={isOutputHintOpen} onOpenChange={setIsOutputHintOpen}>
-                        <PopoverTrigger asChild>
-                          <button
-                            type="button"
-                            className="inline-flex size-4 shrink-0 items-center justify-center text-[#8e8e93] transition hover:text-[#45515e] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring dark:text-muted-foreground dark:hover:text-foreground"
-                            aria-label="查看图片输出说明"
-                          >
-                            <CircleHelp className="size-3.5" />
-                          </button>
-                        </PopoverTrigger>
-                        <PopoverContent
-                          align="center"
-                          side="top"
-                          sideOffset={6}
-                          className="z-[120] w-[min(calc(100vw-2rem),20rem)] rounded-xl border-[#e5e7eb] bg-white px-4 py-3 text-xs leading-6 text-[#45515e] shadow-[0_24px_80px_-32px_rgba(15,23,42,0.35)] dark:border-border dark:bg-card dark:text-muted-foreground dark:shadow-[0_24px_80px_-28px_rgba(0,0,0,0.72)]"
-                          onOpenAutoFocus={(event) => event.preventDefault()}
-                        >
-                          {imageOutputHint}
-                        </PopoverContent>
-                      </Popover>
-                    </span>
-                    <button
-                      type="button"
-                      className="flex h-7 min-w-0 flex-1 items-center justify-end gap-1 bg-transparent text-right text-xs font-semibold text-[#18181b] dark:text-foreground"
-                      onClick={() => {
-                        setIsQualityMenuOpen((open) => !open);
-                        setIsModelMenuOpen(false);
-                        setIsAspectRatioMenuOpen(false);
-                        setIsResolutionMenuOpen(false);
-                      }}
-                      title={imageQualityOptions.find((option) => option.value === imageQuality)?.description}
-                    >
-                      <span className="truncate">{imageQualityLabel}</span>
-                      <ChevronDown className={cn("size-4 shrink-0 opacity-60 transition", isQualityMenuOpen && "rotate-180")} />
-                    </button>
-                    {isQualityMenuOpen ? (
-                      <div className="absolute bottom-[calc(100%+0.5rem)] right-0 z-[90] max-h-[14rem] w-[min(17rem,calc(100vw-3rem))] overflow-y-auto rounded-[16px] border border-[#e5e7eb] bg-white p-1.5 shadow-[0_18px_46px_-26px_rgba(15,23,42,0.35)] dark:border-border dark:bg-card dark:shadow-[0_18px_46px_-24px_rgba(0,0,0,0.72)]">
-                        {imageQualityOptions.map((option) => {
-                          const active = option.value === imageQuality;
-                          return (
-                            <button
-                              key={option.value}
-                              type="button"
-                              className={cn(
-                                "flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left text-sm text-[#45515e] transition hover:bg-black/[0.05] dark:text-muted-foreground dark:hover:bg-accent/60",
-                                active && "bg-black/[0.05] font-medium text-[#18181b] dark:bg-accent dark:text-foreground",
-                              )}
-                              title={option.description}
-                              onClick={() => {
-                                onImageQualityChange(option.value);
-                                setIsQualityMenuOpen(false);
-                              }}
+                        {imageSizeMode === "ratio" ? (
+                          <>
+                            <div
+                              ref={aspectRatioMenuRef}
+                              className="relative flex h-9 min-w-0 items-center justify-between gap-1.5 rounded-full border border-[#e5e7eb] bg-white px-2.5 text-[11px] dark:border-border dark:bg-background/70"
                             >
-                              <span className="min-w-0">
-                                <span className="block truncate">{option.label}</span>
-                                <span className="block truncate text-[11px] font-normal text-[#8e8e93] dark:text-muted-foreground">
-                                  {option.description}
-                                </span>
-                              </span>
-                              {active ? <Check className="size-4 shrink-0" /> : null}
+                              <span className="shrink-0 font-medium text-[#45515e] dark:text-muted-foreground">比例</span>
+                              <button
+                                type="button"
+                                className="flex h-7 min-w-0 flex-1 items-center justify-end gap-1 bg-transparent text-right text-xs font-semibold text-[#18181b] dark:text-foreground"
+                                onClick={() => {
+                                  setIsAspectRatioMenuOpen((open) => !open);
+                                  setIsModelMenuOpen(false);
+                                  setIsResolutionMenuOpen(false);
+                                  setIsQualityMenuOpen(false);
+                                }}
+                              >
+                                <span className="truncate">{imageAspectRatioLabel}</span>
+                                <ChevronDown className={cn("size-4 shrink-0 opacity-60 transition", isAspectRatioMenuOpen && "rotate-180")} />
+                              </button>
+                              {isAspectRatioMenuOpen ? (
+                                <div className="absolute bottom-[calc(100%+0.5rem)] right-0 z-[90] max-h-[14rem] w-[min(17rem,calc(100vw-3rem))] overflow-y-auto rounded-[16px] border border-[#e5e7eb] bg-white p-1.5 shadow-[0_18px_46px_-26px_rgba(15,23,42,0.35)] dark:border-border dark:bg-card dark:shadow-[0_18px_46px_-24px_rgba(0,0,0,0.72)]">
+                                  {IMAGE_ASPECT_RATIO_OPTIONS.map((option) => {
+                                    const active = option.value === imageAspectRatio;
+                                    return (
+                                      <button
+                                        key={option.label}
+                                        type="button"
+                                        className={cn(
+                                          "flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm text-[#45515e] transition hover:bg-black/[0.05] dark:text-muted-foreground dark:hover:bg-accent/60",
+                                          active && "bg-black/[0.05] font-medium text-[#18181b] dark:bg-accent dark:text-foreground",
+                                        )}
+                                        onClick={() => {
+                                          onImageAspectRatioChange(option.value);
+                                          setIsAspectRatioMenuOpen(false);
+                                        }}
+                                      >
+                                        <span className="min-w-0 truncate">{option.label}</span>
+                                        {active ? <Check className="size-4 shrink-0" /> : null}
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              ) : null}
+                            </div>
+                            <div
+                              ref={resolutionMenuRef}
+                              className="relative flex h-9 min-w-0 items-center justify-between gap-1.5 rounded-full border border-[#e5e7eb] bg-white px-2.5 text-[11px] dark:border-border dark:bg-background/70"
+                            >
+                              <span className="shrink-0 font-medium text-[#45515e] dark:text-muted-foreground">分辨率</span>
+                              <button
+                                type="button"
+                                className="flex h-7 min-w-0 flex-1 items-center justify-end gap-1 bg-transparent text-right text-xs font-semibold text-[#18181b] dark:text-foreground"
+                                onClick={() => {
+                                  setIsResolutionMenuOpen((open) => !open);
+                                  setIsModelMenuOpen(false);
+                                  setIsAspectRatioMenuOpen(false);
+                                  setIsQualityMenuOpen(false);
+                                }}
+                              >
+                                <span className="truncate">{imageResolutionLabel}</span>
+                                <ChevronDown className={cn("size-4 shrink-0 opacity-60 transition", isResolutionMenuOpen && "rotate-180")} />
+                              </button>
+                              {isResolutionMenuOpen ? (
+                                <div className="absolute bottom-[calc(100%+0.5rem)] left-0 z-[90] max-h-[14rem] w-[min(12rem,calc(100vw-3rem))] overflow-y-auto rounded-[16px] border border-[#e5e7eb] bg-white p-1.5 shadow-[0_18px_46px_-26px_rgba(15,23,42,0.35)] dark:border-border dark:bg-card dark:shadow-[0_18px_46px_-24px_rgba(0,0,0,0.72)]">
+                                  {IMAGE_RESOLUTION_OPTIONS.map((option) => {
+                                    const active = option.value === imageResolution;
+                                    return (
+                                      <button
+                                        key={option.value}
+                                        type="button"
+                                        className={cn(
+                                          "flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm text-[#45515e] transition hover:bg-black/[0.05] dark:text-muted-foreground dark:hover:bg-accent/60",
+                                          active && "bg-black/[0.05] font-medium text-[#18181b] dark:bg-accent dark:text-foreground",
+                                        )}
+                                        onClick={() => {
+                                          onImageResolutionChange(option.value);
+                                          setIsResolutionMenuOpen(false);
+                                        }}
+                                      >
+                                        <span className="min-w-0 truncate">{option.label}</span>
+                                        {active ? <Check className="size-4 shrink-0" /> : null}
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              ) : null}
+                            </div>
+                          </>
+                        ) : null}
+                        {supportsQuality ? (
+                          <div
+                            ref={qualityMenuRef}
+                            className="relative flex h-9 min-w-0 items-center justify-between gap-1.5 rounded-full border border-[#e5e7eb] bg-white px-2.5 text-[11px] dark:border-border dark:bg-background/70"
+                          >
+                            <span className="flex shrink-0 items-center gap-1 font-medium text-[#45515e] dark:text-muted-foreground">
+                              质量
+                              <Popover open={isOutputHintOpen} onOpenChange={setIsOutputHintOpen}>
+                                <PopoverTrigger asChild>
+                                  <button
+                                    type="button"
+                                    className="inline-flex size-4 shrink-0 items-center justify-center text-[#8e8e93] transition hover:text-[#45515e] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring dark:text-muted-foreground dark:hover:text-foreground"
+                                    aria-label="查看图片输出说明"
+                                  >
+                                    <CircleHelp className="size-3.5" />
+                                  </button>
+                                </PopoverTrigger>
+                                <PopoverContent
+                                  align="center"
+                                  side="top"
+                                  sideOffset={6}
+                                  className="z-[120] w-[min(calc(100vw-2rem),20rem)] rounded-xl border-[#e5e7eb] bg-white px-4 py-3 text-xs leading-6 text-[#45515e] shadow-[0_24px_80px_-32px_rgba(15,23,42,0.35)] dark:border-border dark:bg-card dark:text-muted-foreground dark:shadow-[0_24px_80px_-28px_rgba(0,0,0,0.72)]"
+                                  onOpenAutoFocus={(event) => event.preventDefault()}
+                                >
+                                  {imageOutputHint}
+                                </PopoverContent>
+                              </Popover>
+                            </span>
+                            <button
+                              type="button"
+                              className="flex h-7 min-w-0 flex-1 items-center justify-end gap-1 bg-transparent text-right text-xs font-semibold text-[#18181b] dark:text-foreground"
+                              onClick={() => {
+                                setIsQualityMenuOpen((open) => !open);
+                                setIsModelMenuOpen(false);
+                                setIsAspectRatioMenuOpen(false);
+                                setIsResolutionMenuOpen(false);
+                              }}
+                              title={imageQualityOptions.find((option) => option.value === imageQuality)?.description}
+                            >
+                              <span className="truncate">{imageQualityLabel}</span>
+                              <ChevronDown className={cn("size-4 shrink-0 opacity-60 transition", isQualityMenuOpen && "rotate-180")} />
                             </button>
-                          );
-                        })}
-                      </div>
-                    ) : null}
-                      </div>
-                  ) : null}
+                            {isQualityMenuOpen ? (
+                              <div className="absolute bottom-[calc(100%+0.5rem)] right-0 z-[90] max-h-[14rem] w-[min(17rem,calc(100vw-3rem))] overflow-y-auto rounded-[16px] border border-[#e5e7eb] bg-white p-1.5 shadow-[0_18px_46px_-26px_rgba(15,23,42,0.35)] dark:border-border dark:bg-card dark:shadow-[0_18px_46px_-24px_rgba(0,0,0,0.72)]">
+                                {imageQualityOptions.map((option) => {
+                                  const active = option.value === imageQuality;
+                                  return (
+                                    <button
+                                      key={option.value}
+                                      type="button"
+                                      className={cn(
+                                        "flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left text-sm text-[#45515e] transition hover:bg-black/[0.05] dark:text-muted-foreground dark:hover:bg-accent/60",
+                                        active && "bg-black/[0.05] font-medium text-[#18181b] dark:bg-accent dark:text-foreground",
+                                      )}
+                                      title={option.description}
+                                      onClick={() => {
+                                        onImageQualityChange(option.value);
+                                        setIsQualityMenuOpen(false);
+                                      }}
+                                    >
+                                      <span className="min-w-0">
+                                        <span className="block truncate">{option.label}</span>
+                                        <span className="block truncate text-[11px] font-normal text-[#8e8e93] dark:text-muted-foreground">
+                                          {option.description}
+                                        </span>
+                                      </span>
+                                      {active ? <Check className="size-4 shrink-0" /> : null}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            ) : null}
+                          </div>
+                        ) : null}
                       </div>
                     </PopoverContent>
                   </Popover>

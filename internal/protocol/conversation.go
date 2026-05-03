@@ -48,6 +48,7 @@ type ConversationRequest struct {
 	N                  int
 	Size               string
 	Quality            string
+	OutputFormat       string
 	ResponseFormat     string
 	BaseURL            string
 	OwnerID            string
@@ -58,7 +59,9 @@ type ConversationRequest struct {
 }
 
 func (r ConversationRequest) Normalized() ConversationRequest {
+	r.Size = NormalizeImageGenerationSize(r.Size)
 	r.Quality = ImageQualityForModel(r.Model, r.Quality)
+	r.RequirePaidAccount = r.RequirePaidAccount || RequiresPaidImageSize(r.Size)
 	return r
 }
 
@@ -422,6 +425,9 @@ func (e *Engine) StreamImageOutputsWithPool(ctx context.Context, request Convers
 }
 
 func (e *Engine) StreamImageOutputs(ctx context.Context, client *backend.Client, request ConversationRequest, index, total int) (<-chan ImageOutput, <-chan error) {
+	if request.ResponsesImageTool {
+		return e.StreamResponsesImageToolOutputs(ctx, client, request, index, total)
+	}
 	out := make(chan ImageOutput)
 	errCh := make(chan error, 1)
 	go func() {
@@ -470,10 +476,11 @@ func (e *Engine) StreamImageOutputs(ctx context.Context, client *backend.Client,
 			for _, data := range bytesItems {
 				imageItems = append(imageItems, map[string]any{"b64_json": base64.StdEncoding.EncodeToString(data)})
 			}
-			result := e.FormatImageResult(imageItems, request.Prompt, request.ResponseFormat, request.BaseURL, request.OwnerID, request.OwnerName, time.Now().Unix(), "")
+			created := time.Now().Unix()
+			result := e.FormatImageResult(imageItems, request.Prompt, request.ResponseFormat, request.BaseURL, request.OwnerID, request.OwnerName, created, "")
 			data := util.AsMapSlice(result["data"])
 			if len(data) > 0 {
-				out <- ImageOutput{Kind: "result", Model: request.Model, Index: index, Total: total, Created: time.Now().Unix(), Data: data}
+				out <- ImageOutput{Kind: "result", Model: request.Model, Index: index, Total: total, Created: created, Data: data}
 			}
 			errCh <- nil
 			return
@@ -484,6 +491,297 @@ func (e *Engine) StreamImageOutputs(ctx context.Context, client *backend.Client,
 		errCh <- nil
 	}()
 	return out, errCh
+}
+
+const codexResponsesImageMainModel = "gpt-5.5"
+
+const responsesImagePromptGuardPrefix = "Use the following text as the complete prompt. Do not rewrite it:"
+
+const codexResponsesImageToolBridgeMarker = "<chatgpt2api-codex-image-generation>"
+
+const codexResponsesImageToolBridgeText = codexResponsesImageToolBridgeMarker + "\nWhen the user asks for raster image generation or editing, use the OpenAI Responses native `image_generation` tool attached to this request. The local Codex client may not expose an `image_gen` namespace, but that does not mean image generation is unavailable. Do not answer with prose or JSON instead of calling the image_generation tool.\n</chatgpt2api-codex-image-generation>"
+
+func (e *Engine) StreamResponsesImageToolOutputs(ctx context.Context, client *backend.Client, request ConversationRequest, index, total int) (<-chan ImageOutput, <-chan error) {
+	out := make(chan ImageOutput)
+	errCh := make(chan error, 1)
+	go func() {
+		defer close(out)
+		defer close(errCh)
+		payloads, upstreamErr := client.StreamCodexResponses(ctx, CodexResponsesImageToolPayload(request))
+		created := time.Now().Unix()
+		var imageItems []map[string]any
+		var textParts []string
+		upstreamFailure := ""
+		for payload := range payloads {
+			if payload == "" || payload == "[DONE]" {
+				continue
+			}
+			var event map[string]any
+			if err := json.Unmarshal([]byte(payload), &event); err != nil {
+				continue
+			}
+			eventType := util.Clean(event["type"])
+			created = responseEventCreatedAt(event, created)
+			if failure := responsesImageToolEventErrorMessage(event); failure != "" {
+				upstreamFailure = failure
+			}
+			switch eventType {
+			case "response.output_text.delta":
+				if delta := util.Clean(event["delta"]); delta != "" {
+					textParts = append(textParts, delta)
+					out <- ImageOutput{Kind: "progress", Model: request.Model, Index: index, Total: total, Created: created, Text: delta, UpstreamEventType: eventType}
+				}
+			case "response.output_item.done":
+				if item := util.StringMap(event["item"]); len(item) > 0 {
+					imageItems = appendResponseImageOutputItems(imageItems, []map[string]any{item})
+					if text := responseOutputItemText(item); text != "" {
+						textParts = append(textParts, text)
+					}
+				}
+			case "response.completed":
+				if response := util.StringMap(event["response"]); len(response) > 0 {
+					imageItems = appendResponseImageOutputItems(imageItems, util.AsMapSlice(response["output"]))
+					if text := responseOutputItemsText(util.AsMapSlice(response["output"])); text != "" {
+						textParts = append(textParts, text)
+					}
+				}
+			default:
+				out <- ImageOutput{Kind: "progress", Model: request.Model, Index: index, Total: total, Created: created, UpstreamEventType: eventType}
+			}
+		}
+		if err := <-upstreamErr; err != nil {
+			errCh <- err
+			return
+		}
+		if upstreamFailure != "" {
+			errCh <- fmt.Errorf("upstream response failed: %s", upstreamFailure)
+			return
+		}
+		if len(imageItems) > 0 {
+			result := e.FormatImageResult(imageItems, request.Prompt, request.ResponseFormat, request.BaseURL, request.OwnerID, request.OwnerName, created, "")
+			data := util.AsMapSlice(result["data"])
+			if len(data) > 0 {
+				out <- ImageOutput{Kind: "result", Model: request.Model, Index: index, Total: total, Created: created, Data: data}
+				errCh <- nil
+				return
+			}
+		}
+		if text := strings.TrimSpace(strings.Join(textParts, "")); text != "" {
+			out <- ImageOutput{Kind: "message", Model: request.Model, Index: index, Total: total, Created: created, Text: text}
+			errCh <- nil
+			return
+		}
+		errCh <- fmt.Errorf("image generation failed")
+	}()
+	return out, errCh
+}
+
+func CodexResponsesImageToolPayload(request ConversationRequest) map[string]any {
+	prompt := strings.TrimSpace(request.Prompt)
+	content := []map[string]any{{"type": "input_text", "text": guardedResponsesImagePrompt(prompt)}}
+	for _, image := range request.Images {
+		if imageURL := imageInputDataURL(image); imageURL != "" {
+			content = append(content, map[string]any{"type": "input_image", "image_url": imageURL})
+		}
+	}
+
+	tool := map[string]any{
+		"type":          "image_generation",
+		"action":        responseImageToolAction(request.Images),
+		"size":          firstNonEmpty(request.Size, "auto"),
+		"output_format": firstNonEmpty(request.OutputFormat, "png"),
+	}
+	if model := responseImageToolModel(request.Model); model != "" {
+		tool["model"] = model
+	}
+	if quality := strings.TrimSpace(request.Quality); quality != "" && util.Clean(tool["model"]) != util.ImageModelCodex {
+		tool["quality"] = quality
+	}
+
+	return map[string]any{
+		"instructions":        responsesImageToolInstructions(request.Messages, prompt),
+		"stream":              true,
+		"reasoning":           map[string]any{"effort": "medium", "summary": "auto"},
+		"parallel_tool_calls": true,
+		"include":             []any{"reasoning.encrypted_content"},
+		"model":               responsesImageMainModel(request.Model),
+		"store":               false,
+		"tool_choice":         map[string]any{"type": "image_generation"},
+		"input": []map[string]any{{
+			"type":    "message",
+			"role":    "user",
+			"content": content,
+		}},
+		"tools": []map[string]any{tool},
+	}
+}
+
+func guardedResponsesImagePrompt(prompt string) string {
+	prompt = strings.TrimSpace(prompt)
+	if prompt == "" {
+		return responsesImagePromptGuardPrefix
+	}
+	return responsesImagePromptGuardPrefix + "\n" + prompt
+}
+
+func responsesImageMainModel(model string) string {
+	model = strings.TrimSpace(model)
+	if model == "" || util.IsImageGenerationModel(model) {
+		return codexResponsesImageMainModel
+	}
+	return model
+}
+
+func responseImageToolModel(model string) string {
+	model = strings.TrimSpace(model)
+	if model == "" || model == util.ImageModelAuto {
+		return util.ImageModelGPT
+	}
+	if util.IsImageGenerationModel(model) {
+		return model
+	}
+	return ""
+}
+
+func responseImageToolAction(images []string) string {
+	if len(images) > 0 {
+		return "edit"
+	}
+	return "generate"
+}
+
+func imageInputDataURL(image string) string {
+	image = strings.TrimSpace(image)
+	if image == "" {
+		return ""
+	}
+	if strings.HasPrefix(image, "data:image/") {
+		return image
+	}
+	return "data:image/png;base64," + image
+}
+
+func responsesImageToolInstructions(messages []map[string]any, prompt string) string {
+	prompt = strings.TrimSpace(prompt)
+	var history []string
+	for index, message := range messages {
+		role := firstNonEmpty(util.Clean(message["role"]), "user")
+		text := strings.TrimSpace(util.Clean(message["content"]))
+		if text == "" {
+			continue
+		}
+		if index == len(messages)-1 && strings.EqualFold(role, "user") && text == prompt {
+			continue
+		}
+		history = append(history, role+": "+text)
+	}
+	if len(history) == 0 {
+		return codexResponsesImageToolBridgeText
+	}
+	return codexResponsesImageToolBridgeText + "\n\nUse this conversation history only as context for image generation. Do not render the history text unless the current request explicitly asks for it.\n\n" + strings.Join(history, "\n")
+}
+
+func responseEventCreatedAt(event map[string]any, fallback int64) int64 {
+	if created := util.ToInt(event["created_at"], 0); created > 0 {
+		return int64(created)
+	}
+	if response := util.StringMap(event["response"]); len(response) > 0 {
+		if created := util.ToInt(response["created_at"], 0); created > 0 {
+			return int64(created)
+		}
+	}
+	return fallback
+}
+
+func responsesImageToolEventErrorMessage(event map[string]any) string {
+	eventType := util.Clean(event["type"])
+	switch eventType {
+	case "error", "response.failed", "response.incomplete", "response.cancelled", "response.canceled":
+	default:
+		return ""
+	}
+	for _, value := range []any{
+		event["error"],
+		util.StringMap(event["response"])["error"],
+		util.StringMap(event["response"])["incomplete_details"],
+		event["message"],
+	} {
+		if message := responseErrorValueMessage(value); message != "" {
+			return message
+		}
+	}
+	if eventType == "response.incomplete" {
+		return "response incomplete"
+	}
+	if eventType == "response.cancelled" || eventType == "response.canceled" {
+		return "response cancelled"
+	}
+	return "response failed"
+}
+
+func responseErrorValueMessage(value any) string {
+	if text, ok := value.(string); ok {
+		return strings.TrimSpace(text)
+	}
+	item, ok := value.(map[string]any)
+	if !ok || len(item) == 0 {
+		return ""
+	}
+	for _, key := range []string{"message", "reason", "code", "type"} {
+		if text := strings.TrimSpace(util.Clean(item[key])); text != "" {
+			return text
+		}
+	}
+	return ""
+}
+
+func appendResponseImageOutputItems(items []map[string]any, output []map[string]any) []map[string]any {
+	seen := map[string]struct{}{}
+	for _, item := range items {
+		if b64 := util.Clean(item["b64_json"]); b64 != "" {
+			seen[b64] = struct{}{}
+		}
+	}
+	for _, item := range output {
+		if util.Clean(item["type"]) != "image_generation_call" {
+			continue
+		}
+		b64 := util.Clean(item["result"])
+		if b64 == "" {
+			continue
+		}
+		if _, ok := seen[b64]; ok {
+			continue
+		}
+		seen[b64] = struct{}{}
+		items = append(items, map[string]any{"b64_json": b64, "revised_prompt": util.Clean(item["revised_prompt"])})
+	}
+	return items
+}
+
+func responseOutputItemsText(items []map[string]any) string {
+	var parts []string
+	for _, item := range items {
+		if text := responseOutputItemText(item); text != "" {
+			parts = append(parts, text)
+		}
+	}
+	return strings.TrimSpace(strings.Join(parts, "\n"))
+}
+
+func responseOutputItemText(item map[string]any) string {
+	if util.Clean(item["type"]) != "message" {
+		return ""
+	}
+	var parts []string
+	for _, content := range util.AsMapSlice(item["content"]) {
+		if util.Clean(content["type"]) == "output_text" {
+			if text := strings.TrimSpace(util.Clean(content["text"])); text != "" {
+				parts = append(parts, text)
+			}
+		}
+	}
+	return strings.TrimSpace(strings.Join(parts, "\n"))
 }
 
 func (e *Engine) CollectImageOutputs(outputs <-chan ImageOutput, errCh <-chan error) (map[string]any, error) {
@@ -673,7 +971,21 @@ func AssistantHistoryMessages(messages []map[string]any) []string {
 
 const maxFreeGeneratePixels = 1577536
 
+func NormalizeImageGenerationSize(size string) string {
+	switch strings.ToLower(strings.TrimSpace(size)) {
+	case "1080p":
+		return "1080x1080"
+	case "2k":
+		return "2048x2048"
+	case "4k":
+		return "2880x2880"
+	default:
+		return strings.TrimSpace(size)
+	}
+}
+
 func RequiresPaidImageSize(size string) bool {
+	size = NormalizeImageGenerationSize(size)
 	width, height, ok := imageSizeDimensions(size)
 	return ok && width*height > maxFreeGeneratePixels
 }
@@ -693,10 +1005,15 @@ func imageSizeDimensions(size string) (int, int, bool) {
 
 func BuildImagePrompt(prompt, size, quality string) string {
 	prompt = strings.TrimSpace(prompt)
+	size = NormalizeImageGenerationSize(size)
+	if strings.EqualFold(size, "auto") {
+		size = ""
+	}
 	var hintsList []string
 	hints := map[string]string{
 		"1:1":  "输出为 1:1 正方形构图，主体居中，适合正方形画幅。",
 		"3:2":  "输出为 3:2 横版构图，适合摄影、产品展示和横向叙事画幅。",
+		"2:3":  "输出为 2:3 竖版构图，适合海报、人物和纵向叙事画幅。",
 		"16:9": "输出为 16:9 横屏构图，适合宽画幅展示。",
 		"21:9": "输出为 21:9 超宽横版构图，适合电影感全景和宽银幕画幅。",
 		"9:16": "输出为 9:16 竖屏构图，适合竖版画幅展示。",
@@ -934,8 +1251,15 @@ func conversationBaseEvent(eventType string, state *ConversationState) Conversat
 }
 
 func anyList(v any) []any {
-	if list, ok := v.([]any); ok {
+	switch list := v.(type) {
+	case []any:
 		return list
+	case []map[string]any:
+		out := make([]any, 0, len(list))
+		for _, item := range list {
+			out = append(out, item)
+		}
+		return out
 	}
 	return nil
 }

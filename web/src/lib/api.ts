@@ -163,6 +163,7 @@ export type SettingsConfig = {
   registration_enabled?: boolean;
   refresh_account_interval_minute?: number | string;
   image_concurrent_limit?: number | string;
+  image_task_timeout_seconds?: number | string;
   user_default_concurrent_limit?: number | string;
   user_default_rpm_limit?: number | string;
   image_retention_days?: number | string;
@@ -207,6 +208,12 @@ export type ManagedImage = {
   thumbnail_url?: string;
   width?: number;
   height?: number;
+  resolution?: string;
+  resolution_preset?: string;
+  requested_size?: string;
+  aspect_ratio?: string;
+  orientation?: string;
+  megapixels?: number;
   created_at: string;
   published_at?: string;
 };
@@ -635,6 +642,7 @@ export async function createImageGenerationTask(
   count = 1,
   messages?: CreationTaskMessage[],
   visibility: ImageVisibility = "private",
+  imageResolution?: string,
 ) {
   return httpRequest<CreationTask>("/api/creation-tasks/image-generations", {
     method: "POST",
@@ -643,6 +651,7 @@ export async function createImageGenerationTask(
       prompt,
       ...(model ? { model } : {}),
       ...(size ? { size } : {}),
+      ...(imageResolution ? { image_resolution: imageResolution } : {}),
       ...(quality ? { quality } : {}),
       ...(messages?.length ? { messages } : {}),
       visibility,
@@ -661,6 +670,7 @@ export async function createResponseImageGenerationTask(
   messages?: CreationTaskMessage[],
   images?: string[],
   visibility: ImageVisibility = "private",
+  imageResolution?: string,
 ) {
   return httpRequest<CreationTask>("/api/creation-tasks/response-image-generations", {
     method: "POST",
@@ -669,6 +679,7 @@ export async function createResponseImageGenerationTask(
       prompt,
       model,
       ...(size ? { size } : {}),
+      ...(imageResolution ? { image_resolution: imageResolution } : {}),
       ...(quality ? { quality } : {}),
       ...(messages?.length ? { messages } : {}),
       ...(images?.length ? { images } : {}),
@@ -688,6 +699,7 @@ export async function createImageEditTask(
   count = 1,
   messages?: CreationTaskMessage[],
   visibility: ImageVisibility = "private",
+  imageResolution?: string,
 ) {
   const formData = new FormData();
   const uploadFiles = Array.isArray(files) ? files : [files];
@@ -702,6 +714,9 @@ export async function createImageEditTask(
   }
   if (size) {
     formData.append("size", size);
+  }
+  if (imageResolution) {
+    formData.append("image_resolution", imageResolution);
   }
   if (quality) {
     formData.append("quality", quality);
@@ -1175,7 +1190,10 @@ export type Sub2APIRemoteGroup = {
 };
 
 export async function fetchSub2APIServers() {
-  return httpRequest<{ servers: Sub2APIServer[] }>("/api/sub2api/servers");
+  const data = await httpRequest<{ servers?: Sub2APIServer[] | null }>("/api/sub2api/servers");
+  return {
+    servers: Array.isArray(data.servers) ? data.servers : [],
+  };
 }
 
 export async function createSub2APIServer(server: {
@@ -1186,10 +1204,14 @@ export async function createSub2APIServer(server: {
   api_key: string;
   group_id: string;
 }) {
-  return httpRequest<{ server: Sub2APIServer; servers: Sub2APIServer[] }>("/api/sub2api/servers", {
+  const data = await httpRequest<{ server: Sub2APIServer; servers?: Sub2APIServer[] | null }>("/api/sub2api/servers", {
     method: "POST",
     body: server,
   });
+  return {
+    server: data.server,
+    servers: Array.isArray(data.servers) ? data.servers : [],
+  };
 }
 
 export async function updateSub2APIServer(
@@ -1203,28 +1225,43 @@ export async function updateSub2APIServer(
     group_id?: string;
   },
 ) {
-  return httpRequest<{ server: Sub2APIServer; servers: Sub2APIServer[] }>(`/api/sub2api/servers/${serverId}`, {
+  const data = await httpRequest<{ server: Sub2APIServer; servers?: Sub2APIServer[] | null }>(`/api/sub2api/servers/${serverId}`, {
     method: "POST",
     body: updates,
   });
+  return {
+    server: data.server,
+    servers: Array.isArray(data.servers) ? data.servers : [],
+  };
 }
 
 export async function fetchSub2APIServerGroups(serverId: string) {
-  return httpRequest<{ server_id: string; groups: Sub2APIRemoteGroup[] }>(
+  const data = await httpRequest<{ server_id: string; groups?: Sub2APIRemoteGroup[] | null }>(
     `/api/sub2api/servers/${serverId}/groups`,
   );
+  return {
+    server_id: data.server_id,
+    groups: Array.isArray(data.groups) ? data.groups : [],
+  };
 }
 
 export async function deleteSub2APIServer(serverId: string) {
-  return httpRequest<{ servers: Sub2APIServer[] }>(`/api/sub2api/servers/${serverId}`, {
+  const data = await httpRequest<{ servers?: Sub2APIServer[] | null }>(`/api/sub2api/servers/${serverId}`, {
     method: "DELETE",
   });
+  return {
+    servers: Array.isArray(data.servers) ? data.servers : [],
+  };
 }
 
 export async function fetchSub2APIServerAccounts(serverId: string) {
-  return httpRequest<{ server_id: string; accounts: Sub2APIRemoteAccount[] }>(
+  const data = await httpRequest<{ server_id: string; accounts?: Sub2APIRemoteAccount[] | null }>(
     `/api/sub2api/servers/${serverId}/accounts`,
   );
+  return {
+    server_id: data.server_id,
+    accounts: Array.isArray(data.accounts) ? data.accounts : [],
+  };
 }
 
 export async function startSub2APIImport(serverId: string, accountIds: string[]) {

@@ -513,10 +513,10 @@ func ResponseImageGenerationRequest(body map[string]any, scope string, previous 
 		return ConversationRequest{}, "", err
 	}
 	tool := ResponseImageGenerationTool(body)
-	size := firstNonEmpty(util.Clean(tool["size"]), util.Clean(body["size"]), "1:1")
+	size := firstNonEmpty(util.Clean(tool["size"]), util.Clean(body["size"]), "auto")
 	inputImages := ExtractResponseImages(body["input"])
 	if len(inputImages) > 0 && util.Clean(tool["size"]) == "" && util.Clean(body["size"]) == "" {
-		size = ""
+		size = "auto"
 	}
 	images := []string(nil)
 	if previous != nil {
@@ -533,6 +533,7 @@ func ResponseImageGenerationRequest(body map[string]any, scope string, previous 
 		N:                  n,
 		Size:               size,
 		Quality:            firstNonEmpty(util.Clean(tool["quality"]), util.Clean(body["quality"])),
+		OutputFormat:       firstNonEmpty(util.Clean(tool["output_format"]), util.Clean(body["output_format"]), "png"),
 		ResponseFormat:     firstNonEmpty(util.Clean(tool["response_format"]), util.Clean(body["response_format"]), "b64_json"),
 		OwnerID:            scope,
 		OwnerName:          util.Clean(body["owner_name"]),

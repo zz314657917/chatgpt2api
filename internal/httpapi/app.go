@@ -113,6 +113,9 @@ func NewApp() (*App, error) {
 		cfg.UserDefaultConcurrentLimit,
 		cfg.UserDefaultRPMLimit,
 	)
+	app.tasks.SetTaskTimeoutGetter(func() time.Duration {
+		return time.Duration(app.config.ImageTaskTimeoutSeconds()) * time.Second
+	})
 	app.tasks.SetResponseImageHandler(func(ctx context.Context, identity service.Identity, payload map[string]any) (map[string]any, error) {
 		return app.runLoggedImageTask(ctx, identity, payload, "/api/creation-tasks/response-image-generations", "Responses 作画", func(ctx context.Context, payload map[string]any) (map[string]any, error) {
 			return app.runResponsesImageGenerationTask(ctx, payload)
@@ -1119,6 +1122,17 @@ func (a *App) recordGeneratedImages(identity service.Identity, urls []string, vi
 	a.images.RecordGeneratedImages(urls, ownerID, identityDisplayName(identity), visibility)
 }
 
+func (a *App) recordGeneratedImagesForPayload(identity service.Identity, urls []string, visibility string, payload map[string]any) {
+	if len(urls) == 0 || a.images == nil {
+		return
+	}
+	ownerID := identityScope(identity)
+	a.images.RecordGeneratedImages(urls, ownerID, identityDisplayName(identity), visibility, service.GeneratedImageMetadata{
+		ResolutionPreset: util.Clean(payload["image_resolution"]),
+		RequestedSize:    util.Clean(payload["size"]),
+	})
+}
+
 func (a *App) decorateImageList(payload map[string]any) {
 	ownerNames := a.imageOwnerDisplayNames()
 	for _, item := range util.AsMapSlice(payload["items"]) {
@@ -1166,7 +1180,7 @@ func (a *App) runLoggedImageTask(ctx context.Context, identity service.Identity,
 	model := firstNonEmpty(util.Clean(payload["model"]), util.ImageModelAuto)
 	result, err := run(ctx, payload)
 	urls := collectURLs(result)
-	a.recordGeneratedImages(identity, urls, util.Clean(payload["visibility"]))
+	a.recordGeneratedImagesForPayload(identity, urls, util.Clean(payload["visibility"]), payload)
 	if err != nil {
 		a.logCall(identity, summary, http.MethodPost, endpoint, model, start, "failed", protocolErrorHTTPStatus(err), err.Error(), urls)
 		return result, err
@@ -1190,13 +1204,28 @@ func (a *App) runResponsesImageGenerationTask(ctx context.Context, payload map[s
 		return completed, err
 	}
 	result := responsesImageTaskResult(a.engine, completed, payload)
-	if len(util.AsMapSlice(result["data"])) == 0 {
-		if text := responseOutputText(completed["output"]); text != "" {
-			result["message"] = text
-			result["output_type"] = "text"
-		}
+	if err := responsesImageTaskTextOutputError(result, completed); err != nil {
+		return result, err
 	}
 	return result, nil
+}
+
+func responsesImageTaskTextOutputError(result map[string]any, completed map[string]any) error {
+	if len(util.AsMapSlice(result["data"])) > 0 {
+		return nil
+	}
+	text := responseOutputText(completed["output"])
+	if text == "" {
+		return nil
+	}
+	result["message"] = text
+	result["output_type"] = "text"
+	return &protocol.ImageGenerationError{
+		Message:    firstNonEmpty(text, "Responses image_generation returned text instead of image data."),
+		StatusCode: http.StatusBadGateway,
+		Type:       "server_error",
+		Code:       "image_generation_text_response",
+	}
 }
 
 func responseImageTaskBody(payload map[string]any) map[string]any {
@@ -1211,13 +1240,12 @@ func responseImageTaskBody(payload map[string]any) map[string]any {
 		input = []map[string]any{{"role": "user", "content": content}}
 	}
 	tool := map[string]any{
-		"type":   "image_generation",
-		"action": responseImageTaskAction(images),
+		"type":          "image_generation",
+		"action":        responseImageTaskAction(images),
+		"size":          firstNonEmpty(util.Clean(payload["size"]), "auto"),
+		"output_format": "png",
 	}
-	if size := util.Clean(payload["size"]); size != "" {
-		tool["size"] = size
-	}
-	if quality := util.Clean(payload["quality"]); quality != "" {
+	if quality := util.Clean(payload["quality"]); quality != "" && util.Clean(payload["model"]) != util.ImageModelCodex {
 		tool["quality"] = quality
 	}
 	body := map[string]any{

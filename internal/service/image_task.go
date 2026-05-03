@@ -21,6 +21,8 @@ const (
 	TaskStatusSuccess   = "success"
 	TaskStatusError     = "error"
 	TaskStatusCancelled = "cancelled"
+
+	defaultImageTaskTimeout = 5 * time.Minute
 )
 
 type ImageTaskHandler func(context.Context, Identity, map[string]any) (map[string]any, error)
@@ -36,6 +38,7 @@ type ImageTaskService struct {
 	responseImage       ImageTaskHandler
 	retentionGetter     func() int
 	concurrentLimit     func() int
+	taskTimeoutGetter   func() time.Duration
 	userConcurrentLimit func() int
 	userRPMLimit        func() int
 	runningImages       int
@@ -89,6 +92,13 @@ func (s *ImageTaskService) SetResponseImageHandler(handler ImageTaskHandler) {
 	s.responseImage = handler
 }
 
+func (s *ImageTaskService) SetTaskTimeoutGetter(getter func() time.Duration) {
+	if getter == nil {
+		return
+	}
+	s.taskTimeoutGetter = getter
+}
+
 func (s *ImageTaskService) SubmitGeneration(ctx context.Context, identity Identity, clientTaskID, prompt, model, size, quality, baseURL string, n int, messages any, visibilityValues ...string) (map[string]any, error) {
 	prompt = strings.TrimSpace(prompt)
 	if prompt == "" {
@@ -103,6 +113,10 @@ func (s *ImageTaskService) SubmitGeneration(ctx context.Context, identity Identi
 		payload["messages"] = messages
 	}
 	return s.submit(ctx, identity, clientTaskID, "generate", payload)
+}
+
+func (s *ImageTaskService) SubmitGenerationWithMetadata(ctx context.Context, identity Identity, clientTaskID, prompt, model, size, quality, baseURL string, n int, messages any, metadata map[string]any, visibilityValues ...string) (map[string]any, error) {
+	return s.submitImageWithMetadata(ctx, identity, clientTaskID, prompt, model, size, quality, baseURL, n, messages, metadata, "generate", nil, visibilityValues...)
 }
 
 func (s *ImageTaskService) SubmitResponseImageGeneration(ctx context.Context, identity Identity, clientTaskID, prompt, model, size, quality, baseURL string, images any, n int, messages any, visibilityValues ...string) (map[string]any, error) {
@@ -121,6 +135,10 @@ func (s *ImageTaskService) SubmitResponseImageGeneration(ctx context.Context, id
 	return s.submit(ctx, identity, clientTaskID, "response-image", payload)
 }
 
+func (s *ImageTaskService) SubmitResponseImageGenerationWithMetadata(ctx context.Context, identity Identity, clientTaskID, prompt, model, size, quality, baseURL string, images any, n int, messages any, metadata map[string]any, visibilityValues ...string) (map[string]any, error) {
+	return s.submitImageWithMetadata(ctx, identity, clientTaskID, prompt, model, size, quality, baseURL, n, messages, metadata, "response-image", images, visibilityValues...)
+}
+
 func (s *ImageTaskService) SubmitEdit(ctx context.Context, identity Identity, clientTaskID, prompt, model, size, quality, baseURL string, images any, n int, messages any, visibilityValues ...string) (map[string]any, error) {
 	prompt = strings.TrimSpace(prompt)
 	if prompt == "" {
@@ -137,6 +155,10 @@ func (s *ImageTaskService) SubmitEdit(ctx context.Context, identity Identity, cl
 	return s.submit(ctx, identity, clientTaskID, "edit", payload)
 }
 
+func (s *ImageTaskService) SubmitEditWithMetadata(ctx context.Context, identity Identity, clientTaskID, prompt, model, size, quality, baseURL string, images any, n int, messages any, metadata map[string]any, visibilityValues ...string) (map[string]any, error) {
+	return s.submitImageWithMetadata(ctx, identity, clientTaskID, prompt, model, size, quality, baseURL, n, messages, metadata, "edit", images, visibilityValues...)
+}
+
 func (s *ImageTaskService) SubmitChat(ctx context.Context, identity Identity, clientTaskID, prompt, model string, messages any) (map[string]any, error) {
 	prompt = strings.TrimSpace(prompt)
 	if prompt == "" {
@@ -147,6 +169,26 @@ func (s *ImageTaskService) SubmitChat(ctx context.Context, identity Identity, cl
 	}
 	payload := map[string]any{"prompt": prompt, "model": model, "messages": messages, "n": 1, "visibility": ImageVisibilityPrivate}
 	return s.submit(ctx, identity, clientTaskID, "chat", payload)
+}
+
+func (s *ImageTaskService) submitImageWithMetadata(ctx context.Context, identity Identity, clientTaskID, prompt, model, size, quality, baseURL string, n int, messages any, metadata map[string]any, mode string, images any, visibilityValues ...string) (map[string]any, error) {
+	prompt = strings.TrimSpace(prompt)
+	if prompt == "" {
+		return nil, fmt.Errorf("prompt is required")
+	}
+	visibility, err := imageTaskVisibility(visibilityValues...)
+	if err != nil {
+		return nil, err
+	}
+	payload := map[string]any{"prompt": prompt, "model": model, "n": normalizedImageTaskCount(n), "size": size, "quality": quality, "response_format": "url", "base_url": baseURL, "visibility": visibility}
+	if images != nil {
+		payload["images"] = images
+	}
+	if messages != nil {
+		payload["messages"] = messages
+	}
+	mergeImageTaskMetadata(payload, metadata)
+	return s.submit(ctx, identity, clientTaskID, mode, payload)
 }
 
 func (s *ImageTaskService) ListTasks(identity Identity, taskIDs []string) map[string]any {
@@ -267,6 +309,9 @@ func (s *ImageTaskService) runTask(ctx context.Context, key, mode string, identi
 	if !s.updateActiveTask(key, map[string]any{"status": TaskStatusRunning, "error": ""}) {
 		return
 	}
+	runCtx, cancel := context.WithTimeout(ctx, s.taskTimeout())
+	defer cancel()
+
 	handler := s.generation
 	if mode == "edit" {
 		handler = s.edit
@@ -275,13 +320,15 @@ func (s *ImageTaskService) runTask(ctx context.Context, key, mode string, identi
 	} else if mode == "response-image" {
 		handler = s.responseImage
 	}
-	result, err := handler(ctx, identity, payload)
+	result, err := handler(runCtx, identity, payload)
 	if err != nil {
 		status := TaskStatusError
 		message := err.Error()
 		if ctx.Err() != nil {
 			status = TaskStatusCancelled
 			message = "任务已终止"
+		} else if runCtx.Err() == context.DeadlineExceeded {
+			message = "图片生成超时，请稍后重试或降低分辨率"
 		}
 		updates := map[string]any{"status": status, "error": message, "data": taskResultData(result)}
 		if outputType := util.Clean(result["output_type"]); outputType != "" {
@@ -361,6 +408,17 @@ func (s *ImageTaskService) imageConcurrentLimit() int {
 		return 1
 	}
 	return limit
+}
+
+func (s *ImageTaskService) taskTimeout() time.Duration {
+	if s.taskTimeoutGetter == nil {
+		return defaultImageTaskTimeout
+	}
+	timeout := s.taskTimeoutGetter()
+	if timeout <= 0 {
+		return defaultImageTaskTimeout
+	}
+	return timeout
 }
 
 func (s *ImageTaskService) checkUserTaskLimitsLocked(identity Identity, owner string, requested int, now time.Time) error {
@@ -613,6 +671,18 @@ func taskCount(mode string, payload map[string]any) int {
 		return 1
 	}
 	return imageTaskCount(payload)
+}
+
+func mergeImageTaskMetadata(payload map[string]any, metadata map[string]any) {
+	if len(metadata) == 0 {
+		return
+	}
+	if preset := NormalizeImageResolutionPreset(util.Clean(metadata["image_resolution"])); preset != "" {
+		payload["image_resolution"] = preset
+	}
+	if requestedSize := strings.TrimSpace(util.Clean(metadata["requested_size"])); requestedSize != "" {
+		payload["requested_size"] = requestedSize
+	}
 }
 
 func storedTaskCount(task map[string]any) int {

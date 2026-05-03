@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"image"
 	"image/color"
 	"image/png"
@@ -17,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"chatgpt2api/internal/protocol"
 	"chatgpt2api/internal/service"
 	"chatgpt2api/internal/util"
 	"chatgpt2api/internal/version"
@@ -469,7 +471,7 @@ func TestResponsesImageTaskRouteBuildsTaskPayload(t *testing.T) {
 		t.Fatalf("CreateAPIKey() error = %v", err)
 	}
 
-	body := `{"client_task_id":"response-image-route","prompt":"生成封面","model":"gpt-5.5","size":"16:9","quality":"high","n":2,"images":["data:image/png;base64,cG5n"],"messages":[{"role":"user","content":"生成封面"}],"visibility":"public"}`
+	body := `{"client_task_id":"response-image-route","prompt":"生成封面","model":"gpt-5.5","size":"2048x2048","image_resolution":"2k","quality":"high","n":2,"images":["data:image/png;base64,cG5n"],"messages":[{"role":"user","content":"生成封面"}],"visibility":"public"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/creation-tasks/response-image-generations", strings.NewReader(body))
 	req.Header.Set("Authorization", "Bearer "+rawKey)
 	res := httptest.NewRecorder()
@@ -491,6 +493,9 @@ func TestResponsesImageTaskRouteBuildsTaskPayload(t *testing.T) {
 		}
 		if images, ok := payload["images"].([]any); !ok || len(images) != 1 {
 			t.Fatalf("payload images = %#v", payload["images"])
+		}
+		if payload["image_resolution"] != "2k" || payload["requested_size"] != "2048x2048" {
+			t.Fatalf("payload request metadata = %#v", payload)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for response image handler")
@@ -528,6 +533,97 @@ func TestResponsesImageTaskResultExtractsImagesAndText(t *testing.T) {
 	})
 	if text != "模型返回文本" {
 		t.Fatalf("responseOutputText() = %q", text)
+	}
+}
+
+func TestRunLoggedImageTaskLogsTextOutputAsFailure(t *testing.T) {
+	app := newTestApp(t)
+	defer app.Close()
+
+	identity := service.Identity{ID: "admin", Role: service.AuthRoleAdmin, Name: "Admin"}
+	result, err := app.runLoggedImageTask(
+		context.Background(),
+		identity,
+		map[string]any{"model": "gpt-image-2"},
+		"/api/creation-tasks/response-image-generations",
+		"Responses 作画",
+		func(context.Context, map[string]any) (map[string]any, error) {
+			return map[string]any{"output_type": "text", "message": "模型返回文本", "data": []map[string]any{}}, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("runLoggedImageTask() error = %v", err)
+	}
+	if result["output_type"] != "text" || result["message"] != "模型返回文本" {
+		t.Fatalf("runLoggedImageTask() result = %#v", result)
+	}
+	logs := app.logs.Search(service.LogQuery{Limit: 10})
+	item := findLogBySummary(logs, "Responses 作画调用失败")
+	if item == nil {
+		t.Fatalf("expected text-only image result to write failure log, got %#v", logs)
+	}
+	detail := util.StringMap(item["detail"])
+	if detail["outcome"] != "failed" || util.ToInt(detail["status"], 0) != http.StatusBadGateway {
+		t.Fatalf("failure log detail = %#v", detail)
+	}
+}
+
+func TestResponsesImageTaskTextOutputError(t *testing.T) {
+	result := map[string]any{"data": []map[string]any{}}
+	completed := map[string]any{
+		"output": []map[string]any{
+			{"type": "message", "content": []map[string]any{{"type": "output_text", "text": "Got it! What image would you like me to generate?"}}},
+		},
+	}
+	err := responsesImageTaskTextOutputError(result, completed)
+	if err == nil {
+		t.Fatalf("responsesImageTaskTextOutputError() err = nil, result = %#v", result)
+	}
+	var imageErr *protocol.ImageGenerationError
+	if !errors.As(err, &imageErr) || imageErr.Code != "image_generation_text_response" {
+		t.Fatalf("err = %T %v, want image_generation_text_response", err, err)
+	}
+	if result["output_type"] != "text" {
+		t.Fatalf("result output_type = %#v, want text in %#v", result["output_type"], result)
+	}
+}
+
+func TestResponseImageTaskBodyPassesSizeToImageTool(t *testing.T) {
+	body := responseImageTaskBody(map[string]any{
+		"prompt":  "生成 4K 正方形封面",
+		"model":   "gpt-5.5",
+		"size":    "2880x2880",
+		"quality": "high",
+	})
+	tools := body["tools"].([]map[string]any)
+	if len(tools) != 1 {
+		t.Fatalf("tools = %#v", body["tools"])
+	}
+	tool := tools[0]
+	if tool["size"] != "2880x2880" {
+		t.Fatalf("tool size = %#v, want 2880x2880", tool["size"])
+	}
+	if tool["quality"] != "high" {
+		t.Fatalf("tool quality = %#v, want high", tool["quality"])
+	}
+	if tool["output_format"] != "png" {
+		t.Fatalf("tool output_format = %#v, want png", tool["output_format"])
+	}
+}
+
+func TestResponseImageTaskBodyDefaultsAutoAndOmitsCodexQuality(t *testing.T) {
+	body := responseImageTaskBody(map[string]any{
+		"prompt":  "生成封面",
+		"model":   "codex-gpt-image-2",
+		"quality": "high",
+	})
+	tools := body["tools"].([]map[string]any)
+	tool := tools[0]
+	if tool["size"] != "auto" {
+		t.Fatalf("tool size = %#v, want auto", tool["size"])
+	}
+	if _, ok := tool["quality"]; ok {
+		t.Fatalf("codex tool should not include quality: %#v", tool)
 	}
 }
 
