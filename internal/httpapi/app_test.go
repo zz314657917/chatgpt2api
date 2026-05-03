@@ -1146,6 +1146,93 @@ func TestImageManagementIsScopedByOwner(t *testing.T) {
 	}
 }
 
+func TestManagedImageFilesRequireOwnerOrPublicAccess(t *testing.T) {
+	app := newTestApp(t)
+	defer app.Close()
+
+	owner := service.AuthOwner{ID: "linuxdo:123", Name: "alice", Provider: service.AuthProviderLinuxDo}
+	_, aliceKey, err := app.auth.UpsertLinuxDoSession(owner)
+	if err != nil {
+		t.Fatalf("UpsertLinuxDoSession(alice) error = %v", err)
+	}
+	_, bobKey, err := app.auth.CreateAPIKey(service.AuthRoleUser, "bob", service.AuthOwner{ID: "linuxdo:456", Name: "bob", Provider: service.AuthProviderLinuxDo})
+	if err != nil {
+		t.Fatalf("CreateAPIKey(bob) error = %v", err)
+	}
+
+	rel := "2026/05/01/1777664437_f5b9d1d2cd2a380307ca9fb32c1a84d1.png"
+	imagePath := filepath.Join(app.config.ImagesDir(), filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(imagePath), 0o755); err != nil {
+		t.Fatalf("mkdir image dir: %v", err)
+	}
+	if err := writeHTTPTestPNG(imagePath); err != nil {
+		t.Fatalf("write image: %v", err)
+	}
+	app.images.RecordGeneratedImages([]string{rel}, owner.ID, owner.Name, service.ImageVisibilityPrivate)
+
+	req := httptest.NewRequest(http.MethodGet, "/images/2026/05/01", nil)
+	res := httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusNotFound {
+		t.Fatalf("image directory listing status = %d body = %q, want 404", res.Code, res.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/images/"+rel, nil)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusUnauthorized {
+		t.Fatalf("anonymous private image status = %d body = %q, want 401", res.Code, res.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/images/"+rel, nil)
+	req.Header.Set("Authorization", "Bearer "+bobKey)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusNotFound {
+		t.Fatalf("other user private image status = %d body = %q, want 404", res.Code, res.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/images/"+rel, nil)
+	req.Header.Set("Authorization", "Bearer "+aliceKey)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("owner private image status = %d body = %q", res.Code, res.Body.String())
+	}
+	if got := res.Header().Get("Content-Type"); !strings.Contains(got, "image/png") {
+		t.Fatalf("owner private image Content-Type = %q, want image/png", got)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/images/"+rel, nil)
+	req.AddCookie(&http.Cookie{Name: authSessionCookieName, Value: aliceKey})
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("owner private image cookie status = %d body = %q", res.Code, res.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodHead, "/images/"+rel, nil)
+	req.Header.Set("Authorization", "Bearer "+aliceKey)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("owner private image HEAD status = %d body = %q", res.Code, res.Body.String())
+	}
+	if res.Body.Len() != 0 {
+		t.Fatalf("owner private image HEAD body length = %d, want 0", res.Body.Len())
+	}
+
+	if _, err := app.images.UpdateImageVisibility(rel, service.ImageVisibilityPublic, service.ImageAccessScope{OwnerID: owner.ID}); err != nil {
+		t.Fatalf("publish image: %v", err)
+	}
+	req = httptest.NewRequest(http.MethodGet, "/images/"+rel, nil)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("anonymous public image status = %d body = %q", res.Code, res.Body.String())
+	}
+}
+
 func TestImageThumbnailsAreGeneratedOnDemand(t *testing.T) {
 	app := newTestApp(t)
 	defer app.Close()
@@ -1194,6 +1281,7 @@ func TestImageThumbnailsAreGeneratedOnDemand(t *testing.T) {
 	}
 
 	req = httptest.NewRequest(http.MethodGet, parsedThumbnailURL.Path, nil)
+	req.Header.Set("Authorization", adminAuthHeader(t, app))
 	res = httptest.NewRecorder()
 	app.Handler().ServeHTTP(res, req)
 	if res.Code != http.StatusOK {
@@ -1210,6 +1298,155 @@ func TestImageThumbnailsAreGeneratedOnDemand(t *testing.T) {
 	}
 	if _, err := os.Stat(thumbPath); err != nil {
 		t.Fatalf("thumbnail was not created on demand: %v", err)
+	}
+}
+
+func TestManagedImageThumbnailsRequireOwnerOrPublicAccess(t *testing.T) {
+	app := newTestApp(t)
+	defer app.Close()
+
+	owner := service.AuthOwner{ID: "linuxdo:123", Name: "alice", Provider: service.AuthProviderLinuxDo}
+	_, aliceKey, err := app.auth.UpsertLinuxDoSession(owner)
+	if err != nil {
+		t.Fatalf("UpsertLinuxDoSession(alice) error = %v", err)
+	}
+	_, bobKey, err := app.auth.CreateAPIKey(service.AuthRoleUser, "bob", service.AuthOwner{ID: "linuxdo:456", Name: "bob", Provider: service.AuthProviderLinuxDo})
+	if err != nil {
+		t.Fatalf("CreateAPIKey(bob) error = %v", err)
+	}
+
+	rel := "2026/05/01/private.png"
+	imagePath := filepath.Join(app.config.ImagesDir(), filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(imagePath), 0o755); err != nil {
+		t.Fatalf("mkdir image dir: %v", err)
+	}
+	if err := writeHTTPTestPNG(imagePath); err != nil {
+		t.Fatalf("write image: %v", err)
+	}
+	app.images.RecordGeneratedImages([]string{rel}, owner.ID, owner.Name, service.ImageVisibilityPrivate)
+	thumbnailPath := "/image-thumbnails/" + rel + ".jpg"
+
+	req := httptest.NewRequest(http.MethodGet, thumbnailPath, nil)
+	res := httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusUnauthorized {
+		t.Fatalf("anonymous private thumbnail status = %d body = %q, want 401", res.Code, res.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, thumbnailPath, nil)
+	req.Header.Set("Authorization", "Bearer "+bobKey)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusNotFound {
+		t.Fatalf("other user private thumbnail status = %d body = %q, want 404", res.Code, res.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, thumbnailPath, nil)
+	req.Header.Set("Authorization", "Bearer "+aliceKey)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("owner private thumbnail status = %d body = %q", res.Code, res.Body.String())
+	}
+	if got := res.Header().Get("Content-Type"); !strings.Contains(got, "image/jpeg") {
+		t.Fatalf("owner private thumbnail Content-Type = %q, want image/jpeg", got)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, thumbnailPath, nil)
+	req.AddCookie(&http.Cookie{Name: authSessionCookieName, Value: aliceKey})
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("owner private thumbnail cookie status = %d body = %q", res.Code, res.Body.String())
+	}
+
+	if _, err := app.images.UpdateImageVisibility(rel, service.ImageVisibilityPublic, service.ImageAccessScope{OwnerID: owner.ID}); err != nil {
+		t.Fatalf("publish image: %v", err)
+	}
+	req = httptest.NewRequest(http.MethodGet, thumbnailPath, nil)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("anonymous public thumbnail status = %d body = %q", res.Code, res.Body.String())
+	}
+}
+
+func TestAuthSessionCookieLifecycle(t *testing.T) {
+	app := newTestApp(t)
+	defer app.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "/auth/login", strings.NewReader(`{"username":"`+testAdminUsername+`","password":"`+testAdminPassword+`"}`))
+	res := httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("login status = %d body = %s", res.Code, res.Body.String())
+	}
+	cookie := findResponseCookie(res.Result(), authSessionCookieName)
+	if cookie == nil || cookie.Value == "" || cookie.Path != "/" || !cookie.HttpOnly {
+		t.Fatalf("login cookie = %#v", cookie)
+	}
+	if got := cookie.SameSite; got != http.SameSiteLaxMode {
+		t.Fatalf("login cookie SameSite = %v, want Lax", got)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/auth/logout", nil)
+	req.AddCookie(cookie)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("logout status = %d body = %s", res.Code, res.Body.String())
+	}
+	cleared := findResponseCookie(res.Result(), authSessionCookieName)
+	if cleared == nil || cleared.MaxAge >= 0 || cleared.Value != "" {
+		t.Fatalf("logout cookie = %#v", cleared)
+	}
+}
+
+func TestLoginAllowsCredentialedLoopbackFrontend(t *testing.T) {
+	app := newTestApp(t)
+	defer app.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "/auth/login", strings.NewReader(`{"username":"`+testAdminUsername+`","password":"`+testAdminPassword+`"}`))
+	req.Host = "127.0.0.1:8000"
+	req.Header.Set("Origin", "http://localhost:5173")
+	res := httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("login status = %d body = %s", res.Code, res.Body.String())
+	}
+	if got := res.Header().Get("Access-Control-Allow-Origin"); got != "http://localhost:5173" {
+		t.Fatalf("Access-Control-Allow-Origin = %q, want frontend origin", got)
+	}
+	if got := res.Header().Get("Access-Control-Allow-Credentials"); got != "true" {
+		t.Fatalf("Access-Control-Allow-Credentials = %q, want true", got)
+	}
+	if cookie := findResponseCookie(res.Result(), authSessionCookieName); cookie == nil || cookie.Value == "" {
+		t.Fatalf("login cookie = %#v", cookie)
+	}
+}
+
+func TestCredentialedLoginPreflightAllowsContentType(t *testing.T) {
+	app := newTestApp(t)
+	defer app.Close()
+
+	req := httptest.NewRequest(http.MethodOptions, "/auth/login", nil)
+	req.Host = "127.0.0.1:8000"
+	req.Header.Set("Origin", "http://127.0.0.1:5173")
+	req.Header.Set("Access-Control-Request-Method", http.MethodPost)
+	req.Header.Set("Access-Control-Request-Headers", "content-type")
+	res := httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusNoContent {
+		t.Fatalf("preflight status = %d body = %s", res.Code, res.Body.String())
+	}
+	if got := res.Header().Get("Access-Control-Allow-Origin"); got != "http://127.0.0.1:5173" {
+		t.Fatalf("Access-Control-Allow-Origin = %q, want request origin", got)
+	}
+	if got := res.Header().Get("Access-Control-Allow-Credentials"); got != "true" {
+		t.Fatalf("Access-Control-Allow-Credentials = %q, want true", got)
+	}
+	if got := res.Header().Get("Access-Control-Allow-Headers"); got != "content-type" {
+		t.Fatalf("Access-Control-Allow-Headers = %q, want content-type", got)
 	}
 }
 
@@ -2103,6 +2340,15 @@ func findHTTPItem(items []map[string]any, id string) map[string]any {
 	for _, item := range items {
 		if item["id"] == id {
 			return item
+		}
+	}
+	return nil
+}
+
+func findResponseCookie(res *http.Response, name string) *http.Cookie {
+	for _, cookie := range res.Cookies() {
+		if cookie.Name == name {
+			return cookie
 		}
 	}
 	return nil

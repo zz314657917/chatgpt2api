@@ -521,6 +521,13 @@ export async function verifySession(token: string) {
   });
 }
 
+export async function logout() {
+  return httpRequest<{ ok: boolean }>("/auth/logout", {
+    method: "POST",
+    redirectOnUnauthorized: false,
+  });
+}
+
 export async function fetchAuthProviders() {
   return httpRequest<AuthProviders>("/auth/providers", {
     redirectOnUnauthorized: false,

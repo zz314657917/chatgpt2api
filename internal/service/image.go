@@ -61,6 +61,14 @@ type GeneratedImageMetadata struct {
 	OutputFormat     string
 }
 
+type ImageFileAccess struct {
+	Rel        string
+	Path       string
+	Info       os.FileInfo
+	Visibility string
+	OwnerID    string
+}
+
 type ImageService struct {
 	config        ImageConfig
 	store         storage.JSONDocumentBackend
@@ -241,6 +249,35 @@ func (s *ImageService) UpdateImageVisibility(value, visibility string, scope Ima
 		setImageItemDimensions(item, width, height)
 	}
 	return item, nil
+}
+
+func (s *ImageService) ImageFileAccess(value string, scope ImageAccessScope) (ImageFileAccess, error) {
+	rel, err := imageRelativePathFromValue(value)
+	if err != nil {
+		return ImageFileAccess{}, err
+	}
+	imageRoot, err := filepath.Abs(s.config.ImagesDir())
+	if err != nil {
+		return ImageFileAccess{}, err
+	}
+	ref, err := s.imageFileRef(imageRoot, rel)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return ImageFileAccess{}, errors.New("image not found")
+		}
+		return ImageFileAccess{}, err
+	}
+	meta := s.imageMetadata(ref.rel)
+	if !imageMetadataAllowsAccess(meta, scope) {
+		return ImageFileAccess{}, errors.New("image not found")
+	}
+	return ImageFileAccess{
+		Rel:        ref.rel,
+		Path:       ref.path,
+		Info:       ref.info,
+		Visibility: meta.Visibility,
+		OwnerID:    meta.OwnerID,
+	}, nil
 }
 
 func (s *ImageService) DeleteImages(paths []string, scope ImageAccessScope) (map[string]any, error) {
@@ -508,6 +545,16 @@ func (s *ImageService) thumbnailPath(rel string) string {
 
 func (s *ImageService) imageOwner(rel string) string {
 	return s.imageMetadata(rel).OwnerID
+}
+
+func imageMetadataAllowsAccess(meta imageMetadata, scope ImageAccessScope) bool {
+	if meta.Visibility == ImageVisibilityPublic {
+		return true
+	}
+	if scope.All {
+		return true
+	}
+	return scope.OwnerID != "" && meta.OwnerID == scope.OwnerID
 }
 
 func (s *ImageService) imageMetadata(rel string) imageMetadata {

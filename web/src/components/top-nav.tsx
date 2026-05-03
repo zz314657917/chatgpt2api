@@ -21,7 +21,7 @@ import {
 } from "@/store/auth";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { fetchAccounts, type Account } from "@/lib/api";
+import { fetchAccounts, logout, type Account } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import {
   applyColorTheme,
@@ -333,6 +333,11 @@ export function TopNav() {
   }, [session]);
 
   const handleLogout = async () => {
+    try {
+      await logout();
+    } catch {
+      // Local logout should still complete if the server session cookie is already gone.
+    }
     await clearVerifiedAuthSession();
     navigate("/login", { replace: true });
   };

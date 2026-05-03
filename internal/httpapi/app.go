@@ -34,6 +34,7 @@ import (
 const (
 	maxLoginPageImageSize      = 10 << 20
 	imageThumbnailCacheControl = "public, max-age=31536000, immutable"
+	authSessionCookieName      = "chatgpt2api_session"
 )
 
 type App struct {
@@ -373,6 +374,7 @@ func (a *App) handleLogin(w http.ResponseWriter, r *http.Request) {
 		util.WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	setAuthSessionCookie(w, r, token)
 	a.writeLoginResponse(w, *identity, token)
 }
 
@@ -380,6 +382,9 @@ func (a *App) handleSession(w http.ResponseWriter, r *http.Request) {
 	identity, ok := a.requireIdentity(w, r, "")
 	if !ok {
 		return
+	}
+	if token := requestBearerToken(r); token != "" {
+		setAuthSessionCookie(w, r, token)
 	}
 	a.writeLoginResponse(w, identity, "")
 }
@@ -399,7 +404,17 @@ func (a *App) handleAccountRegister(w http.ResponseWriter, r *http.Request) {
 		util.WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	setAuthSessionCookie(w, r, token)
 	a.writeLoginResponse(w, *identity, token)
+}
+
+func (a *App) handleLogout(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	clearAuthSessionCookie(w, r)
+	util.WriteJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 func (a *App) writeLoginResponse(w http.ResponseWriter, identity service.Identity, token string) {
@@ -706,6 +721,43 @@ func (a *App) handleImageVisibility(w http.ResponseWriter, r *http.Request) {
 	util.WriteJSON(w, http.StatusOK, map[string]any{"item": item})
 }
 
+func (a *App) handleImageFile(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	rel, err := imageFileRequestPath(r)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	ref, ok := a.authorizeImageFileRequest(w, r, rel)
+	if !ok {
+		return
+	}
+	http.ServeFile(w, r, ref.Path)
+}
+
+func (a *App) authorizeImageFileRequest(w http.ResponseWriter, r *http.Request, rel string) (service.ImageFileAccess, bool) {
+	ref, err := a.images.ImageFileAccess(rel, service.ImageAccessScope{All: true})
+	if err != nil {
+		http.NotFound(w, r)
+		return service.ImageFileAccess{}, false
+	}
+	if ref.Visibility == service.ImageVisibilityPublic {
+		return ref, true
+	}
+	identity, ok := a.imageRequestIdentity(w, r)
+	if !ok {
+		return service.ImageFileAccess{}, false
+	}
+	if identity.Role == service.AuthRoleAdmin || (ref.OwnerID != "" && ref.OwnerID == identityScope(identity)) {
+		return ref, true
+	}
+	http.NotFound(w, r)
+	return service.ImageFileAccess{}, false
+}
+
 func (a *App) handleImageThumbnail(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -721,6 +773,9 @@ func (a *App) handleImageThumbnail(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	if _, ok := a.authorizeImageFileRequest(w, r, sourceRel); !ok {
+		return
+	}
 	_ = a.images.EnsureThumbnail(thumbnailRel)
 	thumbPath := filepath.Join(a.config.ImageThumbnailsDir(), filepath.FromSlash(thumbnailRel))
 	if info, err := os.Stat(thumbPath); err == nil && !info.IsDir() {
@@ -734,6 +789,18 @@ func (a *App) handleImageThumbnail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.NotFound(w, r)
+}
+
+func imageFileRequestPath(r *http.Request) (string, error) {
+	raw := strings.TrimPrefix(r.URL.EscapedPath(), "/images/")
+	if raw == "" || raw == r.URL.EscapedPath() {
+		return "", errors.New("invalid image path")
+	}
+	rel, err := url.PathUnescape(raw)
+	if err != nil {
+		return "", err
+	}
+	return rel, nil
 }
 
 func imageThumbnailRequestPath(r *http.Request) (string, error) {
@@ -840,17 +907,52 @@ func (a *App) handleProxy(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) requireIdentity(w http.ResponseWriter, r *http.Request, overrideAuth string) (service.Identity, bool) {
-	auth := overrideAuth
-	if auth == "" {
-		auth = r.Header.Get("Authorization")
-	}
-	token := extractBearerToken(auth)
+	token := overrideAuthToken(overrideAuth, r)
 	if identity := a.auth.Authenticate(token); identity != nil {
 		if !a.identityCanAccessRequest(*identity, r) {
 			util.WriteError(w, http.StatusForbidden, "permission denied")
 			return service.Identity{}, false
 		}
 		*r = *r.WithContext(withRequestIdentity(r.Context(), *identity))
+		return *identity, true
+	}
+	util.WriteError(w, http.StatusUnauthorized, "authorization is invalid")
+	return service.Identity{}, false
+}
+
+func overrideAuthToken(overrideAuth string, r *http.Request) string {
+	if overrideAuth != "" {
+		return extractBearerToken(overrideAuth)
+	}
+	return requestAuthToken(r)
+}
+
+func requestAuthToken(r *http.Request) string {
+	if token := requestBearerToken(r); token != "" {
+		return token
+	}
+	return requestAuthCookieToken(r)
+}
+
+func requestBearerToken(r *http.Request) string {
+	return extractBearerToken(r.Header.Get("Authorization"))
+}
+
+func requestAuthCookieToken(r *http.Request) string {
+	cookie, err := r.Cookie(authSessionCookieName)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(cookie.Value)
+}
+
+func (a *App) imageRequestIdentity(w http.ResponseWriter, r *http.Request) (service.Identity, bool) {
+	token := requestAuthToken(r)
+	if token == "" {
+		util.WriteError(w, http.StatusUnauthorized, "authorization is invalid")
+		return service.Identity{}, false
+	}
+	if identity := a.auth.Authenticate(token); identity != nil {
 		return *identity, true
 	}
 	util.WriteError(w, http.StatusUnauthorized, "authorization is invalid")
@@ -885,6 +987,10 @@ func isPermissionCheckSkipped(path string) bool {
 	switch path {
 	case "/auth/login":
 		return true
+	case "/auth/logout":
+		return true
+	case "/auth/register":
+		return true
 	case "/auth/session":
 		return true
 	case "/api/profile":
@@ -906,6 +1012,34 @@ func extractBearerToken(auth string) string {
 		return ""
 	}
 	return strings.TrimSpace(value)
+}
+
+func setAuthSessionCookie(w http.ResponseWriter, r *http.Request, token string) {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     authSessionCookieName,
+		Value:    token,
+		Path:     "/",
+		MaxAge:   30 * 24 * 60 * 60,
+		HttpOnly: true,
+		Secure:   isHTTPSRequest(r),
+		SameSite: http.SameSiteLaxMode,
+	})
+}
+
+func clearAuthSessionCookie(w http.ResponseWriter, r *http.Request) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     authSessionCookieName,
+		Value:    "",
+		Path:     "/",
+		MaxAge:   -1,
+		HttpOnly: true,
+		Secure:   isHTTPSRequest(r),
+		SameSite: http.SameSiteLaxMode,
+	})
 }
 
 func (a *App) resolveImageBaseURL(r *http.Request) string {

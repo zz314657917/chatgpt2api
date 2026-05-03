@@ -1521,19 +1521,21 @@ function ImageManagerContent({
                         <Eye className="size-3" />
                         View Original
                       </button>
-                      <button
-                        type="button"
-                        onClick={(event) => {
-                          event.currentTarget.blur();
-                          void navigator.clipboard.writeText(item.url);
-                          toast.success("图片地址已复制");
-                        }}
-                        className="inline-flex size-7 items-center justify-center rounded-full bg-white/95 text-stone-800 shadow-sm transition hover:bg-white hover:text-stone-950"
-                        aria-label="复制图片地址"
-                        title="复制图片地址"
-                      >
-                        <Copy className="size-3.5" />
-                      </button>
+                      {galleryView !== "mine" ? (
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.currentTarget.blur();
+                            void navigator.clipboard.writeText(item.url);
+                            toast.success("图片地址已复制");
+                          }}
+                          className="inline-flex size-7 items-center justify-center rounded-full bg-white/95 text-stone-800 shadow-sm transition hover:bg-white hover:text-stone-950"
+                          aria-label="复制图片地址"
+                          title="复制图片地址"
+                        >
+                          <Copy className="size-3.5" />
+                        </button>
+                      ) : null}
                       {canDeleteImages ? (
                         <button
                           type="button"
