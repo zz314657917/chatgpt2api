@@ -1134,9 +1134,7 @@ func NormalizeImageGenerationSize(size string) string {
 }
 
 func RequiresPaidImageSize(size string) bool {
-	size = NormalizeImageGenerationSize(size)
-	width, height, ok := imageSizeDimensions(size)
-	return ok && width*height > maxFreeGeneratePixels
+	return false
 }
 
 func imageSizeDimensions(size string) (int, int, bool) {
