@@ -57,7 +57,6 @@ import {
   createChatCompletionTask,
   createImageEditTask,
   createImageGenerationTask,
-  createResponseImageGenerationTask,
   DEFAULT_CHAT_MODEL,
   DEFAULT_IMAGE_MODEL,
   fetchCreationTasks,
@@ -69,7 +68,6 @@ import {
   isImageOutputFormat,
   isImageQuality,
   isImageTaskModel,
-  isResponseImageToolModel,
   supportsImageQuality,
   updateManagedImageVisibility,
   type ImageModel,
@@ -629,10 +627,6 @@ function isTurnInProgress(turn: ImageTurn) {
 
 function usesReferenceImages(mode: ImageConversationMode) {
   return mode === "image" || mode === "edit";
-}
-
-function usesResponseImageTaskModel(model: ImageModel) {
-  return isResponseImageToolModel(model) && !isImageTaskModel(model);
 }
 
 function isMissingBatchImageDataError(error?: string) {
@@ -1838,22 +1832,6 @@ function ImagePageContent() {
         const submitTaskGroup = (group: { taskId: string; count: number }) => {
           if (activeTurn.mode === "chat") {
             return createChatCompletionTask(group.taskId, activeTurn.prompt, activeTurn.model, taskMessages);
-          }
-          if (usesResponseImageTaskModel(activeTurn.model)) {
-            return createResponseImageGenerationTask(
-              group.taskId,
-              activeTurn.prompt,
-              activeTurn.model,
-              activeTurn.size,
-              imageQualityForModel(activeTurn.model, activeTurn.quality || DEFAULT_IMAGE_QUALITY),
-              group.count,
-              taskMessages,
-              activeTurn.referenceImages.map((image) => image.dataUrl),
-              activeTurn.visibility || "private",
-              activeTurn.sizeSelection?.resolution,
-              taskOutputFormat,
-              taskOutputCompression,
-            );
           }
           if (usesReferenceImages(activeTurn.mode)) {
             return createImageEditTask(

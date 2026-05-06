@@ -22,19 +22,6 @@ export const DEFAULT_CHAT_MODEL: ImageModel = "auto";
 export const CODEX_IMAGE_MODEL: ImageModel = "codex-gpt-image-2";
 const IMAGE_MODEL_VALUES = new Set<string>(IMAGE_MODEL_OPTIONS.map((option) => option.value));
 const IMAGE_TASK_MODEL_VALUES = new Set<ImageModel>(["auto", "gpt-image-2", "codex-gpt-image-2"]);
-const RESPONSE_IMAGE_TOOL_MODEL_VALUES = new Set<ImageModel>([
-  "auto",
-  "gpt-image-2",
-  "codex-gpt-image-2",
-  "gpt-5-mini",
-  "gpt-5-3-mini",
-  "gpt-5",
-  "gpt-5-1",
-  "gpt-5-2",
-  "gpt-5-3",
-  "gpt-5.4",
-  "gpt-5.5",
-]);
 const CHAT_MODEL_VALUES = new Set<ImageModel>([
   "auto",
   "gpt-5-mini",
@@ -47,10 +34,7 @@ const CHAT_MODEL_VALUES = new Set<ImageModel>([
   "gpt-5.5",
 ]);
 export const IMAGE_TASK_MODEL_OPTIONS = IMAGE_MODEL_OPTIONS.filter((option) => IMAGE_TASK_MODEL_VALUES.has(option.value));
-export const RESPONSE_IMAGE_TOOL_MODEL_OPTIONS = IMAGE_MODEL_OPTIONS.filter((option) => RESPONSE_IMAGE_TOOL_MODEL_VALUES.has(option.value));
-export const IMAGE_CREATION_MODEL_OPTIONS = IMAGE_MODEL_OPTIONS.filter(
-  (option) => IMAGE_TASK_MODEL_VALUES.has(option.value) || RESPONSE_IMAGE_TOOL_MODEL_VALUES.has(option.value),
-);
+export const IMAGE_CREATION_MODEL_OPTIONS = IMAGE_TASK_MODEL_OPTIONS;
 export const CHAT_MODEL_OPTIONS = IMAGE_MODEL_OPTIONS.filter((option) => CHAT_MODEL_VALUES.has(option.value));
 
 export function isImageModel(value: unknown): value is ImageModel {
@@ -61,12 +45,8 @@ export function isImageTaskModel(value: unknown): value is ImageModel {
   return isImageModel(value) && IMAGE_TASK_MODEL_VALUES.has(value);
 }
 
-export function isResponseImageToolModel(value: unknown): value is ImageModel {
-  return isImageModel(value) && RESPONSE_IMAGE_TOOL_MODEL_VALUES.has(value);
-}
-
 export function isImageCreationModel(value: unknown): value is ImageModel {
-  return isImageTaskModel(value) || isResponseImageToolModel(value);
+  return isImageTaskModel(value);
 }
 
 export function isChatModel(value: unknown): value is ImageModel {
@@ -314,12 +294,16 @@ export type CreationTaskData = {
 export type CreationTask = {
   id: string;
   status: "queued" | "running" | "success" | "error" | "cancelled";
-  mode: "generate" | "edit" | "chat" | "response-image";
+  mode: "generate" | "edit" | "chat";
   model?: ImageModel;
   size?: string;
   quality?: ImageQuality;
   output_format?: ImageOutputFormat;
   output_compression?: number;
+  background?: string;
+  moderation?: string;
+  style?: string;
+  partial_images?: number;
   created_at: string;
   updated_at: string;
   data?: CreationTaskData[];
@@ -677,6 +661,12 @@ export async function createImageGenerationTask(
   imageResolution?: string,
   outputFormat?: ImageOutputFormat,
   outputCompression?: number,
+  toolOptions?: {
+    background?: string;
+    moderation?: string;
+    style?: string;
+    partialImages?: number;
+  },
 ) {
   return httpRequest<CreationTask>("/api/creation-tasks/image-generations", {
     method: "POST",
@@ -689,40 +679,11 @@ export async function createImageGenerationTask(
       ...(quality ? { quality } : {}),
       ...(outputFormat ? { output_format: outputFormat } : {}),
       ...(typeof outputCompression === "number" ? { output_compression: outputCompression } : {}),
+      ...(toolOptions?.background ? { background: toolOptions.background } : {}),
+      ...(toolOptions?.moderation ? { moderation: toolOptions.moderation } : {}),
+      ...(toolOptions?.style ? { style: toolOptions.style } : {}),
+      ...(typeof toolOptions?.partialImages === "number" ? { partial_images: toolOptions.partialImages } : {}),
       ...(messages?.length ? { messages } : {}),
-      visibility,
-      n: count,
-    },
-  });
-}
-
-export async function createResponseImageGenerationTask(
-  clientTaskId: string,
-  prompt: string,
-  model: ImageModel,
-  size?: string,
-  quality?: ImageQuality,
-  count = 1,
-  messages?: CreationTaskMessage[],
-  images?: string[],
-  visibility: ImageVisibility = "private",
-  imageResolution?: string,
-  outputFormat?: ImageOutputFormat,
-  outputCompression?: number,
-) {
-  return httpRequest<CreationTask>("/api/creation-tasks/response-image-generations", {
-    method: "POST",
-    body: {
-      client_task_id: clientTaskId,
-      prompt,
-      model,
-      ...(size ? { size } : {}),
-      ...(imageResolution ? { image_resolution: imageResolution } : {}),
-      ...(quality ? { quality } : {}),
-      ...(outputFormat ? { output_format: outputFormat } : {}),
-      ...(typeof outputCompression === "number" ? { output_compression: outputCompression } : {}),
-      ...(messages?.length ? { messages } : {}),
-      ...(images?.length ? { images } : {}),
       visibility,
       n: count,
     },
@@ -742,6 +703,13 @@ export async function createImageEditTask(
   imageResolution?: string,
   outputFormat?: ImageOutputFormat,
   outputCompression?: number,
+  toolOptions?: {
+    background?: string;
+    moderation?: string;
+    style?: string;
+    partialImages?: number;
+    inputImageMask?: string;
+  },
 ) {
   const formData = new FormData();
   const uploadFiles = Array.isArray(files) ? files : [files];
@@ -768,6 +736,21 @@ export async function createImageEditTask(
   }
   if (typeof outputCompression === "number") {
     formData.append("output_compression", String(outputCompression));
+  }
+  if (toolOptions?.background) {
+    formData.append("background", toolOptions.background);
+  }
+  if (toolOptions?.moderation) {
+    formData.append("moderation", toolOptions.moderation);
+  }
+  if (toolOptions?.style) {
+    formData.append("style", toolOptions.style);
+  }
+  if (typeof toolOptions?.partialImages === "number") {
+    formData.append("partial_images", String(toolOptions.partialImages));
+  }
+  if (toolOptions?.inputImageMask) {
+    formData.append("input_image_mask", toolOptions.inputImageMask);
   }
   if (messages?.length) {
     formData.append("messages", JSON.stringify(messages));

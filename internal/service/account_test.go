@@ -80,12 +80,29 @@ func TestFetchRemoteInfoBootstrapsBeforeAccountRefresh(t *testing.T) {
 	if info["email"] != "user@example.com" || info["quota"] != 7 {
 		t.Fatalf("FetchRemoteInfo() = %#v", info)
 	}
+	if info["chatgpt_account_id"] != "user-1" {
+		t.Fatalf("chatgpt_account_id = %#v, want user-1", info["chatgpt_account_id"])
+	}
 	mu.Lock()
 	gotPaths := append([]string(nil), paths...)
 	mu.Unlock()
 	wantPaths := []string{"/", "/backend-api/me", "/backend-api/conversation/init"}
 	if !reflect.DeepEqual(gotPaths, wantPaths) {
 		t.Fatalf("request paths = %#v, want %#v", gotPaths, wantPaths)
+	}
+}
+
+func TestNormalizeAccountPreservesChatGPTAccountID(t *testing.T) {
+	normalized := normalizeAccount(map[string]any{
+		"access_token":       "token-1",
+		"chatgpt_account_id": " acct-123 ",
+	})
+	if normalized["chatgpt_account_id"] != "acct-123" {
+		t.Fatalf("chatgpt_account_id = %#v, want acct-123", normalized["chatgpt_account_id"])
+	}
+	public := publicAccounts([]map[string]any{normalized})
+	if public[0]["chatgpt_account_id"] != "acct-123" {
+		t.Fatalf("public chatgpt_account_id = %#v, want acct-123", public[0]["chatgpt_account_id"])
 	}
 }
 
@@ -341,6 +358,35 @@ func TestGetAvailableAccessTokenLimitsUnknownImageQuotaToOneInFlight(t *testing.
 		t.Fatalf("token after release = %q, want token-1", token)
 	}
 	accounts.MarkImageResult("token-1", false)
+}
+
+func TestGetAvailableAccessTokenAllowsFreeUnknownImageQuota(t *testing.T) {
+	accounts := newTestAccountService(t)
+	server := newAccountQuotaServer(t, map[string]any{
+		"email":     "free@example.com",
+		"id":        "user-1",
+		"plan_type": "free",
+	}, nil)
+	defer server.Close()
+	accounts.remoteBaseURL = server.URL
+	accounts.browserHTTPClient = func(string, time.Duration) *http.Client {
+		return server.Client()
+	}
+	accounts.AddAccounts([]string{"free-token"})
+	accounts.UpdateAccount("free-token", map[string]any{"status": "正常", "quota": 0, "image_quota_unknown": true, "type": "Free"})
+
+	token, err := accounts.GetAvailableAccessToken(context.Background())
+	if err != nil {
+		t.Fatalf("GetAvailableAccessToken() error = %v", err)
+	}
+	if token != "free-token" {
+		t.Fatalf("token = %q, want free-token", token)
+	}
+	account := accounts.GetAccount("free-token")
+	if account["status"] != "正常" || account["type"] != "Free" || account["image_quota_unknown"] != true {
+		t.Fatalf("free unknown quota account = %#v, want available Free account with unknown image quota", account)
+	}
+	accounts.MarkImageResult("free-token", false)
 }
 
 func TestReserveNextCandidateTokenCanFilterPaidAccounts(t *testing.T) {

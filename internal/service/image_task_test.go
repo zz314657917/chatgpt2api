@@ -211,6 +211,34 @@ func TestImageTaskServicePassesImageRequestMetadataToHandler(t *testing.T) {
 	waitForTaskStatus(t, svc, identity, "task-1", TaskStatusSuccess)
 }
 
+func TestImageTaskServicePassesImageToolOptionsToHandler(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "image_tasks.json")
+	handlerCalls := make(chan map[string]any, 1)
+	handler := func(ctx context.Context, identity Identity, payload map[string]any) (map[string]any, error) {
+		handlerCalls <- payload
+		return map[string]any{"data": []map[string]any{{"url": "https://example.test/image.png"}}}, nil
+	}
+	svc := NewImageTaskService(path, handler, handler, handler, func() int { return 30 })
+	identity := Identity{ID: "alice", Name: "Alice", Role: "user"}
+	partialImages := 2
+
+	if _, err := svc.SubmitGenerationWithOptions(context.Background(), identity, "task-1", "draw", "gpt-image-2", "16:9", "high", "https://base.test", 1, nil, nil, ImageOutputOptions{Format: "webp"}, ImageToolOptions{Background: "transparent", Moderation: "auto", Style: "vivid", PartialImages: &partialImages}); err != nil {
+		t.Fatalf("SubmitGenerationWithOptions() error = %v", err)
+	}
+
+	select {
+	case payload := <-handlerCalls:
+		for key, want := range map[string]any{"background": "transparent", "moderation": "auto", "style": "vivid", "partial_images": 2, "output_format": "webp"} {
+			if got := payload[key]; got != want {
+				t.Fatalf("payload[%s] = %#v, want %#v in %#v", key, got, want, payload)
+			}
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for handler payload")
+	}
+	waitForTaskStatus(t, svc, identity, "task-1", TaskStatusSuccess)
+}
+
 func TestImageTaskServiceSubmitsChatTasks(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "image_tasks.json")
 	handlerCalls := make(chan map[string]any, 1)
@@ -248,47 +276,6 @@ func TestImageTaskServiceSubmitsChatTasks(t *testing.T) {
 		}
 	default:
 		t.Fatal("chat handler was not called")
-	}
-}
-
-func TestImageTaskServiceSubmitsResponseImageTasks(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "image_tasks.json")
-	handlerCalls := make(chan map[string]any, 1)
-	imageHandler := func(ctx context.Context, identity Identity, payload map[string]any) (map[string]any, error) {
-		return map[string]any{"data": []map[string]any{{"url": "https://example.test/image.png"}}}, nil
-	}
-	responseImageHandler := func(ctx context.Context, identity Identity, payload map[string]any) (map[string]any, error) {
-		handlerCalls <- payload
-		return map[string]any{"data": []map[string]any{{"url": "https://example.test/response.png"}}}, nil
-	}
-	svc := NewImageTaskService(path, imageHandler, imageHandler, imageHandler, func() int { return 30 }, func() int { return 0 })
-	svc.SetResponseImageHandler(responseImageHandler)
-	identity := Identity{ID: "alice", Name: "Alice", Role: "user"}
-	messages := []map[string]any{{"role": "user", "content": "生成封面"}}
-	images := []any{"data:image/png;base64,cG5n"}
-
-	if _, err := svc.SubmitResponseImageGeneration(context.Background(), identity, "response-1", "生成封面", "gpt-5.5", "16:9", "high", "https://base.test", images, 1, messages); err != nil {
-		t.Fatalf("SubmitResponseImageGeneration() error = %v", err)
-	}
-	waitForTaskStatus(t, svc, identity, "response-1", TaskStatusSuccess)
-	got := svc.ListTasks(identity, []string{"response-1"})
-	item := got["items"].([]map[string]any)[0]
-	if item["mode"] != "response-image" {
-		t.Fatalf("mode = %#v, want response-image in %#v", item["mode"], item)
-	}
-	if item["model"] != "gpt-5.5" || item["quality"] != "high" {
-		t.Fatalf("model/quality = %#v/%#v in %#v", item["model"], item["quality"], item)
-	}
-	select {
-	case payload := <-handlerCalls:
-		if got := payload["images"]; got == nil {
-			t.Fatalf("response image payload missing images: %#v", payload)
-		}
-		if got := payload["messages"]; got == nil {
-			t.Fatalf("response image payload missing messages: %#v", payload)
-		}
-	default:
-		t.Fatal("response image handler was not called")
 	}
 }
 

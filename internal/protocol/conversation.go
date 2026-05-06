@@ -52,11 +52,16 @@ type ConversationRequest struct {
 	Prompt             string
 	Messages           []map[string]any
 	Images             []string
+	InputImageMask     string
 	N                  int
 	Size               string
 	Quality            string
+	Background         string
+	Moderation         string
+	Style              string
 	OutputFormat       string
 	OutputCompression  *int
+	PartialImages      *int
 	ResponseFormat     string
 	BaseURL            string
 	OwnerID            string
@@ -100,6 +105,14 @@ type ImageOutputOptions struct {
 	Compression *int
 }
 
+type ImageToolOptions struct {
+	Background     string
+	Moderation     string
+	Style          string
+	PartialImages  *int
+	InputImageMask string
+}
+
 func ImageOutputOptionsFromPayload(payload map[string]any) ImageOutputOptions {
 	format := NormalizeImageOutputFormat(util.Clean(payload["output_format"]))
 	options := ImageOutputOptions{Format: format}
@@ -108,6 +121,19 @@ func ImageOutputOptionsFromPayload(payload map[string]any) ImageOutputOptions {
 	}
 	if compression, ok := normalizedImageOutputCompression(payload["output_compression"]); ok {
 		options.Compression = &compression
+	}
+	return options
+}
+
+func ImageToolOptionsFromPayload(payload map[string]any) ImageToolOptions {
+	options := ImageToolOptions{
+		Background:     util.Clean(payload["background"]),
+		Moderation:     util.Clean(payload["moderation"]),
+		Style:          util.Clean(payload["style"]),
+		InputImageMask: responseImageMask(payload["input_image_mask"]),
+	}
+	if partialImages, ok := normalizedPositiveInt(payload["partial_images"]); ok {
+		options.PartialImages = &partialImages
 	}
 	return options
 }
@@ -128,6 +154,11 @@ func normalizedImageOutputCompression(value any) (int, bool) {
 
 func (r ConversationRequest) SupportsImageGenerationModel() bool {
 	return util.IsImageGenerationModel(r.Model)
+}
+
+func (r ConversationRequest) UsesResponsesImageRoute() bool {
+	model := strings.TrimSpace(r.Model)
+	return model == "" || model == util.ImageModelAuto || model == util.ImageModelGPT || model == util.ImageModelCodex
 }
 
 type ConversationState struct {
@@ -253,7 +284,7 @@ func (e *Engine) StreamTextDeltas(ctx context.Context, client *backend.Client, r
 	go func() {
 		defer close(out)
 		defer close(errCh)
-		events, convErr := e.ConversationEvents(ctx, client, request.Messages, request.Model, request.Prompt, nil, "", "")
+		events, convErr := e.ConversationEvents(ctx, client, request.Messages, request.Model, request.Prompt)
 		for event := range events {
 			if event["type"] != "conversation.delta" {
 				continue
@@ -287,7 +318,7 @@ func (e *Engine) CollectText(ctx context.Context, client *backend.Client, reques
 	return strings.Join(parts, ""), <-errCh
 }
 
-func (e *Engine) ConversationEvents(ctx context.Context, client *backend.Client, messages []map[string]any, model, prompt string, images []string, size, quality string) (<-chan ConversationEvent, <-chan error) {
+func (e *Engine) ConversationEvents(ctx context.Context, client *backend.Client, messages []map[string]any, model, prompt string) (<-chan ConversationEvent, <-chan error) {
 	out := make(chan ConversationEvent)
 	errCh := make(chan error, 1)
 	go func() {
@@ -297,21 +328,9 @@ func (e *Engine) ConversationEvents(ctx context.Context, client *backend.Client,
 		if len(normalized) == 0 && prompt != "" {
 			normalized = []map[string]any{{"role": "user", "content": prompt}}
 		}
-		imageModel := util.IsImageModel(model) || (prompt != "" && util.IsImageGenerationModel(model))
-		historyText := ""
-		historyMessages := []string{}
-		finalPrompt := prompt
-		systemHints := []string{}
-		streamImages := []string(nil)
-		if imageModel {
-			finalPrompt = BuildImageContextPrompt(normalized, prompt, size, quality)
-			systemHints = []string{"picture_v2"}
-			streamImages = images
-		} else {
-			historyText = AssistantHistoryText(normalized)
-			historyMessages = AssistantHistoryMessages(normalized)
-		}
-		payloads, upstreamErr := client.StreamConversation(ctx, normalized, model, finalPrompt, streamImages, systemHints)
+		historyText := AssistantHistoryText(normalized)
+		historyMessages := AssistantHistoryMessages(normalized)
+		payloads, upstreamErr := client.StreamConversation(ctx, normalized, model, prompt)
 		iterErr := IterConversationPayloads(ctx, payloads, historyText, historyMessages, out)
 		upErr := <-upstreamErr
 		if iterErr != nil {
@@ -478,69 +497,133 @@ func (e *Engine) StreamImageOutputsWithPool(ctx context.Context, request Convers
 }
 
 func (e *Engine) StreamImageOutputs(ctx context.Context, client *backend.Client, request ConversationRequest, index, total int) (<-chan ImageOutput, <-chan error) {
+	return e.StreamResponsesImageOutputs(ctx, client, request, index, total)
+}
+
+func (e *Engine) StreamResponsesImageOutputs(ctx context.Context, client *backend.Client, request ConversationRequest, index, total int) (<-chan ImageOutput, <-chan error) {
 	out := make(chan ImageOutput)
 	errCh := make(chan error, 1)
 	go func() {
 		defer close(out)
 		defer close(errCh)
-		var last ConversationEvent
-		events, convErr := e.ConversationEvents(ctx, client, request.Messages, request.Model, request.Prompt, request.Images, request.Size, request.Quality)
+		events, upstreamErr := client.StreamResponsesImage(ctx, backend.ResponsesImageRequest{
+			Prompt:            request.Prompt,
+			Model:             responsesImageToolModel(request.Model),
+			Size:              request.Size,
+			Quality:           request.Quality,
+			Background:        request.Background,
+			Moderation:        request.Moderation,
+			Style:             request.Style,
+			OutputFormat:      request.OutputFormat,
+			OutputCompression: request.OutputCompression,
+			PartialImages:     request.PartialImages,
+			InputImages:       responsesInputImages(request.Images),
+			InputImageMask:    responsesInputImagePtr(request.InputImageMask),
+		})
+		emitted := false
+		seen := map[string]struct{}{}
 		for event := range events {
-			last = event
-			if event["type"] == "conversation.delta" {
-				out <- ImageOutput{Kind: "progress", Model: request.Model, Index: index, Total: total, Created: time.Now().Unix(), Text: util.Clean(event["delta"]), UpstreamEventType: "conversation.delta"}
+			if event.PartialImage != "" {
+				out <- ImageOutput{Kind: "progress", Model: request.Model, Index: index, Total: total, Created: firstNonZeroInt64(event.Created, time.Now().Unix()), UpstreamEventType: event.Type}
 				continue
 			}
-			if event["type"] == "conversation.event" {
-				rawType := ""
-				if raw := util.StringMap(event["raw"]); raw != nil {
-					rawType = util.Clean(raw["type"])
-				}
-				out <- ImageOutput{Kind: "progress", Model: request.Model, Index: index, Total: total, Created: time.Now().Unix(), UpstreamEventType: rawType}
+			if event.Result == "" {
+				continue
+			}
+			key := firstNonEmpty(event.ItemID, event.Result)
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			item := map[string]any{
+				"b64_json":       event.Result,
+				"revised_prompt": firstNonEmpty(event.RevisedPrompt, request.Prompt),
+				"output_format":  firstNonEmpty(event.OutputFormat, request.OutputFormat),
+			}
+			if event.Background != "" {
+				item["background"] = event.Background
+			}
+			created := firstNonZeroInt64(event.Created, time.Now().Unix())
+			result := e.FormatImageResultWithOptions([]map[string]any{item}, request.Prompt, request.ResponseFormat, request.BaseURL, request.OwnerID, request.OwnerName, created, "", ImageOutputOptions{Format: request.OutputFormat, Compression: request.OutputCompression})
+			data := util.AsMapSlice(result["data"])
+			if len(data) > 0 {
+				emitted = true
+				out <- ImageOutput{Kind: "result", Model: request.Model, Index: index, Total: total, Created: created, Data: data}
 			}
 		}
-		if err := <-convErr; err != nil {
+		if err := <-upstreamErr; err != nil {
 			errCh <- err
 			return
 		}
-		conversationID := util.Clean(last["conversation_id"])
-		fileIDs := util.AsStringSlice(last["file_ids"])
-		sedimentIDs := util.AsStringSlice(last["sediment_ids"])
-		message := strings.TrimSpace(util.Clean(last["text"]))
-		toolInvoked, _ := last["tool_invoked"].(bool)
-		hasToolInvoked := last["tool_invoked"] != nil
-		isTextResponse := (hasToolInvoked && !toolInvoked) || last["turn_use_case"] == "text"
-		if message != "" && len(fileIDs) == 0 && len(sedimentIDs) == 0 && (util.ToBool(last["blocked"]) || isTextResponse) {
-			out <- ImageOutput{Kind: "message", Model: request.Model, Index: index, Total: total, Created: time.Now().Unix(), Text: message}
-			errCh <- nil
+		if !emitted {
+			errCh <- fmt.Errorf("image generation failed")
 			return
-		}
-		imageURLs := client.ResolveConversationImageURLs(ctx, conversationID, fileIDs, sedimentIDs, true)
-		if len(imageURLs) > 0 {
-			bytesItems, err := client.DownloadImageBytes(ctx, imageURLs)
-			if err != nil {
-				errCh <- err
-				return
-			}
-			var imageItems []map[string]any
-			for _, data := range bytesItems {
-				imageItems = append(imageItems, map[string]any{"b64_json": base64.StdEncoding.EncodeToString(data), "output_format": NormalizeImageOutputFormat(request.OutputFormat)})
-			}
-			created := time.Now().Unix()
-			result := e.FormatImageResultWithOptions(imageItems, request.Prompt, request.ResponseFormat, request.BaseURL, request.OwnerID, request.OwnerName, created, "", ImageOutputOptions{Format: request.OutputFormat, Compression: request.OutputCompression})
-			data := util.AsMapSlice(result["data"])
-			if len(data) > 0 {
-				out <- ImageOutput{Kind: "result", Model: request.Model, Index: index, Total: total, Created: created, Data: data}
-			}
-			errCh <- nil
-			return
-		}
-		if message != "" {
-			out <- ImageOutput{Kind: "message", Model: request.Model, Index: index, Total: total, Created: time.Now().Unix(), Text: message}
 		}
 		errCh <- nil
 	}()
 	return out, errCh
+}
+
+func responsesImageToolModel(model string) string {
+	switch strings.TrimSpace(model) {
+	case "", util.ImageModelAuto, util.ImageModelGPT:
+		return ""
+	case util.ImageModelCodex:
+		return backend.ResponsesImageCodexToolModel
+	default:
+		return strings.TrimSpace(model)
+	}
+}
+
+func responsesInputImages(values []string) []backend.ResponsesInputImage {
+	out := make([]backend.ResponsesInputImage, 0, len(values))
+	for _, value := range values {
+		image := responsesInputImage(value)
+		if len(image.Data) > 0 {
+			out = append(out, image)
+		}
+	}
+	return out
+}
+
+func responsesInputImagePtr(value string) *backend.ResponsesInputImage {
+	image := responsesInputImage(value)
+	if len(image.Data) == 0 {
+		return nil
+	}
+	return &image
+}
+
+func responsesInputImage(value string) backend.ResponsesInputImage {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return backend.ResponsesInputImage{}
+	}
+	contentType := "image/png"
+	dataPart := value
+	if strings.HasPrefix(value, "data:") {
+		header, data, ok := strings.Cut(value, ",")
+		if ok {
+			dataPart = data
+			if mimeType := strings.TrimPrefix(strings.Split(header, ";")[0], "data:"); mimeType != "" {
+				contentType = mimeType
+			}
+		}
+	}
+	data, err := base64.StdEncoding.DecodeString(strings.TrimSpace(dataPart))
+	if err != nil {
+		return backend.ResponsesInputImage{}
+	}
+	return backend.ResponsesInputImage{Data: data, ContentType: contentType}
+}
+
+func firstNonZeroInt64(values ...int64) int64 {
+	for _, value := range values {
+		if value != 0 {
+			return value
+		}
+	}
+	return 0
 }
 
 func (e *Engine) CollectImageOutputs(outputs <-chan ImageOutput, errCh <-chan error) (map[string]any, error) {

@@ -3,11 +3,16 @@ package backend
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 )
+
+func ptrInt(value int) *int {
+	return &value
+}
 
 func TestUpstreamHTTPErrorSummarizesCloudflareChallenge(t *testing.T) {
 	err := upstreamHTTPError("bootstrap", 403, []byte(`<html><body><script>window._cf_chl_opt={}</script>Enable JavaScript and cookies to continue</body></html>`))
@@ -73,53 +78,194 @@ func TestApplyBrowserFingerprintPreservesAccountProfile(t *testing.T) {
 	}
 }
 
-func TestImageHeadersCarryAllRequirementTokens(t *testing.T) {
-	client := &Client{BaseURL: "https://chatgpt.com", fp: map[string]string{}, userAgent: browserUserAgent}
-	client.applyBrowserFingerprint()
-	headers := client.imageHeaders("/backend-api/f/conversation", ChatRequirements{
-		Token:          "chat-token",
-		ProofToken:     "proof-token",
-		TurnstileToken: "turnstile-token",
-		SOToken:        "so-token",
-	}, "conduit-token", "text/event-stream")
-	for key, want := range map[string]string{
-		"OpenAI-Sentinel-Chat-Requirements-Token": "chat-token",
-		"OpenAI-Sentinel-Proof-Token":             "proof-token",
-		"OpenAI-Sentinel-Turnstile-Token":         "turnstile-token",
-		"OpenAI-Sentinel-SO-Token":                "so-token",
-		"X-Conduit-Token":                         "conduit-token",
+func TestBuildResponsesImageRequestPreservesStructuredToolFields(t *testing.T) {
+	request := ResponsesImageRequest{
+		Prompt:            "生成封面",
+		Model:             "gpt-image-2",
+		Size:              "2048x2048",
+		Quality:           "high",
+		Background:        "transparent",
+		OutputFormat:      "webp",
+		OutputCompression: ptrInt(37),
+		PartialImages:     ptrInt(2),
+		InputImages: []ResponsesInputImage{
+			{Data: []byte("png-bytes"), ContentType: "image/png"},
+		},
+		InputImageMask: &ResponsesInputImage{Data: []byte("mask-bytes"), ContentType: "image/png"},
+	}
+
+	payload, err := buildResponsesImagePayload(request)
+	if err != nil {
+		t.Fatalf("buildResponsesImagePayload() error = %v", err)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(payload, &body); err != nil {
+		t.Fatalf("payload json error = %v", err)
+	}
+
+	if body["model"] != ResponsesImageMainModel {
+		t.Fatalf("main model = %#v, want %q", body["model"], ResponsesImageMainModel)
+	}
+	tool := body["tools"].([]any)[0].(map[string]any)
+	for key, want := range map[string]any{
+		"type":               "image_generation",
+		"action":             "edit",
+		"size":               "2048x2048",
+		"quality":            "high",
+		"background":         "transparent",
+		"output_format":      "webp",
+		"output_compression": float64(37),
+		"partial_images":     float64(2),
 	} {
-		if got := headers[key]; got != want {
-			t.Fatalf("%s = %q, want %q", key, got, want)
+		if got := tool[key]; got != want {
+			t.Fatalf("tool[%s] = %#v, want %#v in %#v", key, got, want, tool)
 		}
 	}
-	if headers["X-Oai-Turn-Trace-Id"] == "" {
-		t.Fatal("missing turn trace id")
+	if _, ok := tool["model"]; ok {
+		t.Fatalf("tool model = %#v, want omitted for official gpt-image-2 route", tool["model"])
+	}
+	mask := tool["input_image_mask"].(map[string]any)
+	if got := mask["image_url"].(string); !strings.HasPrefix(got, "data:image/png;base64,") {
+		t.Fatalf("mask image_url = %q", got)
+	}
+	input := body["input"].([]any)[0].(map[string]any)
+	content := input["content"].([]any)
+	if len(content) != 2 || content[0].(map[string]any)["type"] != "input_text" || content[1].(map[string]any)["type"] != "input_image" {
+		t.Fatalf("input content = %#v", content)
 	}
 }
 
-func TestImageModelSlugSupportsSelection(t *testing.T) {
-	client := &Client{}
-	for _, tc := range []struct {
+func TestBuildResponsesImageRequestMapsCodexAliasToCodexToolModel(t *testing.T) {
+	payload, err := buildResponsesImagePayload(ResponsesImageRequest{
+		Prompt: "生成封面",
+		Model:  "codex-gpt-image-2",
+	})
+	if err != nil {
+		t.Fatalf("buildResponsesImagePayload() error = %v", err)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(payload, &body); err != nil {
+		t.Fatalf("payload json error = %v", err)
+	}
+	if body["model"] != ResponsesImageMainModel {
+		t.Fatalf("main model = %#v, want %q", body["model"], ResponsesImageMainModel)
+	}
+	tool := body["tools"].([]any)[0].(map[string]any)
+	if got := tool["model"]; got != ResponsesImageCodexToolModel {
+		t.Fatalf("tool model = %#v, want %q in %#v", got, ResponsesImageCodexToolModel, tool)
+	}
+}
+
+func TestNormalizeResponsesImageToolModel(t *testing.T) {
+	tests := []struct {
+		name  string
 		model string
 		want  string
 	}{
-		{model: "", want: "gpt-image-2"},
-		{model: "auto", want: "gpt-image-2"},
-		{model: "gpt-image-2", want: "gpt-image-2"},
-		{model: "codex-gpt-image-2", want: "codex-gpt-image-2"},
-		{model: "gpt-5", want: "gpt-image-2"},
-		{model: "gpt-5-3-mini", want: "gpt-image-2"},
-		{model: "gpt-5.4", want: "gpt-image-2"},
-		{model: "gpt-5.5", want: "gpt-image-2"},
-		{model: "unknown", want: "gpt-image-2"},
-	} {
-		t.Run(tc.model, func(t *testing.T) {
-			if got := client.imageModelSlug(tc.model); got != tc.want {
-				t.Fatalf("imageModelSlug(%q) = %q, want %q", tc.model, got, tc.want)
+		{name: "empty official default is omitted", model: "", want: ""},
+		{name: "auto official default is omitted", model: "auto", want: ""},
+		{name: "gpt image 2 official default is omitted", model: "gpt-image-2", want: ""},
+		{name: "codex alias maps to codex model", model: "codex-gpt-image-2", want: ResponsesImageCodexToolModel},
+		{name: "explicit codex upstream model is preserved", model: "gpt-5.4-mini", want: "gpt-5.4-mini"},
+		{name: "unknown values are omitted", model: "unknown", want: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := normalizeResponsesImageToolModel(tt.model); got != tt.want {
+				t.Fatalf("normalizeResponsesImageToolModel(%q) = %q, want %q", tt.model, got, tt.want)
 			}
 		})
 	}
+}
+
+func TestResponsesImageHeadersUseCodexRoute(t *testing.T) {
+	client := &Client{AccessToken: "token-1", fp: map[string]string{}, userAgent: browserUserAgent, sessionID: "session-1"}
+	headers, err := client.responsesImageHeaders("acct-1")
+	if err != nil {
+		t.Fatalf("responsesImageHeaders() error = %v", err)
+	}
+	if headers["Authorization"] != "Bearer token-1" {
+		t.Fatalf("Authorization = %q", headers["Authorization"])
+	}
+	if headers["Chatgpt-Account-Id"] != "acct-1" {
+		t.Fatalf("Chatgpt-Account-Id = %q", headers["Chatgpt-Account-Id"])
+	}
+	if headers["Originator"] != "codex-tui" || headers["Accept"] != "text/event-stream" {
+		t.Fatalf("codex headers = %#v", headers)
+	}
+	if !strings.Contains(headers["User-Agent"], "codex-tui/0.128.0") || !strings.Contains(headers["User-Agent"], "iTerm.app") {
+		t.Fatalf("User-Agent = %q, want Codex TUI user agent", headers["User-Agent"])
+	}
+	if headers["Session_id"] == "" {
+		t.Fatalf("Session_id missing in %#v", headers)
+	}
+}
+
+func TestStreamResponsesImageUsesCodexResponsesRouteForCodexModel(t *testing.T) {
+	imageB64 := base64.StdEncoding.EncodeToString([]byte("png-bytes"))
+	var seenPath string
+	var seenToolModel any
+	var seenUserAgent string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenPath = r.URL.Path
+		seenUserAgent = r.Header.Get("User-Agent")
+		if got := r.Header.Get("Authorization"); got != "Bearer token-1" {
+			t.Errorf("Authorization = %q, want Bearer token-1", got)
+		}
+		if got := r.Header.Get("Chatgpt-Account-Id"); got != "acct-1" {
+			t.Errorf("Chatgpt-Account-Id = %q, want acct-1", got)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode request body: %v", err)
+		} else {
+			tool := body["tools"].([]any)[0].(map[string]any)
+			seenToolModel = tool["model"]
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(`data: {"type":"response.output_item.done","item":{"type":"image_generation_call","result":"` + imageB64 + `","output_format":"png"}}
+
+`))
+	}))
+	defer server.Close()
+
+	client := &Client{
+		BaseURL:     server.URL,
+		AccessToken: "token-1",
+		httpClient:  server.Client(),
+		lookup: testAccountLookup{
+			"token-1": {"chatgpt_account_id": "acct-1"},
+		},
+	}
+	events, errCh := client.StreamResponsesImage(context.Background(), ResponsesImageRequest{
+		Prompt: "生成封面",
+		Model:  "codex-gpt-image-2",
+	})
+	var gotResult string
+	for event := range events {
+		gotResult = event.Result
+	}
+	if err := <-errCh; err != nil {
+		t.Fatalf("StreamResponsesImage() error = %v", err)
+	}
+	if seenPath != codexResponsesPath {
+		t.Fatalf("path = %q, want %q", seenPath, codexResponsesPath)
+	}
+	if seenToolModel != ResponsesImageCodexToolModel {
+		t.Fatalf("tool model = %#v, want %q", seenToolModel, ResponsesImageCodexToolModel)
+	}
+	if !strings.Contains(seenUserAgent, "codex-tui/0.128.0") {
+		t.Fatalf("User-Agent = %q, want Codex TUI", seenUserAgent)
+	}
+	if gotResult != imageB64 {
+		t.Fatalf("result = %q, want %q", gotResult, imageB64)
+	}
+}
+
+type testAccountLookup map[string]map[string]any
+
+func (l testAccountLookup) GetAccount(accessToken string) map[string]any {
+	return l[accessToken]
 }
 
 func TestConversationPayloadEmbedsOpenAIMessageHistoryInSingleUserMessage(t *testing.T) {
@@ -212,77 +358,6 @@ func TestSolveTurnstileTokenInterpretsEncodedProgram(t *testing.T) {
 	}
 }
 
-func TestFileDownloadURLUsesConversationScopedEndpoint(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/backend-api/files/download/file_abc" {
-			t.Fatalf("path = %q", r.URL.Path)
-		}
-		if got := r.URL.Query().Get("conversation_id"); got != "conv-1" {
-			t.Fatalf("conversation_id = %q", got)
-		}
-		if got := r.URL.Query().Get("inline"); got != "false" {
-			t.Fatalf("inline = %q", got)
-		}
-		if got := r.Header.Get("X-OpenAI-Target-Path"); got != "/backend-api/files/download/file_abc" {
-			t.Fatalf("target path = %q", got)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"download_url":"https://files.example/image.png"}`))
-	}))
-	defer server.Close()
-
-	client := &Client{
-		BaseURL:     server.URL,
-		AccessToken: "token-1",
-		httpClient:  server.Client(),
-		fp:          map[string]string{},
-	}
-	got := client.fileDownloadURL(context.Background(), "conv-1", "file_abc")
-	if got != "https://files.example/image.png" {
-		t.Fatalf("fileDownloadURL() = %q", got)
-	}
-}
-
-func TestDownloadImageBytesAuthenticatesChatGPTBackendURLs(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if got := r.Header.Get("Authorization"); got != "Bearer token-1" {
-			t.Fatalf("Authorization = %q", got)
-		}
-		if got := r.Header.Get("Origin"); got != serverURL(r) {
-			t.Fatalf("Origin = %q", got)
-		}
-		if got := r.Header.Get("X-OpenAI-Target-Path"); got != "/backend-api/files/stream" {
-			t.Fatalf("target path = %q", got)
-		}
-		w.Header().Set("Content-Type", "image/png")
-		_, _ = w.Write([]byte("png-data"))
-	}))
-	defer server.Close()
-
-	client := &Client{
-		BaseURL:     server.URL,
-		AccessToken: "token-1",
-		httpClient:  server.Client(),
-		fp:          map[string]string{},
-		userAgent:   browserUserAgent,
-	}
-	got, err := client.DownloadImageBytes(context.Background(), []string{server.URL + "/backend-api/files/stream"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got) != 1 || string(got[0]) != "png-data" {
-		t.Fatalf("DownloadImageBytes() = %#v", got)
-	}
-}
-
 type errString string
 
 func (e errString) Error() string { return string(e) }
-
-func serverURL(r *http.Request) string {
-	scheme := "http"
-	if r.TLS != nil {
-		scheme = "https"
-	}
-	return scheme + "://" + r.Host
-}

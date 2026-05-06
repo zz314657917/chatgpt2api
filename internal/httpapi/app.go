@@ -117,11 +117,6 @@ func NewApp() (*App, error) {
 	app.tasks.SetTaskTimeoutGetter(func() time.Duration {
 		return time.Duration(app.config.ImageTaskTimeoutSeconds()) * time.Second
 	})
-	app.tasks.SetResponseImageHandler(func(ctx context.Context, identity service.Identity, payload map[string]any) (map[string]any, error) {
-		return app.runLoggedImageTask(ctx, identity, payload, "/api/creation-tasks/response-image-generations", "Responses 作画", func(ctx context.Context, payload map[string]any) (map[string]any, error) {
-			return app.runResponsesImageGenerationTask(ctx, payload)
-		})
-	})
 	accounts.StartLimitedWatcher(ctx, time.Duration(cfg.RefreshAccountIntervalMinute())*time.Minute)
 	cfg.CleanupOldImages()
 	return app, nil
@@ -1080,6 +1075,11 @@ func readMultipartImageBody(r *http.Request) (map[string]any, []protocol.Uploade
 		"n":                  util.ToInt(firstForm(r.MultipartForm, "n"), 1),
 		"size":               firstForm(r.MultipartForm, "size"),
 		"quality":            firstForm(r.MultipartForm, "quality"),
+		"background":         firstForm(r.MultipartForm, "background"),
+		"moderation":         firstForm(r.MultipartForm, "moderation"),
+		"style":              firstForm(r.MultipartForm, "style"),
+		"partial_images":     firstForm(r.MultipartForm, "partial_images"),
+		"input_image_mask":   firstForm(r.MultipartForm, "input_image_mask"),
 		"output_format":      firstForm(r.MultipartForm, "output_format"),
 		"output_compression": firstForm(r.MultipartForm, "output_compression"),
 		"visibility":         firstForm(r.MultipartForm, "visibility"),
@@ -1329,153 +1329,6 @@ func (a *App) runLoggedImageTask(ctx context.Context, identity service.Identity,
 	}
 	a.logCall(identity, summary, http.MethodPost, endpoint, model, start, "success", http.StatusOK, "", urls)
 	return result, nil
-}
-
-func (a *App) runResponsesImageGenerationTask(ctx context.Context, payload map[string]any) (map[string]any, error) {
-	body := responseImageTaskBody(payload)
-	completed, _, err := a.engine.HandleResponsesScoped(ctx, body, util.Clean(payload["owner_id"]))
-	if err != nil {
-		if completed == nil {
-			completed = map[string]any{}
-		}
-		return completed, err
-	}
-	result := responsesImageTaskResult(a.engine, completed, payload)
-	if err := responsesImageTaskTextOutputError(result, completed); err != nil {
-		return result, err
-	}
-	return result, nil
-}
-
-func responsesImageTaskTextOutputError(result map[string]any, completed map[string]any) error {
-	if len(util.AsMapSlice(result["data"])) > 0 {
-		return nil
-	}
-	text := responseOutputText(completed["output"])
-	if text == "" {
-		return nil
-	}
-	result["message"] = text
-	result["output_type"] = "text"
-	return &protocol.ImageGenerationError{
-		Message:    firstNonEmpty(text, "Responses image_generation returned text instead of image data."),
-		StatusCode: http.StatusBadGateway,
-		Type:       "server_error",
-		Code:       "image_generation_text_response",
-	}
-}
-
-func responseImageTaskBody(payload map[string]any) map[string]any {
-	prompt := util.Clean(payload["prompt"])
-	images := responseImageTaskDataURLs(payload["images"])
-	input := any(prompt)
-	if len(images) > 0 {
-		content := []map[string]any{{"type": "input_text", "text": prompt}}
-		for _, imageURL := range images {
-			content = append(content, map[string]any{"type": "input_image", "image_url": imageURL})
-		}
-		input = []map[string]any{{"role": "user", "content": content}}
-	}
-	tool := map[string]any{
-		"type":          "image_generation",
-		"action":        responseImageTaskAction(images),
-		"size":          firstNonEmpty(util.Clean(payload["size"]), "auto"),
-		"output_format": service.NormalizeImageOutputFormat(util.Clean(payload["output_format"])),
-	}
-	if util.Clean(tool["output_format"]) != "png" {
-		if compression, ok := imageOutputCompressionFromBody(payload["output_compression"]); ok {
-			tool["output_compression"] = compression
-		}
-	}
-	if quality := util.Clean(payload["quality"]); quality != "" && util.Clean(payload["model"]) != util.ImageModelCodex {
-		tool["quality"] = quality
-	}
-	body := map[string]any{
-		"model":           firstNonEmpty(util.Clean(payload["model"]), util.ImageModelAuto),
-		"input":           input,
-		"tools":           []map[string]any{tool},
-		"tool_choice":     "required",
-		"n":               util.ToInt(payload["n"], 1),
-		"owner_name":      util.Clean(payload["owner_name"]),
-		"response_format": "b64_json",
-	}
-	if messages := util.AsMapSlice(payload["messages"]); len(messages) > 0 {
-		body["instructions"] = responseImageTaskInstructions(messages, prompt)
-	}
-	return body
-}
-
-func responseImageTaskAction(images []string) string {
-	if len(images) > 0 {
-		return "edit"
-	}
-	return "generate"
-}
-
-func responseImageTaskDataURLs(raw any) []string {
-	var out []string
-	for _, item := range util.AsStringSlice(raw) {
-		if text := util.Clean(item); strings.HasPrefix(text, "data:image/") {
-			out = append(out, text)
-		}
-	}
-	return out
-}
-
-func responseImageTaskInstructions(messages []map[string]any, prompt string) string {
-	var history []string
-	for index, message := range messages {
-		if index == len(messages)-1 && strings.TrimSpace(util.Clean(message["content"])) == strings.TrimSpace(prompt) {
-			continue
-		}
-		text := strings.TrimSpace(util.Clean(message["content"]))
-		if text == "" {
-			continue
-		}
-		history = append(history, firstNonEmpty(util.Clean(message["role"]), "user")+": "+text)
-	}
-	if len(history) == 0 {
-		return ""
-	}
-	return "Use this conversation history only as context for image generation. Do not render the history text unless the current request explicitly asks for it.\n\n" + strings.Join(history, "\n")
-}
-
-func responsesImageTaskResult(engine *protocol.Engine, completed map[string]any, payload map[string]any) map[string]any {
-	created := int64(util.ToInt(completed["created_at"], int(time.Now().Unix())))
-	items := responseImageOutputItems(completed["output"])
-	return engine.FormatImageResultWithOptions(items, util.Clean(payload["prompt"]), util.Clean(payload["response_format"]), util.Clean(payload["base_url"]), util.Clean(payload["owner_id"]), util.Clean(payload["owner_name"]), created, "", protocol.ImageOutputOptionsFromPayload(payload))
-}
-
-func responseImageOutputItems(output any) []map[string]any {
-	var items []map[string]any
-	for _, item := range util.AsMapSlice(output) {
-		if util.Clean(item["type"]) != "image_generation_call" {
-			continue
-		}
-		b64 := util.Clean(item["result"])
-		if b64 == "" {
-			continue
-		}
-		items = append(items, map[string]any{"b64_json": b64, "revised_prompt": util.Clean(item["revised_prompt"])})
-	}
-	return items
-}
-
-func responseOutputText(output any) string {
-	var parts []string
-	for _, item := range util.AsMapSlice(output) {
-		if util.Clean(item["type"]) != "message" {
-			continue
-		}
-		for _, content := range util.AsMapSlice(item["content"]) {
-			if util.Clean(content["type"]) == "output_text" {
-				if text := strings.TrimSpace(util.Clean(content["text"])); text != "" {
-					parts = append(parts, text)
-				}
-			}
-		}
-	}
-	return strings.TrimSpace(strings.Join(parts, "\n"))
 }
 
 func (a *App) runLoggedChatTask(ctx context.Context, identity service.Identity, payload map[string]any) (map[string]any, error) {

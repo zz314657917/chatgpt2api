@@ -502,6 +502,8 @@ curl http://localhost:3000/v1/images/generations \
 | `n` | 生成数量，当前限制为 `1-4` |
 | `response_format` | 默认 `b64_json` |
 
+`gpt-image-2` 走官网图片链路，`codex-gpt-image-2` 走 Codex TUI 风格的 `/backend-api/codex/responses` 链路，`auto` 默认使用官网图片链路。`codex-gpt-image-2` 是本项目的路由别名，上游 payload 会映射为 Codex 可识别的 `tools[0].model=gpt-5.4-mini`。Free 账号不会被本地预先拦截；如果账号没有对应图片工具权限，上游可能直接返回失败。
+
 ### `POST /v1/images/edits`
 
 ```bash
@@ -521,6 +523,8 @@ curl http://localhost:3000/v1/images/edits \
 | `prompt` | 图片编辑提示词 |
 | `n` | 生成数量，当前限制为 `1-4` |
 | `image` | 参考图片，使用 multipart/form-data 上传 |
+
+图片编辑使用同一套模型路由：`gpt-image-2` 对应官网图片链路，`codex-gpt-image-2` 对应 Codex TUI 风格 Responses 链路。
 
 ### `POST /v1/chat/completions`
 
@@ -552,13 +556,17 @@ curl http://localhost:3000/v1/responses \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer <session-or-api-token>" \
   -d '{
-    "model": "gpt-image-2",
+    "model": "gpt-5.5",
     "input": "生成一张未来感城市天际线图片",
     "tools": [
       {
-        "type": "image_generation"
+        "type": "image_generation",
+        "model": "gpt-image-2"
       }
-    ]
+    ],
+    "tool_choice": {
+      "type": "image_generation"
+    }
   }'
 ```
 

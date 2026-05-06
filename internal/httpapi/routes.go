@@ -946,17 +946,7 @@ func (a *App) handleCreationTasks(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.URL.Path == "/api/creation-tasks/image-generations" && r.Method == http.MethodPost {
 		body, _ := readJSONMap(r)
-		task, err := a.tasks.SubmitGenerationWithOptions(r.Context(), identity, util.Clean(body["client_task_id"]), util.Clean(body["prompt"]), firstNonEmpty(util.Clean(body["model"]), util.ImageModelAuto), util.Clean(body["size"]), util.Clean(body["quality"]), a.resolveImageBaseURL(r), util.ToInt(body["n"], 1), body["messages"], imageTaskRequestMetadata(body), imageOutputOptionsFromBody(body), util.Clean(body["visibility"]))
-		if err != nil {
-			writeCreationTaskSubmitError(w, err)
-			return
-		}
-		util.WriteJSON(w, http.StatusOK, task)
-		return
-	}
-	if r.URL.Path == "/api/creation-tasks/response-image-generations" && r.Method == http.MethodPost {
-		body, _ := readJSONMap(r)
-		task, err := a.tasks.SubmitResponseImageGenerationWithOptions(r.Context(), identity, util.Clean(body["client_task_id"]), util.Clean(body["prompt"]), firstNonEmpty(util.Clean(body["model"]), util.ImageModelAuto), util.Clean(body["size"]), util.Clean(body["quality"]), a.resolveImageBaseURL(r), body["images"], util.ToInt(body["n"], 1), body["messages"], imageTaskRequestMetadata(body), imageOutputOptionsFromBody(body), util.Clean(body["visibility"]))
+		task, err := a.tasks.SubmitGenerationWithOptions(r.Context(), identity, util.Clean(body["client_task_id"]), util.Clean(body["prompt"]), firstNonEmpty(util.Clean(body["model"]), util.ImageModelAuto), util.Clean(body["size"]), util.Clean(body["quality"]), a.resolveImageBaseURL(r), util.ToInt(body["n"], 1), body["messages"], imageTaskRequestMetadata(body), imageOutputOptionsFromBody(body), imageToolOptionsFromBody(body), util.Clean(body["visibility"]))
 		if err != nil {
 			writeCreationTaskSubmitError(w, err)
 			return
@@ -980,7 +970,7 @@ func (a *App) handleCreationTasks(w http.ResponseWriter, r *http.Request) {
 			util.WriteError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		task, err := a.tasks.SubmitEditWithOptions(r.Context(), identity, util.Clean(body["client_task_id"]), util.Clean(body["prompt"]), firstNonEmpty(util.Clean(body["model"]), util.ImageModelAuto), util.Clean(body["size"]), util.Clean(body["quality"]), a.resolveImageBaseURL(r), images, util.ToInt(body["n"], 1), body["messages"], imageTaskRequestMetadata(body), imageOutputOptionsFromBody(body), util.Clean(body["visibility"]))
+		task, err := a.tasks.SubmitEditWithOptions(r.Context(), identity, util.Clean(body["client_task_id"]), util.Clean(body["prompt"]), firstNonEmpty(util.Clean(body["model"]), util.ImageModelAuto), util.Clean(body["size"]), util.Clean(body["quality"]), a.resolveImageBaseURL(r), images, util.ToInt(body["n"], 1), body["messages"], imageTaskRequestMetadata(body), imageOutputOptionsFromBody(body), imageToolOptionsFromBody(body), util.Clean(body["visibility"]))
 		if err != nil {
 			writeCreationTaskSubmitError(w, err)
 			return
@@ -1010,6 +1000,19 @@ func imageOutputOptionsFromBody(body map[string]any) service.ImageOutputOptions 
 		if compression, ok := imageOutputCompressionFromBody(body["output_compression"]); ok {
 			options.Compression = &compression
 		}
+	}
+	return options
+}
+
+func imageToolOptionsFromBody(body map[string]any) service.ImageToolOptions {
+	options := service.ImageToolOptions{
+		Background:     util.Clean(body["background"]),
+		Moderation:     util.Clean(body["moderation"]),
+		Style:          util.Clean(body["style"]),
+		InputImageMask: util.Clean(body["input_image_mask"]),
+	}
+	if partialImages := util.ToInt(body["partial_images"], 0); partialImages > 0 {
+		options.PartialImages = &partialImages
 	}
 	return options
 }

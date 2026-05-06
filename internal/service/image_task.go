@@ -32,6 +32,14 @@ type ImageOutputOptions struct {
 	Compression *int
 }
 
+type ImageToolOptions struct {
+	Background     string
+	Moderation     string
+	Style          string
+	PartialImages  *int
+	InputImageMask string
+}
+
 type ImageTaskService struct {
 	mu                  sync.RWMutex
 	path                string
@@ -40,7 +48,6 @@ type ImageTaskService struct {
 	generation          ImageTaskHandler
 	edit                ImageTaskHandler
 	chat                ImageTaskHandler
-	responseImage       ImageTaskHandler
 	retentionGetter     func() int
 	concurrentLimit     func() int
 	taskTimeoutGetter   func() time.Duration
@@ -69,7 +76,7 @@ func NewStoredImageTaskService(path string, backend storage.Backend, generation 
 }
 
 func newImageTaskService(path string, store storage.JSONDocumentBackend, generation ImageTaskHandler, edit ImageTaskHandler, chat ImageTaskHandler, retentionGetter func() int, limitGetters ...func() int) *ImageTaskService {
-	s := &ImageTaskService{path: path, store: store, docName: "image_tasks.json", generation: generation, edit: edit, chat: chat, responseImage: generation, retentionGetter: retentionGetter, tasks: map[string]map[string]any{}, cancels: map[string]context.CancelFunc{}, ownerSubmitTimes: map[string][]time.Time{}}
+	s := &ImageTaskService{path: path, store: store, docName: "image_tasks.json", generation: generation, edit: edit, chat: chat, retentionGetter: retentionGetter, tasks: map[string]map[string]any{}, cancels: map[string]context.CancelFunc{}, ownerSubmitTimes: map[string][]time.Time{}}
 	if len(limitGetters) > 0 {
 		s.concurrentLimit = limitGetters[0]
 	}
@@ -88,13 +95,6 @@ func newImageTaskService(path string, store storage.JSONDocumentBackend, generat
 	}
 	s.mu.Unlock()
 	return s
-}
-
-func (s *ImageTaskService) SetResponseImageHandler(handler ImageTaskHandler) {
-	if handler == nil {
-		return
-	}
-	s.responseImage = handler
 }
 
 func (s *ImageTaskService) SetTaskTimeoutGetter(getter func() time.Duration) {
@@ -124,32 +124,8 @@ func (s *ImageTaskService) SubmitGenerationWithMetadata(ctx context.Context, ide
 	return s.submitImageWithMetadata(ctx, identity, clientTaskID, prompt, model, size, quality, baseURL, n, messages, metadata, "generate", nil, visibilityValues...)
 }
 
-func (s *ImageTaskService) SubmitGenerationWithOptions(ctx context.Context, identity Identity, clientTaskID, prompt, model, size, quality, baseURL string, n int, messages any, metadata map[string]any, options ImageOutputOptions, visibilityValues ...string) (map[string]any, error) {
-	return s.submitImageWithMetadataAndOptions(ctx, identity, clientTaskID, prompt, model, size, quality, baseURL, n, messages, metadata, "generate", nil, options, visibilityValues...)
-}
-
-func (s *ImageTaskService) SubmitResponseImageGeneration(ctx context.Context, identity Identity, clientTaskID, prompt, model, size, quality, baseURL string, images any, n int, messages any, visibilityValues ...string) (map[string]any, error) {
-	prompt = strings.TrimSpace(prompt)
-	if prompt == "" {
-		return nil, fmt.Errorf("prompt is required")
-	}
-	visibility, err := imageTaskVisibility(visibilityValues...)
-	if err != nil {
-		return nil, err
-	}
-	payload := map[string]any{"prompt": prompt, "images": images, "model": model, "n": normalizedImageTaskCount(n), "size": size, "quality": quality, "response_format": "url", "base_url": baseURL, "visibility": visibility}
-	if messages != nil {
-		payload["messages"] = messages
-	}
-	return s.submit(ctx, identity, clientTaskID, "response-image", payload)
-}
-
-func (s *ImageTaskService) SubmitResponseImageGenerationWithMetadata(ctx context.Context, identity Identity, clientTaskID, prompt, model, size, quality, baseURL string, images any, n int, messages any, metadata map[string]any, visibilityValues ...string) (map[string]any, error) {
-	return s.submitImageWithMetadata(ctx, identity, clientTaskID, prompt, model, size, quality, baseURL, n, messages, metadata, "response-image", images, visibilityValues...)
-}
-
-func (s *ImageTaskService) SubmitResponseImageGenerationWithOptions(ctx context.Context, identity Identity, clientTaskID, prompt, model, size, quality, baseURL string, images any, n int, messages any, metadata map[string]any, options ImageOutputOptions, visibilityValues ...string) (map[string]any, error) {
-	return s.submitImageWithMetadataAndOptions(ctx, identity, clientTaskID, prompt, model, size, quality, baseURL, n, messages, metadata, "response-image", images, options, visibilityValues...)
+func (s *ImageTaskService) SubmitGenerationWithOptions(ctx context.Context, identity Identity, clientTaskID, prompt, model, size, quality, baseURL string, n int, messages any, metadata map[string]any, options ImageOutputOptions, toolOptions ImageToolOptions, visibilityValues ...string) (map[string]any, error) {
+	return s.submitImageWithMetadataAndOptions(ctx, identity, clientTaskID, prompt, model, size, quality, baseURL, n, messages, metadata, "generate", nil, options, toolOptions, visibilityValues...)
 }
 
 func (s *ImageTaskService) SubmitEdit(ctx context.Context, identity Identity, clientTaskID, prompt, model, size, quality, baseURL string, images any, n int, messages any, visibilityValues ...string) (map[string]any, error) {
@@ -172,8 +148,8 @@ func (s *ImageTaskService) SubmitEditWithMetadata(ctx context.Context, identity 
 	return s.submitImageWithMetadata(ctx, identity, clientTaskID, prompt, model, size, quality, baseURL, n, messages, metadata, "edit", images, visibilityValues...)
 }
 
-func (s *ImageTaskService) SubmitEditWithOptions(ctx context.Context, identity Identity, clientTaskID, prompt, model, size, quality, baseURL string, images any, n int, messages any, metadata map[string]any, options ImageOutputOptions, visibilityValues ...string) (map[string]any, error) {
-	return s.submitImageWithMetadataAndOptions(ctx, identity, clientTaskID, prompt, model, size, quality, baseURL, n, messages, metadata, "edit", images, options, visibilityValues...)
+func (s *ImageTaskService) SubmitEditWithOptions(ctx context.Context, identity Identity, clientTaskID, prompt, model, size, quality, baseURL string, images any, n int, messages any, metadata map[string]any, options ImageOutputOptions, toolOptions ImageToolOptions, visibilityValues ...string) (map[string]any, error) {
+	return s.submitImageWithMetadataAndOptions(ctx, identity, clientTaskID, prompt, model, size, quality, baseURL, n, messages, metadata, "edit", images, options, toolOptions, visibilityValues...)
 }
 
 func (s *ImageTaskService) SubmitChat(ctx context.Context, identity Identity, clientTaskID, prompt, model string, messages any) (map[string]any, error) {
@@ -189,10 +165,10 @@ func (s *ImageTaskService) SubmitChat(ctx context.Context, identity Identity, cl
 }
 
 func (s *ImageTaskService) submitImageWithMetadata(ctx context.Context, identity Identity, clientTaskID, prompt, model, size, quality, baseURL string, n int, messages any, metadata map[string]any, mode string, images any, visibilityValues ...string) (map[string]any, error) {
-	return s.submitImageWithMetadataAndOptions(ctx, identity, clientTaskID, prompt, model, size, quality, baseURL, n, messages, metadata, mode, images, ImageOutputOptions{}, visibilityValues...)
+	return s.submitImageWithMetadataAndOptions(ctx, identity, clientTaskID, prompt, model, size, quality, baseURL, n, messages, metadata, mode, images, ImageOutputOptions{}, ImageToolOptions{}, visibilityValues...)
 }
 
-func (s *ImageTaskService) submitImageWithMetadataAndOptions(ctx context.Context, identity Identity, clientTaskID, prompt, model, size, quality, baseURL string, n int, messages any, metadata map[string]any, mode string, images any, options ImageOutputOptions, visibilityValues ...string) (map[string]any, error) {
+func (s *ImageTaskService) submitImageWithMetadataAndOptions(ctx context.Context, identity Identity, clientTaskID, prompt, model, size, quality, baseURL string, n int, messages any, metadata map[string]any, mode string, images any, options ImageOutputOptions, toolOptions ImageToolOptions, visibilityValues ...string) (map[string]any, error) {
 	prompt = strings.TrimSpace(prompt)
 	if prompt == "" {
 		return nil, fmt.Errorf("prompt is required")
@@ -210,6 +186,7 @@ func (s *ImageTaskService) submitImageWithMetadataAndOptions(ctx context.Context
 	}
 	mergeImageTaskMetadata(payload, metadata)
 	mergeImageOutputOptions(payload, options)
+	mergeImageToolOptions(payload, toolOptions)
 	return s.submit(ctx, identity, clientTaskID, mode, payload)
 }
 
@@ -312,6 +289,7 @@ func (s *ImageTaskService) submit(ctx context.Context, identity Identity, client
 	if compression, ok := normalizedImageOutputCompressionValue(payload["output_compression"]); ok {
 		task["output_compression"] = compression
 	}
+	mergePublicImageToolTaskFields(task, payload)
 	s.tasks[key] = task
 	s.cancels[key] = cancel
 	_ = s.saveLocked()
@@ -342,8 +320,6 @@ func (s *ImageTaskService) runTask(ctx context.Context, key, mode string, identi
 		handler = s.edit
 	} else if mode == "chat" {
 		handler = s.chat
-	} else if mode == "response-image" {
-		handler = s.responseImage
 	}
 	result, err := handler(runCtx, identity, payload)
 	if err != nil {
@@ -554,8 +530,6 @@ func (s *ImageTaskService) loadLocked() map[string]map[string]any {
 		mode := "generate"
 		if task["mode"] == "edit" {
 			mode = "edit"
-		} else if task["mode"] == "response-image" {
-			mode = "response-image"
 		} else if task["mode"] == "chat" {
 			mode = "chat"
 		}
@@ -647,6 +621,7 @@ func publicTask(task map[string]any) map[string]any {
 	if compression, ok := normalizedImageOutputCompressionValue(task["output_compression"]); ok {
 		item["output_compression"] = compression
 	}
+	mergePublicImageToolTaskFields(item, task)
 	if task["data"] != nil {
 		item["data"] = task["data"]
 	}
@@ -738,6 +713,33 @@ func mergeImageOutputOptions(payload map[string]any, options ImageOutputOptions)
 	payload["output_compression"] = compression
 }
 
+func mergeImageToolOptions(payload map[string]any, options ImageToolOptions) {
+	for key, value := range map[string]string{
+		"background":       options.Background,
+		"moderation":       options.Moderation,
+		"style":            options.Style,
+		"input_image_mask": options.InputImageMask,
+	} {
+		if strings.TrimSpace(value) != "" {
+			payload[key] = strings.TrimSpace(value)
+		}
+	}
+	if options.PartialImages != nil && *options.PartialImages > 0 {
+		payload["partial_images"] = *options.PartialImages
+	}
+}
+
+func mergePublicImageToolTaskFields(target, source map[string]any) {
+	for _, key := range []string{"background", "moderation", "style", "input_image_mask"} {
+		if value := util.Clean(source[key]); value != "" {
+			target[key] = value
+		}
+	}
+	if value := util.ToInt(source["partial_images"], 0); value > 0 {
+		target["partial_images"] = value
+	}
+}
+
 func NormalizeImageOutputFormat(format string) string {
 	switch strings.ToLower(strings.TrimSpace(format)) {
 	case "", "png":
@@ -770,7 +772,7 @@ func storedTaskCount(task map[string]any) int {
 }
 
 func isImageTaskMode(mode string) bool {
-	return mode == "generate" || mode == "edit" || mode == "response-image"
+	return mode == "generate" || mode == "edit"
 }
 
 func taskResultData(result map[string]any) []map[string]any {

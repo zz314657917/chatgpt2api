@@ -540,16 +540,20 @@ func (s *AccountService) FetchRemoteInfo(ctx context.Context, accessToken string
 	limits := anyList(init.payload["limits_progress"])
 	accountType := s.detectAccountType(accessToken, me.payload, init.payload)
 	quota, restoreAt, unknown := extractQuotaAndRestoreAt(limits)
+	chatGPTAccountID := firstNonEmpty(
+		chatGPTAccountIDFromPayload(decodeAccessTokenPayload(accessToken)),
+		util.Clean(me.payload["chatgpt_account_id"]),
+		util.Clean(me.payload["account_id"]),
+		util.Clean(me.payload["id"]),
+	)
 	status := "正常"
 	if !unknown && quota == 0 {
-		status = "限流"
-	}
-	if unknown && accountType == "Free" {
 		status = "限流"
 	}
 	return map[string]any{
 		"email":               me.payload["email"],
 		"user_id":             me.payload["id"],
+		"chatgpt_account_id":  chatGPTAccountID,
 		"type":                accountType,
 		"quota":               quota,
 		"image_quota_unknown": unknown,
@@ -905,6 +909,13 @@ func normalizeAccount(item map[string]any) map[string]any {
 	} else {
 		normalized["user_id"] = nil
 	}
+	if accountID := util.Clean(normalized["chatgpt_account_id"]); accountID != "" {
+		normalized["chatgpt_account_id"] = accountID
+	} else if accountID := util.Clean(normalized["account_id"]); accountID != "" {
+		normalized["chatgpt_account_id"] = accountID
+	} else {
+		normalized["chatgpt_account_id"] = nil
+	}
 	limits := anyList(normalized["limits_progress"])
 	normalized["limits_progress"] = limits
 	if model := util.Clean(normalized["default_model_slug"]); model != "" {
@@ -939,6 +950,7 @@ func publicAccounts(accounts []map[string]any) []map[string]any {
 			"imageQuotaUnknown":  util.ToBool(account["image_quota_unknown"]),
 			"email":              account["email"],
 			"user_id":            account["user_id"],
+			"chatgpt_account_id": account["chatgpt_account_id"],
 			"limits_progress":    util.ValueOr(account["limits_progress"], []any{}),
 			"default_model_slug": account["default_model_slug"],
 			"restoreAt":          account["restore_at"],
@@ -1000,6 +1012,24 @@ func decodeAccessTokenPayload(accessToken string) map[string]any {
 		return map[string]any{}
 	}
 	return out
+}
+
+func chatGPTAccountIDFromPayload(payload map[string]any) string {
+	if len(payload) == 0 {
+		return ""
+	}
+	if accountID := util.Clean(payload["chatgpt_account_id"]); accountID != "" {
+		return accountID
+	}
+	if accountID := util.Clean(payload["account_id"]); accountID != "" {
+		return accountID
+	}
+	if authPayload := util.StringMap(payload["https://api.openai.com/auth"]); authPayload != nil {
+		if accountID := util.Clean(authPayload["chatgpt_account_id"]); accountID != "" {
+			return accountID
+		}
+	}
+	return ""
 }
 
 func normalizeAccountType(value any) string {
