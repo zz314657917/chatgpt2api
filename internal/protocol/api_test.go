@@ -173,33 +173,6 @@ func TestGPTImageModelKeepsQualityHint(t *testing.T) {
 	}
 }
 
-func TestRequiresPaidImageSize(t *testing.T) {
-	tests := []struct {
-		name string
-		size string
-		want bool
-	}{
-		{name: "empty", size: "", want: false},
-		{name: "aspect ratio", size: "16:9", want: false},
-		{name: "free pixel budget", size: "1248x1248", want: false},
-		{name: "1080p square below paid budget", size: "1080x1080", want: false},
-		{name: "1080p tier below paid budget", size: "1080p", want: false},
-		{name: "1080p widescreen above paid budget", size: "1920x1080", want: true},
-		{name: "2k tier", size: "2k", want: true},
-		{name: "2k", size: "2560x1440", want: true},
-		{name: "4k tier", size: "4k", want: true},
-		{name: "4k", size: "3840x2160", want: true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := RequiresPaidImageSize(tt.size); got != tt.want {
-				t.Fatalf("RequiresPaidImageSize(%q) = %v, want %v", tt.size, got, tt.want)
-			}
-		})
-	}
-}
-
 func TestNormalizeImageGenerationSizeTiers(t *testing.T) {
 	tests := []struct {
 		size string
@@ -229,9 +202,6 @@ func TestConversationRequestNormalizesResolutionTierSize(t *testing.T) {
 	}.Normalized()
 	if request.Size != "2048x2048" {
 		t.Fatalf("Normalized() size = %q, want 2048x2048", request.Size)
-	}
-	if !request.RequirePaidAccount {
-		t.Fatal("Normalized() RequirePaidAccount = false, want true for 2k tier")
 	}
 }
 
@@ -396,9 +366,6 @@ func TestResponseImageGenerationRequestUsesToolImageModel(t *testing.T) {
 	if request.Model != "gpt-image-2" {
 		t.Fatalf("request model = %q, want image tool model gpt-image-2", request.Model)
 	}
-	if !request.RequirePaidAccount {
-		t.Fatal("RequirePaidAccount = false, want true for 2048x2048")
-	}
 }
 
 func TestResponseImageGenerationToolAcceptsTypedToolSlice(t *testing.T) {
@@ -424,9 +391,6 @@ func TestResponseImageGenerationToolAcceptsTypedToolSlice(t *testing.T) {
 	}
 	if request.Size != "2880x2880" {
 		t.Fatalf("request size = %q, want 2880x2880", request.Size)
-	}
-	if !request.RequirePaidAccount {
-		t.Fatal("RequirePaidAccount = false, want true for 2880x2880")
 	}
 }
 

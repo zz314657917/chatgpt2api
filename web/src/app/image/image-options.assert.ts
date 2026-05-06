@@ -6,7 +6,7 @@ import {
   buildImageSize,
   calculateImageSize,
   getImageSizeSelectionFromSize,
-  requiresPaidImageSize,
+  isHighResolutionImageSize,
   parseImageRatio,
   type ImageSizeSelection,
 } from "./image-options";
@@ -38,8 +38,8 @@ assert.equal(
   "",
 );
 assert.equal(buildImageSize(ratioSelection({ aspectRatio: "", resolution: "4k" })), "2880x2880");
-assert.equal(requiresPaidImageSize("1088x1088"), false);
-assert.equal(requiresPaidImageSize("2048x2048"), true);
+assert.equal(isHighResolutionImageSize("1088x1088"), false);
+assert.equal(isHighResolutionImageSize("2048x2048"), true);
 assert.deepEqual(getImageSizeSelectionFromSize("2.39:1"), {
   mode: "ratio",
   aspectRatio: CUSTOM_IMAGE_ASPECT_RATIO,

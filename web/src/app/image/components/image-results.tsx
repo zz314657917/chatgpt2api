@@ -6,14 +6,14 @@ import { Check, CircleStop, Clock3, Download, Eye, Globe2, LoaderCircle, Lock, P
 import { AuthenticatedImage } from "@/components/authenticated-image";
 import { Button } from "@/components/ui/button";
 import type { ImagePromptPreset } from "@/app/image/image-presets";
-import { formatImageSizeDisplay, getImageSizeRequirementLabel, requiresPaidImageSize } from "@/app/image/image-options";
+import { formatImageSizeDisplay, getImageSizeRequirementLabel, isHighResolutionImageSize } from "@/app/image/image-options";
 import { IMAGE_MODEL_ROUTE_DETAILS } from "@/lib/api";
 import type { ImageVisibility } from "@/lib/api";
 import { fetchAuthenticatedImageBlob, shouldUseAuthenticatedImageFallback } from "@/lib/authenticated-image";
 import { formatBase64ImageFileSize, formatImageFileSize } from "@/lib/image-size";
 import { cn } from "@/lib/utils";
 import type { ImageConversation, ImageTurn, ImageTurnStatus, StoredImage, StoredReferenceImage } from "@/store/image-conversations";
-import type { ImageTurnProgress } from "@/store/image-turn-progress";
+import { imageTurnStartedAtTimestamp, type ImageTurnProgress } from "@/store/image-turn-progress";
 
 export type ImageLightboxItem = {
   id: string;
@@ -99,12 +99,12 @@ function getTurnResultSizeLabel(turn: ImageTurn, dimensionsByImageId: Record<str
     ),
   );
   if (labels.length === 1) {
-    return labels[0];
+    return `结果 ${labels[0]}`;
   }
   if (labels.length > 1) {
-    return `${labels.length} 种尺寸`;
+    return `结果 ${labels.length} 种尺寸`;
   }
-  return isTurnBusy(turn) && turn.size ? `请求 ${turn.size}` : "";
+  return "";
 }
 
 function getRequestedSizeLabel(turn: ImageTurn) {
@@ -121,8 +121,8 @@ function getLongTaskHint(turn: ImageTurn, elapsedSeconds: number) {
   if (!isTurnBusy(turn) || turn.mode === "chat") {
     return "";
   }
-  if (requiresPaidImageSize(turn.size)) {
-    return "高分辨率任务正在使用 Paid 图片账号链路";
+  if (isHighResolutionImageSize(turn.size)) {
+    return "高分辨率任务已提交给上游判断";
   }
   return "";
 }
@@ -408,13 +408,11 @@ export function ImageResults({
         const showResultSummary = turn.mode !== "chat" && (visualImages.length > 0 || turnBusy);
         const resultSizeLabel = getTurnResultSizeLabel(turn, imageDimensions);
         const progressStartedAt =
-          progress && Number.isFinite(progress.startedAt) ? progress.startedAt : null;
-        const elapsedSeconds = progressStartedAt === null ? 0 : Math.max(0, Math.floor((progressNow - progressStartedAt) / 1000));
-        const elapsedClock = turnBusy
-          ? progressStartedAt === null
-            ? ""
-            : formatElapsedClock(elapsedSeconds)
-          : "";
+          progress && Number.isFinite(progress.startedAt)
+            ? progress.startedAt
+            : imageTurnStartedAtTimestamp(turn.processingStartedAt, turn.createdAt);
+        const elapsedSeconds = Math.max(0, Math.floor((progressNow - progressStartedAt) / 1000));
+        const elapsedClock = turnBusy ? formatElapsedClock(elapsedSeconds) : "";
         const progressMessage =
           progress?.message || (turn.status === "queued" ? "等待前序任务" : turnBusy ? "正在处理图片" : "");
         const requestedSizeLabel = getRequestedSizeLabel(turn);
@@ -565,7 +563,7 @@ export function ImageResults({
                         <span
                           className={cn(
                             "rounded-full px-3 py-1",
-                            requiresPaidImageSize(turn.size)
+                            isHighResolutionImageSize(turn.size)
                               ? "bg-amber-50 text-amber-700"
                               : "bg-[#f0f0f0]",
                           )}

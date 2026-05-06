@@ -48,26 +48,25 @@ type Engine struct {
 }
 
 type ConversationRequest struct {
-	Model              string
-	Prompt             string
-	Messages           []map[string]any
-	Images             []string
-	InputImageMask     string
-	N                  int
-	Size               string
-	Quality            string
-	Background         string
-	Moderation         string
-	Style              string
-	OutputFormat       string
-	OutputCompression  *int
-	PartialImages      *int
-	ResponseFormat     string
-	BaseURL            string
-	OwnerID            string
-	OwnerName          string
-	MessageAsError     bool
-	RequirePaidAccount bool
+	Model             string
+	Prompt            string
+	Messages          []map[string]any
+	Images            []string
+	InputImageMask    string
+	N                 int
+	Size              string
+	Quality           string
+	Background        string
+	Moderation        string
+	Style             string
+	OutputFormat      string
+	OutputCompression *int
+	PartialImages     *int
+	ResponseFormat    string
+	BaseURL           string
+	OwnerID           string
+	OwnerName         string
+	MessageAsError    bool
 }
 
 func (r ConversationRequest) Normalized() ConversationRequest {
@@ -85,7 +84,6 @@ func (r ConversationRequest) Normalized() ConversationRequest {
 		}
 		r.OutputCompression = &compression
 	}
-	r.RequirePaidAccount = r.RequirePaidAccount || RequiresPaidImageSize(r.Size)
 	return r
 }
 
@@ -213,6 +211,7 @@ func isTransientImageStreamErrorMessage(message string) bool {
 		"sse read error",
 		"responses sse read error",
 		"stream error",
+		"flow_control_error",
 		"internal_error",
 		"received from peer",
 		"unexpected eof",
@@ -238,6 +237,9 @@ func imageStreamErrorMessage(message string) string {
 	}
 	if detail, ok := util.SummarizeUpstreamConnectionError(text); ok {
 		return detail
+	}
+	if strings.Contains(lower, "flow_control_error") {
+		return "upstream image stream interrupted by HTTP/2 flow control; retry the request or change proxy if it repeats"
 	}
 	if text == "" {
 		return "image generation failed"
@@ -438,21 +440,13 @@ func (e *Engine) StreamImageOutputsWithPool(ctx context.Context, request Convers
 		}
 		emitted := false
 		lastError := ""
-		var allowAccount func(map[string]any) bool
-		if request.RequirePaidAccount {
-			allowAccount = service.IsPaidImageAccount
-		}
 		for index := 1; index <= request.N; index++ {
 			transientAttempts := 0
 			for {
-				token, err := e.Accounts.GetAvailableAccessTokenFor(ctx, allowAccount)
+				token, err := e.Accounts.GetAvailableAccessTokenFor(ctx, nil)
 				if err != nil {
 					if emitted {
 						errCh <- nil
-						return
-					}
-					if request.RequirePaidAccount {
-						errCh <- NewImageGenerationError("当前没有可用的 Paid 图片账号，1080P/2K/4K 等高分辨率出图需要 Plus / Pro / Team 账号")
 						return
 					}
 					errCh <- NewImageGenerationError(err.Error())
@@ -932,8 +926,6 @@ func AssistantHistoryMessages(messages []map[string]any) []string {
 	return out
 }
 
-const maxFreeGeneratePixels = 1577536
-
 func NormalizeImageGenerationSize(size string) string {
 	switch strings.ToLower(strings.TrimSpace(size)) {
 	case "1080p":
@@ -945,12 +937,6 @@ func NormalizeImageGenerationSize(size string) string {
 	default:
 		return strings.TrimSpace(size)
 	}
-}
-
-func RequiresPaidImageSize(size string) bool {
-	size = NormalizeImageGenerationSize(size)
-	width, height, ok := imageSizeDimensions(size)
-	return ok && width*height > maxFreeGeneratePixels
 }
 
 func imageSizeDimensions(size string) (int, int, bool) {

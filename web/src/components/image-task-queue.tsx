@@ -6,7 +6,7 @@ import { useNavigate } from "react-router-dom";
 
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { formatImageSizeDisplay, getImageSizeRequirementLabel, requiresPaidImageSize } from "@/app/image/image-options";
+import { formatImageSizeDisplay, getImageSizeRequirementLabel, isHighResolutionImageSize } from "@/app/image/image-options";
 import { IMAGE_MODEL_ROUTE_DETAILS } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import {
@@ -21,6 +21,7 @@ import {
 } from "@/store/image-conversations";
 import {
   getImageTurnProgressSnapshot,
+  imageTurnStartedAtTimestamp,
   imageTurnProgressKey,
   subscribeImageTurnProgress,
 } from "@/store/image-turn-progress";
@@ -134,8 +135,8 @@ function getQueueLongTaskHint(turn: ImageTurn, elapsedSeconds: number) {
   if (turn.mode === "chat") {
     return "";
   }
-  if (requiresPaidImageSize(turn.size)) {
-    return "高分辨率任务使用 Paid 图片账号链路";
+  if (isHighResolutionImageSize(turn.size)) {
+    return "高分辨率任务已提交给上游判断";
   }
   return "";
 }
@@ -256,12 +257,12 @@ function QueueItem({
       : item.turn.status === "generating"
         ? 8
         : 0;
-  const elapsed =
+  const progressStartedAt =
     progress && Number.isFinite(progress.startedAt)
-      ? formatElapsedClock(Math.floor((now - progress.startedAt) / 1000))
-      : "";
-  const elapsedSeconds =
-    progress && Number.isFinite(progress.startedAt) ? Math.max(0, Math.floor((now - progress.startedAt) / 1000)) : 0;
+      ? progress.startedAt
+      : imageTurnStartedAtTimestamp(item.turn.processingStartedAt, item.turn.createdAt);
+  const elapsedSeconds = Math.max(0, Math.floor((now - progressStartedAt) / 1000));
+  const elapsed = formatElapsedClock(elapsedSeconds);
   const routeDetail = IMAGE_MODEL_ROUTE_DETAILS[item.turn.model];
   const sizeLabel = getQueueSizeLabel(item.turn);
   const detailParts = [

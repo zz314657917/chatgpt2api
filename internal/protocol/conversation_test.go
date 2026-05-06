@@ -149,6 +149,10 @@ func TestImageStreamErrorMessage(t *testing.T) {
 	if got := imageStreamErrorMessage("upstream returned 500"); got != "upstream returned 500" {
 		t.Fatalf("non-connection error = %q", got)
 	}
+	flowControl := "connection error: FLOW_CONTROL_ERROR"
+	if got := imageStreamErrorMessage(flowControl); got != "upstream image stream interrupted by HTTP/2 flow control; retry the request or change proxy if it repeats" {
+		t.Fatalf("flow control error = %q", got)
+	}
 	if got := imageStreamErrorMessage(""); got != "image generation failed" {
 		t.Fatalf("empty error = %q", got)
 	}
@@ -157,6 +161,7 @@ func TestImageStreamErrorMessage(t *testing.T) {
 func TestIsTransientImageStreamErrorMessage(t *testing.T) {
 	transient := []string{
 		"responses SSE read error: stream error: stream ID 1; INTERNAL_ERROR; received from peer",
+		"connection error: FLOW_CONTROL_ERROR",
 		"http2: client connection lost",
 		"unexpected EOF",
 		"connection reset by peer",

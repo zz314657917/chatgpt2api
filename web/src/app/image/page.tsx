@@ -21,11 +21,11 @@ import {
   formatImageSizeDisplay,
   getImageSizeSelectionFromSize,
   getImageSizeRequirementLabel,
+  isHighResolutionImageSize,
   isImageAspectRatio,
   isImageResolution,
   isImageSizeMode,
   parseImageRatio,
-  requiresPaidImageSize,
   type ImageAspectRatio,
   type ImageResolution,
   type ImageSizeMode,
@@ -61,7 +61,6 @@ import {
   createImageGenerationTask,
   DEFAULT_CHAT_MODEL,
   DEFAULT_IMAGE_MODEL,
-  fetchAccounts,
   fetchCreationTasks,
   IMAGE_CREATION_MODEL_OPTIONS,
   IMAGE_MODEL_ROUTE_DETAILS,
@@ -73,7 +72,6 @@ import {
   isImageQuality,
   supportsImageQuality,
   updateManagedImageVisibility,
-  type Account,
   type ImageModel,
   type ImageOutputFormat,
   type ImageQuality,
@@ -107,6 +105,7 @@ import {
 import {
   clearImageTurnProgress,
   getImageTurnProgressSnapshot,
+  imageTurnStartedAtTimestamp,
   imageTurnProgressKey,
   setImageTurnProgress,
   subscribeImageTurnProgress,
@@ -128,7 +127,6 @@ const IMAGE_OUTPUT_COMPRESSION_STORAGE_KEY = "chatgpt2api:image_last_output_comp
 const QUOTA_REFRESH_EVENT = "chatgpt2api:quota-refresh";
 const DEFAULT_IMAGE_QUALITY: ImageQuality = "high";
 const DEFAULT_IMAGE_OUTPUT_FORMAT: ImageOutputFormat = "png";
-const PAID_IMAGE_ACCOUNT_TYPES = new Set<Account["type"]>(["Plus", "ProLite", "Pro", "Team"]);
 const activeConversationQueueIds = new Set<string>();
 const EMPTY_IMAGE_ASPECT_RATIO_SELECT_VALUE = "__empty_aspect_ratio__";
 const MISSING_RECOVERABLE_TASK_ID_ERROR = "页面刷新或任务中断，未找到可恢复的任务 ID";
@@ -312,22 +310,10 @@ function imageOutputCompressionForFormat(format: ImageOutputFormat, value: unkno
   return normalizeOutputCompressionValue(value);
 }
 
-function isAvailablePaidImageAccount(account: Account) {
-  return account.status === "正常" && PAID_IMAGE_ACCOUNT_TYPES.has(account.type);
-}
-
-function formatPaidImageAccountHint(accounts: Account[] | null, canInspectAccounts: boolean) {
-  if (!canInspectAccounts) {
-    return "当前角色无法读取账号池；高分辨率提交后会由后端选择可用 Paid 图片账号。";
-  }
-  if (!accounts) {
-    return "正在读取账号池状态；高分辨率需要 Plus / Pro / Team 图片账号。";
-  }
-  const availablePaidCount = accounts.filter(isAvailablePaidImageAccount).length;
-  if (availablePaidCount > 0) {
-    return `当前检测到 ${availablePaidCount} 个正常 Paid 图片账号。`;
-  }
-  return "当前未检测到正常 Paid 图片账号，2K / 4K 等高分辨率可能会提交后失败。";
+function formatHighResolutionHint(canInspectAccounts: boolean) {
+  return canInspectAccounts
+    ? "高分辨率不会在本地预拦截，会直接提交给上游；官方会按账号能力判断、回退或返回错误。"
+    : "高分辨率会照常提交给上游；官方会按账号能力判断、回退或返回错误。";
 }
 
 function imageTaskProgressMessage(turn: ImageTurn, elapsedSeconds = 0) {
@@ -339,12 +325,12 @@ function imageTaskProgressMessage(turn: ImageTurn, elapsedSeconds = 0) {
   }
 
   const route = IMAGE_MODEL_ROUTE_DETAILS[turn.model];
-  const paidRequired = requiresPaidImageSize(turn.size);
+  const isHighResolution = isHighResolutionImageSize(turn.size);
   void elapsedSeconds;
-  if (paidRequired) {
+  if (isHighResolution) {
     return {
       message: "高分辨率生成中",
-      detail: `${getImageSizeRequirementLabel(turn.size)}，后端正在等待图片结果`,
+      detail: `${getImageSizeRequirementLabel(turn.size)}，后端已提交给上游等待结果`,
     };
   }
   return {
@@ -932,11 +918,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
   const [progressNow, setProgressNow] = useState(Date.now());
   const [composerDockHeight, setComposerDockHeight] = useState(0);
   const [visibilityMutatingImageKey, setVisibilityMutatingImageKey] = useState("");
-  const [imageAccounts, setImageAccounts] = useState<Account[] | null>(null);
-  const [imageAccountHint, setImageAccountHint] = useState("");
-
   const canInspectAccounts = session.role === "admin" || session.apiPermissions.includes("get/api/accounts");
-  const hasAvailablePaidImageAccount = imageAccounts?.some(isAvailablePaidImageAccount) ?? false;
 
   const parsedCount = useMemo(() => normalizeRequestedImageCount(imageCount), [imageCount]);
   const imageSize = useMemo(
@@ -994,7 +976,9 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
           ? `已按链路限制校准为 ${formatImageSizeDisplay(editingDraftImageSize)}，${getImageSizeRequirementLabel(editingDraftImageSize)}`
           : "宽高需要填写正整数"
         : "不会强制指定尺寸";
-  const editingDraftSizeRequiresPaid = Boolean(editingDraftImageSize && requiresPaidImageSize(editingDraftImageSize));
+  const editingDraftSizeIsHighResolution = Boolean(
+    editingDraftImageSize && isHighResolutionImageSize(editingDraftImageSize),
+  );
   const composerModelOptions = composerMode === "chat" ? CHAT_MODEL_OPTIONS : IMAGE_CREATION_MODEL_OPTIONS;
   const imageQualityOptions = supportsImageQuality(imageModel) ? IMAGE_QUALITY_OPTIONS : [];
   const selectedConversation = useMemo(
@@ -1029,11 +1013,11 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         </div>
         <div className="mt-2">
           <span className="font-semibold text-stone-800">分辨率限制：</span>
-          Free 账号建议按约 1.57M 像素总量控制；Paid 账号的图片最长边最高支持 3840。按比例选择 1080P / 2K / 4K，或手动指定宽高时，会把具体像素尺寸下发并补充到生成提示中。
+          按比例选择 1080P / 2K / 4K，或手动指定宽高时，会把具体像素尺寸下发并补充到生成提示中；后端不会因为 Free / Paid 账号类型预先拦截。
         </div>
         <div className="mt-2">
-          <span className="font-semibold text-stone-800">账号要求：</span>
-          超过 Free 像素预算的分辨率档会优先使用 Plus / Pro / Team 等 Paid 账号；没有可用 Paid 账号时任务会直接提示失败原因。
+          <span className="font-semibold text-stone-800">账号能力：</span>
+          高分辨率请求会直接传给官方图片工具；官方可能按账号能力接受、自动回退尺寸，或返回上游错误。
         </div>
         <div className="mt-2">
           <span className="font-semibold text-stone-800">Auto 模式补充：</span>
@@ -1047,56 +1031,14 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     ),
     [],
   );
-  const paidImageAccountHint = useMemo(
-    () => formatPaidImageAccountHint(imageAccounts, canInspectAccounts),
-    [canInspectAccounts, imageAccounts],
-  );
-  const paidImageAccountHintNode = (
-    <>
-      {paidImageAccountHint}
-      {imageAccountHint ? <span className="block text-amber-700 dark:text-amber-300">{imageAccountHint}</span> : null}
-    </>
+  const highResolutionHint = useMemo(
+    () => formatHighResolutionHint(canInspectAccounts),
+    [canInspectAccounts],
   );
 
   useEffect(() => {
     conversationsRef.current = conversations;
   }, [conversations]);
-
-  useEffect(() => {
-    if (!canInspectAccounts) {
-      setImageAccounts(null);
-      return;
-    }
-
-    let cancelled = false;
-    const loadImageAccounts = async (silent = false) => {
-      try {
-        const data = await fetchAccounts();
-        if (!cancelled) {
-          setImageAccounts(Array.isArray(data.items) ? data.items : []);
-          setImageAccountHint("");
-        }
-      } catch (error) {
-        if (!cancelled) {
-          setImageAccounts(null);
-          setImageAccountHint(error instanceof Error ? error.message : "账号池状态读取失败");
-          if (!silent) {
-            toast.error(error instanceof Error ? error.message : "账号池状态读取失败");
-          }
-        }
-      }
-    };
-
-    void loadImageAccounts(true);
-    const handleRefresh = () => {
-      void loadImageAccounts(true);
-    };
-    window.addEventListener(QUOTA_REFRESH_EVENT, handleRefresh);
-    return () => {
-      cancelled = true;
-      window.removeEventListener(QUOTA_REFRESH_EVENT, handleRefresh);
-    };
-  }, [canInspectAccounts]);
 
   useEffect(() => {
     const node = composerDockRef.current;
@@ -1821,12 +1763,14 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
 
       activeConversationQueueIds.add(conversationId);
       const activeTurnKey = imageTurnProgressKey(conversationId, activeTurn.id);
+      const activeTurnStartedAt = imageTurnStartedAtTimestamp(activeTurn.processingStartedAt, activeTurn.createdAt);
       updateTurnProgress(conversationId, activeTurn.id, {
         message: activeTurn.mode === "chat" ? "正在准备对话请求" : "正在准备生成任务",
         detail:
           activeTurn.mode === "chat"
             ? "正在整理上下文"
             : `准备处理 ${activeTurn.images.filter((image) => image.status === "loading").length || activeTurn.count} 张图片`,
+        startedAt: activeTurnStartedAt,
       });
       const applyTasks = async (tasks: CreationTask[]) => {
         const taskMap = new Map(tasks.map((task) => [task.id, task]));
@@ -1878,6 +1822,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                     ...turn,
                     status: "generating",
                     error: undefined,
+                    processingStartedAt: turn.processingStartedAt || turn.createdAt,
                     images: turn.images.map((image, imageIndex) =>
                       image.status === "loading"
                         ? {
@@ -1987,7 +1932,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
           const elapsedSeconds =
             progressSnapshot && Number.isFinite(progressSnapshot.startedAt)
               ? Math.max(0, Math.floor((Date.now() - progressSnapshot.startedAt) / 1000))
-              : 0;
+              : Math.max(0, Math.floor((Date.now() - activeTurnStartedAt) / 1000));
           const progressCopy = imageTaskProgressMessage(activeTurn, elapsedSeconds);
           updateTurnProgress(conversationId, activeTurn.id, {
             message: progressCopy.message,
@@ -2245,6 +2190,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
               return {
                 ...turn,
                 ...derived,
+                processingStartedAt: now,
                 images,
               };
             }),
@@ -2303,6 +2249,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
               count: imageCount,
               status: "queued",
               error: undefined,
+              processingStartedAt: now,
               images: Array.from({ length: imageCount }, (_, index) => {
                 const imageId = `${turn.id}-${regenerationId}-${index}`;
                 return {
@@ -2376,12 +2323,10 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         return;
       }
       const draftOutputCompression = imageOutputCompressionForFormat(draft.outputFormat, draft.outputCompression);
-      if (mode !== "chat" && requiresPaidImageSize(draftImageSize)) {
+      if (mode !== "chat" && isHighResolutionImageSize(draftImageSize)) {
         const sizeLabel = formatImageSizeDisplay(draftImageSize);
-        if (canInspectAccounts && imageAccounts && !hasAvailablePaidImageAccount) {
-          toast.error(`当前未检测到正常 Paid 图片账号，${sizeLabel} 可能会提交后失败。`);
-        } else if (regenerate) {
-          toast.message(`${sizeLabel} 属于高分辨率任务，将使用 Paid 图片账号并可能耗时更久。`);
+        if (regenerate) {
+          toast.message(`${sizeLabel} 属于高分辨率任务，会直接提交给上游判断。`);
         }
       }
       const now = new Date().toISOString();
@@ -2419,6 +2364,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
               ...baseTurn,
               status: "queued" as const,
               error: undefined,
+              processingStartedAt: now,
               images: Array.from({ length: imageCount }, (_, index) => {
                 const imageId = `${turn.id}-${regenerationId}-${index}`;
                 return {
@@ -2444,14 +2390,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         toast.success("已保存编辑设置");
       }
     },
-    [
-      canInspectAccounts,
-      editingTurnDraft,
-      hasAvailablePaidImageAccount,
-      imageAccounts,
-      runConversationQueue,
-      updateConversation,
-    ],
+    [editingTurnDraft, runConversationQueue, updateConversation],
   );
 
   const handleSubmit = async () => {
@@ -2495,14 +2434,10 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         customWidth: imageCustomWidth,
         customHeight: imageCustomHeight,
       });
-      const needsPaidImageAccount = effectiveImageMode !== "chat" && requiresPaidImageSize(imageSize);
-      if (needsPaidImageAccount) {
+      const isHighResolutionRequest = effectiveImageMode !== "chat" && isHighResolutionImageSize(imageSize);
+      if (isHighResolutionRequest) {
         const sizeLabel = formatImageSizeDisplay(imageSize);
-        if (canInspectAccounts && imageAccounts && !hasAvailablePaidImageAccount) {
-          toast.error(`当前未检测到正常 Paid 图片账号，${sizeLabel} 可能会提交后失败。`);
-        } else {
-          toast.message(`${sizeLabel} 属于高分辨率任务，将使用 Paid 图片账号并可能耗时更久。`);
-        }
+        toast.message(`${sizeLabel} 属于高分辨率任务，会直接提交给上游判断。`);
       }
       const targetConversation = selectedConversationId
         ? conversationsRef.current.find((conversation) => conversation.id === selectedConversationId) ?? null
@@ -2533,6 +2468,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
           };
         }),
         createdAt: now,
+        processingStartedAt: now,
         status: "queued",
       };
 
@@ -2554,6 +2490,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
       updateTurnProgress(conversationId, turnId, {
         message: "正在创建本地记录",
         detail: effectiveImageMode === "chat" ? "正在保存对话内容" : "正在保存提示词和生成参数",
+        startedAt: Date.parse(now),
       });
       setSelectedConversationId(conversationId);
       clearComposerInputs();
@@ -2943,30 +2880,32 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                     </>
                     ) : null}
                     {editingTurnDraft.sizeMode !== "auto" ? (
-                    <div className="rounded-2xl border border-stone-200 bg-stone-50 px-3 py-2 text-sm sm:col-span-2 lg:col-span-4">
-                      <div className="flex min-w-0 items-center justify-between gap-3">
-                        <span className="shrink-0 font-medium text-stone-600">计算后分辨率</span>
-                        <span className={cn(
-                          "min-w-0 truncate text-right font-mono font-semibold",
-                          editingDraftSizeRequiresPaid ? "text-amber-700" : "text-stone-900",
-                        )}>
-                          {editingDraftSizePreviewLabel}
-                        </span>
-                      </div>
-                      <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-stone-500">
-                        <span className="min-w-0 truncate">{editingDraftSizePreviewDetail}</span>
-                        {editingDraftSizeRequiresPaid ? (
-                          <span className="shrink-0 rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700 ring-1 ring-amber-100">
-                            Paid
-                          </span>
-                        ) : null}
-                      </div>
-                      {editingDraftSizeRequiresPaid ? (
-                        <div className="mt-1.5 rounded-xl bg-white px-2.5 py-1.5 text-xs leading-5 text-stone-500 ring-1 ring-stone-100">
-                          {paidImageAccountHintNode}
+                      <>
+                        <div className="rounded-2xl border border-stone-200 bg-stone-50 px-3 py-2 text-sm sm:col-span-2 lg:col-span-4">
+                          <div className="flex min-w-0 items-center justify-between gap-3">
+                            <span className="shrink-0 font-medium text-stone-600">计算后分辨率</span>
+                            <span className={cn(
+                              "min-w-0 truncate text-right font-mono font-semibold",
+                              editingDraftSizeIsHighResolution ? "text-amber-700" : "text-stone-900",
+                            )}>
+                              {editingDraftSizePreviewLabel}
+                            </span>
+                          </div>
+                          <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-stone-500">
+                            <span className="min-w-0 truncate">{editingDraftSizePreviewDetail}</span>
+                            {editingDraftSizeIsHighResolution ? (
+                              <span className="shrink-0 rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700 ring-1 ring-amber-100">
+                                高分辨率
+                              </span>
+                            ) : null}
+                          </div>
                         </div>
-                      ) : null}
-                    </div>
+                        {editingDraftSizeIsHighResolution ? (
+                          <div className="rounded-2xl border border-amber-100 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800 sm:col-span-2 lg:col-span-4">
+                            {highResolutionHint}
+                          </div>
+                        ) : null}
+                      </>
                     ) : null}
                     {supportsImageQuality(editingTurnDraft.model) ? (
                     <label className="flex flex-col gap-2 text-sm font-medium text-stone-700">
@@ -3093,7 +3032,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                 imageOutputFormat={imageOutputFormat}
                 imageOutputCompression={imageOutputCompression}
                 imageOutputHint={imageOutputHint}
-                paidImageAccountHint={paidImageAccountHintNode}
+                highResolutionHint={highResolutionHint}
                 referenceImages={referenceImages}
                 textareaRef={textareaRef}
                 fileInputRef={fileInputRef}

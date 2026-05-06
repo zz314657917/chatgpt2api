@@ -71,6 +71,7 @@ export type ImageTurn = {
   visibility?: ImageVisibility;
   images: StoredImage[];
   createdAt: string;
+  processingStartedAt?: string;
   status: ImageTurnStatus;
   error?: string;
 };
@@ -299,6 +300,7 @@ function normalizeTurn(turn: ImageTurn & Record<string, unknown>): ImageTurn {
     visibility,
     images,
     createdAt: String(turn.createdAt || new Date().toISOString()),
+    processingStartedAt: typeof turn.processingStartedAt === "string" ? turn.processingStartedAt : undefined,
     status:
       turn.status === "queued" ||
       turn.status === "generating" ||

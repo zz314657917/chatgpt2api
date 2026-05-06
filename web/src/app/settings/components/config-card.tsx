@@ -76,6 +76,44 @@ function ConfigFieldLabel({
   );
 }
 
+function NumberInputWithUnit({
+  id,
+  max,
+  min,
+  onChange,
+  placeholder,
+  unit,
+  value,
+}: {
+  id: string;
+  max?: number;
+  min?: number;
+  onChange: (value: string) => void;
+  placeholder: string;
+  unit: string;
+  value: number | string;
+}) {
+  return (
+    <div className="relative min-w-0">
+      <Input
+        id={id}
+        type="number"
+        min={min}
+        max={max}
+        step={1}
+        inputMode="numeric"
+        value={String(value)}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder={placeholder}
+        className={cn(settingsInputClassName, "pr-12")}
+      />
+      <span className="pointer-events-none absolute top-1/2 right-3 -translate-y-1/2 text-xs font-medium text-muted-foreground">
+        {unit}
+      </span>
+    </div>
+  );
+}
+
 function ConfigOption({
   checked,
   label,
@@ -204,14 +242,13 @@ export function ConfigCard() {
               <ConfigFieldLabel htmlFor="settings-refresh-interval">
                 账号刷新间隔
               </ConfigFieldLabel>
-              <Input
+              <NumberInputWithUnit
                 id="settings-refresh-interval"
-                value={String(config?.refresh_account_interval_minute || "")}
-                onChange={(event) =>
-                  setRefreshAccountIntervalMinute(event.target.value)
-                }
-                placeholder="分钟"
-                className={settingsInputClassName}
+                min={1}
+                value={config?.refresh_account_interval_minute || ""}
+                onChange={setRefreshAccountIntervalMinute}
+                placeholder="5"
+                unit="分钟"
               />
             </Field>
             <Field className={configFieldClassName}>
@@ -230,40 +267,40 @@ export function ConfigCard() {
               <ConfigFieldLabel htmlFor="settings-image-concurrent-limit">
                 同时生成张数
               </ConfigFieldLabel>
-              <Input
+              <NumberInputWithUnit
                 id="settings-image-concurrent-limit"
-                value={String(config?.image_concurrent_limit || "")}
-                onChange={(event) =>
-                  setImageConcurrentLimit(event.target.value)
-                }
+                min={1}
+                value={config?.image_concurrent_limit || ""}
+                onChange={setImageConcurrentLimit}
                 placeholder="4"
-                className={settingsInputClassName}
+                unit="张"
               />
             </Field>
             <Field className={configFieldClassName}>
               <ConfigFieldLabel htmlFor="settings-image-retention-days">
                 图片自动清理
               </ConfigFieldLabel>
-              <Input
+              <NumberInputWithUnit
                 id="settings-image-retention-days"
-                value={String(config?.image_retention_days || "")}
-                onChange={(event) => setImageRetentionDays(event.target.value)}
+                min={1}
+                value={config?.image_retention_days || ""}
+                onChange={setImageRetentionDays}
                 placeholder="30"
-                className={settingsInputClassName}
+                unit="天"
               />
             </Field>
             <Field className={configFieldClassName}>
               <ConfigFieldLabel htmlFor="settings-image-task-timeout-seconds">
                 任务超时时间
               </ConfigFieldLabel>
-              <Input
+              <NumberInputWithUnit
                 id="settings-image-task-timeout-seconds"
-                value={String(config?.image_task_timeout_seconds || "")}
-                onChange={(event) =>
-                  setImageTaskTimeoutSeconds(event.target.value)
-                }
+                min={30}
+                max={3600}
+                value={config?.image_task_timeout_seconds || ""}
+                onChange={setImageTaskTimeoutSeconds}
                 placeholder="300"
-                className={settingsInputClassName}
+                unit="秒"
               />
             </Field>
           </div>
@@ -279,28 +316,26 @@ export function ConfigCard() {
               <ConfigFieldLabel htmlFor="settings-user-default-concurrent-limit">
                 用户默认并发
               </ConfigFieldLabel>
-              <Input
+              <NumberInputWithUnit
                 id="settings-user-default-concurrent-limit"
-                value={String(config?.user_default_concurrent_limit ?? "")}
-                onChange={(event) =>
-                  setUserDefaultConcurrentLimit(event.target.value)
-                }
+                min={0}
+                value={config?.user_default_concurrent_limit ?? ""}
+                onChange={setUserDefaultConcurrentLimit}
                 placeholder="0"
-                className={settingsInputClassName}
+                unit="个"
               />
             </Field>
             <Field className={configFieldClassName}>
               <ConfigFieldLabel htmlFor="settings-user-default-rpm-limit">
                 用户默认 RPM
               </ConfigFieldLabel>
-              <Input
+              <NumberInputWithUnit
                 id="settings-user-default-rpm-limit"
-                value={String(config?.user_default_rpm_limit ?? "")}
-                onChange={(event) =>
-                  setUserDefaultRpmLimit(event.target.value)
-                }
+                min={0}
+                value={config?.user_default_rpm_limit ?? ""}
+                onChange={setUserDefaultRpmLimit}
                 placeholder="0"
-                className={settingsInputClassName}
+                unit="次/分"
               />
             </Field>
           </div>

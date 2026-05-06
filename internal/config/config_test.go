@@ -134,6 +134,15 @@ func TestStoreNormalizesImageTaskTimeoutSeconds(t *testing.T) {
 	if store.ImageTaskTimeoutSeconds() != 3600 {
 		t.Fatalf("ImageTaskTimeoutSeconds() = %d, want 3600", store.ImageTaskTimeoutSeconds())
 	}
+
+	got, err = store.Update(map[string]any{"image_task_timeout_seconds": float64(900)})
+	if err != nil {
+		t.Fatalf("Update() json number error = %v", err)
+	}
+	assertConfigValue(t, got, "image_task_timeout_seconds", 900)
+	if store.ImageTaskTimeoutSeconds() != 900 {
+		t.Fatalf("ImageTaskTimeoutSeconds() = %d, want 900", store.ImageTaskTimeoutSeconds())
+	}
 }
 
 func TestStoreUpdatePersistsLinuxDoSettingsWithoutLeakingSecret(t *testing.T) {

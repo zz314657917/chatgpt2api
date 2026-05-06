@@ -38,7 +38,7 @@ func (e *Engine) HandleImageGenerations(ctx context.Context, body map[string]any
 	outputCompression, hasOutputCompression := normalizedImageOutputCompression(body["output_compression"])
 	responseFormat := firstNonEmpty(util.Clean(body["response_format"]), "b64_json")
 	baseURL := util.Clean(body["base_url"])
-	request := ConversationRequest{Prompt: prompt, Model: model, Messages: NormalizeMessages(util.AsMapSlice(body["messages"]), nil), N: n, Size: size, Quality: quality, Background: util.Clean(body["background"]), Moderation: util.Clean(body["moderation"]), Style: util.Clean(body["style"]), OutputFormat: outputFormat, ResponseFormat: responseFormat, BaseURL: baseURL, OwnerID: util.Clean(body["owner_id"]), OwnerName: util.Clean(body["owner_name"]), MessageAsError: true, RequirePaidAccount: RequiresPaidImageSize(size)}
+	request := ConversationRequest{Prompt: prompt, Model: model, Messages: NormalizeMessages(util.AsMapSlice(body["messages"]), nil), N: n, Size: size, Quality: quality, Background: util.Clean(body["background"]), Moderation: util.Clean(body["moderation"]), Style: util.Clean(body["style"]), OutputFormat: outputFormat, ResponseFormat: responseFormat, BaseURL: baseURL, OwnerID: util.Clean(body["owner_id"]), OwnerName: util.Clean(body["owner_name"]), MessageAsError: true}
 	if partialImages, ok := normalizedPositiveInt(body["partial_images"]); ok {
 		request.PartialImages = &partialImages
 	}
@@ -62,24 +62,23 @@ func (e *Engine) HandleImageEdits(ctx context.Context, body map[string]any, imag
 	}
 	size := util.Clean(body["size"])
 	request := ConversationRequest{
-		Prompt:             util.Clean(body["prompt"]),
-		Model:              firstNonEmpty(util.Clean(body["model"]), util.ImageModelAuto),
-		N:                  util.ToInt(body["n"], 1),
-		Size:               size,
-		Quality:            util.Clean(body["quality"]),
-		Background:         util.Clean(body["background"]),
-		Moderation:         util.Clean(body["moderation"]),
-		Style:              util.Clean(body["style"]),
-		OutputFormat:       NormalizeImageOutputFormat(util.Clean(body["output_format"])),
-		ResponseFormat:     firstNonEmpty(util.Clean(body["response_format"]), "b64_json"),
-		BaseURL:            util.Clean(body["base_url"]),
-		OwnerID:            util.Clean(body["owner_id"]),
-		OwnerName:          util.Clean(body["owner_name"]),
-		Messages:           NormalizeMessages(util.AsMapSlice(body["messages"]), nil),
-		Images:             encoded,
-		InputImageMask:     responseImageMask(body["input_image_mask"]),
-		MessageAsError:     true,
-		RequirePaidAccount: RequiresPaidImageSize(size),
+		Prompt:         util.Clean(body["prompt"]),
+		Model:          firstNonEmpty(util.Clean(body["model"]), util.ImageModelAuto),
+		N:              util.ToInt(body["n"], 1),
+		Size:           size,
+		Quality:        util.Clean(body["quality"]),
+		Background:     util.Clean(body["background"]),
+		Moderation:     util.Clean(body["moderation"]),
+		Style:          util.Clean(body["style"]),
+		OutputFormat:   NormalizeImageOutputFormat(util.Clean(body["output_format"])),
+		ResponseFormat: firstNonEmpty(util.Clean(body["response_format"]), "b64_json"),
+		BaseURL:        util.Clean(body["base_url"]),
+		OwnerID:        util.Clean(body["owner_id"]),
+		OwnerName:      util.Clean(body["owner_name"]),
+		Messages:       NormalizeMessages(util.AsMapSlice(body["messages"]), nil),
+		Images:         encoded,
+		InputImageMask: responseImageMask(body["input_image_mask"]),
+		MessageAsError: true,
 	}
 	if partialImages, ok := normalizedPositiveInt(body["partial_images"]); ok {
 		request.PartialImages = &partialImages
@@ -231,7 +230,7 @@ func (e *Engine) ImageChatResponse(ctx context.Context, body map[string]any) (ma
 		return nil, nil, err
 	}
 	size := util.Clean(body["size"])
-	request := ConversationRequest{Prompt: prompt, Model: model, Messages: messages, N: n, Size: size, Quality: util.Clean(body["quality"]), Background: util.Clean(body["background"]), Moderation: util.Clean(body["moderation"]), Style: util.Clean(body["style"]), ResponseFormat: "b64_json", OwnerID: util.Clean(body["owner_id"]), OwnerName: util.Clean(body["owner_name"]), Images: EncodeImages(images), InputImageMask: responseImageMask(body["input_image_mask"]), RequirePaidAccount: RequiresPaidImageSize(size)}
+	request := ConversationRequest{Prompt: prompt, Model: model, Messages: messages, N: n, Size: size, Quality: util.Clean(body["quality"]), Background: util.Clean(body["background"]), Moderation: util.Clean(body["moderation"]), Style: util.Clean(body["style"]), ResponseFormat: "b64_json", OwnerID: util.Clean(body["owner_id"]), OwnerName: util.Clean(body["owner_name"]), Images: EncodeImages(images), InputImageMask: responseImageMask(body["input_image_mask"])}
 	if partialImages, ok := normalizedPositiveInt(body["partial_images"]); ok {
 		request.PartialImages = &partialImages
 	}
@@ -257,7 +256,7 @@ func (e *Engine) ImageChatEvents(ctx context.Context, body map[string]any) (<-ch
 			return
 		}
 		size := util.Clean(body["size"])
-		request := ConversationRequest{Prompt: prompt, Model: model, Messages: messages, N: n, Size: size, Quality: util.Clean(body["quality"]), Background: util.Clean(body["background"]), Moderation: util.Clean(body["moderation"]), Style: util.Clean(body["style"]), ResponseFormat: "b64_json", OwnerID: util.Clean(body["owner_id"]), OwnerName: util.Clean(body["owner_name"]), Images: EncodeImages(images), InputImageMask: responseImageMask(body["input_image_mask"]), RequirePaidAccount: RequiresPaidImageSize(size)}
+		request := ConversationRequest{Prompt: prompt, Model: model, Messages: messages, N: n, Size: size, Quality: util.Clean(body["quality"]), Background: util.Clean(body["background"]), Moderation: util.Clean(body["moderation"]), Style: util.Clean(body["style"]), ResponseFormat: "b64_json", OwnerID: util.Clean(body["owner_id"]), OwnerName: util.Clean(body["owner_name"]), Images: EncodeImages(images), InputImageMask: responseImageMask(body["input_image_mask"])}
 		if partialImages, ok := normalizedPositiveInt(body["partial_images"]); ok {
 			request.PartialImages = &partialImages
 		}
@@ -587,22 +586,21 @@ func ResponseImageGenerationRequest(body map[string]any, scope string, previous 
 	outputFormat := NormalizeImageOutputFormat(firstNonEmpty(util.Clean(tool["output_format"]), util.Clean(body["output_format"])))
 	partialImages, hasPartialImages := normalizedPositiveInt(firstNonNil(tool["partial_images"], body["partial_images"]))
 	request := ConversationRequest{
-		Prompt:             prompt,
-		Model:              responseImageGenerationModel(toolModel),
-		Messages:           messages,
-		N:                  n,
-		Size:               size,
-		Quality:            firstNonEmpty(util.Clean(tool["quality"]), util.Clean(body["quality"])),
-		Background:         firstNonEmpty(util.Clean(tool["background"]), util.Clean(body["background"])),
-		Moderation:         firstNonEmpty(util.Clean(tool["moderation"]), util.Clean(body["moderation"])),
-		Style:              firstNonEmpty(util.Clean(tool["style"]), util.Clean(body["style"])),
-		OutputFormat:       outputFormat,
-		ResponseFormat:     firstNonEmpty(util.Clean(tool["response_format"]), util.Clean(body["response_format"]), "b64_json"),
-		OwnerID:            scope,
-		OwnerName:          util.Clean(body["owner_name"]),
-		Images:             images,
-		InputImageMask:     responseImageMask(firstNonNil(tool["input_image_mask"], body["input_image_mask"])),
-		RequirePaidAccount: RequiresPaidImageSize(size),
+		Prompt:         prompt,
+		Model:          responseImageGenerationModel(toolModel),
+		Messages:       messages,
+		N:              n,
+		Size:           size,
+		Quality:        firstNonEmpty(util.Clean(tool["quality"]), util.Clean(body["quality"])),
+		Background:     firstNonEmpty(util.Clean(tool["background"]), util.Clean(body["background"])),
+		Moderation:     firstNonEmpty(util.Clean(tool["moderation"]), util.Clean(body["moderation"])),
+		Style:          firstNonEmpty(util.Clean(tool["style"]), util.Clean(body["style"])),
+		OutputFormat:   outputFormat,
+		ResponseFormat: firstNonEmpty(util.Clean(tool["response_format"]), util.Clean(body["response_format"]), "b64_json"),
+		OwnerID:        scope,
+		OwnerName:      util.Clean(body["owner_name"]),
+		Images:         images,
+		InputImageMask: responseImageMask(firstNonNil(tool["input_image_mask"], body["input_image_mask"])),
 	}
 	if hasPartialImages {
 		request.PartialImages = &partialImages

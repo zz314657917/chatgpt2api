@@ -35,14 +35,13 @@ import {
   CUSTOM_IMAGE_ASPECT_RATIO,
   IMAGE_ASPECT_RATIO_OPTIONS,
   IMAGE_RESOLUTION_OPTIONS,
-  IMAGE_SIZE_PRESET_DETAILS,
   IMAGE_SIZE_MODE_OPTIONS,
   buildImageSize,
   formatImageSizeDisplay,
   getActiveImageAspectRatio,
   getImageSizeRequirementLabel,
+  isHighResolutionImageSize,
   parseImageRatio,
-  requiresPaidImageSize,
   type ImageAspectRatio,
   type ImageResolution,
   type ImageSizeMode,
@@ -73,7 +72,7 @@ type ImageComposerProps = {
   imageOutputFormat: ImageOutputFormat;
   imageOutputCompression: string;
   imageOutputHint: ReactNode;
-  paidImageAccountHint?: ReactNode;
+  highResolutionHint?: ReactNode;
   referenceImages: Array<{ name: string; dataUrl: string }>;
   textareaRef: RefObject<HTMLTextAreaElement | null>;
   fileInputRef: RefObject<HTMLInputElement | null>;
@@ -241,13 +240,11 @@ function ImageSettingsPopoverMenu<Value extends string>({
 function ImageSizePreviewPanel({
   label,
   detail,
-  paidRequired,
-  paidHint,
+  highResolution,
 }: {
   label: string;
   detail: string;
-  paidRequired: boolean;
-  paidHint?: ReactNode;
+  highResolution: boolean;
 }) {
   return (
     <div className="col-span-2 rounded-xl border border-[#e5e7eb] bg-[#f8fafc] px-3 py-1 dark:border-border dark:bg-background/50 sm:col-span-3">
@@ -258,7 +255,7 @@ function ImageSizePreviewPanel({
         <span
           className={cn(
             "min-w-0 truncate text-right font-mono text-sm font-semibold dark:text-foreground",
-            paidRequired ? "text-amber-700 dark:text-amber-300" : "text-[#18181b]",
+            highResolution ? "text-amber-700 dark:text-amber-300" : "text-[#18181b]",
           )}
         >
           {label}
@@ -266,17 +263,12 @@ function ImageSizePreviewPanel({
       </div>
       <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1.5 text-[11px] text-[#8e8e93] dark:text-muted-foreground">
         <span className="min-w-0 truncate">{detail}</span>
-        {paidRequired ? (
+        {highResolution ? (
           <span className="shrink-0 rounded-full bg-amber-50 px-2 py-0.5 font-medium text-amber-700 ring-1 ring-amber-100 dark:bg-amber-950/30 dark:text-amber-300 dark:ring-amber-800">
-            Paid
+            高分辨率
           </span>
         ) : null}
       </div>
-      {paidRequired && paidHint ? (
-        <div className="mt-1.5 rounded-lg bg-white px-2.5 py-1 text-[11px] leading-5 text-[#45515e] ring-1 ring-[#f2f3f5] dark:bg-background/70 dark:text-muted-foreground dark:ring-border">
-          {paidHint}
-        </div>
-      ) : null}
     </div>
   );
 }
@@ -298,7 +290,7 @@ export function ImageComposer({
   imageOutputFormat,
   imageOutputCompression,
   imageOutputHint,
-  paidImageAccountHint,
+  highResolutionHint,
   referenceImages,
   textareaRef,
   fileInputRef,
@@ -376,7 +368,7 @@ export function ImageComposer({
     : imageSizeMode === "auto" || (imageSizeMode === "ratio" && imageResolution === "auto" && !isCustomRatioInvalid)
       ? "Auto"
       : "尺寸无效";
-  const sizeRequiresPaid = Boolean(computedImageSize && requiresPaidImageSize(computedImageSize));
+  const sizeIsHighResolution = Boolean(computedImageSize && isHighResolutionImageSize(computedImageSize));
   const sizeRequirementLabel = computedImageSize ? getImageSizeRequirementLabel(computedImageSize) : "Auto";
   const sizePreviewDetail =
     imageSizeMode === "ratio"
@@ -896,7 +888,7 @@ export function ImageComposer({
                           <span className="shrink-0 font-medium text-[#45515e] dark:text-muted-foreground">尺寸</span>
                           <span className={cn(
                             "min-w-0 truncate text-right text-xs font-semibold dark:text-foreground",
-                            sizeRequiresPaid ? "text-amber-700 dark:text-amber-300" : "text-[#18181b]",
+                            sizeIsHighResolution ? "text-amber-700 dark:text-amber-300" : "text-[#18181b]",
                           )}>
                             {sizePreviewLabel}
                           </span>
@@ -1019,8 +1011,7 @@ export function ImageComposer({
                             <ImageSizePreviewPanel
                               label={sizePreviewLabel}
                               detail={sizePreviewDetail}
-                              paidRequired={sizeRequiresPaid}
-                              paidHint={paidImageAccountHint}
+                              highResolution={sizeIsHighResolution}
                             />
                           </>
                         ) : null}
@@ -1028,34 +1019,14 @@ export function ImageComposer({
                           <ImageSizePreviewPanel
                             label={sizePreviewLabel}
                             detail={sizePreviewDetail}
-                            paidRequired={sizeRequiresPaid}
-                            paidHint={paidImageAccountHint}
+                            highResolution={sizeIsHighResolution}
                           />
                         ) : null}
-                        <div className="col-span-2 rounded-xl border border-[#e5e7eb] bg-white px-3 py-1 dark:border-border dark:bg-background/70 sm:col-span-3">
-                          <div className="flex items-center justify-between gap-2 text-[11px]">
-                            <span className="font-medium text-[#45515e] dark:text-muted-foreground">常用映射</span>
-                            <span className="text-[#8e8e93] dark:text-muted-foreground">请求值 → 实际尺寸</span>
+                        {imageSizeMode !== "auto" && sizeIsHighResolution && highResolutionHint ? (
+                          <div className="col-span-2 rounded-xl border border-amber-100 bg-amber-50 px-3 py-1.5 text-[11px] leading-5 text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200 sm:col-span-3">
+                            {highResolutionHint}
                           </div>
-                          <div className="mt-2 grid gap-1.5 sm:grid-cols-2">
-                            {IMAGE_SIZE_PRESET_DETAILS.map((preset) => (
-                              <div
-                                key={`${preset.requestValue}-${preset.normalizedSize}`}
-                                className="flex min-w-0 items-center justify-between gap-2 rounded-full bg-[#f8fafc] px-2.5 py-1 text-[11px] text-[#45515e] dark:bg-muted/50 dark:text-muted-foreground"
-                              >
-                                <span className="min-w-0 truncate">{preset.label}</span>
-                                <span className="shrink-0 font-mono text-[#18181b] dark:text-foreground">
-                                  {formatImageSizeDisplay(preset.normalizedSize)}
-                                </span>
-                                {preset.paidRequired ? (
-                                  <span className="shrink-0 rounded-full bg-amber-50 px-1.5 py-0.5 font-medium text-amber-700 dark:bg-amber-950/30 dark:text-amber-300">
-                                    Paid
-                                  </span>
-                                ) : null}
-                              </div>
-                            ))}
-                          </div>
-                        </div>
+                        ) : null}
                         {supportsQuality ? (
                           <>
                             <div className={imageSettingsFieldClass}>

@@ -27,8 +27,8 @@ export type ImageSizeMode = (typeof IMAGE_SIZE_MODE_OPTIONS)[number]["value"];
 export const IMAGE_RESOLUTION_OPTIONS = [
   { value: "auto", label: "Auto", description: "不指定固定像素，交给图片工具决定" },
   { value: "1080p", label: "1080P", description: "正方形为 1088×1088，宽高按所选比例计算" },
-  { value: "2k", label: "2K", description: "2K Square 为 2048×2048，通常需要 Paid 图片账号" },
-  { value: "4k", label: "4K", description: "按链路像素上限收敛，通常需要 Paid 图片账号" },
+  { value: "2k", label: "2K", description: "2K Square 为 2048×2048，上游会按账号能力判断" },
+  { value: "4k", label: "4K", description: "按链路像素上限收敛，上游会按账号能力判断" },
 ] as const;
 
 export type ImageResolution = (typeof IMAGE_RESOLUTION_OPTIONS)[number]["value"];
@@ -52,19 +52,19 @@ const MAX_EDGE = 3840;
 const MAX_ASPECT_RATIO = 3;
 const MIN_PIXELS = 655_360;
 const MAX_PIXELS = 8_294_400;
-const FREE_IMAGE_PIXEL_BUDGET = 1_577_536;
+const HIGH_RESOLUTION_PIXEL_THRESHOLD = 1_577_536;
 export const DEFAULT_IMAGE_CUSTOM_WIDTH = "1024";
 export const DEFAULT_IMAGE_CUSTOM_HEIGHT = "1024";
 
 export const IMAGE_SIZE_PRESET_DETAILS = [
-  { label: "1:1", requestValue: "1:1", normalizedSize: "1024x1024", paidRequired: false },
-  { label: "3:2", requestValue: "3:2", normalizedSize: "1536x1024", paidRequired: false },
-  { label: "2:3", requestValue: "2:3", normalizedSize: "1024x1536", paidRequired: false },
-  { label: "16:9", requestValue: "16:9", normalizedSize: "1536x864", paidRequired: false },
-  { label: "9:16", requestValue: "9:16", normalizedSize: "864x1536", paidRequired: false },
-  { label: "1080P Square", requestValue: "1080p", normalizedSize: "1088x1088", paidRequired: false },
-  { label: "2K Square", requestValue: "2k", normalizedSize: "2048x2048", paidRequired: true },
-  { label: "4K", requestValue: "4k", normalizedSize: "2880x2880", paidRequired: true },
+  { label: "1:1", requestValue: "1:1", normalizedSize: "1024x1024", highResolution: false },
+  { label: "3:2", requestValue: "3:2", normalizedSize: "1536x1024", highResolution: false },
+  { label: "2:3", requestValue: "2:3", normalizedSize: "1024x1536", highResolution: false },
+  { label: "16:9", requestValue: "16:9", normalizedSize: "1536x864", highResolution: false },
+  { label: "9:16", requestValue: "9:16", normalizedSize: "864x1536", highResolution: false },
+  { label: "1080P Square", requestValue: "1080p", normalizedSize: "1088x1088", highResolution: false },
+  { label: "2K Square", requestValue: "2k", normalizedSize: "2048x2048", highResolution: true },
+  { label: "4K", requestValue: "4k", normalizedSize: "2880x2880", highResolution: true },
 ] as const;
 
 export const IMAGE_QUALITY_OPTIONS = [
@@ -154,8 +154,8 @@ export function imageSizePixels(size: string) {
   return Number(dimensions.width) * Number(dimensions.height);
 }
 
-export function requiresPaidImageSize(size: string) {
-  return imageSizePixels(size) > FREE_IMAGE_PIXEL_BUDGET;
+export function isHighResolutionImageSize(size: string) {
+  return imageSizePixels(size) > HIGH_RESOLUTION_PIXEL_THRESHOLD;
 }
 
 export function parseImageRatio(ratio: string) {
@@ -235,7 +235,7 @@ export function getImageSizeRequirementLabel(size: string) {
   if (!size || size === "auto") {
     return "Auto";
   }
-  return requiresPaidImageSize(size) ? "Paid 图片账号" : "Free 可用";
+  return isHighResolutionImageSize(size) ? "高分辨率" : "常规分辨率";
 }
 
 export function isImageAspectRatio(value: unknown): value is ImageAspectRatio {
