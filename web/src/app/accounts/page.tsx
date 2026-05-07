@@ -58,6 +58,8 @@ import { hasAPIPermission, type StoredAuthSession } from "@/store/auth";
 
 import { AccountImportDialog } from "./components/account-import-dialog";
 
+const QUOTA_REFRESH_EVENT = "chatgpt2api:quota-refresh";
+
 const accountTypeOptions: { label: string; value: AccountType | "all" }[] = [
   { label: "全部类型", value: "all" },
   { label: "Free", value: "Free" },
@@ -92,38 +94,44 @@ const metricCards = [
   {
     key: "total",
     label: "账户总数",
+    description: "池内全部账号",
     icon: UserRound,
-    className: "border-transparent bg-[linear-gradient(135deg,#181e25,#45515e)] text-white",
+    iconClassName: "bg-stone-100 text-stone-600",
   },
   {
     key: "active",
-    label: "正常账户",
+    label: "正常",
+    description: "可用于调度",
     icon: CheckCircle2,
-    className: "border-transparent bg-[linear-gradient(135deg,#1456f0,#3daeff)] text-white",
+    iconClassName: "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-100",
   },
   {
     key: "limited",
-    label: "限流账户",
+    label: "限流",
+    description: "等待额度恢复",
     icon: CircleAlert,
-    className: "border-transparent bg-[linear-gradient(135deg,#f59e0b,#fb7185)] text-white",
+    iconClassName: "bg-amber-50 text-amber-700 ring-1 ring-amber-100",
   },
   {
     key: "abnormal",
-    label: "异常账户",
+    label: "异常",
+    description: "建议刷新或移除",
     icon: CircleOff,
-    className: "border-transparent bg-[linear-gradient(135deg,#ea5ec1,#7c3aed)] text-white",
+    iconClassName: "bg-rose-50 text-rose-700 ring-1 ring-rose-100",
   },
   {
     key: "disabled",
-    label: "禁用账户",
+    label: "禁用",
+    description: "不会参与调度",
     icon: Ban,
-    className: "border-transparent bg-[linear-gradient(135deg,#8e8e93,#45515e)] text-white",
+    iconClassName: "bg-stone-100 text-stone-500",
   },
   {
     key: "quota",
-    label: "剩余额度",
+    label: "可用额度",
+    description: "正常账号合计",
     icon: RefreshCw,
-    className: "border-transparent bg-[linear-gradient(135deg,#17437d,#60a5fa)] text-white",
+    iconClassName: "bg-[#edf4ff] text-[#1456f0] ring-1 ring-blue-100",
   },
 ] as const;
 
@@ -189,6 +197,18 @@ function maskToken(token?: string) {
   return `${token.slice(0, 16)}...${token.slice(-8)}`;
 }
 
+function accountTokenLabel(account: Account) {
+  return maskToken(account.access_token || account.token_preview || account.id);
+}
+
+function accountPrimaryLabel(account: Account) {
+  return account.email?.trim() || account.user_id?.trim() || "未识别账号";
+}
+
+function accountSecondaryLabel(account: Account) {
+  return accountTokenLabel(account);
+}
+
 function downloadTokenFile(tokens: string[]) {
   const content = `${tokens.join("\n")}\n`;
   const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
@@ -198,6 +218,16 @@ function downloadTokenFile(tokens: string[]) {
   link.download = `accounts-${Date.now()}.txt`;
   link.click();
   URL.revokeObjectURL(url);
+}
+
+function copyToClipboard(text: string, successMessage: string) {
+  if (!text) {
+    return;
+  }
+  void navigator.clipboard.writeText(text).then(
+    () => toast.success(successMessage),
+    () => toast.error("复制失败"),
+  );
 }
 
 function normalizeAccounts(items: Account[] | null | undefined): Account[] {
@@ -233,6 +263,7 @@ function AccountsPageContent({ session }: { session: StoredAuthSession }) {
   const [isDeleting, setIsDeleting] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
+  const [refreshingAccountIds, setRefreshingAccountIds] = useState<string[]>([]);
 
   const canImportAccounts = hasAPIPermission(session, "POST", "/api/accounts");
   const canRefreshAccounts = hasAPIPermission(session, "POST", "/api/accounts/refresh");
@@ -312,6 +343,8 @@ function AccountsPageContent({ session }: { session: StoredAuthSession }) {
     return accounts.filter((item) => item.status === "异常").map((item) => item.id);
   }, [accounts]);
 
+  const refreshingAccountIdSet = useMemo(() => new Set(refreshingAccountIds), [refreshingAccountIds]);
+
   const paginationItems = useMemo(() => {
     const items: (number | "...")[] = [];
     const start = Math.max(1, safePage - 1);
@@ -354,15 +387,18 @@ function AccountsPageContent({ session }: { session: StoredAuthSession }) {
       toast.error("没有刷新账号权限");
       return;
     }
-    if (accountIds.length === 0) {
+    const targetIds = Array.from(new Set(accountIds.map((id) => id.trim()).filter(Boolean)));
+    if (targetIds.length === 0) {
       toast.error("没有需要刷新的账户");
       return;
     }
 
     setIsRefreshing(true);
+    setRefreshingAccountIds(targetIds);
     try {
-      const data = await refreshAccounts(accountIds);
+      const data = await refreshAccounts(targetIds);
       applyAccountItems(data.items);
+      window.dispatchEvent(new Event(QUOTA_REFRESH_EVENT));
       if (data.errors.length > 0) {
         const firstError = data.errors[0]?.error;
         toast.error(
@@ -376,6 +412,7 @@ function AccountsPageContent({ session }: { session: StoredAuthSession }) {
       toast.error(message);
     } finally {
       setIsRefreshing(false);
+      setRefreshingAccountIds([]);
     }
   };
 
@@ -445,6 +482,111 @@ function AccountsPageContent({ session }: { session: StoredAuthSession }) {
     setSelectedIds((prev) => prev.filter((id) => !currentRows.some((row) => row.id === id)));
   };
 
+  const toggleAccountSelection = (accountId: string, checked: boolean) => {
+    setSelectedIds((prev) =>
+      checked ? Array.from(new Set([...prev, accountId])) : prev.filter((item) => item !== accountId),
+    );
+  };
+
+  const renderStatusBadge = (account: Account) => {
+    const status = statusMeta[account.status];
+    const StatusIcon = status.icon;
+    return (
+      <Badge variant={status.badge} className="inline-flex items-center gap-1 rounded-md px-2 py-1">
+        <StatusIcon className="size-3.5" />
+        {account.status}
+      </Badge>
+    );
+  };
+
+  const renderRestoreInfo = (account: Account) => {
+    const restore = formatRestoreAt(account.restoreAt);
+    return (
+      <div className="flex flex-col gap-0.5 text-xs leading-5 text-muted-foreground">
+        {restore.relative ? <span className="font-medium text-foreground">{restore.relative}</span> : null}
+        <span>{restore.absolute}</span>
+      </div>
+    );
+  };
+
+  const renderTokenLabel = (account: Account) => {
+    const secondaryLabel = accountSecondaryLabel(account);
+    if (!secondaryLabel) {
+      return null;
+    }
+
+    return (
+      <div className="flex min-w-0 items-center gap-1.5">
+        <code className="truncate rounded-md bg-stone-100 px-2 py-1 font-mono text-[11px] font-medium text-muted-foreground">
+          {secondaryLabel}
+        </code>
+        {canExportTokens && account.access_token ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="size-7 rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+            onClick={() => copyToClipboard(account.access_token || "", "token 已复制")}
+            aria-label="复制 Token"
+            title="复制 Token"
+          >
+            <Copy className="size-3.5" />
+          </Button>
+        ) : null}
+      </div>
+    );
+  };
+
+  const renderAccountActions = (account: Account, className?: string) => {
+    const rowRefreshing = refreshingAccountIdSet.has(account.id);
+    return (
+      <div className={cn("flex items-center gap-1 text-muted-foreground", className)}>
+        {canUpdateAccount ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="size-8 rounded-lg hover:bg-muted hover:text-foreground"
+            onClick={() => openEditDialog(account)}
+            disabled={isUpdating}
+            aria-label="编辑账号"
+            title="编辑账号"
+          >
+            <Pencil className="size-4" />
+          </Button>
+        ) : null}
+        {canRefreshAccounts ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="size-8 rounded-lg hover:bg-muted hover:text-foreground"
+            onClick={() => void handleRefreshAccounts([account.id])}
+            disabled={isRefreshing}
+            aria-label="刷新账号信息和额度"
+            title="刷新账号信息和额度"
+          >
+            {rowRefreshing ? <LoaderCircle className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
+          </Button>
+        ) : null}
+        {canDeleteAccounts ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="size-8 rounded-lg text-rose-500 hover:bg-rose-50 hover:text-rose-600"
+            onClick={() => void handleDeleteAccounts([account.id])}
+            disabled={isDeleting}
+            aria-label="删除账号"
+            title="删除账号"
+          >
+            <Trash2 className="size-4" />
+          </Button>
+        ) : null}
+      </div>
+    );
+  };
+
   return (
     <>
       <PageHeader
@@ -452,47 +594,47 @@ function AccountsPageContent({ session }: { session: StoredAuthSession }) {
         title="号池管理"
         actions={
           <>
-          <Button
-            variant="outline"
-            className="h-10 rounded-lg"
-            onClick={() => void loadAccounts()}
-            disabled={isLoading || isRefreshing || isDeleting}
-          >
-            <RefreshCw className={cn("size-4", isLoading ? "animate-spin" : "")} />
-            刷新
-          </Button>
-          {canRefreshAccounts ? (
             <Button
               variant="outline"
               className="h-10 rounded-lg"
-              onClick={() => void handleRefreshAccounts(accounts.map((item) => item.id))}
-              disabled={isLoading || isRefreshing || isDeleting || accounts.length === 0}
-            >
-              <RefreshCw className={cn("size-4", isRefreshing ? "animate-spin" : "")} />
-              一键刷新所有账号信息和额度
-            </Button>
-          ) : null}
-          {canImportAccounts ? (
-            <AccountImportDialog
+              onClick={() => void loadAccounts()}
               disabled={isLoading || isRefreshing || isDeleting}
-              onImported={(items) => {
-                applyAccountItems(items);
-                setSelectedIds([]);
-                setPage(1);
-              }}
-            />
-          ) : null}
-          {canExportTokens ? (
-            <Button
-              variant="outline"
-              className="h-10 rounded-lg"
-              onClick={() => void handleExportTokens()}
-              disabled={accounts.length === 0 || isExporting}
             >
-              {isExporting ? <LoaderCircle className="size-4 animate-spin" /> : <Download className="size-4" />}
-              导出全部 Token
+              <RefreshCw className={cn("size-4", isLoading ? "animate-spin" : "")} />
+              刷新
             </Button>
-          ) : null}
+            {canRefreshAccounts ? (
+              <Button
+                variant="outline"
+                className="h-10 rounded-lg"
+                onClick={() => void handleRefreshAccounts(accounts.map((item) => item.id))}
+                disabled={isLoading || isRefreshing || isDeleting || accounts.length === 0}
+              >
+                <RefreshCw className={cn("size-4", isRefreshing ? "animate-spin" : "")} />
+                一键刷新额度
+              </Button>
+            ) : null}
+            {canImportAccounts ? (
+              <AccountImportDialog
+                disabled={isLoading || isRefreshing || isDeleting}
+                onImported={(items) => {
+                  applyAccountItems(items);
+                  setSelectedIds([]);
+                  setPage(1);
+                }}
+              />
+            ) : null}
+            {canExportTokens ? (
+              <Button
+                variant="outline"
+                className="h-10 rounded-lg"
+                onClick={() => void handleExportTokens()}
+                disabled={accounts.length === 0 || isExporting}
+              >
+                {isExporting ? <LoaderCircle className="size-4 animate-spin" /> : <Download className="size-4" />}
+                导出 Token
+              </Button>
+            ) : null}
           </>
         }
       />
@@ -571,21 +713,24 @@ function AccountsPageContent({ session }: { session: StoredAuthSession }) {
       </Dialog>
 
       <section className="mt-5 flex flex-col gap-3">
-        <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6">
           {metricCards.map((item) => {
             const Icon = item.icon;
             const value = summary[item.key];
             return (
-              <Card key={item.key} className={cn("overflow-hidden rounded-[20px] shadow-[0_0_15px_rgba(44,30,116,0.16)]", item.className)}>
-                <CardContent className="p-4">
-                  <div className="mb-4 flex items-start justify-between">
-                    <span className="text-xs font-medium text-white/78">{item.label}</span>
-                    <Icon className="size-4 text-white/72" />
+              <Card key={item.key} className="overflow-hidden rounded-[18px] bg-white/92 shadow-[0_8px_24px_rgba(24,40,72,0.06)]">
+                <CardContent className="flex items-center gap-3 p-4">
+                  <div className={cn("flex size-10 shrink-0 items-center justify-center rounded-[12px]", item.iconClassName)}>
+                    <Icon className="size-4" />
                   </div>
-                  <div className="font-display text-[1.75rem] font-semibold tracking-normal text-white">
-                    <span className={typeof value === "number" ? "" : "text-[1.1rem]"}>
-                      {typeof value === "number" ? formatCompact(value) : value}
-                    </span>
+                  <div className="min-w-0">
+                    <div className="text-xs font-medium text-muted-foreground">{item.label}</div>
+                    <div className="mt-1 flex items-baseline gap-2">
+                      <span className="font-display text-2xl leading-none font-semibold text-foreground">
+                        {typeof value === "number" ? formatCompact(value) : value}
+                      </span>
+                    </div>
+                    <div className="mt-1 truncate text-xs text-muted-foreground">{item.description}</div>
                   </div>
                 </CardContent>
               </Card>
@@ -594,7 +739,7 @@ function AccountsPageContent({ session }: { session: StoredAuthSession }) {
         </div>
       </section>
 
-      <section className="flex flex-col gap-4">
+      <section className="mt-6 flex flex-col gap-4">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex items-center gap-3">
             <h2 className="text-lg font-semibold tracking-tight">账户列表</h2>
@@ -603,8 +748,8 @@ function AccountsPageContent({ session }: { session: StoredAuthSession }) {
             </Badge>
           </div>
 
-          <div className="flex flex-col gap-2 lg:flex-row lg:items-center">
-            <div className="relative min-w-[260px]">
+          <div className="grid gap-2 sm:grid-cols-[minmax(16rem,1fr)_10rem_10rem] lg:min-w-[38rem]">
+            <div className="relative min-w-0">
               <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-stone-400" />
               <Input
                 value={query}
@@ -613,7 +758,7 @@ function AccountsPageContent({ session }: { session: StoredAuthSession }) {
                   setPage(1);
                 }}
                 placeholder="搜索邮箱"
-                className="h-10 pl-10"
+                className="h-10 rounded-lg pl-10"
               />
             </div>
             <Select
@@ -623,7 +768,7 @@ function AccountsPageContent({ session }: { session: StoredAuthSession }) {
                 setPage(1);
               }}
             >
-              <SelectTrigger className="h-10 w-full lg:w-[150px]">
+              <SelectTrigger className="h-10 w-full rounded-lg">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -641,7 +786,7 @@ function AccountsPageContent({ session }: { session: StoredAuthSession }) {
                 setPage(1);
               }}
             >
-              <SelectTrigger className="h-10 w-full lg:w-[150px]">
+              <SelectTrigger className="h-10 w-full rounded-lg">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -675,18 +820,26 @@ function AccountsPageContent({ session }: { session: StoredAuthSession }) {
             isLoading && accounts.length === 0 ? "hidden" : "",
           )}
         >
-          <CardContent className="space-y-0 p-0">
+          <CardContent className="p-0">
             <div className="flex flex-col gap-3 border-b border-stone-100 px-4 py-3 lg:flex-row lg:items-center lg:justify-between">
-              <div className="flex flex-wrap items-center gap-2 text-sm text-stone-500">
+              <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+                <div className="flex items-center gap-2 rounded-lg bg-stone-100 px-2.5 py-1 text-xs font-medium text-stone-600">
+                  <Checkbox
+                    checked={allCurrentSelected}
+                    onCheckedChange={(checked) => toggleSelectAll(Boolean(checked))}
+                    aria-label="选择当前页账号"
+                  />
+                  当前页全选
+                </div>
                 {canRefreshAccounts ? (
                   <Button
                     variant="ghost"
-                    className="h-8 rounded-lg px-3 text-stone-500 hover:bg-stone-100"
+                    className="h-8 rounded-lg px-3 text-stone-600 hover:bg-stone-100"
                     onClick={() => void handleRefreshAccounts(selectedAccountIds)}
                     disabled={selectedAccountIds.length === 0 || isRefreshing}
                   >
                     {isRefreshing ? <LoaderCircle className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
-                    刷新选中账号信息和额度
+                    刷新选中
                   </Button>
                 ) : null}
                 {canDeleteAccounts ? (
@@ -712,7 +865,7 @@ function AccountsPageContent({ session }: { session: StoredAuthSession }) {
                   </>
                 ) : null}
                 {selectedIds.length > 0 ? (
-                  <span className="rounded-lg bg-stone-100 px-2.5 py-1 text-xs font-medium text-stone-600">
+                  <span className="rounded-lg bg-[#edf4ff] px-2.5 py-1 text-xs font-medium text-[#1456f0]">
                     已选择 {selectedIds.length} 项
                   </span>
                 ) : null}
@@ -733,152 +886,134 @@ function AccountsPageContent({ session }: { session: StoredAuthSession }) {
               </div>
             ) : (
               <>
-            <div className="overflow-x-auto">
-              <Table className="min-w-[920px]">
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="w-12">
-                      <Checkbox
-                        checked={allCurrentSelected}
-                        onCheckedChange={(checked) => toggleSelectAll(Boolean(checked))}
-                      />
-                    </TableHead>
-                    <TableHead className="w-56">token</TableHead>
-                    <TableHead className="w-28">类型</TableHead>
-                    <TableHead className="w-24">状态</TableHead>
-                    <TableHead className="w-56">账号信息</TableHead>
-                    <TableHead className="w-24">额度</TableHead>
-                    <TableHead className="w-40">恢复时间</TableHead>
-                    <TableHead className="w-18">成功</TableHead>
-                    <TableHead className="w-18">失败</TableHead>
-                    <TableHead className="w-24">操作</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {currentRows.map((account) => {
-                    const status = statusMeta[account.status];
-                    const StatusIcon = status.icon;
+                <div className="hidden overflow-x-auto md:block">
+                  <Table className="min-w-[940px]">
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead className="w-12">
+                          <Checkbox
+                            checked={allCurrentSelected}
+                            onCheckedChange={(checked) => toggleSelectAll(Boolean(checked))}
+                            aria-label="选择当前页账号"
+                          />
+                        </TableHead>
+                        <TableHead className="w-[34%]">账号</TableHead>
+                        <TableHead className="w-48">状态 / 类型</TableHead>
+                        <TableHead className="w-32">额度</TableHead>
+                        <TableHead className="w-44">恢复时间</TableHead>
+                        <TableHead className="w-36">调用</TableHead>
+                        <TableHead className="w-28 text-right">操作</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {currentRows.map((account) => (
+                        <TableRow key={account.id} className="text-sm text-muted-foreground">
+                          <TableCell>
+                            <Checkbox
+                              checked={selectedIds.includes(account.id)}
+                              onCheckedChange={(checked) => toggleAccountSelection(account.id, Boolean(checked))}
+                              aria-label="选择账号"
+                            />
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex min-w-0 flex-col gap-1.5">
+                              <span className="truncate font-medium tracking-tight text-foreground">
+                                {accountPrimaryLabel(account)}
+                              </span>
+                              {renderTokenLabel(account)}
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              {renderStatusBadge(account)}
+                              <Badge variant="secondary" className="rounded-md px-2 py-1">
+                                {account.type}
+                              </Badge>
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            <Badge variant="info" className="rounded-md px-2 py-1">
+                              {formatQuota(account)}
+                            </Badge>
+                          </TableCell>
+                          <TableCell>{renderRestoreInfo(account)}</TableCell>
+                          <TableCell>
+                            <div className="flex flex-col gap-1 text-xs leading-5">
+                              <span className="text-emerald-700">成功 {account.success}</span>
+                              <span className="text-rose-600">失败 {account.fail}</span>
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            {renderAccountActions(account, "justify-end")}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
 
-                    return (
-                      <TableRow key={account.id} className="text-sm text-muted-foreground">
-                        <TableCell>
+                {currentRows.length > 0 ? (
+                  <div className="flex flex-col gap-3 p-3 md:hidden">
+                    {currentRows.map((account) => (
+                      <div key={account.id} className="rounded-[14px] border border-stone-100 bg-white p-3 shadow-[0_4px_14px_rgba(24,40,72,0.05)]">
+                        <div className="flex items-start gap-3">
                           <Checkbox
                             checked={selectedIds.includes(account.id)}
-                            onCheckedChange={(checked) => {
-                              setSelectedIds((prev) =>
-                                checked
-                                  ? Array.from(new Set([...prev, account.id]))
-                                  : prev.filter((item) => item !== account.id),
-                              );
-                            }}
+                            onCheckedChange={(checked) => toggleAccountSelection(account.id, Boolean(checked))}
+                            className="mt-1"
+                            aria-label="选择账号"
                           />
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex items-center gap-2">
-                            <span className="font-medium tracking-tight text-foreground">
-                              {maskToken(account.access_token || account.token_preview || account.id)}
-                            </span>
-                            {canExportTokens && account.access_token ? (
-                              <button
-                                type="button"
-                                className="rounded-md p-1 text-muted-foreground transition hover:bg-muted hover:text-foreground"
-                                onClick={() => {
-                                  void navigator.clipboard.writeText(account.access_token || "");
-                                  toast.success("token 已复制");
-                                }}
-                              >
-                                <Copy className="size-4" />
-                              </button>
-                            ) : null}
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          <Badge variant="secondary" className="rounded-md">
-                            {account.type}
-                          </Badge>
-                        </TableCell>
-                        <TableCell>
-                          <Badge
-                            variant={status.badge}
-                            className="inline-flex items-center gap-1 rounded-md px-2 py-1"
-                          >
-                            <StatusIcon className="size-3.5" />
-                            {account.status}
-                          </Badge>
-                        </TableCell>
-                        <TableCell>
-                          <div className="text-xs leading-5 text-muted-foreground">{account.email ?? "—"}</div>
-                        </TableCell>
-                        <TableCell>
-                          <Badge variant="info" className="rounded-md">
-                            {formatQuota(account)}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="text-xs leading-5 text-muted-foreground">
-                          {(() => {
-                            const restore = formatRestoreAt(account.restoreAt);
-                            return (
-                              <div className="space-y-0.5">
-                                {restore.relative ? <div className="font-medium text-foreground">{restore.relative}</div> : null}
-                                <div>{restore.absolute}</div>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex min-w-0 items-start justify-between gap-2">
+                              <div className="min-w-0">
+                                <div className="truncate text-sm font-semibold text-foreground">
+                                  {accountPrimaryLabel(account)}
+                                </div>
+                                <div className="mt-1">{renderTokenLabel(account)}</div>
                               </div>
-                            );
-                          })()}
-                        </TableCell>
-                        <TableCell>{account.success}</TableCell>
-                        <TableCell>{account.fail}</TableCell>
-                        <TableCell>
-                          <div className="flex items-center gap-1 text-muted-foreground">
-                            {canUpdateAccount ? (
-                              <button
-                                type="button"
-                                className="rounded-md p-2 transition hover:bg-muted hover:text-foreground"
-                                onClick={() => openEditDialog(account)}
-                                disabled={isUpdating}
-                              >
-                                <Pencil className="size-4" />
-                              </button>
-                            ) : null}
-                            {canRefreshAccounts ? (
-                              <button
-                                type="button"
-                                className="rounded-md p-2 transition hover:bg-muted hover:text-foreground"
-                                onClick={() => void handleRefreshAccounts([account.id])}
-                                disabled={isRefreshing}
-                              >
-                                <RefreshCw className={cn("size-4", isRefreshing ? "animate-spin" : "")} />
-                              </button>
-                            ) : null}
-                            {canDeleteAccounts ? (
-                              <button
-                                type="button"
-                                className="rounded-lg p-2 transition hover:bg-rose-50 hover:text-rose-500"
-                                onClick={() => void handleDeleteAccounts([account.id])}
-                                disabled={isDeleting}
-                              >
-                                <Trash2 className="size-4" />
-                              </button>
-                            ) : null}
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })}
-                </TableBody>
-              </Table>
+                              {renderAccountActions(account, "shrink-0")}
+                            </div>
 
-              {showFilteredEmptyState ? (
-                <div className="flex flex-col items-center justify-center gap-3 px-6 py-14 text-center">
-                  <div className="rounded-xl bg-stone-100 p-3 text-stone-500">
-                    <Search className="size-5" />
+                            <div className="mt-3 flex flex-wrap items-center gap-1.5">
+                              {renderStatusBadge(account)}
+                              <Badge variant="secondary" className="rounded-md px-2 py-1">
+                                {account.type}
+                              </Badge>
+                              <Badge variant="info" className="rounded-md px-2 py-1">
+                                额度 {formatQuota(account)}
+                              </Badge>
+                            </div>
+
+                            <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+                              <div className="rounded-lg bg-stone-50 p-2">
+                                <div className="text-muted-foreground">调用</div>
+                                <div className="mt-1 font-medium text-foreground">
+                                  成功 {account.success} / 失败 {account.fail}
+                                </div>
+                              </div>
+                              <div className="rounded-lg bg-stone-50 p-2">
+                                <div className="text-muted-foreground">恢复</div>
+                                <div className="mt-1">{renderRestoreInfo(account)}</div>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
                   </div>
-                  <div className="space-y-1">
-                    <p className="text-sm font-medium text-stone-700">没有匹配的账户</p>
-                    <p className="text-sm text-stone-500">调整筛选条件或搜索关键字后重试。</p>
+                ) : null}
+
+                {showFilteredEmptyState ? (
+                  <div className="flex flex-col items-center justify-center gap-3 px-6 py-14 text-center">
+                    <div className="rounded-xl bg-stone-100 p-3 text-stone-500">
+                      <Search className="size-5" />
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <p className="text-sm font-medium text-stone-700">没有匹配的账户</p>
+                      <p className="text-sm text-stone-500">调整筛选条件或搜索关键字后重试。</p>
+                    </div>
                   </div>
-                </div>
-              ) : null}
-            </div>
+                ) : null}
 
             <div className="border-t border-stone-100 px-4 py-4">
               <div className="flex items-center justify-center gap-3 overflow-x-auto whitespace-nowrap">

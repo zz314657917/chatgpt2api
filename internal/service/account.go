@@ -341,12 +341,22 @@ func (s *AccountService) RefreshAccountState(ctx context.Context, accessToken st
 func (s *AccountService) RefreshAccounts(ctx context.Context, accessTokens []string) map[string]any {
 	tokens := cleanTokens(accessTokens)
 	if len(tokens) == 0 {
-		return map[string]any{"refreshed": 0, "errors": []map[string]string{}, "items": s.ListAccounts()}
+		return map[string]any{
+			"refreshed":   0,
+			"errors":      []map[string]string{},
+			"results":     []map[string]any{},
+			"total":       0,
+			"failed":      0,
+			"duration_ms": 0,
+			"items":       s.ListAccounts(),
+		}
 	}
+	startedAt := time.Now()
 	type result struct {
-		token string
-		info  map[string]any
-		err   error
+		token    string
+		info     map[string]any
+		err      error
+		duration time.Duration
 	}
 	workers := len(tokens)
 	if workers > 10 {
@@ -360,8 +370,9 @@ func (s *AccountService) RefreshAccounts(ctx context.Context, accessTokens []str
 		go func() {
 			defer wg.Done()
 			for token := range jobs {
+				started := time.Now()
 				info, err := s.FetchRemoteInfo(ctx, token)
-				results <- result{token: token, info: info, err: err}
+				results <- result{token: token, info: info, err: err, duration: time.Since(started)}
 			}
 		}()
 	}
@@ -373,22 +384,74 @@ func (s *AccountService) RefreshAccounts(ctx context.Context, accessTokens []str
 		wg.Wait()
 		close(results)
 	}()
+	resultsByToken := make(map[string]result, len(tokens))
+	for res := range results {
+		resultsByToken[res.token] = res
+	}
+
 	refreshed := 0
 	errors := []map[string]string{}
-	for res := range results {
+	details := make([]map[string]any, 0, len(tokens))
+	for _, token := range tokens {
+		res := resultsByToken[token]
+		detail := map[string]any{
+			"account_id":    accountIDFromToken(token),
+			"access_token":  token,
+			"token_preview": util.AnonymizeToken(token),
+			"success":       false,
+			"status":        "error",
+			"duration_ms":   res.duration.Milliseconds(),
+		}
 		if res.err == nil {
-			if s.UpdateAccount(res.token, res.info) != nil {
+			updated := s.UpdateAccount(res.token, res.info)
+			if updated != nil {
 				refreshed++
+				detail["account_status"] = updated["status"]
+				detail["email"] = updated["email"]
+				detail["type"] = updated["type"]
+				detail["quota"] = updated["quota"]
+				detail["image_quota_unknown"] = updated["image_quota_unknown"]
+				detail["restore_at"] = updated["restore_at"]
+				detail["message"] = "刷新成功"
+			} else {
+				detail["message"] = "刷新完成，账号状态已自动处理"
 			}
+			detail["success"] = true
+			detail["status"] = "success"
+			details = append(details, detail)
 			continue
 		}
 		message := res.err.Error()
 		if normalized, handled := s.ApplyAccountError(res.token, "refresh_accounts", res.err); handled {
 			message = normalized
 		}
-		errors = append(errors, map[string]string{"access_token": res.token, "error": message})
+		if current := s.GetAccount(res.token); current != nil {
+			detail["account_status"] = current["status"]
+			detail["email"] = current["email"]
+			detail["type"] = current["type"]
+			detail["quota"] = current["quota"]
+			detail["image_quota_unknown"] = current["image_quota_unknown"]
+			detail["restore_at"] = current["restore_at"]
+		}
+		errorItem := map[string]string{
+			"account_id":   accountIDFromToken(res.token),
+			"access_token": res.token,
+			"error":        message,
+		}
+		errors = append(errors, errorItem)
+		detail["message"] = message
+		detail["error"] = message
+		details = append(details, detail)
 	}
-	return map[string]any{"refreshed": refreshed, "errors": errors, "items": s.ListAccounts()}
+	return map[string]any{
+		"refreshed":   refreshed,
+		"errors":      errors,
+		"results":     details,
+		"total":       len(tokens),
+		"failed":      len(errors),
+		"duration_ms": time.Since(startedAt).Milliseconds(),
+		"items":       s.ListAccounts(),
+	}
 }
 
 func (s *AccountService) MarkImageResult(accessToken string, success bool) map[string]any {
@@ -1139,6 +1202,12 @@ func summarizeRefreshErrorBody(body []byte) string {
 	if text == "" {
 		return ""
 	}
+	var payload any
+	if json.Unmarshal(body, &payload) == nil {
+		if detail := summarizeRefreshErrorValue(payload); detail != "" {
+			return detail
+		}
+	}
 	lower := strings.ToLower(text)
 	if strings.Contains(lower, "cf_chl") ||
 		strings.Contains(lower, "challenge-platform") ||
@@ -1154,4 +1223,34 @@ func summarizeRefreshErrorBody(body []byte) string {
 		return "body=" + text[:maxBodyDetail] + "...(truncated)"
 	}
 	return "body=" + text
+}
+
+func summarizeRefreshErrorValue(value any) string {
+	switch item := value.(type) {
+	case map[string]any:
+		for _, key := range []string{"detail", "message", "error_description"} {
+			if detail := summarizeRefreshErrorValue(item[key]); detail != "" {
+				return detail
+			}
+		}
+		if detail := summarizeRefreshErrorValue(item["error"]); detail != "" {
+			return detail
+		}
+		if data, err := json.Marshal(item); err == nil && len(data) > 0 {
+			return "body=" + string(data)
+		}
+	case []any:
+		if len(item) == 0 {
+			return ""
+		}
+		if detail := summarizeRefreshErrorValue(item[0]); detail != "" {
+			return detail
+		}
+	case string:
+		text := strings.TrimSpace(item)
+		if text != "" {
+			return "body=" + text
+		}
+	}
+	return ""
 }

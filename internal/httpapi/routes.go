@@ -734,6 +734,15 @@ func (a *App) redactAccountPayloadForIdentity(identity service.Identity, payload
 			}
 		}
 	}
+	if results, ok := payload["results"].([]map[string]any); ok {
+		for _, item := range results {
+			token := util.Clean(item["access_token"])
+			delete(item, "access_token")
+			if token != "" {
+				item["account_id"] = util.SHA1Short(token, 16)
+			}
+		}
+	}
 }
 
 func redactAccountTokens(items []map[string]any) {

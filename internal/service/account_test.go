@@ -170,6 +170,22 @@ func TestRefreshAccountsReturnsEmptyErrorsArray(t *testing.T) {
 	if result["refreshed"] != 1 {
 		t.Fatalf("refreshed = %#v, want 1", result["refreshed"])
 	}
+	if result["total"] != 1 || result["failed"] != 0 {
+		t.Fatalf("refresh summary = total %#v failed %#v, want 1/0", result["total"], result["failed"])
+	}
+	if _, ok := result["duration_ms"].(int64); !ok {
+		t.Fatalf("duration_ms type = %T, want int64", result["duration_ms"])
+	}
+	details, ok := result["results"].([]map[string]any)
+	if !ok || len(details) != 1 {
+		t.Fatalf("results = %#v, want one refresh detail", result["results"])
+	}
+	if details[0]["success"] != true || details[0]["account_id"] == "" || details[0]["message"] != "刷新成功" {
+		t.Fatalf("refresh detail = %#v, want successful account result", details[0])
+	}
+	if details[0]["email"] != "user@example.com" || details[0]["quota"] != 7 {
+		t.Fatalf("refresh detail account fields = %#v", details[0])
+	}
 	errors, ok := result["errors"].([]map[string]string)
 	if !ok {
 		t.Fatalf("errors type = %T, want []map[string]string", result["errors"])
@@ -298,6 +314,16 @@ func TestRefreshAccountsMarksRateLimitedResponse(t *testing.T) {
 	}
 	if errors[0]["error"] != "检测到限流" {
 		t.Fatalf("error = %q, want 检测到限流", errors[0]["error"])
+	}
+	details, ok := result["results"].([]map[string]any)
+	if !ok || len(details) != 1 {
+		t.Fatalf("results = %#v, want one refresh detail", result["results"])
+	}
+	if details[0]["success"] != false || details[0]["status"] != "error" || details[0]["message"] != "检测到限流" {
+		t.Fatalf("refresh detail = %#v, want failed rate-limit result", details[0])
+	}
+	if details[0]["account_status"] != "限流" || details[0]["quota"] != 0 {
+		t.Fatalf("refresh detail account state = %#v, want limited quota 0", details[0])
 	}
 	account := accounts.GetAccount("token-1")
 	if account["status"] != "限流" {
@@ -508,6 +534,13 @@ func TestApplyAccountErrorMessageIgnoresBootstrapFailures(t *testing.T) {
 	account := accounts.GetAccount("token-1")
 	if account["status"] != "正常" || account["quota"] != 5 {
 		t.Fatalf("account = %#v, want unchanged normal account", account)
+	}
+}
+
+func TestSummarizeRefreshErrorBodyPrefersJSONMessage(t *testing.T) {
+	got := summarizeRefreshErrorBody([]byte(`{"error":{"message":"You've reached the image generation limit"}}`))
+	if got != "body=You've reached the image generation limit" {
+		t.Fatalf("summarizeRefreshErrorBody() = %q", got)
 	}
 }
 

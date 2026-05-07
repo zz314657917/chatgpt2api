@@ -864,6 +864,55 @@ func TestRBACPermissionsGateManagementAPIs(t *testing.T) {
 	}
 }
 
+func TestRedactAccountPayloadCoversRefreshResults(t *testing.T) {
+	app := newTestApp(t)
+	defer app.Close()
+
+	identity := service.Identity{
+		Role: service.AuthRoleUser,
+		APIPermissions: []string{
+			service.APIPermissionKey(http.MethodGet, "/api/accounts"),
+			service.APIPermissionKey(http.MethodPost, "/api/accounts/refresh"),
+		},
+	}
+	payload := map[string]any{
+		"items": []map[string]any{{
+			"id":           "account-1",
+			"access_token": "token-1",
+		}},
+		"errors": []map[string]string{{
+			"access_token": "token-2",
+			"error":        "failed",
+		}},
+		"results": []map[string]any{{
+			"access_token": "token-3",
+			"success":      false,
+			"message":      "failed",
+		}},
+	}
+
+	app.redactAccountPayloadForIdentity(identity, payload)
+
+	items := payload["items"].([]map[string]any)
+	if _, ok := items[0]["access_token"]; ok {
+		t.Fatalf("items should not expose access_token: %#v", items[0])
+	}
+	errors := payload["errors"].([]map[string]string)
+	if _, ok := errors[0]["access_token"]; ok {
+		t.Fatalf("errors should not expose access_token: %#v", errors[0])
+	}
+	if errors[0]["account_id"] != util.SHA1Short("token-2", 16) {
+		t.Fatalf("error account_id = %#v, want hash", errors[0]["account_id"])
+	}
+	results := payload["results"].([]map[string]any)
+	if _, ok := results[0]["access_token"]; ok {
+		t.Fatalf("results should not expose access_token: %#v", results[0])
+	}
+	if results[0]["account_id"] != util.SHA1Short("token-3", 16) {
+		t.Fatalf("result account_id = %#v, want hash", results[0]["account_id"])
+	}
+}
+
 func TestRBACImageDeletePermissionAllowsDelegatedUser(t *testing.T) {
 	app := newTestApp(t)
 	defer app.Close()

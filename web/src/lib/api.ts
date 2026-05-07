@@ -177,12 +177,37 @@ type AccountMutationResponse = {
   removed?: number;
   refreshed?: number;
   errors?: Array<{ access_token?: string; account_id?: string; error: string }>;
+  results?: AccountRefreshResult[];
+  total?: number;
+  failed?: number;
+  duration_ms?: number;
+};
+
+export type AccountRefreshResult = {
+  account_id: string;
+  access_token?: string;
+  token_preview?: string;
+  success: boolean;
+  status: "success" | "error" | string;
+  message?: string;
+  error?: string;
+  duration_ms?: number;
+  account_status?: AccountStatus;
+  email?: string | null;
+  type?: AccountType;
+  quota?: number;
+  image_quota_unknown?: boolean;
+  restore_at?: string | null;
 };
 
 type AccountRefreshResponse = {
   items: Account[];
   refreshed: number;
   errors: Array<{ access_token?: string; account_id?: string; error: string }>;
+  results: AccountRefreshResult[];
+  total?: number;
+  failed?: number;
+  duration_ms?: number;
 };
 
 type AccountUpdateResponse = {
