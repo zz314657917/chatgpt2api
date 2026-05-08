@@ -1,10 +1,14 @@
 # syntax=docker/dockerfile:1.7
 
 ARG VERSION=0.0.0-dev
+ARG BUN_IMAGE=oven/bun:1-alpine
+ARG GO_IMAGE=golang:1.26.2-bookworm
+ARG RUNTIME_IMAGE=debian:bookworm-slim
 
-FROM --platform=$BUILDPLATFORM oven/bun:1-alpine AS web-deps
+FROM --platform=$BUILDPLATFORM ${BUN_IMAGE} AS web-deps
 
 WORKDIR /app/web
+ENV CI=1
 
 COPY web/package.json web/bun.lock ./
 RUN --mount=type=cache,target=/root/.bun/install/cache,sharing=locked \
@@ -15,52 +19,55 @@ FROM web-deps AS web-build
 
 COPY web ./
 ARG VERSION=0.0.0-dev
-ENV VITE_APP_VERSION=${VERSION}
+ARG BUILD_NODE_OPTIONS=--max-old-space-size=1024
+ENV VITE_APP_VERSION=${VERSION} \
+    NODE_OPTIONS=${BUILD_NODE_OPTIONS}
 RUN bun run build
 
 
-FROM --platform=$BUILDPLATFORM golang:1.26.2-bookworm AS go-build
+FROM --platform=$BUILDPLATFORM ${GO_IMAGE} AS go-build
 
 WORKDIR /src
 
 COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod,sharing=locked go mod download
 
-COPY cmd ./cmd
 COPY internal ./internal
 COPY --from=web-build /app/internal/web/dist ./internal/web/dist
 ARG TARGETOS
 ARG TARGETARCH
 ARG VERSION=0.0.0-dev
-# GOMEMLIMIT 是 Go 1.19+ 的软内存上限，仅在内存紧张时触发更激进的 GC，
-# 不影响构建速度，仅作为防止 OOM 的安全阀
+ARG BUILD_GOMAXPROCS=2
+ARG BUILD_GOMEMLIMIT=1GiB
 RUN --mount=type=cache,target=/go/pkg/mod \
-    --mount=type=cache,target=/root/.cache/go-build \
-    GOMEMLIMIT=1GiB \
+    --mount=type=cache,target=/root/.cache/go-build,sharing=locked \
+    GOMAXPROCS=${BUILD_GOMAXPROCS} GOMEMLIMIT=${BUILD_GOMEMLIMIT} \
     CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} \
-    go build -trimpath -tags=embed \
+    go build -p=${BUILD_GOMAXPROCS} -trimpath -tags=embed \
     -ldflags="-s -w -X chatgpt2api/internal/version.Version=${VERSION}" \
-    -o /out/chatgpt2api ./cmd/chatgpt2api
+    -o /out/chatgpt2api ./internal
 
 
-FROM --platform=$TARGETPLATFORM debian:bookworm-slim AS app
+FROM --platform=$TARGETPLATFORM ${RUNTIME_IMAGE} AS app
 
 WORKDIR /app
 ENV PORT=80
 ENV CHATGPT2API_DEPLOYMENT=docker
 
-# 运行时依赖：
-# - ca-certificates: HTTPS 上游请求需要
-# - git: Git 存储后端需要
-# - tzdata: 保持容器内时区数据可用
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
+    curl \
     git \
     tzdata \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=go-build /out/chatgpt2api ./chatgpt2api
 
+RUN mkdir -p /app/data && chmod +x /app/chatgpt2api
+
 EXPOSE 80
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+    CMD curl -fsS http://127.0.0.1:${PORT:-80}/health || exit 1
 
 CMD ["/app/chatgpt2api"]

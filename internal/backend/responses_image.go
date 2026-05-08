@@ -13,6 +13,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	urlpkg "net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -107,16 +108,6 @@ type imageConversationState struct {
 	Blocked        bool
 	ToolInvoked    *bool
 	TurnUseCase    string
-}
-
-type officialImageDownloadTarget struct {
-	FileID     string
-	SedimentID string
-}
-
-type officialImageDownloadCandidate struct {
-	Label string
-	URL   func(context.Context) (string, error)
 }
 
 func (c *Client) StreamResponsesImage(ctx context.Context, request ResponsesImageRequest) (<-chan ResponsesImageEvent, <-chan error) {
@@ -1138,13 +1129,13 @@ func (c *Client) resolveOfficialImageResults(ctx context.Context, request Respon
 		fileIDs = appendUniqueString(fileIDs, polledFiles...)
 		sedimentIDs = appendUniqueString(sedimentIDs, polledSediments...)
 	}
-	targets := officialImageDownloadTargets(fileIDs, sedimentIDs)
-	if len(targets) == 0 {
+	imageFileIDs := officialImageFileIDs(fileIDs, sedimentIDs)
+	if len(imageFileIDs) == 0 {
 		return nil, nil
 	}
-	results := make([]ResponsesImageEvent, 0, len(targets))
-	for index, target := range targets {
-		data, downloadErr := c.downloadOfficialImageFromCandidates(ctx, c.officialImageDownloadCandidates(conversationID, target))
+	results := make([]ResponsesImageEvent, 0, len(imageFileIDs))
+	for index, fileID := range imageFileIDs {
+		data, downloadErr := c.downloadOfficialImageFile(ctx, conversationID, fileID)
 		if downloadErr != nil {
 			return nil, downloadErr
 		}
@@ -1163,38 +1154,12 @@ func (c *Client) resolveOfficialImageResults(ctx context.Context, request Respon
 	return results, nil
 }
 
-func officialImageDownloadTargets(fileIDs, sedimentIDs []string) []officialImageDownloadTarget {
-	fileIDs = filterOfficialImageIDs(fileIDs)
-	sedimentIDs = filterOfficialImageIDs(sedimentIDs)
-	if len(fileIDs) > 0 && len(fileIDs) == len(sedimentIDs) {
-		targets := make([]officialImageDownloadTarget, 0, len(fileIDs))
-		for index, fileID := range fileIDs {
-			targets = append(targets, officialImageDownloadTarget{FileID: fileID, SedimentID: sedimentIDs[index]})
-		}
-		return targets
-	}
-
-	usedFiles := map[string]struct{}{}
-	fileSet := map[string]struct{}{}
-	for _, fileID := range fileIDs {
-		fileSet[fileID] = struct{}{}
-	}
-	targets := make([]officialImageDownloadTarget, 0, len(fileIDs)+len(sedimentIDs))
+func officialImageFileIDs(fileIDs, sedimentIDs []string) []string {
+	out := appendUniqueString(nil, filterOfficialImageIDs(fileIDs)...)
 	for _, sedimentID := range sedimentIDs {
-		target := officialImageDownloadTarget{SedimentID: sedimentID}
-		if _, ok := fileSet[sedimentID]; ok {
-			target.FileID = sedimentID
-			usedFiles[sedimentID] = struct{}{}
-		}
-		targets = append(targets, target)
+		out = appendUniqueString(out, sedimentID)
 	}
-	for _, fileID := range fileIDs {
-		if _, ok := usedFiles[fileID]; ok {
-			continue
-		}
-		targets = append(targets, officialImageDownloadTarget{FileID: fileID})
-	}
-	return targets
+	return out
 }
 
 func filterOfficialImageIDs(values []string) []string {
@@ -1291,34 +1256,18 @@ func (c *Client) fetchOfficialConversationImageIDs(ctx context.Context, conversa
 	return fileIDs, sedimentIDs, nil
 }
 
-func (c *Client) officialImageDownloadCandidates(conversationID string, target officialImageDownloadTarget) []officialImageDownloadCandidate {
-	var candidates []officialImageDownloadCandidate
+func (c *Client) getOfficialFileDownloadURL(ctx context.Context, conversationID, fileID string) (string, error) {
 	conversationID = strings.TrimSpace(conversationID)
-	if conversationID != "" && strings.TrimSpace(target.SedimentID) != "" {
-		sedimentID := strings.TrimSpace(target.SedimentID)
-		candidates = append(candidates, officialImageDownloadCandidate{
-			Label: "official image attachment " + sedimentID,
-			URL: func(ctx context.Context) (string, error) {
-				return c.getOfficialAttachmentDownloadURL(ctx, conversationID, sedimentID)
-			},
-		})
+	if conversationID == "" {
+		return "", fmt.Errorf("conversation_id is required for official image download")
 	}
-	if strings.TrimSpace(target.FileID) != "" {
-		fileID := strings.TrimSpace(target.FileID)
-		candidates = append(candidates, officialImageDownloadCandidate{
-			Label: "official image file " + fileID,
-			URL: func(ctx context.Context) (string, error) {
-				return c.getOfficialFileDownloadURL(ctx, fileID)
-			},
-		})
-	}
-	return candidates
-}
-
-func (c *Client) getOfficialFileDownloadURL(ctx context.Context, fileID string) (string, error) {
-	path := "/backend-api/files/" + fileID + "/download"
+	query := urlpkg.Values{}
+	query.Set("conversation_id", conversationID)
+	query.Set("inline", "false")
+	targetPath := "/backend-api/files/download/" + urlpkg.PathEscape(fileID)
+	path := targetPath + "?" + query.Encode()
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+path, nil)
-	for key, value := range c.headers(path, map[string]string{"Accept": "application/json"}) {
+	for key, value := range c.headers(targetPath, map[string]string{"Accept": "application/json"}) {
 		req.Header.Set(key, value)
 	}
 	resp, err := c.httpClient.Do(req)
@@ -1336,52 +1285,16 @@ func (c *Client) getOfficialFileDownloadURL(ctx context.Context, fileID string) 
 	return firstNonEmpty(util.Clean(data["download_url"]), util.Clean(data["url"])), nil
 }
 
-func (c *Client) getOfficialAttachmentDownloadURL(ctx context.Context, conversationID, attachmentID string) (string, error) {
-	path := "/backend-api/conversation/" + conversationID + "/attachment/" + attachmentID + "/download"
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+path, nil)
-	for key, value := range c.headers(path, map[string]string{"Accept": "application/json"}) {
-		req.Header.Set(key, value)
-	}
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return "", upstreamTransportError(path, err)
-	}
-	defer resp.Body.Close()
-	if err := ensureOK(resp, path); err != nil {
-		return "", err
-	}
-	var data map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
-		return "", err
-	}
-	return firstNonEmpty(util.Clean(data["download_url"]), util.Clean(data["url"])), nil
-}
-
-func (c *Client) downloadOfficialImageFromCandidates(ctx context.Context, candidates []officialImageDownloadCandidate) ([]byte, error) {
-	var lastErr error
-	for _, candidate := range candidates {
-		data, err := c.downloadOfficialImageWithRetry(ctx, candidate)
-		if err == nil {
-			return data, nil
-		}
-		lastErr = err
-	}
-	if lastErr != nil {
-		return nil, fmt.Errorf("official image download failed after %d candidate(s): %w", len(candidates), lastErr)
-	}
-	return nil, fmt.Errorf("official image download failed: no downloadable image resource")
-}
-
-func (c *Client) downloadOfficialImageWithRetry(ctx context.Context, candidate officialImageDownloadCandidate) ([]byte, error) {
+func (c *Client) downloadOfficialImageFile(ctx context.Context, conversationID, fileID string) ([]byte, error) {
 	var lastErr error
 	for attempt := 1; attempt <= officialImageDownloadAttempts; attempt++ {
-		url, err := candidate.URL(ctx)
-		if err == nil && strings.TrimSpace(url) == "" {
-			err = fmt.Errorf("%s returned empty download URL", candidate.Label)
+		downloadURL, err := c.getOfficialFileDownloadURL(ctx, conversationID, fileID)
+		if err == nil && strings.TrimSpace(downloadURL) == "" {
+			err = fmt.Errorf("official image file %s returned empty download URL", fileID)
 		}
 		if err == nil {
 			var data []byte
-			data, err = c.downloadOfficialImage(ctx, url)
+			data, err = c.downloadOfficialImage(ctx, downloadURL)
 			if err == nil {
 				return data, nil
 			}
@@ -1400,7 +1313,28 @@ func (c *Client) downloadOfficialImageWithRetry(ctx context.Context, candidate o
 }
 
 func (c *Client) downloadOfficialImage(ctx context.Context, url string) ([]byte, error) {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	target := strings.TrimSpace(url)
+	parsed, err := urlpkg.Parse(target)
+	if err != nil {
+		return nil, err
+	}
+	if !parsed.IsAbs() {
+		base, baseErr := urlpkg.Parse(c.BaseURL)
+		if baseErr != nil {
+			return nil, baseErr
+		}
+		parsed = base.ResolveReference(parsed)
+		target = parsed.String()
+	}
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if c.isChatGPTBackendURL(parsed) {
+		path := parsed.EscapedPath()
+		for key, value := range c.headers(path, map[string]string{"Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"}) {
+			req.Header.Set(key, value)
+		}
+	} else if c.userAgent != "" {
+		req.Header.Set("User-Agent", c.userAgent)
+	}
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, upstreamTransportError("image_download", err)
@@ -1411,6 +1345,21 @@ func (c *Client) downloadOfficialImage(ctx context.Context, url string) ([]byte,
 		return nil, upstreamHTTPError("image_download", resp.StatusCode, data)
 	}
 	return io.ReadAll(resp.Body)
+}
+
+func (c *Client) isChatGPTBackendURL(parsed *urlpkg.URL) bool {
+	if parsed == nil {
+		return false
+	}
+	base, err := urlpkg.Parse(c.BaseURL)
+	if err != nil || base.Host == "" {
+		return false
+	}
+	if !strings.EqualFold(parsed.Host, base.Host) {
+		return false
+	}
+	path := parsed.EscapedPath()
+	return strings.HasPrefix(path, "/backend-api/") || strings.HasPrefix(path, "/backend-anon/")
 }
 
 func appendUniqueString(base []string, values ...string) []string {
