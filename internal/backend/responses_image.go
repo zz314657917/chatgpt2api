@@ -45,11 +45,7 @@ const (
 	officialImageDownloadAttempts = 3
 )
 
-var (
-	officialImageDownloadRetryDelay = 750 * time.Millisecond
-	officialImagePollTimeout        = 120 * time.Second
-	officialImagePollInterval       = 4 * time.Second
-)
+var officialImageDownloadRetryDelay = 750 * time.Millisecond
 
 type ResponsesInputImage struct {
 	Data        []byte
@@ -937,15 +933,14 @@ func iterOfficialImageSSE(ctx context.Context, client *Client, reader io.Reader,
 			return ctx.Err()
 		}
 	}
-	if len(resolved) == 0 {
-		return officialImageEmptyResultError(lastEvent)
+	if len(resolved) == 0 && strings.TrimSpace(lastEvent.Text) == "" {
+		return fmt.Errorf("image generation failed")
 	}
 	return nil
 }
 
 func shouldTreatOfficialImageEventAsFinalText(event ResponsesImageEvent) bool {
-	text := strings.TrimSpace(event.Text)
-	if text == "" || event.Result != "" {
+	if strings.TrimSpace(event.Text) == "" || event.Result != "" {
 		return false
 	}
 	if event.Blocked {
@@ -954,53 +949,7 @@ func shouldTreatOfficialImageEventAsFinalText(event ResponsesImageEvent) bool {
 	if strings.EqualFold(strings.TrimSpace(event.TurnUseCase), "text") {
 		return true
 	}
-	if event.ToolInvoked != nil {
-		return !*event.ToolInvoked
-	}
-	return !isOfficialImageQueuedText(text)
-}
-
-func isOfficialImageQueuedText(text string) bool {
-	normalized := strings.ToLower(strings.TrimSpace(text))
-	if normalized == "" {
-		return false
-	}
-	for _, token := range []string{
-		"正在处理图片",
-		"创建图片",
-		"图片准备好后",
-		"生成图片",
-		"processing your image",
-		"creating your image",
-		"image is ready",
-		"your image is ready",
-		"generating your image",
-	} {
-		if strings.Contains(normalized, token) {
-			return true
-		}
-	}
-	return false
-}
-
-func officialImageEmptyResultError(event ResponsesImageEvent) error {
-	text := strings.TrimSpace(event.Text)
-	if event.Blocked {
-		return fmt.Errorf("no image was generated; upstream moderation blocked the request")
-	}
-	if event.ToolInvoked != nil && !*event.ToolInvoked {
-		return fmt.Errorf("no image was generated; upstream did not invoke the image tool")
-	}
-	if conversationID := strings.TrimSpace(event.ConversationID); conversationID != "" {
-		if text != "" {
-			return fmt.Errorf("timed out waiting for async image generation results in conversation %s; last upstream message: %s", conversationID, text)
-		}
-		return fmt.Errorf("timed out waiting for async image generation results in conversation %s", conversationID)
-	}
-	if text != "" {
-		return fmt.Errorf("no image was generated; upstream returned text instead: %s", text)
-	}
-	return fmt.Errorf("no image was generated; upstream returned no image output")
+	return event.ToolInvoked != nil && !*event.ToolInvoked
 }
 
 func parseOfficialImagePayload(payload string, state *imageConversationState) (ResponsesImageEvent, bool, error) {
@@ -1027,7 +976,7 @@ func parseOfficialImagePayload(payload string, state *imageConversationState) (R
 		TurnUseCase:    state.TurnUseCase,
 		Raw:            data,
 	}
-	if message := officialImageAssistantText(data); message != "" && event.Result == "" {
+	if message := officialImageTextMessage(data); message != "" && event.Result == "" {
 		event.Text = message
 	}
 	switch eventType {
@@ -1173,7 +1122,7 @@ func (c *Client) resolveOfficialImageResults(ctx context.Context, request Respon
 	fileIDs := filterOfficialImageIDs(event.FileIDs)
 	sedimentIDs := filterOfficialImageIDs(event.SedimentIDs)
 	if conversationID != "" && len(fileIDs) == 0 && len(sedimentIDs) == 0 {
-		polledFiles, polledSediments, err := c.pollOfficialImageResults(ctx, conversationID, officialImagePollTimeout)
+		polledFiles, polledSediments, err := c.pollOfficialImageResults(ctx, conversationID, 120*time.Second)
 		if err != nil {
 			return nil, err
 		}
@@ -1241,7 +1190,7 @@ func (c *Client) pollOfficialImageResults(ctx context.Context, conversationID st
 		select {
 		case <-ctx.Done():
 			return nil, nil, ctx.Err()
-		case <-time.After(officialImagePollInterval):
+		case <-time.After(4 * time.Second):
 		}
 	}
 	return nil, nil, nil
