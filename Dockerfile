@@ -32,9 +32,15 @@ COPY --from=web-build /app/internal/web/dist ./internal/web/dist
 ARG TARGETOS
 ARG TARGETARCH
 ARG VERSION=0.0.0-dev
+# GOMEMLIMIT 是 Go 1.19+ 的软内存上限，仅在内存紧张时触发更激进的 GC，
+# 不影响构建速度，仅作为防止 OOM 的安全阀
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build -trimpath -tags=embed -ldflags="-s -w -X chatgpt2api/internal/version.Version=${VERSION}" -o /out/chatgpt2api ./cmd/chatgpt2api
+    GOMEMLIMIT=1GiB \
+    CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} \
+    go build -trimpath -tags=embed \
+    -ldflags="-s -w -X chatgpt2api/internal/version.Version=${VERSION}" \
+    -o /out/chatgpt2api ./cmd/chatgpt2api
 
 
 FROM --platform=$TARGETPLATFORM debian:bookworm-slim AS app
