@@ -80,12 +80,29 @@ func TestFetchRemoteInfoBootstrapsBeforeAccountRefresh(t *testing.T) {
 	if info["email"] != "user@example.com" || info["quota"] != 7 {
 		t.Fatalf("FetchRemoteInfo() = %#v", info)
 	}
+	if info["chatgpt_account_id"] != "user-1" {
+		t.Fatalf("chatgpt_account_id = %#v, want user-1", info["chatgpt_account_id"])
+	}
 	mu.Lock()
 	gotPaths := append([]string(nil), paths...)
 	mu.Unlock()
 	wantPaths := []string{"/", "/backend-api/me", "/backend-api/conversation/init"}
 	if !reflect.DeepEqual(gotPaths, wantPaths) {
 		t.Fatalf("request paths = %#v, want %#v", gotPaths, wantPaths)
+	}
+}
+
+func TestNormalizeAccountPreservesChatGPTAccountID(t *testing.T) {
+	normalized := normalizeAccount(map[string]any{
+		"access_token":       "token-1",
+		"chatgpt_account_id": " acct-123 ",
+	})
+	if normalized["chatgpt_account_id"] != "acct-123" {
+		t.Fatalf("chatgpt_account_id = %#v, want acct-123", normalized["chatgpt_account_id"])
+	}
+	public := publicAccounts([]map[string]any{normalized})
+	if public[0]["chatgpt_account_id"] != "acct-123" {
+		t.Fatalf("public chatgpt_account_id = %#v, want acct-123", public[0]["chatgpt_account_id"])
 	}
 }
 
@@ -153,6 +170,22 @@ func TestRefreshAccountsReturnsEmptyErrorsArray(t *testing.T) {
 	if result["refreshed"] != 1 {
 		t.Fatalf("refreshed = %#v, want 1", result["refreshed"])
 	}
+	if result["total"] != 1 || result["failed"] != 0 {
+		t.Fatalf("refresh summary = total %#v failed %#v, want 1/0", result["total"], result["failed"])
+	}
+	if _, ok := result["duration_ms"].(int64); !ok {
+		t.Fatalf("duration_ms type = %T, want int64", result["duration_ms"])
+	}
+	details, ok := result["results"].([]map[string]any)
+	if !ok || len(details) != 1 {
+		t.Fatalf("results = %#v, want one refresh detail", result["results"])
+	}
+	if details[0]["success"] != true || details[0]["account_id"] == "" || details[0]["message"] != "刷新成功" {
+		t.Fatalf("refresh detail = %#v, want successful account result", details[0])
+	}
+	if details[0]["email"] != "user@example.com" || details[0]["quota"] != 7 {
+		t.Fatalf("refresh detail account fields = %#v", details[0])
+	}
 	errors, ok := result["errors"].([]map[string]string)
 	if !ok {
 		t.Fatalf("errors type = %T, want []map[string]string", result["errors"])
@@ -201,15 +234,48 @@ func TestRefreshAccountStateMarksUnauthorizedInitAsInvalid(t *testing.T) {
 	accounts.AddAccounts([]string{"token-1"})
 	accounts.UpdateAccount("token-1", map[string]any{"status": "正常", "quota": 5})
 
-	account := accounts.RefreshAccountState(context.Background(), "token-1")
+	account, err := accounts.RefreshAccountState(context.Background(), "token-1")
+	if err != nil {
+		t.Fatalf("RefreshAccountState() error = %v", err)
+	}
 	if account == nil {
-		t.Fatal("RefreshAccountState() = nil, want updated invalid account")
+		t.Fatal("RefreshAccountState() account = nil, want updated invalid account")
 	}
 	if account["status"] != "异常" {
 		t.Fatalf("status = %#v, want 异常", account["status"])
 	}
 	if account["quota"] != 0 {
 		t.Fatalf("quota = %#v, want 0", account["quota"])
+	}
+}
+
+func TestApplyAccountErrorMessageDoesNotMarkGenericUnauthorizedAsInvalid(t *testing.T) {
+	accounts := newTestAccountService(t)
+	accounts.AddAccounts([]string{"token-1"})
+	accounts.UpdateAccount("token-1", map[string]any{"status": "正常", "quota": 5})
+
+	message, handled := accounts.ApplyAccountErrorMessage("token-1", "image_stream", "auth_chat_requirements failed: status=401, body={\"detail\":\"challenge_required\"}")
+	if handled {
+		t.Fatalf("handled = true message = %q, want generic unauthorized ignored", message)
+	}
+	account := accounts.GetAccount("token-1")
+	if account["status"] != "正常" || account["quota"] != 5 {
+		t.Fatalf("account = %#v, want unchanged normal account", account)
+	}
+}
+
+func TestApplyAccountErrorMessageDoesNotMarkGenericTooManyRequestsAsLimited(t *testing.T) {
+	accounts := newTestAccountService(t)
+	accounts.AddAccounts([]string{"token-1"})
+	accounts.UpdateAccount("token-1", map[string]any{"status": "正常", "quota": 5, "image_quota_unknown": true})
+
+	message, handled := accounts.ApplyAccountErrorMessage("token-1", "image_stream", "auth_chat_requirements failed: status=429, body={\"detail\":\"too many requests\"}")
+	if handled {
+		t.Fatalf("handled = true message = %q, want generic upstream 429 ignored", message)
+	}
+	account := accounts.GetAccount("token-1")
+	if account["status"] != "正常" || account["quota"] != 5 || account["image_quota_unknown"] != true {
+		t.Fatalf("account = %#v, want unchanged normal account", account)
 	}
 }
 
@@ -248,6 +314,16 @@ func TestRefreshAccountsMarksRateLimitedResponse(t *testing.T) {
 	}
 	if errors[0]["error"] != "检测到限流" {
 		t.Fatalf("error = %q, want 检测到限流", errors[0]["error"])
+	}
+	details, ok := result["results"].([]map[string]any)
+	if !ok || len(details) != 1 {
+		t.Fatalf("results = %#v, want one refresh detail", result["results"])
+	}
+	if details[0]["success"] != false || details[0]["status"] != "error" || details[0]["message"] != "检测到限流" {
+		t.Fatalf("refresh detail = %#v, want failed rate-limit result", details[0])
+	}
+	if details[0]["account_status"] != "限流" || details[0]["quota"] != 0 {
+		t.Fatalf("refresh detail account state = %#v, want limited quota 0", details[0])
 	}
 	account := accounts.GetAccount("token-1")
 	if account["status"] != "限流" {
@@ -343,6 +419,65 @@ func TestGetAvailableAccessTokenLimitsUnknownImageQuotaToOneInFlight(t *testing.
 	accounts.MarkImageResult("token-1", false)
 }
 
+func TestGetAvailableAccessTokenAllowsFreeUnknownImageQuota(t *testing.T) {
+	accounts := newTestAccountService(t)
+	server := newAccountQuotaServer(t, map[string]any{
+		"email":     "free@example.com",
+		"id":        "user-1",
+		"plan_type": "free",
+	}, nil)
+	defer server.Close()
+	accounts.remoteBaseURL = server.URL
+	accounts.browserHTTPClient = func(string, time.Duration) *http.Client {
+		return server.Client()
+	}
+	accounts.AddAccounts([]string{"free-token"})
+	accounts.UpdateAccount("free-token", map[string]any{"status": "正常", "quota": 0, "image_quota_unknown": true, "type": "Free"})
+
+	token, err := accounts.GetAvailableAccessToken(context.Background())
+	if err != nil {
+		t.Fatalf("GetAvailableAccessToken() error = %v", err)
+	}
+	if token != "free-token" {
+		t.Fatalf("token = %q, want free-token", token)
+	}
+	account := accounts.GetAccount("free-token")
+	if account["status"] != "正常" || account["type"] != "Free" || account["image_quota_unknown"] != true {
+		t.Fatalf("free unknown quota account = %#v, want available Free account with unknown image quota", account)
+	}
+	accounts.MarkImageResult("free-token", false)
+}
+
+func TestGetAvailableAccessTokenReportsRefreshFailure(t *testing.T) {
+	accounts := newTestAccountService(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("<html>ok</html>"))
+		case "/backend-api/me":
+			http.Error(w, "temporary upstream failure", http.StatusBadGateway)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	accounts.remoteBaseURL = server.URL
+	accounts.browserHTTPClient = func(string, time.Duration) *http.Client {
+		return server.Client()
+	}
+	accounts.AddAccounts([]string{"token-1"})
+	accounts.UpdateAccount("token-1", map[string]any{"status": "正常", "quota": 1})
+
+	token, err := accounts.GetAvailableAccessToken(context.Background())
+	if err == nil {
+		t.Fatalf("GetAvailableAccessToken() token = %q, want refresh error", token)
+	}
+	if !strings.Contains(err.Error(), "/backend-api/me failed: HTTP 502") {
+		t.Fatalf("GetAvailableAccessToken() error = %q, want refresh failure detail", err.Error())
+	}
+}
+
 func TestReserveNextCandidateTokenCanFilterPaidAccounts(t *testing.T) {
 	accounts := newTestAccountService(t)
 	accounts.AddAccounts([]string{"free-token", "plus-token"})
@@ -399,6 +534,13 @@ func TestApplyAccountErrorMessageIgnoresBootstrapFailures(t *testing.T) {
 	account := accounts.GetAccount("token-1")
 	if account["status"] != "正常" || account["quota"] != 5 {
 		t.Fatalf("account = %#v, want unchanged normal account", account)
+	}
+}
+
+func TestSummarizeRefreshErrorBodyPrefersJSONMessage(t *testing.T) {
+	got := summarizeRefreshErrorBody([]byte(`{"error":{"message":"You've reached the image generation limit"}}`))
+	if got != "body=You've reached the image generation limit" {
+		t.Fatalf("summarizeRefreshErrorBody() = %q", got)
 	}
 }
 

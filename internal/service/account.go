@@ -295,13 +295,20 @@ func (s *AccountService) GetAvailableAccessToken(ctx context.Context) (string, e
 
 func (s *AccountService) GetAvailableAccessTokenFor(ctx context.Context, allow func(map[string]any) bool) (string, error) {
 	attempted := map[string]struct{}{}
+	var lastRefreshErr error
 	for {
 		reservation, err := s.reserveNextCandidateToken(attempted, allow)
 		if err != nil {
+			if lastRefreshErr != nil {
+				return "", lastRefreshErr
+			}
 			return "", err
 		}
 		attempted[reservation.token] = struct{}{}
-		account := s.RefreshAccountState(ctx, reservation.token)
+		account, refreshErr := s.RefreshAccountState(ctx, reservation.token)
+		if refreshErr != nil {
+			lastRefreshErr = refreshErr
+		}
 		if account != nil && (allow == nil || allow(account)) && s.reservedImageSlotAvailable(reservation) {
 			return reservation.token, nil
 		}
@@ -320,26 +327,36 @@ func (s *AccountService) HasAvailableAccount() bool {
 	return false
 }
 
-func (s *AccountService) RefreshAccountState(ctx context.Context, accessToken string) map[string]any {
+func (s *AccountService) RefreshAccountState(ctx context.Context, accessToken string) (map[string]any, error) {
 	remote, err := s.FetchRemoteInfo(ctx, accessToken)
 	if err != nil {
 		if _, handled := s.ApplyAccountError(accessToken, "refresh_account_state", err); handled {
-			return s.GetAccount(accessToken)
+			return s.GetAccount(accessToken), nil
 		}
-		return nil
+		return nil, err
 	}
-	return s.UpdateAccount(accessToken, remote)
+	return s.UpdateAccount(accessToken, remote), nil
 }
 
 func (s *AccountService) RefreshAccounts(ctx context.Context, accessTokens []string) map[string]any {
 	tokens := cleanTokens(accessTokens)
 	if len(tokens) == 0 {
-		return map[string]any{"refreshed": 0, "errors": []map[string]string{}, "items": s.ListAccounts()}
+		return map[string]any{
+			"refreshed":   0,
+			"errors":      []map[string]string{},
+			"results":     []map[string]any{},
+			"total":       0,
+			"failed":      0,
+			"duration_ms": 0,
+			"items":       s.ListAccounts(),
+		}
 	}
+	startedAt := time.Now()
 	type result struct {
-		token string
-		info  map[string]any
-		err   error
+		token    string
+		info     map[string]any
+		err      error
+		duration time.Duration
 	}
 	workers := len(tokens)
 	if workers > 10 {
@@ -353,8 +370,9 @@ func (s *AccountService) RefreshAccounts(ctx context.Context, accessTokens []str
 		go func() {
 			defer wg.Done()
 			for token := range jobs {
+				started := time.Now()
 				info, err := s.FetchRemoteInfo(ctx, token)
-				results <- result{token: token, info: info, err: err}
+				results <- result{token: token, info: info, err: err, duration: time.Since(started)}
 			}
 		}()
 	}
@@ -366,22 +384,74 @@ func (s *AccountService) RefreshAccounts(ctx context.Context, accessTokens []str
 		wg.Wait()
 		close(results)
 	}()
+	resultsByToken := make(map[string]result, len(tokens))
+	for res := range results {
+		resultsByToken[res.token] = res
+	}
+
 	refreshed := 0
 	errors := []map[string]string{}
-	for res := range results {
+	details := make([]map[string]any, 0, len(tokens))
+	for _, token := range tokens {
+		res := resultsByToken[token]
+		detail := map[string]any{
+			"account_id":    accountIDFromToken(token),
+			"access_token":  token,
+			"token_preview": util.AnonymizeToken(token),
+			"success":       false,
+			"status":        "error",
+			"duration_ms":   res.duration.Milliseconds(),
+		}
 		if res.err == nil {
-			if s.UpdateAccount(res.token, res.info) != nil {
+			updated := s.UpdateAccount(res.token, res.info)
+			if updated != nil {
 				refreshed++
+				detail["account_status"] = updated["status"]
+				detail["email"] = updated["email"]
+				detail["type"] = updated["type"]
+				detail["quota"] = updated["quota"]
+				detail["image_quota_unknown"] = updated["image_quota_unknown"]
+				detail["restore_at"] = updated["restore_at"]
+				detail["message"] = "刷新成功"
+			} else {
+				detail["message"] = "刷新完成，账号状态已自动处理"
 			}
+			detail["success"] = true
+			detail["status"] = "success"
+			details = append(details, detail)
 			continue
 		}
 		message := res.err.Error()
 		if normalized, handled := s.ApplyAccountError(res.token, "refresh_accounts", res.err); handled {
 			message = normalized
 		}
-		errors = append(errors, map[string]string{"access_token": res.token, "error": message})
+		if current := s.GetAccount(res.token); current != nil {
+			detail["account_status"] = current["status"]
+			detail["email"] = current["email"]
+			detail["type"] = current["type"]
+			detail["quota"] = current["quota"]
+			detail["image_quota_unknown"] = current["image_quota_unknown"]
+			detail["restore_at"] = current["restore_at"]
+		}
+		errorItem := map[string]string{
+			"account_id":   accountIDFromToken(res.token),
+			"access_token": res.token,
+			"error":        message,
+		}
+		errors = append(errors, errorItem)
+		detail["message"] = message
+		detail["error"] = message
+		details = append(details, detail)
 	}
-	return map[string]any{"refreshed": refreshed, "errors": errors, "items": s.ListAccounts()}
+	return map[string]any{
+		"refreshed":   refreshed,
+		"errors":      errors,
+		"results":     details,
+		"total":       len(tokens),
+		"failed":      len(errors),
+		"duration_ms": time.Since(startedAt).Milliseconds(),
+		"items":       s.ListAccounts(),
+	}
 }
 
 func (s *AccountService) MarkImageResult(accessToken string, success bool) map[string]any {
@@ -540,16 +610,20 @@ func (s *AccountService) FetchRemoteInfo(ctx context.Context, accessToken string
 	limits := anyList(init.payload["limits_progress"])
 	accountType := s.detectAccountType(accessToken, me.payload, init.payload)
 	quota, restoreAt, unknown := extractQuotaAndRestoreAt(limits)
+	chatGPTAccountID := firstNonEmpty(
+		chatGPTAccountIDFromPayload(decodeAccessTokenPayload(accessToken)),
+		util.Clean(me.payload["chatgpt_account_id"]),
+		util.Clean(me.payload["account_id"]),
+		util.Clean(me.payload["id"]),
+	)
 	status := "正常"
 	if !unknown && quota == 0 {
-		status = "限流"
-	}
-	if unknown && accountType == "Free" {
 		status = "限流"
 	}
 	return map[string]any{
 		"email":               me.payload["email"],
 		"user_id":             me.payload["id"],
+		"chatgpt_account_id":  chatGPTAccountID,
 		"type":                accountType,
 		"quota":               quota,
 		"image_quota_unknown": unknown,
@@ -848,8 +922,7 @@ func IsAccountInvalidErrorMessage(message string) bool {
 	return strings.Contains(text, "token_invalidated") ||
 		strings.Contains(text, "token_revoked") ||
 		strings.Contains(text, "authentication token has been invalidated") ||
-		strings.Contains(text, "invalidated oauth token") ||
-		hasAccountHTTPStatus(text, http.StatusUnauthorized)
+		strings.Contains(text, "invalidated oauth token")
 }
 
 func IsAccountRateLimitedErrorMessage(message string) bool {
@@ -857,12 +930,7 @@ func IsAccountRateLimitedErrorMessage(message string) bool {
 	if text == "" || isBootstrapErrorMessage(text) {
 		return false
 	}
-	if hasAccountHTTPStatus(text, http.StatusTooManyRequests) ||
-		strings.Contains(text, "rate_limit") ||
-		strings.Contains(text, "rate limit") ||
-		strings.Contains(text, "too many requests") ||
-		strings.Contains(text, "too_many_requests") ||
-		strings.Contains(text, "insufficient_quota") ||
+	if strings.Contains(text, "insufficient_quota") ||
 		strings.Contains(text, "limit reached") ||
 		strings.Contains(text, "usage limit") ||
 		strings.Contains(text, "image generation limit") ||
@@ -905,6 +973,13 @@ func normalizeAccount(item map[string]any) map[string]any {
 	} else {
 		normalized["user_id"] = nil
 	}
+	if accountID := util.Clean(normalized["chatgpt_account_id"]); accountID != "" {
+		normalized["chatgpt_account_id"] = accountID
+	} else if accountID := util.Clean(normalized["account_id"]); accountID != "" {
+		normalized["chatgpt_account_id"] = accountID
+	} else {
+		normalized["chatgpt_account_id"] = nil
+	}
 	limits := anyList(normalized["limits_progress"])
 	normalized["limits_progress"] = limits
 	if model := util.Clean(normalized["default_model_slug"]); model != "" {
@@ -939,6 +1014,7 @@ func publicAccounts(accounts []map[string]any) []map[string]any {
 			"imageQuotaUnknown":  util.ToBool(account["image_quota_unknown"]),
 			"email":              account["email"],
 			"user_id":            account["user_id"],
+			"chatgpt_account_id": account["chatgpt_account_id"],
 			"limits_progress":    util.ValueOr(account["limits_progress"], []any{}),
 			"default_model_slug": account["default_model_slug"],
 			"restoreAt":          account["restore_at"],
@@ -1000,6 +1076,24 @@ func decodeAccessTokenPayload(accessToken string) map[string]any {
 		return map[string]any{}
 	}
 	return out
+}
+
+func chatGPTAccountIDFromPayload(payload map[string]any) string {
+	if len(payload) == 0 {
+		return ""
+	}
+	if accountID := util.Clean(payload["chatgpt_account_id"]); accountID != "" {
+		return accountID
+	}
+	if accountID := util.Clean(payload["account_id"]); accountID != "" {
+		return accountID
+	}
+	if authPayload := util.StringMap(payload["https://api.openai.com/auth"]); authPayload != nil {
+		if accountID := util.Clean(authPayload["chatgpt_account_id"]); accountID != "" {
+			return accountID
+		}
+	}
+	return ""
 }
 
 func normalizeAccountType(value any) string {
@@ -1091,24 +1185,6 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-func hasHTTPStatus(message string, status int) bool {
-	code := fmt.Sprint(status)
-	return strings.Contains(message, "http "+code) ||
-		strings.Contains(message, "status="+code) ||
-		strings.Contains(message, "status: "+code) ||
-		strings.Contains(message, `"status":`+code)
-}
-
-func hasAccountHTTPStatus(message string, status int) bool {
-	if !hasHTTPStatus(message, status) {
-		return false
-	}
-	return strings.Contains(message, "/backend-api/") ||
-		strings.Contains(message, "auth_chat_requirements") ||
-		strings.Contains(message, "authorization") ||
-		strings.Contains(message, "token")
-}
-
 func isBootstrapErrorMessage(message string) bool {
 	return strings.HasPrefix(strings.TrimSpace(message), "bootstrap failed")
 }
@@ -1126,6 +1202,12 @@ func summarizeRefreshErrorBody(body []byte) string {
 	if text == "" {
 		return ""
 	}
+	var payload any
+	if json.Unmarshal(body, &payload) == nil {
+		if detail := summarizeRefreshErrorValue(payload); detail != "" {
+			return detail
+		}
+	}
 	lower := strings.ToLower(text)
 	if strings.Contains(lower, "cf_chl") ||
 		strings.Contains(lower, "challenge-platform") ||
@@ -1141,4 +1223,34 @@ func summarizeRefreshErrorBody(body []byte) string {
 		return "body=" + text[:maxBodyDetail] + "...(truncated)"
 	}
 	return "body=" + text
+}
+
+func summarizeRefreshErrorValue(value any) string {
+	switch item := value.(type) {
+	case map[string]any:
+		for _, key := range []string{"detail", "message", "error_description"} {
+			if detail := summarizeRefreshErrorValue(item[key]); detail != "" {
+				return detail
+			}
+		}
+		if detail := summarizeRefreshErrorValue(item["error"]); detail != "" {
+			return detail
+		}
+		if data, err := json.Marshal(item); err == nil && len(data) > 0 {
+			return "body=" + string(data)
+		}
+	case []any:
+		if len(item) == 0 {
+			return ""
+		}
+		if detail := summarizeRefreshErrorValue(item[0]); detail != "" {
+			return detail
+		}
+	case string:
+		text := strings.TrimSpace(item)
+		if text != "" {
+			return "body=" + text
+		}
+	}
+	return ""
 }

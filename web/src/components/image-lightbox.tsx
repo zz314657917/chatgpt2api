@@ -4,11 +4,15 @@ import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { ChevronLeft, ChevronRight, Download, RotateCcw, X, ZoomIn, ZoomOut } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { AuthenticatedImage } from "@/components/authenticated-image";
+import { fetchAuthenticatedImageBlob, shouldUseAuthenticatedImageFallback } from "@/lib/authenticated-image";
 import { cn } from "@/lib/utils";
 
 type LightboxImage = {
   id: string;
   src: string;
+  fileName?: string;
+  outputFormat?: string;
   sizeLabel?: string;
   dimensions?: string;
 };
@@ -24,6 +28,38 @@ type ImageLightboxProps = {
 const MIN_ZOOM = 1;
 const MAX_ZOOM = 4;
 const ZOOM_STEP = 0.25;
+
+function normalizeImageExtension(value?: string) {
+  const extension = String(value || "").toLowerCase().trim().replace(/^image\//, "").replace(/^\./, "");
+  if (extension === "jpg" || extension === "jpeg") {
+    return "jpg";
+  }
+  if (extension === "png" || extension === "webp") {
+    return extension;
+  }
+  return "";
+}
+
+function imageExtensionFromSrc(src: string) {
+  const dataUrlFormat = src.match(/^data:image\/([^;,]+)/i)?.[1];
+  if (dataUrlFormat) {
+    return normalizeImageExtension(dataUrlFormat);
+  }
+  const urlExtension = src.split(/[?#]/, 1)[0]?.match(/\.([a-z0-9]+)$/i)?.[1];
+  return normalizeImageExtension(urlExtension);
+}
+
+function imageDownloadName(image: LightboxImage, blobType?: string) {
+  if (image.fileName) {
+    return image.fileName;
+  }
+  const extension =
+    normalizeImageExtension(image.outputFormat) ||
+    normalizeImageExtension(blobType) ||
+    imageExtensionFromSrc(image.src) ||
+    "png";
+  return `image-${image.id}.${extension}`;
+}
 
 export function ImageLightbox({
   images,
@@ -101,10 +137,33 @@ export function ImageLightbox({
 
   const handleDownload = useCallback(() => {
     if (!current) return;
-    const link = document.createElement("a");
-    link.href = current.src;
-    link.download = `image-${current.id}.png`;
-    link.click();
+    const download = async () => {
+      let href = current.src;
+      let objectURL = "";
+      let blobType = "";
+
+      if (shouldUseAuthenticatedImageFallback(current.src)) {
+        try {
+          const blob = await fetchAuthenticatedImageBlob(current.src);
+          blobType = blob.type;
+          objectURL = URL.createObjectURL(blob);
+          href = objectURL;
+        } catch {
+          href = current.src;
+        }
+      }
+
+      const link = document.createElement("a");
+      link.href = href;
+      link.download = imageDownloadName(current, blobType);
+      link.click();
+
+      if (objectURL) {
+        window.setTimeout(() => URL.revokeObjectURL(objectURL), 1000);
+      }
+    };
+
+    void download();
   }, [current]);
 
   const handleImagePointerDown = useCallback(
@@ -156,6 +215,9 @@ export function ImageLightbox({
           <DialogPrimitive.Title className="sr-only">
             图片预览
           </DialogPrimitive.Title>
+          <DialogPrimitive.Description className="sr-only">
+            查看、缩放、切换或下载当前图片。
+          </DialogPrimitive.Description>
 
           <div className="absolute top-3 right-3 left-3 z-20 flex flex-wrap items-center justify-end gap-2 sm:top-4 sm:right-4 sm:left-auto">
             {current.sizeLabel || current.dimensions ? (
@@ -230,7 +292,7 @@ export function ImageLightbox({
             className="flex h-full w-full items-center justify-center overflow-hidden p-4 pt-24 sm:p-8 sm:pt-20"
             onClick={() => onOpenChange(false)}
           >
-            <img
+            <AuthenticatedImage
               src={current.src}
               alt=""
               className={cn(

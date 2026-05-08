@@ -3,17 +3,31 @@
 import { useRef, useState } from "react";
 import { Check, CircleStop, Clock3, Download, Eye, Globe2, LoaderCircle, Lock, PencilLine, Plus, RotateCcw, Sparkles } from "lucide-react";
 
+import { AuthenticatedImage } from "@/components/authenticated-image";
 import { Button } from "@/components/ui/button";
 import type { ImagePromptPreset } from "@/app/image/image-presets";
+import { formatImageSizeDisplay, getImageSizeRequirementLabel, isHighResolutionImageSize } from "@/app/image/image-options";
+import { IMAGE_MODEL_ROUTE_DETAILS, supportsImageOutputCompression } from "@/lib/api";
 import type { ImageVisibility } from "@/lib/api";
+import { fetchAuthenticatedImageBlob, shouldUseAuthenticatedImageFallback } from "@/lib/authenticated-image";
 import { formatBase64ImageFileSize, formatImageFileSize } from "@/lib/image-size";
 import { cn } from "@/lib/utils";
-import type { ImageConversation, ImageTurn, ImageTurnStatus, StoredImage, StoredReferenceImage } from "@/store/image-conversations";
-import type { ImageTurnProgress } from "@/store/image-turn-progress";
+import {
+  getImageTurnLoadingPhase,
+  getStoredImageLoadingPhase,
+  type ImageConversation,
+  type ImageTurn,
+  type ImageTurnStatus,
+  type StoredImage,
+  type StoredReferenceImage,
+} from "@/store/image-conversations";
+import { imageTurnStartedAtTimestamp, type ImageTurnProgress } from "@/store/image-turn-progress";
 
 export type ImageLightboxItem = {
   id: string;
   src: string;
+  fileName?: string;
+  outputFormat?: string;
   sizeLabel?: string;
   dimensions?: string;
 };
@@ -95,12 +109,32 @@ function getTurnResultSizeLabel(turn: ImageTurn, dimensionsByImageId: Record<str
     ),
   );
   if (labels.length === 1) {
-    return labels[0];
+    return `结果 ${labels[0]}`;
   }
   if (labels.length > 1) {
-    return `${labels.length} 种尺寸`;
+    return `结果 ${labels.length} 种尺寸`;
   }
-  return isTurnBusy(turn) && turn.size ? `请求 ${turn.size}` : "";
+  return "";
+}
+
+function getRequestedSizeLabel(turn: ImageTurn) {
+  if (!turn.size) {
+    return "";
+  }
+  const size = turn.size.includes("x") ? formatImageSizeDisplay(turn.size) : turn.size;
+  const requirement = getImageSizeRequirementLabel(turn.size);
+  return requirement === "Auto" ? size : `请求 ${size} / ${requirement}`;
+}
+
+function getLongTaskHint(turn: ImageTurn, elapsedSeconds: number) {
+  void elapsedSeconds;
+  if (!isTurnBusy(turn) || turn.mode === "chat") {
+    return "";
+  }
+  if (isHighResolutionImageSize(turn.size)) {
+    return "高分辨率任务已提交给上游判断";
+  }
+  return "";
 }
 
 function imageVisibilityLabel(visibility?: ImageVisibility) {
@@ -126,14 +160,30 @@ function blurFocusedElementInContainer(container: HTMLElement) {
   }
 }
 
-function imageExtension(outputFormat?: string) {
-  return outputFormat === "jpeg" ? "jpg" : outputFormat || "png";
+function imageExtensionFromSrc(src?: string) {
+  const dataUrlFormat = src?.match(/^data:image\/([^;,]+)/i)?.[1];
+  const urlFormat = src?.split(/[?#]/, 1)[0]?.match(/\.([a-z0-9]+)$/i)?.[1];
+  const format = String(dataUrlFormat || urlFormat || "").toLowerCase();
+  if (format === "jpg" || format === "jpeg") {
+    return "jpg";
+  }
+  if (format === "png" || format === "webp") {
+    return format;
+  }
+  return "";
 }
 
-function buildDownloadName(createdAt: string, turnId: string, index: number, outputFormat?: string) {
+function imageExtension(outputFormat?: string, src?: string) {
+  if (outputFormat === "jpeg") {
+    return "jpg";
+  }
+  return outputFormat || imageExtensionFromSrc(src) || "png";
+}
+
+function buildDownloadName(createdAt: string, turnId: string, index: number, outputFormat?: string, src?: string) {
   const date = new Date(createdAt);
   const safeIndex = String(index + 1).padStart(2, "0");
-  const extension = imageExtension(outputFormat);
+  const extension = imageExtension(outputFormat, src);
   if (Number.isNaN(date.getTime())) {
     return `chatgpt-image-${turnId.slice(0, 8)}-${safeIndex}.${extension}`;
   }
@@ -153,9 +203,10 @@ async function downloadImage(image: DownloadableImage) {
 
   if (!image.src.startsWith("data:")) {
     try {
-      const response = await fetch(image.src);
-      if (response.ok) {
-        const blob = await response.blob();
+      const blob = shouldUseAuthenticatedImageFallback(image.src)
+        ? await fetchAuthenticatedImageBlob(image.src)
+        : await fetch(image.src).then((response) => (response.ok ? response.blob() : null));
+      if (blob) {
         objectUrl = URL.createObjectURL(blob);
         href = objectUrl;
       }
@@ -186,11 +237,10 @@ async function fetchImageSizeLabel(src: string) {
   }
 
   try {
-    const response = await fetch(src);
-    if (!response.ok) {
-      return "";
-    }
-    const blob = await response.blob();
+    const blob = shouldUseAuthenticatedImageFallback(src)
+      ? await fetchAuthenticatedImageBlob(src)
+      : await fetch(src).then((response) => (response.ok ? response.blob() : null));
+    if (!blob) return "";
     return formatImageFileSize(blob.size);
   } catch {
     return "";
@@ -340,6 +390,7 @@ export function ImageResults({
         const referenceLightboxImages = turn.referenceImages.map((image, index) => ({
           id: `${turn.id}-reference-${index}`,
           src: image.dataUrl,
+          fileName: image.name,
         }));
         const downloadableImages = turn.images.flatMap((image, index) => {
           const src = image.status === "success" ? getStoredImageSrc(image) : "";
@@ -349,20 +400,22 @@ export function ImageResults({
                   id: image.id,
                   selectionKey: imageSelectionKey(selectedConversation.id, turn.id, image.id),
                   src,
-                  fileName: buildDownloadName(turn.createdAt, turn.id, index, image.outputFormat || turn.outputFormat),
+                  fileName: buildDownloadName(turn.createdAt, turn.id, index, image.outputFormat || turn.outputFormat, src),
                   imageIndex: index,
                 },
               ]
             : [];
         });
         const selectedDownloadableImages = downloadableImages.filter((image) => selectedImageIds[image.selectionKey]);
-        const successfulTurnImages = turn.images.flatMap((image) => {
+        const successfulTurnImages = turn.images.flatMap((image, index) => {
           const src = image.status === "success" ? getStoredImageSrc(image) : "";
           return src
             ? [
                 {
                   id: image.id,
                   src,
+                  fileName: buildDownloadName(turn.createdAt, turn.id, index, image.outputFormat || turn.outputFormat, src),
+                  outputFormat: image.outputFormat || turn.outputFormat,
                   sizeLabel: image.b64_json ? formatBase64ImageFileSize(image.b64_json) : imageSizeLabels[image.id],
                   dimensions: imageDimensions[image.id],
                 },
@@ -383,15 +436,26 @@ export function ImageResults({
         const outcomeLabel = getTurnOutcomeLabel(successCount, failedCount, cancelledCount);
         const showResultSummary = turn.mode !== "chat" && (visualImages.length > 0 || turnBusy);
         const resultSizeLabel = getTurnResultSizeLabel(turn, imageDimensions);
-        const progressStartedAt =
-          progress && Number.isFinite(progress.startedAt) ? progress.startedAt : null;
-        const elapsedClock = turnBusy
-          ? progressStartedAt === null
-            ? ""
-            : formatElapsedClock(Math.max(0, Math.floor((progressNow - progressStartedAt) / 1000)))
-          : "";
+        const loadingPhase = getImageTurnLoadingPhase(turn);
+        const isWaitingForQuota = loadingPhase === "queued";
+        const isRunning = loadingPhase === "running";
+        const elapsedSeconds = isRunning
+          ? Math.max(
+              0,
+              Math.floor((progressNow - imageTurnStartedAtTimestamp(turn.processingStartedAt, turn.createdAt)) / 1000),
+            )
+          : 0;
+        const elapsedClock = isRunning ? formatElapsedClock(elapsedSeconds) : "";
         const progressMessage =
-          progress?.message || (turn.status === "queued" ? "等待前序任务" : turnBusy ? "正在处理图片" : "");
+          progress?.message ||
+          (isWaitingForQuota
+            ? "等待创作并发额度"
+            : turnBusy
+              ? "正在处理图片"
+              : "");
+        const requestedSizeLabel = getRequestedSizeLabel(turn);
+        const routeDetail = IMAGE_MODEL_ROUTE_DETAILS[turn.model];
+        const longTaskHint = getLongTaskHint(turn, elapsedSeconds);
         const downloadActions =
           downloadableImages.length > 0 ? (
             <>
@@ -446,6 +510,11 @@ export function ImageResults({
                     <span className="rounded-full bg-[#f0f0f0] px-2.5 py-0.5 text-[#45515e]">第 {turnIndex + 1} 轮</span>
                     <span className="rounded-full bg-[#f0f0f0] px-2.5 py-0.5 text-[#45515e]">{getTurnModeLabel(turn)}</span>
                     <span className="rounded-full bg-[#f0f0f0] px-2.5 py-0.5 text-[#45515e]">{turn.model}</span>
+                    {turn.mode !== "chat" && routeDetail ? (
+                      <span className="rounded-full bg-[#eef4ff] px-2.5 py-0.5 text-[#1456f0]">
+                        {routeDetail.routeLabel}
+                      </span>
+                    ) : null}
                     <span className="rounded-full bg-[#f0f0f0] px-2.5 py-0.5 text-[#45515e]">
                       {getTurnStatusLabel(turn.status)}
                     </span>
@@ -528,6 +597,18 @@ export function ImageResults({
                       {turn.count !== resultCount ? (
                         <span className="rounded-full bg-[#f0f0f0] px-3 py-1">目标 {turn.count} 张</span>
                       ) : null}
+                      {requestedSizeLabel ? (
+                        <span
+                          className={cn(
+                            "rounded-full px-3 py-1",
+                            isHighResolutionImageSize(turn.size)
+                              ? "bg-amber-50 text-amber-700"
+                              : "bg-[#f0f0f0]",
+                          )}
+                        >
+                          {requestedSizeLabel}
+                        </span>
+                      ) : null}
                       {resultSizeLabel ? <span className="rounded-full bg-[#f0f0f0] px-3 py-1">{resultSizeLabel}</span> : null}
                       {turn.quality ? (
                         <span className="rounded-full bg-[#f0f0f0] px-3 py-1">Quality {turn.quality}</span>
@@ -535,7 +616,7 @@ export function ImageResults({
                       {turn.outputFormat ? (
                         <span className="rounded-full bg-[#f0f0f0] px-3 py-1">{turn.outputFormat.toUpperCase()}</span>
                       ) : null}
-                      {turn.outputCompression != null && turn.outputFormat && turn.outputFormat !== "png" ? (
+                      {turn.outputCompression != null && turn.outputFormat && supportsImageOutputCompression(turn.outputFormat) ? (
                         <span className="rounded-full bg-[#f0f0f0] px-3 py-1">压缩 {turn.outputCompression}</span>
                       ) : null}
                       {outcomeLabel ? <span className="rounded-full bg-[#f0f0f0] px-3 py-1">{outcomeLabel}</span> : null}
@@ -546,8 +627,9 @@ export function ImageResults({
                     {turnBusy || downloadActions ? (
                       <div className="flex flex-wrap items-center justify-end gap-2">
                         {turnBusy ? (
-                          <span className="w-fit whitespace-nowrap rounded-full bg-amber-50 px-3 py-1 text-[11px] text-amber-700 sm:text-xs">
-                            {progressMessage}
+                          <span className="flex max-w-full flex-col gap-0.5 rounded-2xl bg-amber-50 px-3 py-1 text-[11px] leading-5 text-amber-700 sm:text-xs">
+                            <span className="w-fit whitespace-nowrap font-medium">{progressMessage}</span>
+                            {longTaskHint ? <span className="max-w-[20rem] text-[11px] leading-5">{longTaskHint}</span> : null}
                           </span>
                         ) : null}
                         {downloadActions}
@@ -623,7 +705,7 @@ export function ImageResults({
                             className="block w-full cursor-pointer overflow-hidden text-left"
                             aria-label={selected ? "取消选择图片" : "选择图片"}
                           >
-                            <img
+                            <AuthenticatedImage
                               src={imageSrc}
                               alt={`Generated result ${index + 1}`}
                               className="block h-auto w-full transition duration-200 group-hover:brightness-95"
@@ -775,6 +857,13 @@ export function ImageResults({
                       );
                     }
 
+                    const imageLoadingPhase = getStoredImageLoadingPhase(image);
+                    const imageBusyLabel = imageLoadingPhase === "queued"
+                      ? "等待创作并发额度..."
+                      : imageLoadingPhase === "running"
+                        ? "正在处理图片..."
+                        : "";
+
                     return (
                       <div
                         key={image.id}
@@ -782,7 +871,7 @@ export function ImageResults({
                       >
                         <div className="flex h-full flex-col items-center justify-center gap-2 px-5 py-5 text-center text-stone-500">
                           <div className="rounded-full bg-white p-3 shadow-sm">
-                            {turn.status === "queued" ? (
+                            {imageLoadingPhase === "queued" ? (
                               <Clock3 className="size-5" />
                             ) : (
                               <LoaderCircle className="size-5 animate-spin" />
@@ -790,16 +879,14 @@ export function ImageResults({
                           </div>
                           <p className="text-sm">
                             {turn.mode === "chat"
-                              ? turn.status === "queued"
-                                ? "已加入当前对话队列..."
+                              ? imageLoadingPhase === "queued"
+                                ? "等待创作并发额度..."
                                 : "正在等待回复..."
-                              : turn.status === "queued"
-                                ? "已加入当前对话队列..."
-                                : "正在处理图片..."}
+                              : imageBusyLabel}
                           </p>
-                          {elapsedClock ? (
+                          {imageLoadingPhase === "running" ? (
                             <p className="min-w-[7.5rem] rounded-full bg-white/70 px-2.5 py-1 font-mono text-xs tabular-nums text-stone-400">
-                              已等待 {elapsedClock}
+                              已运行 {elapsedClock}
                             </p>
                           ) : null}
                         </div>

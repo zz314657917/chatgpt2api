@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
+	"fmt"
 	"image"
 	"image/color"
 	"image/png"
@@ -15,9 +15,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"chatgpt2api/internal/backend"
 	"chatgpt2api/internal/protocol"
 	"chatgpt2api/internal/service"
 	"chatgpt2api/internal/util"
@@ -260,6 +262,8 @@ func TestAdminSystemCheckUpdates(t *testing.T) {
 }
 
 func TestPasswordAccountLoginAndRegistrationToggle(t *testing.T) {
+	t.Setenv("CHATGPT2API_USER_DEFAULT_CONCURRENT_LIMIT", "2")
+
 	app := newTestApp(t)
 	defer app.Close()
 
@@ -277,6 +281,7 @@ func TestPasswordAccountLoginAndRegistrationToggle(t *testing.T) {
 	if adminToken == "" || login["role"] != service.AuthRoleAdmin || login["subject_id"] != "admin" {
 		t.Fatalf("admin login body = %#v", login)
 	}
+	assertCreationConcurrentLimit(t, login, 0)
 
 	req = httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(`{"username":"alice","password":"Password123","name":"Alice"}`))
 	res = httptest.NewRecorder()
@@ -310,6 +315,7 @@ func TestPasswordAccountLoginAndRegistrationToggle(t *testing.T) {
 	if registered["role_id"] != service.DefaultManagedRoleID {
 		t.Fatalf("registered role fields = %#v", registered)
 	}
+	assertCreationConcurrentLimit(t, registered, 2)
 
 	req = httptest.NewRequest(http.MethodGet, "/auth/session", nil)
 	req.Header.Set("Authorization", "Bearer "+userToken)
@@ -318,9 +324,16 @@ func TestPasswordAccountLoginAndRegistrationToggle(t *testing.T) {
 	if res.Code != http.StatusOK {
 		t.Fatalf("registered session status = %d body = %s", res.Code, res.Body.String())
 	}
+	var session map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &session); err != nil {
+		t.Fatalf("registered session json: %v", err)
+	}
+	assertCreationConcurrentLimit(t, session, 2)
 }
 
 func TestProfileAccountNameAndPasswordUpdates(t *testing.T) {
+	t.Setenv("CHATGPT2API_USER_DEFAULT_CONCURRENT_LIMIT", "3")
+
 	app := newTestApp(t)
 	defer app.Close()
 
@@ -346,6 +359,7 @@ func TestProfileAccountNameAndPasswordUpdates(t *testing.T) {
 	if profile["name"] != "Alice Updated" || profile["subject_id"] != user.ID {
 		t.Fatalf("profile update body = %#v", profile)
 	}
+	assertCreationConcurrentLimit(t, profile, 3)
 
 	req = httptest.NewRequest(http.MethodGet, "/auth/session", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
@@ -360,6 +374,7 @@ func TestProfileAccountNameAndPasswordUpdates(t *testing.T) {
 	if profile["name"] != "Alice Updated" {
 		t.Fatalf("session did not reflect updated name: %#v", profile)
 	}
+	assertCreationConcurrentLimit(t, profile, 3)
 
 	req = httptest.NewRequest(http.MethodPost, "/api/profile/password", strings.NewReader(`{"current_password":"wrong-password","new_password":"NewPassword123"}`))
 	req.Header.Set("Authorization", "Bearer "+token)
@@ -396,6 +411,7 @@ func TestProfileAccountNameAndPasswordUpdates(t *testing.T) {
 	if profile["name"] != "Alice Updated" || profile["subject_id"] != user.ID {
 		t.Fatalf("new password login body = %#v", profile)
 	}
+	assertCreationConcurrentLimit(t, profile, 3)
 }
 
 func TestCreationTaskFailureWritesCallLog(t *testing.T) {
@@ -457,15 +473,10 @@ func TestCreationTaskFailureWritesCallLog(t *testing.T) {
 	}
 }
 
-func TestResponsesImageTaskRouteBuildsTaskPayload(t *testing.T) {
+func TestCreationTaskResponseImageRouteIsNotAnAdminTaskResource(t *testing.T) {
 	app := newTestApp(t)
 	defer app.Close()
 
-	called := make(chan map[string]any, 1)
-	app.tasks.SetResponseImageHandler(func(ctx context.Context, identity service.Identity, payload map[string]any) (map[string]any, error) {
-		called <- payload
-		return map[string]any{"data": []map[string]any{{"url": "https://example.test/generated.png"}}}, nil
-	})
 	_, rawKey, err := app.auth.CreateAPIKey(service.AuthRoleUser, "frontend", service.AuthOwner{})
 	if err != nil {
 		t.Fatalf("CreateAPIKey() error = %v", err)
@@ -476,69 +487,8 @@ func TestResponsesImageTaskRouteBuildsTaskPayload(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer "+rawKey)
 	res := httptest.NewRecorder()
 	app.Handler().ServeHTTP(res, req)
-	if res.Code != http.StatusOK {
-		t.Fatalf("submit response image task status = %d body = %s", res.Code, res.Body.String())
-	}
-	var task map[string]any
-	if err := json.Unmarshal(res.Body.Bytes(), &task); err != nil {
-		t.Fatalf("task json: %v", err)
-	}
-	if task["mode"] != "response-image" || task["model"] != "gpt-5.5" || task["quality"] != "high" || task["visibility"] != "public" {
-		t.Fatalf("unexpected submitted task = %#v", task)
-	}
-	if task["output_format"] != "jpeg" || util.ToInt(task["output_compression"], -1) != 42 {
-		t.Fatalf("unexpected task output options = %#v", task)
-	}
-	select {
-	case payload := <-called:
-		if payload["model"] != "gpt-5.5" || payload["quality"] != "high" {
-			t.Fatalf("unexpected response image payload = %#v", payload)
-		}
-		if payload["output_format"] != "jpeg" || util.ToInt(payload["output_compression"], -1) != 42 {
-			t.Fatalf("unexpected response image output options = %#v", payload)
-		}
-		if images, ok := payload["images"].([]any); !ok || len(images) != 1 {
-			t.Fatalf("payload images = %#v", payload["images"])
-		}
-		if payload["image_resolution"] != "2k" || payload["requested_size"] != "2048x2048" {
-			t.Fatalf("payload request metadata = %#v", payload)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for response image handler")
-	}
-}
-
-func TestResponsesImageTaskResultExtractsImagesAndText(t *testing.T) {
-	app := newTestApp(t)
-	defer app.Close()
-
-	imageData := "cG5n"
-	completed := map[string]any{
-		"created_at": float64(1700000000),
-		"output": []map[string]any{
-			{"type": "image_generation_call", "result": imageData, "revised_prompt": "封面"},
-		},
-	}
-	result := responsesImageTaskResult(app.engine, completed, map[string]any{
-		"prompt":          "生成封面",
-		"response_format": "b64_json",
-		"base_url":        "https://example.test",
-		"owner_id":        "owner-1",
-		"owner_name":      "Alice",
-	})
-	data := util.AsMapSlice(result["data"])
-	if len(data) != 1 || data[0]["b64_json"] != imageData || data[0]["revised_prompt"] != "封面" {
-		t.Fatalf("response image result data = %#v", result)
-	}
-	if urlValue := util.Clean(data[0]["url"]); !strings.HasPrefix(urlValue, "https://example.test/images/") {
-		t.Fatalf("stored image url = %#v in %#v", urlValue, result)
-	}
-
-	text := responseOutputText([]map[string]any{
-		{"type": "message", "content": []map[string]any{{"type": "output_text", "text": "模型返回文本"}}},
-	})
-	if text != "模型返回文本" {
-		t.Fatalf("responseOutputText() = %q", text)
+	if res.Code != http.StatusNotFound {
+		t.Fatalf("response image creation task status = %d body = %s, want 404", res.Code, res.Body.String())
 	}
 }
 
@@ -551,8 +501,8 @@ func TestRunLoggedImageTaskLogsTextOutputAsFailure(t *testing.T) {
 		context.Background(),
 		identity,
 		map[string]any{"model": "gpt-image-2"},
-		"/api/creation-tasks/response-image-generations",
-		"Responses 作画",
+		"/api/creation-tasks/image-generations",
+		"文生图",
 		func(context.Context, map[string]any) (map[string]any, error) {
 			return map[string]any{"output_type": "text", "message": "模型返回文本", "data": []map[string]any{}}, nil
 		},
@@ -564,7 +514,7 @@ func TestRunLoggedImageTaskLogsTextOutputAsFailure(t *testing.T) {
 		t.Fatalf("runLoggedImageTask() result = %#v", result)
 	}
 	logs := app.logs.Search(service.LogQuery{Limit: 10})
-	item := findLogBySummary(logs, "Responses 作画调用失败")
+	item := findLogBySummary(logs, "文生图调用失败")
 	if item == nil {
 		t.Fatalf("expected text-only image result to write failure log, got %#v", logs)
 	}
@@ -574,84 +524,170 @@ func TestRunLoggedImageTaskLogsTextOutputAsFailure(t *testing.T) {
 	}
 }
 
-func TestResponsesImageTaskTextOutputError(t *testing.T) {
-	result := map[string]any{"data": []map[string]any{}}
-	completed := map[string]any{
-		"output": []map[string]any{
-			{"type": "message", "content": []map[string]any{{"type": "output_text", "text": "Got it! What image would you like me to generate?"}}},
-		},
+func TestDirectImageGenerationUsesCreationLimiter(t *testing.T) {
+	t.Setenv("CHATGPT2API_USER_DEFAULT_CONCURRENT_LIMIT", "2")
+	app := newTestApp(t)
+	defer app.Close()
+	_, rawKey, err := app.auth.CreateAPIKey(service.AuthRoleUser, "image-user", service.AuthOwner{})
+	if err != nil {
+		t.Fatalf("CreateAPIKey() error = %v", err)
 	}
-	err := responsesImageTaskTextOutputError(result, completed)
-	if err == nil {
-		t.Fatalf("responsesImageTaskTextOutputError() err = nil, result = %#v", result)
+
+	app.engine.ImageTokenProvider = func(context.Context) (string, error) {
+		return "test-token", nil
 	}
-	var imageErr *protocol.ImageGenerationError
-	if !errors.As(err, &imageErr) || imageErr.Code != "image_generation_text_response" {
-		t.Fatalf("err = %T %v, want image_generation_text_response", err, err)
+	app.engine.ImageClientFactory = func(string) *backend.Client {
+		return nil
 	}
-	if result["output_type"] != "text" {
-		t.Fatalf("result output_type = %#v, want text in %#v", result["output_type"], result)
+
+	var mu sync.Mutex
+	active := 0
+	maxActive := 0
+	release := make(chan struct{})
+	app.engine.StreamImageOutputsFunc = func(ctx context.Context, client *backend.Client, request protocol.ConversationRequest, index, total int) (<-chan protocol.ImageOutput, <-chan error) {
+		out := make(chan protocol.ImageOutput)
+		errCh := make(chan error, 1)
+		go func() {
+			defer close(out)
+			defer close(errCh)
+			mu.Lock()
+			active++
+			if active > maxActive {
+				maxActive = active
+			}
+			mu.Unlock()
+			select {
+			case <-release:
+			case <-ctx.Done():
+				errCh <- ctx.Err()
+				return
+			}
+			out <- protocol.ImageOutput{
+				Kind:    "result",
+				Model:   request.Model,
+				Index:   index,
+				Total:   total,
+				Created: int64(index),
+				Data:    []map[string]any{{"url": fmt.Sprintf("https://example.test/%d.png", index)}},
+			}
+			mu.Lock()
+			active--
+			mu.Unlock()
+			errCh <- nil
+		}()
+		return out, errCh
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/images/generations", strings.NewReader(`{"prompt":"draw","model":"gpt-image-2","n":3,"response_format":"url"}`))
+	req.Header.Set("Authorization", "Bearer "+rawKey)
+	res := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		app.Handler().ServeHTTP(res, req)
+	}()
+
+	waitForHTTPTestCondition(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return maxActive >= 2
+	})
+	time.Sleep(120 * time.Millisecond)
+	mu.Lock()
+	gotMaxActive := maxActive
+	mu.Unlock()
+	if gotMaxActive != 2 {
+		t.Fatalf("max concurrent direct image outputs = %d, want 2", gotMaxActive)
+	}
+	close(release)
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("direct image generation request did not finish")
+	}
+	if res.Code != http.StatusOK {
+		t.Fatalf("direct image generation status = %d body = %s", res.Code, res.Body.String())
 	}
 }
 
-func TestResponseImageTaskBodyPassesSizeToImageTool(t *testing.T) {
-	body := responseImageTaskBody(map[string]any{
-		"prompt":             "生成 4K 正方形封面",
-		"model":              "gpt-5.5",
-		"size":               "2880x2880",
-		"quality":            "high",
-		"output_format":      "webp",
-		"output_compression": 35,
-	})
-	tools := body["tools"].([]map[string]any)
-	if len(tools) != 1 {
-		t.Fatalf("tools = %#v", body["tools"])
-	}
-	tool := tools[0]
-	if tool["size"] != "2880x2880" {
-		t.Fatalf("tool size = %#v, want 2880x2880", tool["size"])
-	}
-	if tool["quality"] != "high" {
-		t.Fatalf("tool quality = %#v, want high", tool["quality"])
-	}
-	if tool["output_format"] != "webp" {
-		t.Fatalf("tool output_format = %#v, want webp", tool["output_format"])
-	}
-	if tool["output_compression"] != 35 {
-		t.Fatalf("tool output_compression = %#v, want 35", tool["output_compression"])
-	}
-}
+func TestDirectImageGenerationDoesNotLimitAdminToken(t *testing.T) {
+	t.Setenv("CHATGPT2API_USER_DEFAULT_CONCURRENT_LIMIT", "2")
+	app := newTestApp(t)
+	defer app.Close()
 
-func TestResponseImageTaskBodyOmitsPngCompression(t *testing.T) {
-	body := responseImageTaskBody(map[string]any{
-		"prompt":             "生成封面",
-		"model":              "gpt-5.5",
-		"output_format":      "png",
-		"output_compression": 35,
-	})
-	tools := body["tools"].([]map[string]any)
-	tool := tools[0]
-	if tool["output_format"] != "png" {
-		t.Fatalf("tool output_format = %#v, want png", tool["output_format"])
+	app.engine.ImageTokenProvider = func(context.Context) (string, error) {
+		return "test-token", nil
 	}
-	if _, ok := tool["output_compression"]; ok {
-		t.Fatalf("png tool should omit output_compression: %#v", tool)
+	app.engine.ImageClientFactory = func(string) *backend.Client {
+		return nil
 	}
-}
 
-func TestResponseImageTaskBodyDefaultsAutoAndOmitsCodexQuality(t *testing.T) {
-	body := responseImageTaskBody(map[string]any{
-		"prompt":  "生成封面",
-		"model":   "codex-gpt-image-2",
-		"quality": "high",
-	})
-	tools := body["tools"].([]map[string]any)
-	tool := tools[0]
-	if tool["size"] != "auto" {
-		t.Fatalf("tool size = %#v, want auto", tool["size"])
+	var mu sync.Mutex
+	active := 0
+	maxActive := 0
+	release := make(chan struct{})
+	app.engine.StreamImageOutputsFunc = func(ctx context.Context, client *backend.Client, request protocol.ConversationRequest, index, total int) (<-chan protocol.ImageOutput, <-chan error) {
+		out := make(chan protocol.ImageOutput)
+		errCh := make(chan error, 1)
+		go func() {
+			defer close(out)
+			defer close(errCh)
+			mu.Lock()
+			active++
+			if active > maxActive {
+				maxActive = active
+			}
+			mu.Unlock()
+			select {
+			case <-release:
+			case <-ctx.Done():
+				errCh <- ctx.Err()
+				return
+			}
+			out <- protocol.ImageOutput{
+				Kind:    "result",
+				Model:   request.Model,
+				Index:   index,
+				Total:   total,
+				Created: int64(index),
+				Data:    []map[string]any{{"url": fmt.Sprintf("https://example.test/%d.png", index)}},
+			}
+			mu.Lock()
+			active--
+			mu.Unlock()
+			errCh <- nil
+		}()
+		return out, errCh
 	}
-	if _, ok := tool["quality"]; ok {
-		t.Fatalf("codex tool should not include quality: %#v", tool)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/images/generations", strings.NewReader(`{"prompt":"draw","model":"gpt-image-2","n":3,"response_format":"url"}`))
+	req.Header.Set("Authorization", adminAuthHeader(t, app))
+	res := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		app.Handler().ServeHTTP(res, req)
+	}()
+
+	waitForHTTPTestCondition(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return maxActive >= 3
+	})
+	mu.Lock()
+	gotMaxActive := maxActive
+	mu.Unlock()
+	if gotMaxActive != 3 {
+		t.Fatalf("max concurrent admin image outputs = %d, want 3", gotMaxActive)
+	}
+	close(release)
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("admin image generation request did not finish")
+	}
+	if res.Code != http.StatusOK {
+		t.Fatalf("admin image generation status = %d body = %s", res.Code, res.Body.String())
 	}
 }
 
@@ -825,6 +861,55 @@ func TestRBACPermissionsGateManagementAPIs(t *testing.T) {
 	tokens := util.AsStringSlice(tokenExport["tokens"])
 	if len(tokens) != 1 || tokens[0] != "pool-token" {
 		t.Fatalf("exported tokens = %#v", tokenExport["tokens"])
+	}
+}
+
+func TestRedactAccountPayloadCoversRefreshResults(t *testing.T) {
+	app := newTestApp(t)
+	defer app.Close()
+
+	identity := service.Identity{
+		Role: service.AuthRoleUser,
+		APIPermissions: []string{
+			service.APIPermissionKey(http.MethodGet, "/api/accounts"),
+			service.APIPermissionKey(http.MethodPost, "/api/accounts/refresh"),
+		},
+	}
+	payload := map[string]any{
+		"items": []map[string]any{{
+			"id":           "account-1",
+			"access_token": "token-1",
+		}},
+		"errors": []map[string]string{{
+			"access_token": "token-2",
+			"error":        "failed",
+		}},
+		"results": []map[string]any{{
+			"access_token": "token-3",
+			"success":      false,
+			"message":      "failed",
+		}},
+	}
+
+	app.redactAccountPayloadForIdentity(identity, payload)
+
+	items := payload["items"].([]map[string]any)
+	if _, ok := items[0]["access_token"]; ok {
+		t.Fatalf("items should not expose access_token: %#v", items[0])
+	}
+	errors := payload["errors"].([]map[string]string)
+	if _, ok := errors[0]["access_token"]; ok {
+		t.Fatalf("errors should not expose access_token: %#v", errors[0])
+	}
+	if errors[0]["account_id"] != util.SHA1Short("token-2", 16) {
+		t.Fatalf("error account_id = %#v, want hash", errors[0]["account_id"])
+	}
+	results := payload["results"].([]map[string]any)
+	if _, ok := results[0]["access_token"]; ok {
+		t.Fatalf("results should not expose access_token: %#v", results[0])
+	}
+	if results[0]["account_id"] != util.SHA1Short("token-3", 16) {
+		t.Fatalf("result account_id = %#v, want hash", results[0]["account_id"])
 	}
 }
 
@@ -1447,6 +1532,34 @@ func TestCredentialedLoginPreflightAllowsContentType(t *testing.T) {
 	}
 	if got := res.Header().Get("Access-Control-Allow-Headers"); got != "content-type" {
 		t.Fatalf("Access-Control-Allow-Headers = %q, want content-type", got)
+	}
+}
+
+func TestCredentialedImageVisibilityPreflightAllowsPatchAuthorization(t *testing.T) {
+	app := newTestApp(t)
+	defer app.Close()
+
+	req := httptest.NewRequest(http.MethodOptions, "/api/images/visibility", nil)
+	req.Host = "127.0.0.1:8000"
+	req.Header.Set("Origin", "http://localhost:5173")
+	req.Header.Set("Access-Control-Request-Method", http.MethodPatch)
+	req.Header.Set("Access-Control-Request-Headers", "authorization,content-type")
+	res := httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusNoContent {
+		t.Fatalf("preflight status = %d body = %s", res.Code, res.Body.String())
+	}
+	if got := res.Header().Get("Access-Control-Allow-Origin"); got != "http://localhost:5173" {
+		t.Fatalf("Access-Control-Allow-Origin = %q, want request origin", got)
+	}
+	if got := res.Header().Get("Access-Control-Allow-Credentials"); got != "true" {
+		t.Fatalf("Access-Control-Allow-Credentials = %q, want true", got)
+	}
+	if got := res.Header().Get("Access-Control-Allow-Methods"); got != http.MethodPatch {
+		t.Fatalf("Access-Control-Allow-Methods = %q, want PATCH", got)
+	}
+	if got := res.Header().Get("Access-Control-Allow-Headers"); got != "authorization,content-type" {
+		t.Fatalf("Access-Control-Allow-Headers = %q, want authorization,content-type", got)
 	}
 }
 
@@ -2354,6 +2467,14 @@ func findResponseCookie(res *http.Response, name string) *http.Cookie {
 	return nil
 }
 
+func assertCreationConcurrentLimit(t *testing.T, payload map[string]any, want int) {
+	t.Helper()
+	got, ok := payload["creation_concurrent_limit"].(float64)
+	if !ok || got != float64(want) {
+		t.Fatalf("creation_concurrent_limit = %#v, want %d in %#v", payload["creation_concurrent_limit"], want, payload)
+	}
+}
+
 func findLogByDetail(items []map[string]any, key, value string) map[string]any {
 	return findLogByDetails(items, map[string]any{key: value})
 }
@@ -2390,6 +2511,18 @@ func adminAuthHeader(t *testing.T, app *App) string {
 		t.Fatalf("admin LoginPassword() identity=%#v token=%q", identity, token)
 	}
 	return "Bearer " + token
+}
+
+func waitForHTTPTestCondition(t *testing.T, ok func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if ok() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("timed out waiting for condition")
 }
 
 func newTestApp(t *testing.T) *App {

@@ -6,19 +6,25 @@ import { useNavigate } from "react-router-dom";
 
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { formatImageSizeDisplay, getImageSizeRequirementLabel, isHighResolutionImageSize } from "@/app/image/image-options";
+import { IMAGE_MODEL_ROUTE_DETAILS } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import {
   ACTIVE_IMAGE_CONVERSATION_STORAGE_KEY,
   IMAGE_ACTIVE_CONVERSATION_REQUEST_EVENT,
   IMAGE_CONVERSATIONS_CHANGED_EVENT,
   listImageConversations,
+  getImageTurnLoadingCounts,
+  getImageTurnLoadingPhase,
   type ImageConversation,
   type ImageConversationMode,
   type ImageTurn,
+  type ImageTurnLoadingPhase,
   type ImageTurnStatus,
 } from "@/store/image-conversations";
 import {
   getImageTurnProgressSnapshot,
+  imageTurnStartedAtTimestamp,
   imageTurnProgressKey,
   subscribeImageTurnProgress,
 } from "@/store/image-turn-progress";
@@ -28,10 +34,11 @@ type TaskQueueItem = {
   conversationTitle: string;
   turn: ImageTurn;
   totalCount: number;
+  queuedCount: number;
+  runningCount: number;
   completedCount: number;
   failedCount: number;
   cancelledCount: number;
-  loadingCount: number;
 };
 
 type RecentQueueCompletion = TaskQueueItem & {
@@ -118,6 +125,45 @@ function getStatusClass(status: ImageTurnStatus) {
   return "bg-muted text-muted-foreground ring-border";
 }
 
+function getQueueSizeLabel(turn: ImageTurn) {
+  if (!turn.size) {
+    return "";
+  }
+  const size = turn.size.includes("x") ? formatImageSizeDisplay(turn.size) : turn.size;
+  const requirement = getImageSizeRequirementLabel(turn.size);
+  return requirement === "Auto" ? size : `${size} / ${requirement}`;
+}
+
+function getQueueLongTaskHint(turn: ImageTurn, elapsedSeconds: number) {
+  void elapsedSeconds;
+  if (turn.mode === "chat") {
+    return "";
+  }
+  if (isHighResolutionImageSize(turn.size)) {
+    return "高分辨率任务已提交给上游判断";
+  }
+  return "";
+}
+
+function getQueueLoadingDetail(item: TaskQueueItem, loadingPhase: ImageTurnLoadingPhase) {
+  if (item.turn.mode === "chat") {
+    if (loadingPhase === "queued") {
+      return "对话任务排队中";
+    }
+    if (loadingPhase === "running") {
+      return "对话任务处理中";
+    }
+    return "";
+  }
+  if (loadingPhase === "queued") {
+    return `还有 ${item.queuedCount} 张图片排队中`;
+  }
+  if (loadingPhase === "running") {
+    return `还有 ${item.runningCount} 张图片处理中`;
+  }
+  return "";
+}
+
 function getCompletionTone(status: ImageTurnStatus) {
   if (status === "success" || status === "message") {
     return {
@@ -144,20 +190,21 @@ function getCompletionTone(status: ImageTurnStatus) {
 }
 
 function getQueueItem(conversation: ImageConversation, turn: ImageTurn): TaskQueueItem {
+  const { queued: queuedCount, running: runningCount } = getImageTurnLoadingCounts(turn);
   const completedCount = turn.images.filter((image) => image.status === "success" || image.status === "message").length;
   const failedCount = turn.images.filter((image) => image.status === "error").length;
   const cancelledCount = turn.images.filter((image) => image.status === "cancelled").length;
-  const loadingCount = turn.images.filter((image) => image.status === "loading").length;
   const totalCount = Math.max(1, turn.mode === "chat" ? 1 : turn.count || turn.images.length || 1);
   return {
     conversationId: conversation.id,
     conversationTitle: conversation.title,
     turn,
     totalCount,
+    queuedCount,
+    runningCount,
     completedCount,
     failedCount,
     cancelledCount,
-    loadingCount,
   };
 }
 
@@ -234,25 +281,30 @@ function QueueItem({
       : item.turn.status === "generating"
         ? 8
         : 0;
-  const elapsed =
-    progress && Number.isFinite(progress.startedAt)
-      ? formatElapsedClock(Math.floor((now - progress.startedAt) / 1000))
-      : "";
+  const loadingPhase = getImageTurnLoadingPhase(item.turn);
+  const isWaitingForQuota = loadingPhase === "queued";
+  const isRunning = loadingPhase === "running";
+  const elapsedSeconds = isRunning ? Math.max(0, Math.floor((now - imageTurnStartedAtTimestamp(item.turn.processingStartedAt, item.turn.createdAt)) / 1000)) : 0;
+  const elapsed = isRunning ? formatElapsedClock(elapsedSeconds) : "";
+  const routeDetail = IMAGE_MODEL_ROUTE_DETAILS[item.turn.model];
+  const sizeLabel = getQueueSizeLabel(item.turn);
   const detailParts = [
     getModeLabel(item.turn.mode),
     item.turn.model,
-    item.turn.size,
+    routeDetail?.routeLabel || "",
+    sizeLabel,
     item.turn.quality ? `Quality ${item.turn.quality}` : "",
   ].filter(Boolean);
   const progressMessage =
-    progress?.message || (item.turn.status === "queued" ? "等待前序任务" : item.turn.mode === "chat" ? "等待对话回复" : "等待生成结果");
-  const progressDetail =
-    progress?.detail ||
-    (item.turn.mode === "chat"
-      ? "对话任务处理中"
-      : item.loadingCount > 0
-        ? `还有 ${item.loadingCount} 张图片处理中`
-        : "");
+    progress?.message ||
+    (isWaitingForQuota
+      ? "等待创作并发额度"
+      : item.turn.mode === "chat"
+        ? "等待对话回复"
+        : "等待图片处理");
+  const loadingDetail = getQueueLoadingDetail(item, loadingPhase);
+  const progressDetail = loadingDetail || progress?.detail || "";
+  const longTaskHint = getQueueLongTaskHint(item.turn, elapsedSeconds);
 
   return (
     <button
@@ -293,6 +345,16 @@ function QueueItem({
             <span className="rounded-full bg-[#f0f0f0] px-2 py-0.5 font-mono tabular-nums dark:bg-muted">
               {item.completedCount + item.failedCount + item.cancelledCount}/{item.totalCount}
             </span>
+            {item.queuedCount > 0 ? (
+              <span className="rounded-full bg-amber-50 px-2 py-0.5 font-mono tabular-nums text-amber-700 dark:bg-amber-950/30 dark:text-amber-300">
+                排队 {item.queuedCount}
+              </span>
+            ) : null}
+            {item.runningCount > 0 ? (
+              <span className="rounded-full bg-sky-50 px-2 py-0.5 font-mono tabular-nums text-sky-700 dark:bg-sky-950/30 dark:text-sky-300">
+                处理中 {item.runningCount}
+              </span>
+            ) : null}
           </div>
 
           <div className="mt-3">
@@ -304,8 +366,8 @@ function QueueItem({
               <div className="h-full rounded-full bg-[#1456f0] transition-[width] duration-300" style={{ width: `${progressPercent}%` }} />
             </div>
             <div className="mt-1.5 flex items-center justify-between gap-2 text-[11px] text-[#8e8e93] dark:text-muted-foreground">
-              <span className="truncate">{progressDetail || formatQueueTime(item.turn.createdAt)}</span>
-              {elapsed ? <span className="shrink-0 font-mono tabular-nums">已等待 {elapsed}</span> : null}
+              <span className="truncate">{longTaskHint || progressDetail || formatQueueTime(item.turn.createdAt)}</span>
+              {elapsed ? <span className="shrink-0 font-mono tabular-nums">已运行 {elapsed}</span> : null}
             </div>
           </div>
         </div>

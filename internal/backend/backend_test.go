@@ -3,11 +3,16 @@ package backend
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 )
+
+func ptrInt(value int) *int {
+	return &value
+}
 
 func TestUpstreamHTTPErrorSummarizesCloudflareChallenge(t *testing.T) {
 	err := upstreamHTTPError("bootstrap", 403, []byte(`<html><body><script>window._cf_chl_opt={}</script>Enable JavaScript and cookies to continue</body></html>`))
@@ -73,53 +78,350 @@ func TestApplyBrowserFingerprintPreservesAccountProfile(t *testing.T) {
 	}
 }
 
-func TestImageHeadersCarryAllRequirementTokens(t *testing.T) {
-	client := &Client{BaseURL: "https://chatgpt.com", fp: map[string]string{}, userAgent: browserUserAgent}
-	client.applyBrowserFingerprint()
-	headers := client.imageHeaders("/backend-api/f/conversation", ChatRequirements{
-		Token:          "chat-token",
+func TestOfficialImageHeadersIncludeSentinelAndConduitTokens(t *testing.T) {
+	client := &Client{
+		BaseURL:     "https://chatgpt.com",
+		AccessToken: "token-1",
+		userAgent:   browserUserAgent,
+		deviceID:    "device-1",
+		sessionID:   "session-1",
+		fp: map[string]string{
+			"user-agent":                  browserUserAgent,
+			"sec-ch-ua":                   browserSecCHUA,
+			"sec-ch-ua-arch":              browserSecCHUAArch,
+			"sec-ch-ua-bitness":           browserSecCHUABitness,
+			"sec-ch-ua-full-version":      browserSecCHUAFullVersion,
+			"sec-ch-ua-full-version-list": browserSecCHUAFullVersionList,
+			"sec-ch-ua-mobile":            browserSecCHUAMobile,
+			"sec-ch-ua-platform":          browserSecCHUAPlatform,
+			"sec-ch-ua-platform-version":  browserSecCHUAPlatformVersion,
+		},
+	}
+	headers := client.officialImageHeaders(officialImageStreamPath, ChatRequirements{
+		Token:          "req-token",
 		ProofToken:     "proof-token",
-		TurnstileToken: "turnstile-token",
+		TurnstileToken: "turn-token",
 		SOToken:        "so-token",
 	}, "conduit-token", "text/event-stream")
 	for key, want := range map[string]string{
-		"OpenAI-Sentinel-Chat-Requirements-Token": "chat-token",
+		"Authorization": "Bearer token-1",
+		"OpenAI-Sentinel-Chat-Requirements-Token": "req-token",
 		"OpenAI-Sentinel-Proof-Token":             "proof-token",
-		"OpenAI-Sentinel-Turnstile-Token":         "turnstile-token",
+		"OpenAI-Sentinel-Turnstile-Token":         "turn-token",
 		"OpenAI-Sentinel-SO-Token":                "so-token",
 		"X-Conduit-Token":                         "conduit-token",
+		"Accept":                                  "text/event-stream",
+		"Content-Type":                            "application/json",
+		"X-OpenAI-Target-Path":                    officialImageStreamPath,
 	} {
 		if got := headers[key]; got != want {
-			t.Fatalf("%s = %q, want %q", key, got, want)
+			t.Fatalf("headers[%s] = %q, want %q", key, got, want)
 		}
 	}
 	if headers["X-Oai-Turn-Trace-Id"] == "" {
-		t.Fatal("missing turn trace id")
+		t.Fatalf("X-Oai-Turn-Trace-Id missing in %#v", headers)
 	}
 }
 
-func TestImageModelSlugSupportsSelection(t *testing.T) {
-	client := &Client{}
-	for _, tc := range []struct {
+func TestBuildOfficialImagePromptOnlyAddsSizeHint(t *testing.T) {
+	prompt := buildOfficialImagePrompt("画一张城市封面", "16:9")
+	if !strings.Contains(prompt, "16:9 横屏构图") {
+		t.Fatalf("buildOfficialImagePrompt() missing size hint: %s", prompt)
+	}
+	for _, unwanted := range []string{"High 档", "透明背景", "anime", "阶段性预览", "WebP"} {
+		if strings.Contains(prompt, unwanted) {
+			t.Fatalf("buildOfficialImagePrompt() unexpectedly contains %q: %s", unwanted, prompt)
+		}
+	}
+}
+
+func TestOfficialImageModelSlug(t *testing.T) {
+	for _, tt := range []struct {
 		model string
 		want  string
 	}{
-		{model: "", want: "gpt-image-2"},
-		{model: "auto", want: "gpt-image-2"},
-		{model: "gpt-image-2", want: "gpt-image-2"},
+		{model: "", want: "auto"},
+		{model: "auto", want: "auto"},
+		{model: "gpt-image-2", want: "gpt-5-5"},
 		{model: "codex-gpt-image-2", want: "codex-gpt-image-2"},
-		{model: "gpt-5", want: "gpt-image-2"},
-		{model: "gpt-5-3-mini", want: "gpt-image-2"},
-		{model: "gpt-5.4", want: "gpt-image-2"},
-		{model: "gpt-5.5", want: "gpt-image-2"},
-		{model: "unknown", want: "gpt-image-2"},
+		{model: "gpt-5.5", want: "auto"},
 	} {
-		t.Run(tc.model, func(t *testing.T) {
-			if got := client.imageModelSlug(tc.model); got != tc.want {
-				t.Fatalf("imageModelSlug(%q) = %q, want %q", tc.model, got, tc.want)
+		if got := officialImageModelSlug(tt.model); got != tt.want {
+			t.Fatalf("officialImageModelSlug(%q) = %q, want %q", tt.model, got, tt.want)
+		}
+	}
+}
+
+func TestStreamResponsesImageUsesOfficialPrepareAndConversationRoutes(t *testing.T) {
+	const png1x1 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+X2ioAAAAASUVORK5CYII="
+	imageBytes, err := base64.StdEncoding.DecodeString(png1x1)
+	if err != nil {
+		t.Fatalf("decode png: %v", err)
+	}
+	var seenPaths []string
+	var prepareBody map[string]any
+	var streamBody map[string]any
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenPaths = append(seenPaths, r.URL.Path)
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`<html data-build="build-1"><script src="/backend-api/sentinel/sdk.js"></script></html>`))
+		case r.Method == http.MethodPost && r.URL.Path == "/backend-api/sentinel/chat-requirements":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"token":"req-token","proofofwork":{"required":false},"turnstile":{"required":false},"arkose":{"required":false}}`))
+		case r.Method == http.MethodPost && r.URL.Path == officialImagePreparePath:
+			if err := json.NewDecoder(r.Body).Decode(&prepareBody); err != nil {
+				t.Fatalf("decode prepare body: %v", err)
+			}
+			if got := r.Header.Get("OpenAI-Sentinel-Chat-Requirements-Token"); got != "req-token" {
+				t.Fatalf("prepare requirements token = %q", got)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"conduit_token":"conduit-token"}`))
+		case r.Method == http.MethodPost && r.URL.Path == officialImageStreamPath:
+			if err := json.NewDecoder(r.Body).Decode(&streamBody); err != nil {
+				t.Fatalf("decode stream body: %v", err)
+			}
+			if got := r.Header.Get("X-Conduit-Token"); got != "conduit-token" {
+				t.Fatalf("stream conduit token = %q", got)
+			}
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte("data: {\"type\":\"server_ste_metadata\",\"metadata\":{\"tool_invoked\":true,\"turn_use_case\":\"image gen\"},\"conversation_id\":\"conv-1\"}\n\n"))
+			_, _ = w.Write([]byte("data: {\"type\":\"message_stream_complete\",\"conversation_id\":\"conv-1\"}\n\n"))
+		case r.Method == http.MethodGet && r.URL.Path == "/backend-api/conversation/conv-1":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"mapping":{"node-1":{"message":{"author":{"role":"tool"},"metadata":{"async_task_type":"image_gen"},"content":{"content_type":"multimodal_text","parts":[{"asset_pointer":"file-service://file_abc"}]}}}}}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/backend-api/files/file_abc/download":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"download_url":"` + server.URL + `/download/file_abc.png"}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/download/file_abc.png":
+			w.Header().Set("Content-Type", "image/png")
+			_, _ = w.Write(imageBytes)
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := &Client{
+		BaseURL:     server.URL,
+		AccessToken: "token-1",
+		httpClient:  server.Client(),
+		lookup: testAccountLookup{
+			"token-1": {"chatgpt_account_id": "acct-1"},
+		},
+	}
+	client.fp = client.buildFingerprint()
+	client.applyBrowserFingerprint()
+	client.userAgent = client.fp["user-agent"]
+	client.deviceID = client.fp["oai-device-id"]
+	client.sessionID = client.fp["oai-session-id"]
+
+	events, errCh := client.StreamResponsesImage(context.Background(), ResponsesImageRequest{
+		Prompt:        "生成封面",
+		Model:         "gpt-image-2",
+		Size:          "16:9",
+		Quality:       "high",
+		Background:    "transparent",
+		Style:         "anime",
+		Moderation:    "low",
+		PartialImages: ptrInt(2),
+		OutputFormat:  "webp",
+	})
+	var results []ResponsesImageEvent
+	for event := range events {
+		if event.Result != "" {
+			results = append(results, event)
+		}
+	}
+	if err := <-errCh; err != nil {
+		t.Fatalf("StreamResponsesImage() error = %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("result events = %#v", results)
+	}
+	if results[0].ConversationID != "conv-1" {
+		t.Fatalf("conversation id = %q, want conv-1", results[0].ConversationID)
+	}
+	if results[0].Result != png1x1 {
+		t.Fatalf("result = %q, want %q", results[0].Result, png1x1)
+	}
+	if prepareBody["model"] != "gpt-5-5" {
+		t.Fatalf("prepare model = %#v, want gpt-5-5", prepareBody["model"])
+	}
+	if streamBody["model"] != "gpt-5-5" {
+		t.Fatalf("stream model = %#v, want gpt-5-5", streamBody["model"])
+	}
+	messages := streamBody["messages"].([]any)
+	message := messages[0].(map[string]any)
+	content := message["content"].(map[string]any)
+	if content["content_type"] != "text" {
+		t.Fatalf("content_type = %#v, want text", content["content_type"])
+	}
+	parts := content["parts"].([]any)
+	if len(parts) != 1 || !strings.Contains(parts[0].(string), "16:9 横屏构图") {
+		t.Fatalf("parts = %#v, want prompt with size hint", parts)
+	}
+	for _, unwanted := range []string{"High 档", "透明背景", "anime", "阶段性预览", "WebP"} {
+		if strings.Contains(parts[0].(string), unwanted) {
+			t.Fatalf("prompt unexpectedly contains %q: %s", unwanted, parts[0].(string))
+		}
+	}
+	if len(seenPaths) < 6 {
+		t.Fatalf("seen paths too short: %#v", seenPaths)
+	}
+}
+
+func TestStreamResponsesImageDoesNotTreatQueuedAssistantNoticeAsFinalText(t *testing.T) {
+	const png1x1 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+X2ioAAAAASUVORK5CYII="
+	imageBytes, err := base64.StdEncoding.DecodeString(png1x1)
+	if err != nil {
+		t.Fatalf("decode png: %v", err)
+	}
+	var server *httptest.Server
+	pollCount := 0
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`<html data-build="build-1"><script src="/backend-api/sentinel/sdk.js"></script></html>`))
+		case r.Method == http.MethodPost && r.URL.Path == "/backend-api/sentinel/chat-requirements":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"token":"req-token","proofofwork":{"required":false},"turnstile":{"required":false},"arkose":{"required":false}}`))
+		case r.Method == http.MethodPost && r.URL.Path == officialImagePreparePath:
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"conduit_token":"conduit-token"}`))
+		case r.Method == http.MethodPost && r.URL.Path == officialImageStreamPath:
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte("data: {\"type\":\"title_generation\",\"title\":\"正在处理图片\",\"conversation_id\":\"conv-queued\"}\n\n"))
+			_, _ = w.Write([]byte("data: {\"v\":{\"message\":{\"author\":{\"role\":\"assistant\"},\"content\":{\"content_type\":\"text\",\"parts\":[\"正在处理图片 目前有很多人在创建图片，因此可能需要一点时间。图片准备好后我们会通知你。\"]}}},\"conversation_id\":\"conv-queued\"}\n\n"))
+			_, _ = w.Write([]byte("data: {\"type\":\"message_stream_complete\",\"conversation_id\":\"conv-queued\"}\n\n"))
+		case r.Method == http.MethodGet && r.URL.Path == "/backend-api/conversation/conv-queued":
+			pollCount++
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"mapping":{"node-1":{"message":{"author":{"role":"tool"},"metadata":{"async_task_type":"image_gen"},"content":{"content_type":"multimodal_text","parts":[{"asset_pointer":"file-service://file_ready"}]}}}}}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/backend-api/files/file_ready/download":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"download_url":"` + server.URL + `/download/file_ready.png"}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/download/file_ready.png":
+			w.Header().Set("Content-Type", "image/png")
+			_, _ = w.Write(imageBytes)
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := &Client{
+		BaseURL:     server.URL,
+		AccessToken: "token-1",
+		httpClient:  server.Client(),
+		lookup: testAccountLookup{
+			"token-1": {"chatgpt_account_id": "acct-1"},
+		},
+	}
+	client.fp = client.buildFingerprint()
+	client.applyBrowserFingerprint()
+	client.userAgent = client.fp["user-agent"]
+	client.deviceID = client.fp["oai-device-id"]
+	client.sessionID = client.fp["oai-session-id"]
+
+	events, errCh := client.StreamResponsesImage(context.Background(), ResponsesImageRequest{
+		Prompt: "生成封面",
+		Model:  "gpt-image-2",
+	})
+	var results []ResponsesImageEvent
+	var texts []string
+	for event := range events {
+		if strings.TrimSpace(event.Text) != "" {
+			texts = append(texts, event.Text)
+		}
+		if event.Result != "" {
+			results = append(results, event)
+		}
+	}
+	if err := <-errCh; err != nil {
+		t.Fatalf("StreamResponsesImage() error = %v", err)
+	}
+	if pollCount == 0 {
+		t.Fatal("expected conversation polling after queued assistant notice")
+	}
+	if len(results) != 1 || results[0].Result != png1x1 {
+		t.Fatalf("results = %#v, want one final image result", results)
+	}
+}
+
+func TestBuildResponsesImagePayloadSendsCompressionOnlyForJPEG(t *testing.T) {
+	compression := 37
+	jpegPayload, err := buildResponsesImagePayload(ResponsesImageRequest{
+		Prompt:            "生成封面",
+		Model:             "codex-gpt-image-2",
+		OutputFormat:      "jpeg",
+		OutputCompression: &compression,
+	})
+	if err != nil {
+		t.Fatalf("buildResponsesImagePayload(jpeg) error = %v", err)
+	}
+	var jpegBody map[string]any
+	if err := json.Unmarshal(jpegPayload, &jpegBody); err != nil {
+		t.Fatalf("Unmarshal(jpeg) error = %v", err)
+	}
+	jpegTools := jpegBody["tools"].([]any)
+	jpegTool := jpegTools[0].(map[string]any)
+	if jpegTool["output_compression"] != float64(37) {
+		t.Fatalf("jpeg output_compression = %#v, want 37", jpegTool["output_compression"])
+	}
+
+	webpPayload, err := buildResponsesImagePayload(ResponsesImageRequest{
+		Prompt:            "生成封面",
+		Model:             "codex-gpt-image-2",
+		OutputFormat:      "webp",
+		OutputCompression: &compression,
+	})
+	if err != nil {
+		t.Fatalf("buildResponsesImagePayload(webp) error = %v", err)
+	}
+	var webpBody map[string]any
+	if err := json.Unmarshal(webpPayload, &webpBody); err != nil {
+		t.Fatalf("Unmarshal(webp) error = %v", err)
+	}
+	webpTools := webpBody["tools"].([]any)
+	webpTool := webpTools[0].(map[string]any)
+	if _, ok := webpTool["output_compression"]; ok {
+		t.Fatalf("webp tool should not include output_compression: %#v", webpTool)
+	}
+}
+
+func TestShouldTreatOfficialImageEventAsFinalText(t *testing.T) {
+	toolFalse := false
+	toolTrue := true
+	tests := []struct {
+		name  string
+		event ResponsesImageEvent
+		want  bool
+	}{
+		{name: "blocked text", event: ResponsesImageEvent{Text: "blocked", Blocked: true}, want: true},
+		{name: "explicit no tool", event: ResponsesImageEvent{Text: "denied", ToolInvoked: &toolFalse, TurnUseCase: "multimodal"}, want: true},
+		{name: "text use case", event: ResponsesImageEvent{Text: "plain text", ToolInvoked: &toolTrue, TurnUseCase: "text"}, want: true},
+		{name: "queued notice still pending", event: ResponsesImageEvent{Text: "正在处理图片", ToolInvoked: nil, TurnUseCase: ""}, want: false},
+		{name: "image result present", event: ResponsesImageEvent{Text: "ignored", Result: "b64"}, want: false},
+		{name: "empty text", event: ResponsesImageEvent{Text: "", ToolInvoked: &toolFalse}, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := shouldTreatOfficialImageEventAsFinalText(tt.event); got != tt.want {
+				t.Fatalf("shouldTreatOfficialImageEventAsFinalText(%#v) = %v, want %v", tt.event, got, tt.want)
 			}
 		})
 	}
+}
+
+type testAccountLookup map[string]map[string]any
+
+func (l testAccountLookup) GetAccount(accessToken string) map[string]any {
+	return l[accessToken]
 }
 
 func TestConversationPayloadEmbedsOpenAIMessageHistoryInSingleUserMessage(t *testing.T) {
@@ -179,11 +481,11 @@ func TestConversationPayloadKeepsSingleUserMessagePrompt(t *testing.T) {
 	}
 }
 
-func TestConversationPayloadCanEnableImageGenerationToolForTextModel(t *testing.T) {
+func TestConversationPayloadKeepsSystemHintsEmpty(t *testing.T) {
 	client := &Client{}
 	payload := client.conversationPayload([]map[string]any{
 		{"role": "user", "content": "draw\n\n输出为 16:9 横屏构图"},
-	}, "gpt-5.5", "Asia/Shanghai", []string{"picture_v2"})
+	}, "gpt-5.5", "Asia/Shanghai")
 
 	if payload["model"] != "gpt-5.5" {
 		t.Fatalf("model = %q, want gpt-5.5", payload["model"])
@@ -192,8 +494,8 @@ func TestConversationPayloadCanEnableImageGenerationToolForTextModel(t *testing.
 	if !ok {
 		t.Fatalf("system_hints = %T, want []any", payload["system_hints"])
 	}
-	if len(hints) != 1 || hints[0] != "picture_v2" {
-		t.Fatalf("system_hints = %#v, want picture_v2", hints)
+	if len(hints) != 0 {
+		t.Fatalf("system_hints = %#v, want empty", hints)
 	}
 	messages := payload["messages"].([]map[string]any)
 	content := messages[0]["content"].(map[string]any)
@@ -212,77 +514,6 @@ func TestSolveTurnstileTokenInterpretsEncodedProgram(t *testing.T) {
 	}
 }
 
-func TestFileDownloadURLUsesConversationScopedEndpoint(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/backend-api/files/download/file_abc" {
-			t.Fatalf("path = %q", r.URL.Path)
-		}
-		if got := r.URL.Query().Get("conversation_id"); got != "conv-1" {
-			t.Fatalf("conversation_id = %q", got)
-		}
-		if got := r.URL.Query().Get("inline"); got != "false" {
-			t.Fatalf("inline = %q", got)
-		}
-		if got := r.Header.Get("X-OpenAI-Target-Path"); got != "/backend-api/files/download/file_abc" {
-			t.Fatalf("target path = %q", got)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"download_url":"https://files.example/image.png"}`))
-	}))
-	defer server.Close()
-
-	client := &Client{
-		BaseURL:     server.URL,
-		AccessToken: "token-1",
-		httpClient:  server.Client(),
-		fp:          map[string]string{},
-	}
-	got := client.fileDownloadURL(context.Background(), "conv-1", "file_abc")
-	if got != "https://files.example/image.png" {
-		t.Fatalf("fileDownloadURL() = %q", got)
-	}
-}
-
-func TestDownloadImageBytesAuthenticatesChatGPTBackendURLs(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if got := r.Header.Get("Authorization"); got != "Bearer token-1" {
-			t.Fatalf("Authorization = %q", got)
-		}
-		if got := r.Header.Get("Origin"); got != serverURL(r) {
-			t.Fatalf("Origin = %q", got)
-		}
-		if got := r.Header.Get("X-OpenAI-Target-Path"); got != "/backend-api/files/stream" {
-			t.Fatalf("target path = %q", got)
-		}
-		w.Header().Set("Content-Type", "image/png")
-		_, _ = w.Write([]byte("png-data"))
-	}))
-	defer server.Close()
-
-	client := &Client{
-		BaseURL:     server.URL,
-		AccessToken: "token-1",
-		httpClient:  server.Client(),
-		fp:          map[string]string{},
-		userAgent:   browserUserAgent,
-	}
-	got, err := client.DownloadImageBytes(context.Background(), []string{server.URL + "/backend-api/files/stream"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got) != 1 || string(got[0]) != "png-data" {
-		t.Fatalf("DownloadImageBytes() = %#v", got)
-	}
-}
-
 type errString string
 
 func (e errString) Error() string { return string(e) }
-
-func serverURL(r *http.Request) string {
-	scheme := "http"
-	if r.TLS != nil {
-		scheme = "https"
-	}
-	return scheme + "://" + r.Host
-}

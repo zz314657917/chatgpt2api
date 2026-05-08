@@ -10,6 +10,7 @@ import {
   isImageModel,
   isImageOutputFormat,
   isImageQuality,
+  supportsImageOutputCompression,
   type ImageModel,
   type ImageOutputFormat,
   type ImageQuality,
@@ -32,6 +33,7 @@ export type StoredImage = {
   id: string;
   taskId?: string;
   status?: "loading" | "success" | "error" | "cancelled" | "message";
+  taskStatus?: "queued" | "running" | "success";
   path?: string;
   visibility?: ImageVisibility;
   b64_json?: string;
@@ -71,6 +73,7 @@ export type ImageTurn = {
   visibility?: ImageVisibility;
   images: StoredImage[];
   createdAt: string;
+  processingStartedAt?: string;
   status: ImageTurnStatus;
   error?: string;
 };
@@ -88,6 +91,13 @@ export type ImageConversationStats = {
   running: number;
 };
 
+export type ImageTurnLoadingCounts = {
+  queued: number;
+  running: number;
+};
+
+export type ImageTurnLoadingPhase = "queued" | "running" | "idle";
+
 const imageConversationStorage = localforage.createInstance({
   name: "chatgpt2api",
   storeName: "image_conversations",
@@ -104,6 +114,32 @@ function dispatchImageConversationsChanged() {
     return;
   }
   window.dispatchEvent(new Event(IMAGE_CONVERSATIONS_CHANGED_EVENT));
+}
+
+export function getImageTurnLoadingCounts(turn: { images: StoredImage[] }): ImageTurnLoadingCounts {
+  const loadingImages = turn.images.filter((image) => image.status === "loading");
+  return {
+    queued: loadingImages.filter((image) => image.taskStatus === "queued").length,
+    running: loadingImages.filter((image) => image.taskStatus === "running").length,
+  };
+}
+
+export function getImageTurnLoadingPhase(turn: { images: StoredImage[] }): ImageTurnLoadingPhase {
+  const { queued, running } = getImageTurnLoadingCounts(turn);
+  if (running > 0) {
+    return "running";
+  }
+  if (queued > 0) {
+    return "queued";
+  }
+  return "idle";
+}
+
+export function getStoredImageLoadingPhase(image: StoredImage): ImageTurnLoadingPhase {
+  if (image.status !== "loading") {
+    return "idle";
+  }
+  return image.taskStatus === "running" ? "running" : "queued";
 }
 
 function conversationScopeFromSession(session: StoredAuthSession | null) {
@@ -127,9 +163,16 @@ function normalizeStoredImage(image: StoredImage): StoredImage {
   const width = Number(image.width);
   const height = Number(image.height);
   const resolution = typeof image.resolution === "string" && image.resolution ? image.resolution : undefined;
+  const taskStatus =
+    image.taskStatus === "queued" || image.taskStatus === "running" || image.taskStatus === "success"
+      ? image.taskStatus
+      : image.status === "loading"
+        ? "queued"
+        : undefined;
   const normalized = {
     ...image,
     taskId: typeof image.taskId === "string" && image.taskId ? image.taskId : undefined,
+    taskStatus,
     path:
       typeof image.path === "string" && image.path
         ? image.path
@@ -273,10 +316,13 @@ function normalizeTurn(turn: ImageTurn & Record<string, unknown>): ImageTurn {
       : isImageCreationModel(turn.model)
         ? turn.model
         : DEFAULT_IMAGE_MODEL;
+  const loadingPhase = getImageTurnLoadingPhase({ images });
   const derivedStatus: ImageTurnStatus =
-    images.some((image) => image.status === "loading")
+    loadingPhase === "running"
       ? "generating"
-      : images.some((image) => image.status === "error")
+      : loadingPhase === "queued"
+        ? "queued"
+        : images.some((image) => image.status === "error")
         ? "error"
         : images.some((image) => image.status === "cancelled")
           ? "cancelled"
@@ -295,10 +341,14 @@ function normalizeTurn(turn: ImageTurn & Record<string, unknown>): ImageTurn {
     ...(sizeSelection ? { sizeSelection } : {}),
     quality: isImageQuality(turn.quality) ? turn.quality : undefined,
     outputFormat: isImageOutputFormat(turn.outputFormat) ? turn.outputFormat : undefined,
-    outputCompression: normalizeOutputCompression(turn.outputCompression),
+    outputCompression:
+      isImageOutputFormat(turn.outputFormat) && supportsImageOutputCompression(turn.outputFormat)
+        ? normalizeOutputCompression(turn.outputCompression)
+        : undefined,
     visibility,
     images,
     createdAt: String(turn.createdAt || new Date().toISOString()),
+    processingStartedAt: typeof turn.processingStartedAt === "string" ? turn.processingStartedAt : undefined,
     status:
       turn.status === "queued" ||
       turn.status === "generating" ||

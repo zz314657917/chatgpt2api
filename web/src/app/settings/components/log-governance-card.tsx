@@ -22,6 +22,7 @@ import {
 } from "@/components/ui/dialog";
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import { cn } from "@/lib/utils";
 
 import { useSettingsStore } from "../store";
 import {
@@ -67,6 +68,34 @@ function LogLevelOption({
       />
       <span className="min-w-0 leading-5">{label}</span>
     </label>
+  );
+}
+
+function LogRetentionInput({
+  onChange,
+  value,
+}: {
+  onChange: (value: string) => void;
+  value: number | string;
+}) {
+  return (
+    <div className="relative min-w-0">
+      <Input
+        id="settings-log-retention-days"
+        type="number"
+        min={1}
+        max={3650}
+        step={1}
+        inputMode="numeric"
+        value={String(value)}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder="7"
+        className={cn(settingsInputClassName, "pr-12")}
+      />
+      <span className="pointer-events-none absolute top-1/2 right-3 -translate-y-1/2 text-xs font-medium text-muted-foreground">
+        天
+      </span>
+    </div>
   );
 }
 
@@ -161,15 +190,9 @@ export function LogGovernanceCard() {
             <FieldLabel htmlFor="settings-log-retention-days">
               日志保留天数
             </FieldLabel>
-            <Input
-              id="settings-log-retention-days"
-              type="number"
-              min={1}
-              max={3650}
-              value={String(config?.log_retention_days || "")}
-              onChange={(event) => setLogRetentionDays(event.target.value)}
-              placeholder="7"
-              className={settingsInputClassName}
+            <LogRetentionInput
+              value={config?.log_retention_days || ""}
+              onChange={setLogRetentionDays}
             />
             <FieldDescription>
               按保留策略清理时会保留最近 N 天日志，删除更早的历史日志。

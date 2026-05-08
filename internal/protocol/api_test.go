@@ -6,8 +6,6 @@ import (
 	"errors"
 	"strings"
 	"testing"
-
-	"chatgpt2api/internal/util"
 )
 
 func ptrInt(value int) *int {
@@ -175,33 +173,6 @@ func TestGPTImageModelKeepsQualityHint(t *testing.T) {
 	}
 }
 
-func TestRequiresPaidImageSize(t *testing.T) {
-	tests := []struct {
-		name string
-		size string
-		want bool
-	}{
-		{name: "empty", size: "", want: false},
-		{name: "aspect ratio", size: "16:9", want: false},
-		{name: "free pixel budget", size: "1248x1248", want: false},
-		{name: "1080p square below paid budget", size: "1080x1080", want: false},
-		{name: "1080p tier below paid budget", size: "1080p", want: false},
-		{name: "1080p widescreen above paid budget", size: "1920x1080", want: false},
-		{name: "2k tier", size: "2k", want: false},
-		{name: "2k", size: "2560x1440", want: false},
-		{name: "4k tier", size: "4k", want: false},
-		{name: "4k", size: "3840x2160", want: false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := RequiresPaidImageSize(tt.size); got != tt.want {
-				t.Fatalf("RequiresPaidImageSize(%q) = %v, want %v", tt.size, got, tt.want)
-			}
-		})
-	}
-}
-
 func TestNormalizeImageGenerationSizeTiers(t *testing.T) {
 	tests := []struct {
 		size string
@@ -231,9 +202,6 @@ func TestConversationRequestNormalizesResolutionTierSize(t *testing.T) {
 	}.Normalized()
 	if request.Size != "2048x2048" {
 		t.Fatalf("Normalized() size = %q, want 2048x2048", request.Size)
-	}
-	if request.RequirePaidAccount {
-		t.Fatal("Normalized() RequirePaidAccount = true, want false for 2k tier")
 	}
 }
 
@@ -271,7 +239,7 @@ func TestResponsesInputKeepsAssistantAndGeneratedImageContext(t *testing.T) {
 	}
 }
 
-func TestResponseImageGenerationRequestUsesTextModelAndToolParams(t *testing.T) {
+func TestResponseImageGenerationRequestMapsTextModelToOfficialImageFlow(t *testing.T) {
 	body := map[string]any{
 		"model": "gpt-5.5",
 		"input": "生成封面",
@@ -286,14 +254,11 @@ func TestResponseImageGenerationRequestUsesTextModelAndToolParams(t *testing.T) 
 	if prompt != "生成封面" {
 		t.Fatalf("prompt = %q, want 生成封面", prompt)
 	}
-	if request.Model != "gpt-5.5" {
-		t.Fatalf("model = %q, want gpt-5.5", request.Model)
-	}
-	if !request.ResponsesImageTool {
-		t.Fatal("ResponsesImageTool = false, want true")
+	if request.Model != "gpt-image-2" {
+		t.Fatalf("model = %q, want official gpt-image-2 image model", request.Model)
 	}
 	if !request.SupportsImageGenerationModel() {
-		t.Fatal("request should support image generation with gpt-5.5 responses image tool")
+		t.Fatal("request should support image generation")
 	}
 	if request.Size != "16:9" || request.Quality != "high" {
 		t.Fatalf("request size/quality = %q/%q, want 16:9/high", request.Size, request.Quality)
@@ -304,8 +269,171 @@ func TestResponseImageGenerationRequestUsesTextModelAndToolParams(t *testing.T) 
 	if request.OutputFormat != "webp" {
 		t.Fatalf("output format = %q, want webp", request.OutputFormat)
 	}
+	if request.OutputCompression != nil {
+		t.Fatalf("output compression = %#v, want nil for webp", request.OutputCompression)
+	}
+}
+
+func TestResponseImageGenerationRequestKeepsJPEGOutputCompression(t *testing.T) {
+	body := map[string]any{
+		"model": "gpt-5.5",
+		"input": "生成封面",
+		"tools": []any{
+			map[string]any{"type": "image_generation", "output_format": "jpeg", "output_compression": 37},
+		},
+	}
+	request, _, err := ResponseImageGenerationRequest(body, "linuxdo:1", nil)
+	if err != nil {
+		t.Fatalf("ResponseImageGenerationRequest() error = %v", err)
+	}
+	if request.OutputFormat != "jpeg" {
+		t.Fatalf("output format = %q, want jpeg", request.OutputFormat)
+	}
 	if request.OutputCompression == nil || *request.OutputCompression != 37 {
 		t.Fatalf("output compression = %#v, want 37", request.OutputCompression)
+	}
+}
+
+func TestResponseImageGenerationRequestPreservesOfficialToolOptions(t *testing.T) {
+	body := map[string]any{
+		"model": "gpt-5.5",
+		"input": []any{
+			map[string]any{"role": "user", "content": []any{
+				map[string]any{"type": "input_text", "text": "生成封面"},
+				map[string]any{"type": "input_image", "image_url": "data:image/png;base64," + base64.StdEncoding.EncodeToString([]byte("png"))},
+			}},
+		},
+		"tools": []any{
+			map[string]any{
+				"type":               "image_generation",
+				"model":              "gpt-image-2",
+				"size":               "16:9",
+				"quality":            "high",
+				"background":         "transparent",
+				"moderation":         "auto",
+				"style":              "vivid",
+				"output_format":      "webp",
+				"output_compression": 37,
+				"partial_images":     2,
+				"input_image_mask":   map[string]any{"image_url": "data:image/png;base64," + base64.StdEncoding.EncodeToString([]byte("mask"))},
+			},
+		},
+	}
+
+	request, _, err := ResponseImageGenerationRequest(body, "admin", nil)
+	if err != nil {
+		t.Fatalf("ResponseImageGenerationRequest() error = %v", err)
+	}
+	if request.Model != "gpt-image-2" || !request.UsesResponsesImageRoute() {
+		t.Fatalf("request route/model = %q responses=%v", request.Model, request.UsesResponsesImageRoute())
+	}
+	if request.Background != "transparent" || request.Moderation != "auto" || request.Style != "vivid" {
+		t.Fatalf("tool options = background:%q moderation:%q style:%q", request.Background, request.Moderation, request.Style)
+	}
+	if request.PartialImages == nil || *request.PartialImages != 2 {
+		t.Fatalf("PartialImages = %#v, want 2", request.PartialImages)
+	}
+	if request.InputImageMask == "" {
+		t.Fatal("InputImageMask was not preserved")
+	}
+}
+
+func TestCodexImageModelStillUsesSeparateCodexImageRoute(t *testing.T) {
+	request := ConversationRequest{Model: "codex-gpt-image-2"}
+	if !request.UsesResponsesImageRoute() {
+		t.Fatal("codex-gpt-image-2 should still use the dedicated responses image route")
+	}
+}
+
+func TestResponseImageGenerationRequestKeepsPreviousContextOutOfOfficialPrompt(t *testing.T) {
+	previous := ResponseContext{
+		Messages: []map[string]any{
+			{"role": "assistant", "content": "Generated image: 白猫坐在窗边"},
+			{"role": "user", "content": "把它改成夜晚"},
+		},
+	}
+	body := map[string]any{
+		"model": "gpt-5.5",
+		"input": "把它改成蓝色",
+		"tools": []any{
+			map[string]any{"type": "image_generation", "model": "gpt-image-2", "size": "16:9", "quality": "high"},
+		},
+	}
+
+	request, prompt, err := ResponseImageGenerationRequest(body, "admin", &previous)
+	if err != nil {
+		t.Fatalf("ResponseImageGenerationRequest() error = %v", err)
+	}
+	if prompt != "把它改成蓝色" {
+		t.Fatalf("prompt = %q, want 当前输入原文", prompt)
+	}
+	if len(request.Messages) == 0 {
+		t.Fatal("request.Messages should keep response context for storage/continuation bookkeeping")
+	}
+	finalPrompt := buildResponsesImagePrompt(request.Prompt, request.Size, request.Model)
+	for _, unwanted := range []string{"历史上下文", "当前请求:", "白猫坐在窗边", "画质使用 High 档"} {
+		if strings.Contains(finalPrompt, unwanted) {
+			t.Fatalf("official image prompt unexpectedly contains %q: %s", unwanted, finalPrompt)
+		}
+	}
+	if !strings.Contains(finalPrompt, "16:9 横屏构图") {
+		t.Fatalf("finalPrompt missing size hint: %s", finalPrompt)
+	}
+}
+
+func TestBuildResponsesImagePromptKeepsOfficialRouteCloseToRawPrompt(t *testing.T) {
+	prompt := buildResponsesImagePrompt("画一张产品照片", "16:9", "gpt-image-2")
+	if !strings.Contains(prompt, "16:9 横屏构图") {
+		t.Fatalf("buildResponsesImagePrompt() missing size hint: %s", prompt)
+	}
+	for _, unwanted := range []string{"画质使用", "透明背景", "整体风格偏向", "历史上下文", "当前请求:"} {
+		if strings.Contains(prompt, unwanted) {
+			t.Fatalf("buildResponsesImagePrompt() unexpectedly contains %q: %s", unwanted, prompt)
+		}
+	}
+}
+
+func TestBuildResponsesImagePromptLeavesCodexPromptUntouched(t *testing.T) {
+	const raw = "画一张产品照片"
+	if prompt := buildResponsesImagePrompt(raw, "16:9", "codex-gpt-image-2"); prompt != raw {
+		t.Fatalf("buildResponsesImagePrompt() = %q, want %q", prompt, raw)
+	}
+}
+
+func TestResponseImageGenerationRequestAcceptsCodexImageToolAlias(t *testing.T) {
+	body := map[string]any{
+		"model": "gpt-5.5",
+		"input": "生成封面",
+		"tools": []any{
+			map[string]any{"type": "image_generation", "model": "codex-gpt-image-2"},
+		},
+	}
+	request, _, err := ResponseImageGenerationRequest(body, "admin", nil)
+	if err != nil {
+		t.Fatalf("ResponseImageGenerationRequest() error = %v", err)
+	}
+	if request.Model != "codex-gpt-image-2" {
+		t.Fatalf("request model = %q, want codex-gpt-image-2", request.Model)
+	}
+	if !request.UsesResponsesImageRoute() {
+		t.Fatal("codex-gpt-image-2 image_generation request should use the dedicated responses image route")
+	}
+}
+
+func TestResponseImageGenerationRequestUsesToolImageModel(t *testing.T) {
+	body := map[string]any{
+		"model": "gpt-5.5",
+		"input": "生成封面",
+		"tools": []any{
+			map[string]any{"type": "image_generation", "model": "gpt-image-2", "size": "2048x2048"},
+		},
+	}
+	request, _, err := ResponseImageGenerationRequest(body, "admin", nil)
+	if err != nil {
+		t.Fatalf("ResponseImageGenerationRequest() error = %v", err)
+	}
+	if request.Model != "gpt-image-2" {
+		t.Fatalf("request model = %q, want image tool model gpt-image-2", request.Model)
 	}
 }
 
@@ -327,14 +455,11 @@ func TestResponseImageGenerationToolAcceptsTypedToolSlice(t *testing.T) {
 	if prompt != "生成封面" {
 		t.Fatalf("prompt = %q, want 生成封面", prompt)
 	}
-	if !request.ResponsesImageTool {
-		t.Fatal("ResponsesImageTool = false, want true")
+	if request.Model != "gpt-image-2" {
+		t.Fatalf("model = %q, want gpt-image-2", request.Model)
 	}
 	if request.Size != "2880x2880" {
 		t.Fatalf("request size = %q, want 2880x2880", request.Size)
-	}
-	if request.RequirePaidAccount {
-		t.Fatal("RequirePaidAccount = true, want false for 2880x2880")
 	}
 }
 
@@ -350,97 +475,11 @@ func TestResponseImageGenerationRequestDefaultsImageModelForAuto(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResponseImageGenerationRequest() error = %v", err)
 	}
-	if request.Model != "auto" {
-		t.Fatalf("model = %q, want auto", request.Model)
+	if request.Model != "gpt-image-2" {
+		t.Fatalf("model = %q, want gpt-image-2 official image route", request.Model)
 	}
 	if request.Size != "auto" {
 		t.Fatalf("size = %q, want auto", request.Size)
-	}
-}
-
-func TestCodexResponsesImageToolPayloadUsesGPT55ForImageOnlyModel(t *testing.T) {
-	request := ConversationRequest{
-		Model:        "gpt-image-2",
-		Prompt:       "生成 2K 正方形封面",
-		Size:         "2048x2048",
-		Quality:      "high",
-		OutputFormat: "png",
-	}.Normalized()
-	payload := CodexResponsesImageToolPayload(request)
-	if payload["model"] != codexResponsesImageMainModel {
-		t.Fatalf("payload model = %#v, want %s", payload["model"], codexResponsesImageMainModel)
-	}
-	tools := payload["tools"].([]map[string]any)
-	tool := tools[0]
-	if tool["model"] != "gpt-image-2" {
-		t.Fatalf("tool model = %#v, want gpt-image-2", tool["model"])
-	}
-	input := payload["input"].([]map[string]any)
-	content := input[0]["content"].([]map[string]any)
-	text := util.Clean(content[0]["text"])
-	if !strings.HasPrefix(text, responsesImagePromptGuardPrefix+"\n") || !strings.Contains(text, "生成 2K 正方形封面") {
-		t.Fatalf("payload prompt missing guard: %q", text)
-	}
-}
-
-func TestCodexResponsesImageToolPayloadCarriesExactSize(t *testing.T) {
-	request := ConversationRequest{
-		Model:             "gpt-5.5",
-		Prompt:            "生成 4K 正方形封面",
-		Size:              "2880x2880",
-		Quality:           "high",
-		OutputFormat:      "jpeg",
-		OutputCompression: ptrInt(28),
-	}.Normalized()
-	payload := CodexResponsesImageToolPayload(request)
-	tools := payload["tools"].([]map[string]any)
-	if len(tools) != 1 {
-		t.Fatalf("tools = %#v", payload["tools"])
-	}
-	tool := tools[0]
-	if tool["size"] != "2880x2880" {
-		t.Fatalf("tool size = %#v, want 2880x2880", tool["size"])
-	}
-	if tool["quality"] != "high" {
-		t.Fatalf("tool quality = %#v, want high", tool["quality"])
-	}
-	if tool["output_format"] != "jpeg" {
-		t.Fatalf("tool output_format = %#v, want jpeg", tool["output_format"])
-	}
-	if tool["output_compression"] != 28 {
-		t.Fatalf("tool output_compression = %#v, want 28", tool["output_compression"])
-	}
-	if tool["model"] != nil {
-		t.Fatalf("text-model request should not set image tool model: %#v", tool["model"])
-	}
-	if payload["model"] != "gpt-5.5" {
-		t.Fatalf("payload model = %#v, want gpt-5.5", payload["model"])
-	}
-	instructions, ok := payload["instructions"].(string)
-	if !ok || !strings.Contains(instructions, codexResponsesImageToolBridgeMarker) {
-		t.Fatalf("payload instructions missing image bridge: %#v", payload["instructions"])
-	}
-}
-
-func TestCodexResponsesImageToolPayloadOmitsCodexQuality(t *testing.T) {
-	request := ConversationRequest{
-		Model:        "codex-gpt-image-2",
-		Prompt:       "生成封面",
-		Size:         "3840x2160",
-		Quality:      "high",
-		OutputFormat: "png",
-	}.Normalized()
-	payload := CodexResponsesImageToolPayload(request)
-	tools := payload["tools"].([]map[string]any)
-	tool := tools[0]
-	if tool["model"] != "codex-gpt-image-2" {
-		t.Fatalf("tool model = %#v, want codex-gpt-image-2", tool["model"])
-	}
-	if _, ok := tool["quality"]; ok {
-		t.Fatalf("codex image tool should not include quality: %#v", tool)
-	}
-	if payload["model"] != codexResponsesImageMainModel {
-		t.Fatalf("payload model = %#v, want %s", payload["model"], codexResponsesImageMainModel)
 	}
 }
 
@@ -561,6 +600,13 @@ func TestApplyImageOutputOptionsToRequest(t *testing.T) {
 	pngRequest = pngRequest.Normalized()
 	if pngRequest.OutputFormat != "png" || pngRequest.OutputCompression != nil {
 		t.Fatalf("png output options = %#v/%#v, want png/nil", pngRequest.OutputFormat, pngRequest.OutputCompression)
+	}
+
+	webpRequest := ConversationRequest{}
+	applyImageOutputOptionsToRequest(&webpRequest, ImageOutputOptions{Format: "webp", Compression: ptrInt(25)})
+	webpRequest = webpRequest.Normalized()
+	if webpRequest.OutputFormat != "webp" || webpRequest.OutputCompression != nil {
+		t.Fatalf("webp output options = %#v/%#v, want webp/nil", webpRequest.OutputFormat, webpRequest.OutputCompression)
 	}
 }
 

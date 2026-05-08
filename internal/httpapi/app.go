@@ -110,17 +110,11 @@ func NewApp() (*App, error) {
 			return app.runLoggedChatTask(ctx, identity, payload)
 		},
 		cfg.ImageRetentionDays,
-		cfg.ImageConcurrentLimit,
 		cfg.UserDefaultConcurrentLimit,
 		cfg.UserDefaultRPMLimit,
 	)
 	app.tasks.SetTaskTimeoutGetter(func() time.Duration {
 		return time.Duration(app.config.ImageTaskTimeoutSeconds()) * time.Second
-	})
-	app.tasks.SetResponseImageHandler(func(ctx context.Context, identity service.Identity, payload map[string]any) (map[string]any, error) {
-		return app.runLoggedImageTask(ctx, identity, payload, "/api/creation-tasks/response-image-generations", "Responses 作画", func(ctx context.Context, payload map[string]any) (map[string]any, error) {
-			return app.runResponsesImageGenerationTask(ctx, payload)
-		})
 	})
 	accounts.StartLimitedWatcher(ctx, time.Duration(cfg.RefreshAccountIntervalMinute())*time.Minute)
 	cfg.CleanupOldImages()
@@ -172,6 +166,7 @@ func (a *App) handleImageGenerations(w http.ResponseWriter, r *http.Request) {
 	body["owner_id"] = identityScope(identity)
 	body["owner_name"] = identityDisplayName(identity)
 	body["base_url"] = a.resolveImageBaseURL(r)
+	a.attachCreationTaskLimiter(body, identity)
 	visibility, err := service.NormalizeImageVisibility(util.Clean(body["visibility"]))
 	if err != nil {
 		util.WriteError(w, http.StatusBadRequest, err.Error())
@@ -203,6 +198,7 @@ func (a *App) handleImageEdits(w http.ResponseWriter, r *http.Request) {
 	body["owner_id"] = identityScope(identity)
 	body["owner_name"] = identityDisplayName(identity)
 	body["base_url"] = a.resolveImageBaseURL(r)
+	a.attachCreationTaskLimiter(body, identity)
 	visibility, err := service.NormalizeImageVisibility(util.Clean(body["visibility"]))
 	if err != nil {
 		util.WriteError(w, http.StatusBadRequest, err.Error())
@@ -225,6 +221,7 @@ func (a *App) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 	body["owner_id"] = identityScope(identity)
 	body["owner_name"] = identityDisplayName(identity)
+	a.attachCreationTaskLimiter(body, identity)
 	model := firstNonEmpty(util.Clean(body["model"]), "auto")
 	result, stream, err := a.engine.HandleChatCompletions(r.Context(), body)
 	a.writeProtocol(w, r, result, stream, err, "openai", "/v1/chat/completions", model, identity, "文本生成", service.ImageVisibilityPrivate)
@@ -242,6 +239,7 @@ func (a *App) handleResponses(w http.ResponseWriter, r *http.Request) {
 	}
 	body["owner_id"] = identityScope(identity)
 	body["owner_name"] = identityDisplayName(identity)
+	a.attachCreationTaskLimiter(body, identity)
 	model := firstNonEmpty(util.Clean(body["model"]), "auto")
 	result, stream, err := a.engine.HandleResponsesScoped(r.Context(), body, identityScope(identity))
 	a.writeProtocol(w, r, result, stream, err, "openai", "/v1/responses", model, identity, "Responses", service.ImageVisibilityPrivate)
@@ -420,25 +418,33 @@ func (a *App) handleLogout(w http.ResponseWriter, r *http.Request) {
 func (a *App) writeLoginResponse(w http.ResponseWriter, identity service.Identity, token string) {
 	permissions := a.identityPermissions(identity)
 	payload := map[string]any{
-		"ok":              true,
-		"version":         version.Get(),
-		"token":           token,
-		"role":            identity.Role,
-		"role_id":         identity.RoleID,
-		"role_name":       identity.RoleName,
-		"subject_id":      identity.ID,
-		"name":            identity.Name,
-		"provider":        identity.Provider,
-		"credential_id":   identity.CredentialID,
-		"credential_name": identity.CredentialName,
-		"menu_paths":      permissions.MenuPaths,
-		"api_permissions": permissions.APIPermissions,
-		"menus":           service.FilterMenuPermissions(permissions.MenuPaths),
+		"ok":                        true,
+		"version":                   version.Get(),
+		"token":                     token,
+		"role":                      identity.Role,
+		"role_id":                   identity.RoleID,
+		"role_name":                 identity.RoleName,
+		"subject_id":                identity.ID,
+		"name":                      identity.Name,
+		"provider":                  identity.Provider,
+		"credential_id":             identity.CredentialID,
+		"credential_name":           identity.CredentialName,
+		"creation_concurrent_limit": a.identityCreationConcurrentLimit(identity),
+		"menu_paths":                permissions.MenuPaths,
+		"api_permissions":           permissions.APIPermissions,
+		"menus":                     service.FilterMenuPermissions(permissions.MenuPaths),
 	}
 	if token == "" {
 		delete(payload, "token")
 	}
 	util.WriteJSON(w, http.StatusOK, payload)
+}
+
+func (a *App) identityCreationConcurrentLimit(identity service.Identity) int {
+	if identity.Role != service.AuthRoleUser {
+		return 0
+	}
+	return a.config.UserDefaultConcurrentLimit()
 }
 
 func (a *App) handleSettings(w http.ResponseWriter, r *http.Request) {
@@ -1080,6 +1086,11 @@ func readMultipartImageBody(r *http.Request) (map[string]any, []protocol.Uploade
 		"n":                  util.ToInt(firstForm(r.MultipartForm, "n"), 1),
 		"size":               firstForm(r.MultipartForm, "size"),
 		"quality":            firstForm(r.MultipartForm, "quality"),
+		"background":         firstForm(r.MultipartForm, "background"),
+		"moderation":         firstForm(r.MultipartForm, "moderation"),
+		"style":              firstForm(r.MultipartForm, "style"),
+		"partial_images":     firstForm(r.MultipartForm, "partial_images"),
+		"input_image_mask":   firstForm(r.MultipartForm, "input_image_mask"),
 		"output_format":      firstForm(r.MultipartForm, "output_format"),
 		"output_compression": firstForm(r.MultipartForm, "output_compression"),
 		"visibility":         firstForm(r.MultipartForm, "visibility"),
@@ -1331,151 +1342,13 @@ func (a *App) runLoggedImageTask(ctx context.Context, identity service.Identity,
 	return result, nil
 }
 
-func (a *App) runResponsesImageGenerationTask(ctx context.Context, payload map[string]any) (map[string]any, error) {
-	body := responseImageTaskBody(payload)
-	completed, _, err := a.engine.HandleResponsesScoped(ctx, body, util.Clean(payload["owner_id"]))
-	if err != nil {
-		if completed == nil {
-			completed = map[string]any{}
-		}
-		return completed, err
+func (a *App) attachCreationTaskLimiter(body map[string]any, identity service.Identity) {
+	if a == nil || a.tasks == nil || body == nil {
+		return
 	}
-	result := responsesImageTaskResult(a.engine, completed, payload)
-	if err := responsesImageTaskTextOutputError(result, completed); err != nil {
-		return result, err
+	body[protocol.ImageOutputSlotAcquirerPayloadKey] = func(ctx context.Context, index int) (func(), error) {
+		return a.tasks.AcquireCreationUnit(ctx, identity)
 	}
-	return result, nil
-}
-
-func responsesImageTaskTextOutputError(result map[string]any, completed map[string]any) error {
-	if len(util.AsMapSlice(result["data"])) > 0 {
-		return nil
-	}
-	text := responseOutputText(completed["output"])
-	if text == "" {
-		return nil
-	}
-	result["message"] = text
-	result["output_type"] = "text"
-	return &protocol.ImageGenerationError{
-		Message:    firstNonEmpty(text, "Responses image_generation returned text instead of image data."),
-		StatusCode: http.StatusBadGateway,
-		Type:       "server_error",
-		Code:       "image_generation_text_response",
-	}
-}
-
-func responseImageTaskBody(payload map[string]any) map[string]any {
-	prompt := util.Clean(payload["prompt"])
-	images := responseImageTaskDataURLs(payload["images"])
-	input := any(prompt)
-	if len(images) > 0 {
-		content := []map[string]any{{"type": "input_text", "text": prompt}}
-		for _, imageURL := range images {
-			content = append(content, map[string]any{"type": "input_image", "image_url": imageURL})
-		}
-		input = []map[string]any{{"role": "user", "content": content}}
-	}
-	tool := map[string]any{
-		"type":          "image_generation",
-		"action":        responseImageTaskAction(images),
-		"size":          firstNonEmpty(util.Clean(payload["size"]), "auto"),
-		"output_format": service.NormalizeImageOutputFormat(util.Clean(payload["output_format"])),
-	}
-	if util.Clean(tool["output_format"]) != "png" {
-		if compression, ok := imageOutputCompressionFromBody(payload["output_compression"]); ok {
-			tool["output_compression"] = compression
-		}
-	}
-	if quality := util.Clean(payload["quality"]); quality != "" && util.Clean(payload["model"]) != util.ImageModelCodex {
-		tool["quality"] = quality
-	}
-	body := map[string]any{
-		"model":           firstNonEmpty(util.Clean(payload["model"]), util.ImageModelAuto),
-		"input":           input,
-		"tools":           []map[string]any{tool},
-		"tool_choice":     "required",
-		"n":               util.ToInt(payload["n"], 1),
-		"owner_name":      util.Clean(payload["owner_name"]),
-		"response_format": "b64_json",
-	}
-	if messages := util.AsMapSlice(payload["messages"]); len(messages) > 0 {
-		body["instructions"] = responseImageTaskInstructions(messages, prompt)
-	}
-	return body
-}
-
-func responseImageTaskAction(images []string) string {
-	if len(images) > 0 {
-		return "edit"
-	}
-	return "generate"
-}
-
-func responseImageTaskDataURLs(raw any) []string {
-	var out []string
-	for _, item := range util.AsStringSlice(raw) {
-		if text := util.Clean(item); strings.HasPrefix(text, "data:image/") {
-			out = append(out, text)
-		}
-	}
-	return out
-}
-
-func responseImageTaskInstructions(messages []map[string]any, prompt string) string {
-	var history []string
-	for index, message := range messages {
-		if index == len(messages)-1 && strings.TrimSpace(util.Clean(message["content"])) == strings.TrimSpace(prompt) {
-			continue
-		}
-		text := strings.TrimSpace(util.Clean(message["content"]))
-		if text == "" {
-			continue
-		}
-		history = append(history, firstNonEmpty(util.Clean(message["role"]), "user")+": "+text)
-	}
-	if len(history) == 0 {
-		return ""
-	}
-	return "Use this conversation history only as context for image generation. Do not render the history text unless the current request explicitly asks for it.\n\n" + strings.Join(history, "\n")
-}
-
-func responsesImageTaskResult(engine *protocol.Engine, completed map[string]any, payload map[string]any) map[string]any {
-	created := int64(util.ToInt(completed["created_at"], int(time.Now().Unix())))
-	items := responseImageOutputItems(completed["output"])
-	return engine.FormatImageResultWithOptions(items, util.Clean(payload["prompt"]), util.Clean(payload["response_format"]), util.Clean(payload["base_url"]), util.Clean(payload["owner_id"]), util.Clean(payload["owner_name"]), created, "", protocol.ImageOutputOptionsFromPayload(payload))
-}
-
-func responseImageOutputItems(output any) []map[string]any {
-	var items []map[string]any
-	for _, item := range util.AsMapSlice(output) {
-		if util.Clean(item["type"]) != "image_generation_call" {
-			continue
-		}
-		b64 := util.Clean(item["result"])
-		if b64 == "" {
-			continue
-		}
-		items = append(items, map[string]any{"b64_json": b64, "revised_prompt": util.Clean(item["revised_prompt"])})
-	}
-	return items
-}
-
-func responseOutputText(output any) string {
-	var parts []string
-	for _, item := range util.AsMapSlice(output) {
-		if util.Clean(item["type"]) != "message" {
-			continue
-		}
-		for _, content := range util.AsMapSlice(item["content"]) {
-			if util.Clean(content["type"]) == "output_text" {
-				if text := strings.TrimSpace(util.Clean(content["text"])); text != "" {
-					parts = append(parts, text)
-				}
-			}
-		}
-	}
-	return strings.TrimSpace(strings.Join(parts, "\n"))
 }
 
 func (a *App) runLoggedChatTask(ctx context.Context, identity service.Identity, payload map[string]any) (map[string]any, error) {

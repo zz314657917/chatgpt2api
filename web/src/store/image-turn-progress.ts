@@ -14,6 +14,11 @@ export function imageTurnProgressKey(conversationId: string, turnId: string) {
   return `${conversationId}:${turnId}`;
 }
 
+export function imageTurnStartedAtTimestamp(processingStartedAt: string | undefined, createdAt: string) {
+  const timestamp = Date.parse(processingStartedAt || createdAt);
+  return Number.isFinite(timestamp) ? timestamp : Date.now();
+}
+
 export function getImageTurnProgressSnapshot() {
   return imageTurnProgressByKey;
 }
