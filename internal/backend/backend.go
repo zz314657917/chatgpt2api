@@ -715,7 +715,7 @@ func (c *Client) StreamMultimodalConversation(ctx context.Context, messages []ma
 			errCh <- err
 			return
 		}
-		errCh <- iterSSEPayloads(ctx, resp.Body, out)
+		errCh <- iterMultimodalSSEPayloads(ctx, resp.Body, out)
 	}()
 	return out, errCh
 }
@@ -931,6 +931,48 @@ func iterSSEPayloads(ctx context.Context, reader io.Reader, out chan<- string) e
 						case out <- payload:
 						case <-ctx.Done():
 							return ctx.Err()
+						}
+					}
+				}
+			}
+		}
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+	}
+}
+
+func iterMultimodalSSEPayloads(ctx context.Context, reader io.Reader, out chan<- string) error {
+	buf := make([]byte, 0, 4096)
+	tmp := make([]byte, 2048)
+	for {
+		n, err := reader.Read(tmp)
+		if n > 0 {
+			buf = append(buf, tmp[:n]...)
+			for {
+				idx := bytes.IndexByte(buf, '\n')
+				if idx < 0 {
+					break
+				}
+				line := strings.TrimSpace(string(buf[:idx]))
+				buf = buf[idx+1:]
+				if strings.HasPrefix(line, "data:") {
+					payload := strings.TrimSpace(line[5:])
+					if payload != "" && payload != "[DONE]" {
+						var event map[string]any
+						if json.Unmarshal([]byte(payload), &event) == nil {
+							if v, ok := event["v"]; ok {
+								if text, ok := v.(string); ok && text != "" {
+									select {
+									case out <- text:
+									case <-ctx.Done():
+										return ctx.Err()
+									}
+								}
+							}
 						}
 					}
 				}
