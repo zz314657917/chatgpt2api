@@ -1975,6 +1975,15 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         );
         const submitTaskGroup = (group: { taskId: string; count: number }) => {
           if (activeTurn.mode === "chat") {
+            if (activeTurn.referenceImages.length > 0) {
+              return createChatCompletionTask(
+                group.taskId,
+                activeTurn.prompt,
+                activeTurn.model,
+                taskMessages,
+                activeTurn.referenceImages.map((img) => ({ name: img.name, dataUrl: img.dataUrl })),
+              );
+            }
             return createChatCompletionTask(group.taskId, activeTurn.prompt, activeTurn.model, taskMessages);
           }
           if (usesReferenceImages(activeTurn.mode)) {
