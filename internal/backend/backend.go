@@ -147,6 +147,19 @@ func (c *Client) StreamConversation(ctx context.Context, messages []map[string]a
 			errCh <- err
 			return
 		}
+		if c.AccessToken != "" {
+			conduitToken, prepareErr := c.prepareTextConversation(ctx, messages, reqs, model)
+			if prepareErr == nil {
+				resp, startErr := c.startTextConversation(ctx, messages, reqs, conduitToken, model)
+				if startErr == nil {
+					defer resp.Body.Close()
+					if ensureOK(resp, officialStreamPath) == nil {
+						errCh <- iterSSEPayloads(ctx, resp.Body, out)
+						return
+					}
+				}
+			}
+		}
 		path, timezoneName := c.chatTarget()
 		payload := c.conversationPayload(messages, model, timezoneName)
 		resp, err := c.postJSON(ctx, path, payload, c.conversationHeaders(path, reqs), true)
@@ -428,6 +441,100 @@ func (c *Client) chatTarget() (string, string) {
 		return "/backend-api/conversation", "Asia/Shanghai"
 	}
 	return "/backend-anon/conversation", "America/Los_Angeles"
+}
+
+func textModelSlug(model string) string {
+	switch strings.TrimSpace(model) {
+	case "auto", "":
+		return "auto"
+	default:
+		return strings.TrimSpace(model)
+	}
+}
+
+func (c *Client) prepareTextConversation(ctx context.Context, messages []map[string]any, reqs ChatRequirements, model string) (string, error) {
+	prompt := conversationPrompt(messages)
+	payload := map[string]any{
+		"action":                "next",
+		"fork_from_shared_post": false,
+		"parent_message_id":     util.NewUUID(),
+		"model":                 textModelSlug(model),
+		"client_prepare_state":  "success",
+		"timezone_offset_min":   -480,
+		"timezone":              "Asia/Shanghai",
+		"conversation_mode":     map[string]any{"kind": "primary_assistant"},
+		"system_hints":          []any{},
+		"partial_query": map[string]any{
+			"id":      util.NewUUID(),
+			"author":  map[string]any{"role": "user"},
+			"content": map[string]any{"content_type": "text", "parts": []any{prompt}},
+		},
+		"supports_buffering":  true,
+		"supported_encodings": []any{"v1"},
+		"client_contextual_info": map[string]any{
+			"app_name": "chatgpt.com",
+		},
+	}
+	resp, err := c.postJSON(ctx, officialPreparePath, payload, c.officialHeaders(officialPreparePath, reqs, "", "*/*"), false)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if err := ensureOK(resp, officialPreparePath); err != nil {
+		return "", err
+	}
+	var data map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		return "", err
+	}
+	return util.Clean(data["conduit_token"]), nil
+}
+
+func (c *Client) startTextConversation(ctx context.Context, messages []map[string]any, reqs ChatRequirements, conduitToken, model string) (*http.Response, error) {
+	prompt := conversationPrompt(messages)
+	payload := map[string]any{
+		"action": "next",
+		"messages": []any{
+			map[string]any{
+				"id":          util.NewUUID(),
+				"author":      map[string]any{"role": "user"},
+				"create_time": float64(time.Now().UnixNano()) / 1e9,
+				"content": map[string]any{
+					"content_type": "text",
+					"parts":        []any{prompt},
+				},
+				"metadata": map[string]any{
+					"developer_mode_connector_ids": []any{},
+					"selected_github_repos":        []any{},
+					"selected_all_github_repos":    false,
+					"serialization_metadata":       map[string]any{"custom_symbol_offsets": []any{}},
+				},
+			},
+		},
+		"parent_message_id":                    util.NewUUID(),
+		"model":                                textModelSlug(model),
+		"client_prepare_state":                 "sent",
+		"timezone_offset_min":                  -480,
+		"timezone":                             "Asia/Shanghai",
+		"conversation_mode":                    map[string]any{"kind": "primary_assistant"},
+		"enable_message_followups":             true,
+		"system_hints":                         []any{},
+		"supports_buffering":                   true,
+		"supported_encodings":                  []any{"v1"},
+		"paragen_cot_summary_display_override": "allow",
+		"force_parallel_switch":                "auto",
+		"client_contextual_info": map[string]any{
+			"is_dark_mode":      false,
+			"time_since_loaded": 1200,
+			"page_height":       1072,
+			"page_width":        1724,
+			"pixel_ratio":       1.2,
+			"screen_height":     1440,
+			"screen_width":      2560,
+			"app_name":          "chatgpt.com",
+		},
+	}
+	return c.postJSON(ctx, officialStreamPath, payload, c.officialHeaders(officialStreamPath, reqs, conduitToken, "text/event-stream"), true)
 }
 
 func (c *Client) conversationPayload(messages []map[string]any, model, timezoneName string) map[string]any {

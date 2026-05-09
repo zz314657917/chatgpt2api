@@ -123,7 +123,7 @@ func TestOfficialImageHeadersIncludeSentinelAndConduitTokens(t *testing.T) {
 			"sec-ch-ua-platform-version":  browserSecCHUAPlatformVersion,
 		},
 	}
-	headers := client.officialImageHeaders(officialImageStreamPath, ChatRequirements{
+	headers := client.officialHeaders(officialStreamPath, ChatRequirements{
 		Token:          "req-token",
 		ProofToken:     "proof-token",
 		TurnstileToken: "turn-token",
@@ -138,7 +138,7 @@ func TestOfficialImageHeadersIncludeSentinelAndConduitTokens(t *testing.T) {
 		"X-Conduit-Token":                         "conduit-token",
 		"Accept":                                  "text/event-stream",
 		"Content-Type":                            "application/json",
-		"X-OpenAI-Target-Path":                    officialImageStreamPath,
+		"X-OpenAI-Target-Path":                    officialStreamPath,
 	} {
 		if got := headers[key]; got != want {
 			t.Fatalf("headers[%s] = %q, want %q", key, got, want)
@@ -197,7 +197,7 @@ func TestStreamResponsesImageUsesOfficialPrepareAndConversationRoutes(t *testing
 		case r.Method == http.MethodPost && r.URL.Path == "/backend-api/sentinel/chat-requirements":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"token":"req-token","proofofwork":{"required":false},"turnstile":{"required":false},"arkose":{"required":false}}`))
-		case r.Method == http.MethodPost && r.URL.Path == officialImagePreparePath:
+		case r.Method == http.MethodPost && r.URL.Path == officialPreparePath:
 			if err := json.NewDecoder(r.Body).Decode(&prepareBody); err != nil {
 				t.Fatalf("decode prepare body: %v", err)
 			}
@@ -206,7 +206,7 @@ func TestStreamResponsesImageUsesOfficialPrepareAndConversationRoutes(t *testing
 			}
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"conduit_token":"conduit-token"}`))
-		case r.Method == http.MethodPost && r.URL.Path == officialImageStreamPath:
+		case r.Method == http.MethodPost && r.URL.Path == officialStreamPath:
 			if err := json.NewDecoder(r.Body).Decode(&streamBody); err != nil {
 				t.Fatalf("decode stream body: %v", err)
 			}
@@ -322,10 +322,10 @@ func TestStreamResponsesImageDoesNotTreatQueuedAssistantNoticeAsFinalText(t *tes
 		case r.Method == http.MethodPost && r.URL.Path == "/backend-api/sentinel/chat-requirements":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"token":"req-token","proofofwork":{"required":false},"turnstile":{"required":false},"arkose":{"required":false}}`))
-		case r.Method == http.MethodPost && r.URL.Path == officialImagePreparePath:
+		case r.Method == http.MethodPost && r.URL.Path == officialPreparePath:
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"conduit_token":"conduit-token"}`))
-		case r.Method == http.MethodPost && r.URL.Path == officialImageStreamPath:
+		case r.Method == http.MethodPost && r.URL.Path == officialStreamPath:
 			w.Header().Set("Content-Type", "text/event-stream")
 			_, _ = w.Write([]byte("data: {\"type\":\"title_generation\",\"title\":\"正在处理图片\",\"conversation_id\":\"conv-queued\"}\n\n"))
 			_, _ = w.Write([]byte("data: {\"v\":{\"message\":{\"author\":{\"role\":\"assistant\"},\"content\":{\"content_type\":\"text\",\"parts\":[\"正在处理图片 目前有很多人在创建图片，因此可能需要一点时间。图片准备好后我们会通知你。\"]}}},\"conversation_id\":\"conv-queued\"}\n\n"))
