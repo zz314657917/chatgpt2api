@@ -1300,19 +1300,13 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
       if (!isChatModel(imageModel)) {
         setImageModel(DEFAULT_CHAT_MODEL);
       }
-      if (referenceImages.length > 0) {
-        setReferenceImages([]);
-        if (fileInputRef.current) {
-          fileInputRef.current.value = "";
-        }
-      }
       return;
     }
 
     if (!isImageCreationModel(imageModel)) {
       setImageModel(DEFAULT_IMAGE_MODEL);
     }
-  }, [composerMode, imageModel, referenceImages.length]);
+  }, [composerMode, imageModel]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -1428,10 +1422,6 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     if (mode === "chat") {
       promptApplyRequestIdRef.current += 1;
       setDefaultImageVisibility("private");
-      setReferenceImages([]);
-      if (fileInputRef.current) {
-        fileInputRef.current.value = "";
-      }
     }
   }, []);
 
@@ -1609,8 +1599,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         })),
       );
 
-      setComposerMode("image");
-      setReferenceImages((prev) => [...prev, ...previews]);
+        setReferenceImages((prev) => [...prev, ...previews]);
       if (fileInputRef.current) {
         fileInputRef.current.value = "";
       }
@@ -2608,7 +2597,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         prompt,
         model: effectiveModel,
         mode: effectiveImageMode,
-        referenceImages: usesReferenceImages(effectiveImageMode) ? referenceImages : [],
+        referenceImages: effectiveImageMode === "chat" ? referenceImages : usesReferenceImages(effectiveImageMode) ? referenceImages : [],
         count: requestedCount,
         size: effectiveImageMode === "chat" ? "" : currentImageSize,
         sizeSelection: effectiveImageMode === "chat" ? undefined : currentImageSizeSelection,

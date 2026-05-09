@@ -449,9 +449,6 @@ export function ImageComposer({
   }, [isPromptAreaResizing]);
 
   const handleTextareaPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
-    if (composerMode === "chat") {
-      return;
-    }
     const imageFiles = getImageFiles(event.clipboardData.files);
     if (imageFiles.length === 0) {
       return;
@@ -467,9 +464,6 @@ export function ImageComposer({
       return;
     }
 
-    if (composerMode === "chat") {
-      onComposerModeChange("image");
-    }
     void onReferenceImageChange(imageFiles);
   };
 
@@ -585,10 +579,6 @@ export function ImageComposer({
   };
 
   const handlePickReferenceImage = () => {
-    if (composerMode === "chat") {
-      onComposerModeChange("image");
-    }
-
     fileInputRef.current?.click();
   };
 
