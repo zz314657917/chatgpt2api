@@ -662,6 +662,7 @@ func (c *Client) startMultimodalConversation(ctx context.Context, messages []map
 		"supported_encodings":                  []any{"v1"},
 		"paragen_cot_summary_display_override": "allow",
 		"force_parallel_switch":                "auto",
+			"force_use_sse":                       true,
 		"client_contextual_info": map[string]any{
 			"is_dark_mode":      false,
 			"time_since_loaded": 1200,
@@ -961,6 +962,28 @@ func iterSSEPayloads(ctx context.Context, reader io.Reader, out chan<- string) e
 func iterMultimodalSSEPayloads(ctx context.Context, reader io.Reader, out chan<- string) error {
 	buf := make([]byte, 0, 4096)
 	tmp := make([]byte, 2048)
+	processLine := func(line string) error {
+		if !strings.HasPrefix(line, "data:") {
+			return nil
+		}
+		payload := strings.TrimSpace(line[5:])
+		if payload == "" || payload == "[DONE]" {
+			return nil
+		}
+		var event map[string]any
+		if json.Unmarshal([]byte(payload), &event) != nil {
+			return nil
+		}
+		for _, text := range extractMultimodalText(event) {
+			select {
+			case out <- text:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+		return nil
+	}
+
 	for {
 		n, err := reader.Read(tmp)
 		if n > 0 {
@@ -972,49 +995,25 @@ func iterMultimodalSSEPayloads(ctx context.Context, reader io.Reader, out chan<-
 				}
 				line := strings.TrimSpace(string(buf[:idx]))
 				buf = buf[idx+1:]
-				if strings.HasPrefix(line, "data:") {
-					payload := strings.TrimSpace(line[5:])
-					if payload != "" && payload != "[DONE]" {
-						var event map[string]any
-						if json.Unmarshal([]byte(payload), &event) == nil {
-							if v, ok := event["v"]; ok {
-								if text, ok := v.(string); ok && text != "" {
-									select {
-									case out <- text:
-									case <-ctx.Done():
-										return ctx.Err()
-									}
-								}
-							}
-						}
-					}
+				if err := processLine(line); err != nil {
+					return err
 				}
 			}
 		}
 		if err == io.EOF {
 			if len(buf) > 0 {
 				line := strings.TrimSpace(string(buf))
-				if strings.HasPrefix(line, "data:") {
-					payload := strings.TrimSpace(line[5:])
-					if payload != "" && payload != "[DONE]" {
-						var event map[string]any
-						if json.Unmarshal([]byte(payload), &event) == nil {
-							if v, ok := event["v"]; ok {
-								if text, ok := v.(string); ok && text != "" {
-									select {
-									case out <- text:
-									case <-ctx.Done():
-										return ctx.Err()
-									}
-								}
-							}
-						}
-					}
+				if err := processLine(line); err != nil {
+					return err
 				}
 			}
 			return nil
 		}
 		if err != nil {
+			if len(buf) > 0 {
+				line := strings.TrimSpace(string(buf))
+				_ = processLine(line)
+			}
 			return err
 		}
 	}
@@ -1027,4 +1026,59 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func extractMultimodalText(event map[string]any) []string {
+	if v, ok := event["v"]; ok {
+		switch val := v.(type) {
+		case string:
+			if val != "" {
+				return []string{val}
+			}
+		case []any:
+			var texts []string
+			for _, item := range val {
+				if op, ok := item.(map[string]any); ok {
+					if op["o"] == "append" {
+						if t := util.Clean(op["v"]); t != "" {
+							texts = append(texts, t)
+						}
+					}
+				}
+			}
+			if len(texts) > 0 {
+				return texts
+			}
+		case map[string]any:
+			if texts := extractPartsText(val); len(texts) > 0 {
+				return texts
+			}
+		}
+	}
+	if event["o"] == "append" {
+		if t := util.Clean(event["v"]); t != "" {
+			return []string{t}
+		}
+	}
+	if msg, ok := event["message"].(map[string]any); ok {
+		if texts := extractPartsText(msg); len(texts) > 0 {
+			return texts
+		}
+	}
+	return nil
+}
+
+func extractPartsText(message map[string]any) []string {
+	content, _ := message["content"].(map[string]any)
+	if content == nil {
+		return nil
+	}
+	parts, _ := content["parts"].([]any)
+	var texts []string
+	for _, part := range parts {
+		if text, ok := part.(string); ok && text != "" {
+			texts = append(texts, text)
+		}
+	}
+	return texts
 }
