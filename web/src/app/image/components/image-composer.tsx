@@ -449,9 +449,6 @@ export function ImageComposer({
   }, [isPromptAreaResizing]);
 
   const handleTextareaPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
-    if (composerMode === "chat") {
-      return;
-    }
     const imageFiles = getImageFiles(event.clipboardData.files);
     if (imageFiles.length === 0) {
       return;
@@ -467,9 +464,6 @@ export function ImageComposer({
       return;
     }
 
-    if (composerMode === "chat") {
-      onComposerModeChange("image");
-    }
     void onReferenceImageChange(imageFiles);
   };
 
@@ -585,10 +579,6 @@ export function ImageComposer({
   };
 
   const handlePickReferenceImage = () => {
-    if (composerMode === "chat") {
-      onComposerModeChange("image");
-    }
-
     fileInputRef.current?.click();
   };
 
@@ -617,7 +607,7 @@ export function ImageComposer({
         }}
       />
 
-      {composerMode === "image" && referenceImages.length > 0 ? (
+      {referenceImages.length > 0 ? (
         <div className="hide-scrollbar mb-2 flex max-h-20 gap-2 overflow-x-auto px-1 py-1 sm:mb-3">
           {referenceImages.map((image, index) => (
             <div key={`${image.name}-${index}`} className="relative size-14 shrink-0 sm:size-16">

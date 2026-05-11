@@ -852,15 +852,32 @@ export async function createChatCompletionTask(
   prompt: string,
   model: ImageModel,
   messages: CreationTaskMessage[],
+  referenceImages?: { name: string; dataUrl: string }[],
 ) {
+  const body: Record<string, unknown> = {
+    client_task_id: clientTaskId,
+    prompt,
+    model,
+    messages,
+  };
+
+  if (referenceImages && referenceImages.length > 0) {
+    const content: Array<{ type: string; text?: string; image_url?: { url: string } }> = [
+      { type: "text", text: prompt },
+      ...referenceImages.map((img) => ({
+        type: "image_url" as const,
+        image_url: { url: img.dataUrl },
+      })),
+    ];
+    body.messages = [
+      ...messages,
+      { role: "user" as const, content },
+    ];
+  }
+
   return httpRequest<CreationTask>("/api/creation-tasks/chat-completions", {
     method: "POST",
-    body: {
-      client_task_id: clientTaskId,
-      prompt,
-      model,
-      messages,
-    },
+    body,
   });
 }
 

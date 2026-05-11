@@ -25,8 +25,8 @@ import (
 )
 
 const (
-	officialImagePreparePath = "/backend-api/f/conversation/prepare"
-	officialImageStreamPath  = "/backend-api/f/conversation"
+	officialPreparePath = "/backend-api/f/conversation/prepare"
+	officialStreamPath  = "/backend-api/f/conversation"
 
 	ResponsesImageMainModel      = "gpt-5.4-mini"
 	ResponsesImageCodexToolModel = "gpt-5.4-mini"
@@ -178,7 +178,7 @@ func (c *Client) streamOfficialResponsesImage(ctx context.Context, request Respo
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		data, _ := io.ReadAll(resp.Body)
-		return upstreamHTTPError(officialImageStreamPath, resp.StatusCode, data)
+		return upstreamHTTPError(officialStreamPath, resp.StatusCode, data)
 	}
 	return iterOfficialImageSSE(ctx, c, resp.Body, request, out)
 }
@@ -642,7 +642,7 @@ func parseOfficialImageDimensions(value string) (int, int, bool) {
 	return width, height, true
 }
 
-func (c *Client) officialImageHeaders(path string, reqs ChatRequirements, conduitToken, accept string) map[string]string {
+func (c *Client) officialHeaders(path string, reqs ChatRequirements, conduitToken, accept string) map[string]string {
 	extra := map[string]string{
 		"Content-Type": "application/json",
 		"Accept":       accept,
@@ -688,12 +688,12 @@ func (c *Client) prepareOfficialImageConversation(ctx context.Context, prompt st
 			"app_name": "chatgpt.com",
 		},
 	}
-	resp, err := c.postJSON(ctx, officialImagePreparePath, payload, c.officialImageHeaders(officialImagePreparePath, reqs, "", "*/*"), false)
+	resp, err := c.postJSON(ctx, officialPreparePath, payload, c.officialHeaders(officialPreparePath, reqs, "", "*/*"), false)
 	if err != nil {
 		return "", err
 	}
 	defer resp.Body.Close()
-	if err := ensureOK(resp, officialImagePreparePath); err != nil {
+	if err := ensureOK(resp, officialPreparePath); err != nil {
 		return "", err
 	}
 	var data map[string]any
@@ -881,7 +881,7 @@ func (c *Client) startOfficialImageConversation(ctx context.Context, prompt stri
 			"app_name":          "chatgpt.com",
 		},
 	}
-	return c.postJSON(ctx, officialImageStreamPath, payload, c.officialImageHeaders(officialImageStreamPath, reqs, conduitToken, "text/event-stream"), true)
+	return c.postJSON(ctx, officialStreamPath, payload, c.officialHeaders(officialStreamPath, reqs, conduitToken, "text/event-stream"), true)
 }
 
 func iterOfficialImageSSE(ctx context.Context, client *Client, reader io.Reader, request ResponsesImageRequest, out chan<- ResponsesImageEvent) error {
