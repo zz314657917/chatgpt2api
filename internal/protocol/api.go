@@ -871,7 +871,7 @@ func StreamImageResponse(outputs <-chan ImageOutput, prompt, model string) (<-ch
 				return
 			}
 		}
-		errCh <- fmt.Errorf("image generation failed")
+		errCh <- fmt.Errorf("upstream image stream completed without image output")
 	}()
 	return out, errCh
 }

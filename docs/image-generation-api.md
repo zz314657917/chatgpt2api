@@ -389,7 +389,7 @@ curl http://localhost:3000/api/creation-tasks/img-task-20260511-001/cancel \
 当前处理方式：
 
 - 同步 `/v1/images/generations` 和 `/v1/images/edits`：返回 OpenAI 风格错误，`code` 为 `image_generation_text_response`，HTTP 状态通常为 `400`。
-- 异步 `/api/creation-tasks/image-generations` 和 `/api/creation-tasks/image-edits`：任务会被标记为 `success`，同时返回 `output_type=text` 和 `data[].text_response`，避免 Web 端只显示泛化的“image generation failed”。
+- 异步 `/api/creation-tasks/image-generations` 和 `/api/creation-tasks/image-edits`：任务会被标记为 `success`，同时返回 `output_type=text` 和 `data[].text_response`，避免 Web 端只显示泛化的失败提示。
 
 调用方如果只接受图片，需要在任务成功后检查：
 
@@ -459,7 +459,7 @@ OpenAI 风格图片错误：
 | `401` | 未认证或 token 无效 | `authorization is invalid` |
 | `403` | 权限不足 | `permission denied` |
 | `429` | 图片额度或任务并发限制 | `insufficient_quota` 或任务限制错误文本 |
-| `502` | 上游或协议失败 | `upstream_error` 或 `image generation failed` |
+| `502` | 上游或协议失败 | `upstream_error`、上游返回的错误详情，或无图片输出时的诊断消息 |
 
 ## 上下文边界
 
