@@ -20,6 +20,7 @@ const (
 	TaskStatusCancelled = "cancelled"
 
 	defaultImageTaskTimeout = 5 * time.Minute
+	maxImageTaskCount       = 8
 
 	imageOutputCallbackPayloadKey      = "image_output_callback"
 	imageOutputSlotAcquirerPayloadKey  = "image_output_slot_acquirer"
@@ -319,7 +320,7 @@ func (s *ImageTaskService) submit(ctx context.Context, identity Identity, client
 	}
 	count := taskCount(mode, payload)
 	billingUser := billingUserID(identity)
-	shouldPrechargeBilling := s.billing != nil && identity.Role == AuthRoleUser && billingUser != "" && isBillableImageTaskMode(mode, payload)
+	shouldPrechargeBilling := s.billing != nil && identity.Role == AuthRoleUser && identity.Provider != AuthProviderSub2API && billingUser != "" && isBillableImageTaskMode(mode, payload)
 	if shouldPrechargeBilling {
 		if err := s.billing.CheckAvailable(identity, count); err != nil {
 			if cleaned {
@@ -964,8 +965,8 @@ func normalizedImageTaskCount(n int) int {
 	if n < 1 {
 		return 1
 	}
-	if n > 4 {
-		return 4
+	if n > maxImageTaskCount {
+		return maxImageTaskCount
 	}
 	return n
 }

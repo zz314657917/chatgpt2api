@@ -20,6 +20,7 @@ const (
 
 	AuthProviderLocal   = "local"
 	AuthProviderLinuxDo = "linuxdo"
+	AuthProviderSub2API = "sub2api"
 
 	DefaultManagedRoleID = "default-user"
 
@@ -495,6 +496,10 @@ func (s *AuthService) UpsertLinuxDoSessionIfAllowed(owner AuthOwner, allowCreate
 	return s.upsertLinuxDoSession(owner, allowCreate)
 }
 
+func (s *AuthService) UpsertSub2APISession(owner AuthOwner) (map[string]any, string, error) {
+	return s.upsertExternalSession(owner, AuthProviderSub2API, "生图用户", true)
+}
+
 func (s *AuthService) upsertLinuxDoSession(owner AuthOwner, allowCreate bool) (map[string]any, string, error) {
 	owner.ID = util.Clean(owner.ID)
 	owner.Name = util.Clean(owner.Name)
@@ -538,6 +543,86 @@ func (s *AuthService) upsertLinuxDoSession(owner AuthOwner, allowCreate bool) (m
 		next["enabled"] = sessionEnabled
 		next["owner_name"] = name
 		next["linuxdo_level"] = owner.LinuxDoLevel
+		next["last_used_at"] = nil
+		next["updated_at"] = now
+		s.items[index] = next
+		if err := s.saveLocked(); err != nil {
+			s.mu.Unlock()
+			return nil, "", err
+		}
+		item := publicAuthItem(next)
+		s.mu.Unlock()
+		return item, raw, nil
+	}
+	if !ownerSeen && !allowCreate {
+		s.mu.Unlock()
+		return nil, "", ErrAuthUserCreationDisabled
+	}
+
+	item := newAuthItem(AuthRoleUser, AuthKindSession, name, owner, raw)
+	if roleID, ok := managedAuthRoleIDLocked(s.items, s.accounts, owner.ID); ok {
+		s.applyRoleToAuthItem(item, roleID)
+	} else {
+		s.applyRoleToAuthItem(item, "")
+	}
+	item["enabled"] = sessionEnabled
+	s.items = append(s.items, item)
+	if err := s.saveLocked(); err != nil {
+		s.mu.Unlock()
+		return nil, "", err
+	}
+	public := publicAuthItem(item)
+	createdUserID := ""
+	if !ownerSeen {
+		createdUserID = managedAuthUserID(item)
+	}
+	s.mu.Unlock()
+	s.notifyUserCreated(createdUserID)
+	return public, raw, nil
+}
+
+func (s *AuthService) upsertExternalSession(owner AuthOwner, provider, defaultName string, allowCreate bool) (map[string]any, string, error) {
+	owner.ID = util.Clean(owner.ID)
+	owner.Name = util.Clean(owner.Name)
+	owner.Provider = normalizeAuthProvider(util.Clean(provider))
+	if owner.ID == "" {
+		return nil, "", errAuthOwnerRequired()
+	}
+	name := owner.Name
+	if name == "" {
+		name = defaultName
+	}
+	raw := "sess-" + util.RandomTokenURL(32)
+	now := util.NowISO()
+
+	s.mu.Lock()
+	sessionEnabled := true
+	ownerSeen := false
+	ownerHasEnabled := false
+	for _, item := range s.items {
+		if util.Clean(item["role"]) != AuthRoleUser || util.Clean(item["owner_id"]) != owner.ID {
+			continue
+		}
+		ownerSeen = true
+		if util.ToBool(util.ValueOr(item["enabled"], true)) {
+			ownerHasEnabled = true
+		}
+	}
+	if ownerSeen && !ownerHasEnabled {
+		sessionEnabled = false
+	}
+	for index, item := range s.items {
+		if util.Clean(item["kind"]) != AuthKindSession ||
+			util.Clean(item["provider"]) != owner.Provider ||
+			util.Clean(item["owner_id"]) != owner.ID {
+			continue
+		}
+		next := util.CopyMap(item)
+		next["name"] = name
+		next["key"] = raw
+		next["key_hash"] = util.SHA256Hex(raw)
+		next["enabled"] = sessionEnabled
+		next["owner_name"] = name
 		next["last_used_at"] = nil
 		next["updated_at"] = now
 		s.items[index] = next
@@ -1797,6 +1882,8 @@ func normalizeAuthProvider(provider string) string {
 		return AuthProviderLocal
 	case AuthProviderLinuxDo:
 		return AuthProviderLinuxDo
+	case AuthProviderSub2API:
+		return AuthProviderSub2API
 	default:
 		return provider
 	}

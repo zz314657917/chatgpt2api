@@ -39,25 +39,27 @@ const (
 )
 
 type App struct {
-	config     *config.Store
-	auth       *service.AuthService
-	accounts   *service.AccountService
-	billing    *service.BillingService
-	logs       *service.LogService
-	logger     *service.Logger
-	proxy      *service.ProxyService
-	engine     *protocol.Engine
-	images     *service.ImageService
-	tasks      *service.ImageTaskService
-	announce   *service.AnnouncementService
-	prompts    *service.PromptFavoriteService
-	cpa        *service.CPAConfig
-	cpaImport  *service.CPAImportService
-	sub2       *service.Sub2APIConfig
-	sub2Import *service.Sub2APIService
-	register   *service.RegisterService
-	update     *service.UpdateService
-	cancel     context.CancelFunc
+	config       *config.Store
+	auth         *service.AuthService
+	accounts     *service.AccountService
+	billing      *service.BillingService
+	logs         *service.LogService
+	logger       *service.Logger
+	proxy        *service.ProxyService
+	engine       *protocol.Engine
+	images       *service.ImageService
+	tasks        *service.ImageTaskService
+	announce     *service.AnnouncementService
+	prompts      *service.PromptFavoriteService
+	cpa          *service.CPAConfig
+	cpaImport    *service.CPAImportService
+	sub2         *service.Sub2APIConfig
+	sub2Import   *service.Sub2APIService
+	sub2Bindings *service.Sub2APIBindingStore
+	sub2Launch   *service.Sub2APILaunchService
+	register     *service.RegisterService
+	update       *service.UpdateService
+	cancel       context.CancelFunc
 }
 
 func NewApp() (*App, error) {
@@ -94,18 +96,26 @@ func NewApp() (*App, error) {
 	}
 	documentStore, _ := storageBackend.(storage.JSONDocumentBackend)
 	engine := &protocol.Engine{Accounts: accounts, Config: cfg, Storage: documentStore, Proxy: proxy, Logger: logger}
-	app := &App{config: cfg, auth: auth, accounts: accounts, billing: billing, logs: logs, logger: logger, proxy: proxy, engine: engine, images: service.NewImageService(cfg, storageBackend), announce: service.NewAnnouncementService(storageBackend), prompts: service.NewPromptFavoriteService(storageBackend), cpa: service.NewCPAConfig(storageBackend), sub2: service.NewSub2APIConfig(storageBackend), update: newUpdateService(cfg), cancel: cancel}
+	sub2Bindings := service.NewSub2APIBindingStore(documentStore)
+	app := &App{config: cfg, auth: auth, accounts: accounts, billing: billing, logs: logs, logger: logger, proxy: proxy, engine: engine, images: service.NewImageService(cfg, storageBackend), announce: service.NewAnnouncementService(storageBackend), prompts: service.NewPromptFavoriteService(storageBackend), cpa: service.NewCPAConfig(storageBackend), sub2: service.NewSub2APIConfig(storageBackend), sub2Bindings: sub2Bindings, update: newUpdateService(cfg), cancel: cancel}
 	app.cpaImport = service.NewCPAImportService(app.cpa, accounts, proxy)
 	app.sub2Import = service.NewSub2APIService(app.sub2, accounts)
+	app.sub2Launch = service.NewSub2APILaunchService(auth, sub2Bindings, cfg)
 	app.register = service.NewRegisterService(accounts, storageBackend)
 	app.tasks = service.NewStoredImageTaskService(storageBackend,
 		func(ctx context.Context, identity service.Identity, payload map[string]any) (map[string]any, error) {
+			if binding, ok := app.sub2APIBindingForIdentity(identity); ok {
+				return app.runLoggedSub2APIImageGenerationTask(ctx, identity, payload, binding)
+			}
 			return app.runLoggedImageTask(ctx, identity, payload, "/api/creation-tasks/image-generations", "文生图", func(ctx context.Context, payload map[string]any) (map[string]any, error) {
 				result, _, err := engine.HandleImageGenerations(ctx, payload)
 				return result, err
 			})
 		},
 		func(ctx context.Context, identity service.Identity, payload map[string]any) (map[string]any, error) {
+			if binding, ok := app.sub2APIBindingForIdentity(identity); ok {
+				return app.runLoggedSub2APIImageEditTask(ctx, identity, payload, binding)
+			}
 			return app.runLoggedImageTask(ctx, identity, payload, "/api/creation-tasks/image-edits", "图生图", func(ctx context.Context, payload map[string]any) (map[string]any, error) {
 				images, _ := payload["images"].([]protocol.UploadedImage)
 				result, _, err := engine.HandleImageEdits(ctx, payload, images)
@@ -125,8 +135,9 @@ func NewApp() (*App, error) {
 	})
 	accounts.StartLimitedWatcher(ctx, time.Duration(cfg.RefreshAccountIntervalMinute())*time.Minute)
 	_, _ = app.images.CleanupStorage(service.ImageStorageCleanupOptions{
-		RetentionDays: cfg.ImageRetentionDays(),
-		MaxBytes:      cfg.ImageStorageLimitBytes(),
+		RetentionDays:    cfg.ImageRetentionDays(),
+		MaxBytes:         cfg.ImageStorageLimitBytes(),
+		MaxImagesPerUser: cfg.ImageMaxSavedPerUser(),
 	})
 	return app, nil
 }
@@ -317,7 +328,7 @@ func (a *App) writeProtocol(w http.ResponseWriter, r *http.Request, result map[s
 	}
 	if stream == nil {
 		urls := collectURLs(result)
-		a.recordProtocolGeneratedImages(identity, urls, visibility, imagePayloads...)
+		a.recordProtocolGeneratedImages(identity, collectImageRecordURLs(result), visibility, imagePayloads...)
 		a.logCall(identity, summary, r.Method, endpoint, model, start, "success", http.StatusOK, "", urls, requestCapture)
 		markRequestBusinessLogged(r)
 		util.WriteJSON(w, http.StatusOK, result)
@@ -328,8 +339,10 @@ func (a *App) writeProtocol(w http.ResponseWriter, r *http.Request, result map[s
 	flusher, _ := w.(http.Flusher)
 	if stream.Kind == "anthropic" || sseKind == "anthropic" {
 		var urls []string
+		var recordURLs []string
 		for item := range stream.Items {
 			urls = append(urls, collectURLs(item)...)
+			recordURLs = append(recordURLs, collectImageRecordURLs(item)...)
 			event := firstNonEmpty(util.Clean(item["type"]), "message_delta")
 			fmt.Fprintf(w, "event: %s\n", event)
 			fmt.Fprintf(w, "data: %s\n\n", jsonString(item))
@@ -338,14 +351,14 @@ func (a *App) writeProtocol(w http.ResponseWriter, r *http.Request, result map[s
 			}
 		}
 		if err := <-stream.Err; err != nil {
-			a.recordProtocolGeneratedImages(identity, urls, visibility, imagePayloads...)
+			a.recordProtocolGeneratedImages(identity, recordURLs, visibility, imagePayloads...)
 			a.logCall(identity, summary, r.Method, endpoint, model, start, "failed", protocolErrorHTTPStatus(err), err.Error(), urls, requestCapture)
 			markRequestBusinessLogged(r)
 			fmt.Fprintf(w, "event: error\n")
 			fmt.Fprintf(w, "data: %s\n\n", jsonString(map[string]any{"type": "error", "error": map[string]any{"type": fmt.Sprintf("%T", err), "message": err.Error()}}))
 			return
 		}
-		a.recordProtocolGeneratedImages(identity, urls, visibility, imagePayloads...)
+		a.recordProtocolGeneratedImages(identity, recordURLs, visibility, imagePayloads...)
 		a.logCall(identity, summary, r.Method, endpoint, model, start, "success", http.StatusOK, "", urls, requestCapture)
 		markRequestBusinessLogged(r)
 		return
@@ -355,20 +368,22 @@ func (a *App) writeProtocol(w http.ResponseWriter, r *http.Request, result map[s
 		flusher.Flush()
 	}
 	var urls []string
+	var recordURLs []string
 	for item := range stream.Items {
 		urls = append(urls, collectURLs(item)...)
+		recordURLs = append(recordURLs, collectImageRecordURLs(item)...)
 		fmt.Fprintf(w, "data: %s\n\n", jsonString(item))
 		if flusher != nil {
 			flusher.Flush()
 		}
 	}
 	if err := <-stream.Err; err != nil {
-		a.recordProtocolGeneratedImages(identity, urls, visibility, imagePayloads...)
+		a.recordProtocolGeneratedImages(identity, recordURLs, visibility, imagePayloads...)
 		a.logCall(identity, summary, r.Method, endpoint, model, start, "failed", protocolErrorHTTPStatus(err), err.Error(), urls, requestCapture)
 		markRequestBusinessLogged(r)
 		fmt.Fprintf(w, "data: %s\n\n", jsonString(openAIErrorForStream(err)))
 	} else {
-		a.recordProtocolGeneratedImages(identity, urls, visibility, imagePayloads...)
+		a.recordProtocolGeneratedImages(identity, recordURLs, visibility, imagePayloads...)
 		a.logCall(identity, summary, r.Method, endpoint, model, start, "success", http.StatusOK, "", urls, requestCapture)
 		markRequestBusinessLogged(r)
 	}
@@ -474,6 +489,10 @@ func (a *App) handleLogout(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) writeLoginResponse(w http.ResponseWriter, identity service.Identity, token string) {
+	a.writeLoginResponseWithExtra(w, identity, token, nil)
+}
+
+func (a *App) writeLoginResponseWithExtra(w http.ResponseWriter, identity service.Identity, token string, extra map[string]any) {
 	permissions := a.identityPermissions(identity)
 	payload := map[string]any{
 		"ok":                        true,
@@ -497,6 +516,9 @@ func (a *App) writeLoginResponse(w http.ResponseWriter, identity service.Identit
 	if token == "" {
 		delete(payload, "token")
 	}
+	for key, value := range extra {
+		payload[key] = value
+	}
 	util.WriteJSON(w, http.StatusOK, payload)
 }
 
@@ -515,6 +537,17 @@ func (a *App) identityCreationRPMLimit(identity service.Identity) int {
 }
 
 func (a *App) identityBillingState(identity service.Identity) map[string]any {
+	if identity.Provider == service.AuthProviderSub2API {
+		return map[string]any{
+			"type":         service.BillingTypeStandard,
+			"unit":         service.BillingUnitImage,
+			"unlimited":    true,
+			"available":    0,
+			"standard":     nil,
+			"subscription": nil,
+			"limit_state":  "unlimited",
+		}
+	}
 	if identity.Role != service.AuthRoleUser {
 		return map[string]any{
 			"type":         service.BillingTypeStandard,
@@ -1020,6 +1053,8 @@ func (a *App) handleImageStorageGovernance(w http.ResponseWriter, r *http.Reques
 		switch action {
 		case "retention":
 			options.RetentionDays = util.ToInt(body["retention_days"], a.config.ImageRetentionDays())
+		case "user-limit":
+			options.MaxImagesPerUser = util.ToInt(body["max_images_per_user"], a.config.ImageMaxSavedPerUser())
 		case "quota":
 			options.MaxBytes = imageCleanupMaxBytes(body["max_bytes"], body["max_mb"], a.config.ImageStorageLimitBytes())
 		case "thumbnails":
@@ -1027,9 +1062,10 @@ func (a *App) handleImageStorageGovernance(w http.ResponseWriter, r *http.Reques
 		case "all":
 			options.RetentionDays = util.ToInt(body["retention_days"], a.config.ImageRetentionDays())
 			options.MaxBytes = imageCleanupMaxBytes(body["max_bytes"], body["max_mb"], a.config.ImageStorageLimitBytes())
+			options.MaxImagesPerUser = util.ToInt(body["max_images_per_user"], a.config.ImageMaxSavedPerUser())
 			options.ClearThumbnails = util.ToBool(body["clear_thumbnails"])
 		default:
-			util.WriteError(w, http.StatusBadRequest, "action must be retention, quota, thumbnails, or all")
+			util.WriteError(w, http.StatusBadRequest, "action must be retention, user-limit, quota, thumbnails, or all")
 			return
 		}
 		result, err := a.images.CleanupStorage(options)
@@ -1442,7 +1478,7 @@ func cleanAuditPayloadMap(payload map[string]any) map[string]any {
 	out := make(map[string]any, len(payload))
 	for key, value := range payload {
 		switch key {
-		case "owner_id", "owner_name", "base_url":
+		case "owner_id", "owner_name", "base_url", "api_key", "gateway_base_url":
 			continue
 		}
 		if isInternalPayloadValue(value) {
@@ -1587,8 +1623,9 @@ func (a *App) cleanupImageStorage() {
 		return
 	}
 	_, _ = a.images.CleanupStorage(service.ImageStorageCleanupOptions{
-		RetentionDays: a.config.ImageRetentionDays(),
-		MaxBytes:      a.config.ImageStorageLimitBytes(),
+		RetentionDays:    a.config.ImageRetentionDays(),
+		MaxBytes:         a.config.ImageStorageLimitBytes(),
+		MaxImagesPerUser: a.config.ImageMaxSavedPerUser(),
 	})
 }
 
@@ -1629,7 +1666,7 @@ func uploadedImagesFromPayload(value any) []protocol.UploadedImage {
 }
 
 func (a *App) checkProtocolBilling(identity service.Identity, amount int) error {
-	if amount <= 0 || a == nil || a.billing == nil {
+	if amount <= 0 || a == nil || a.billing == nil || identity.Provider == service.AuthProviderSub2API {
 		return nil
 	}
 	return a.billing.CheckAvailable(identity, amount)
@@ -1660,7 +1697,7 @@ func (a *App) attachProtocolBillingCharger(body map[string]any, identity service
 	if a == nil || a.billing == nil || body == nil {
 		return
 	}
-	if identity.Role != service.AuthRoleUser {
+	if identity.Role != service.AuthRoleUser || identity.Provider == service.AuthProviderSub2API {
 		return
 	}
 	var mu sync.Mutex
@@ -1732,7 +1769,7 @@ func (a *App) runLoggedImageTask(ctx context.Context, identity service.Identity,
 	model := firstNonEmpty(util.Clean(payload["model"]), util.ImageModelAuto)
 	result, err := run(ctx, payload)
 	urls := collectURLs(result)
-	a.recordGeneratedImagesForPayload(identity, urls, util.Clean(payload["visibility"]), payload)
+	a.recordGeneratedImagesForPayload(identity, collectImageRecordURLs(result), util.Clean(payload["visibility"]), payload)
 	if err != nil {
 		a.logCall(identity, summary, http.MethodPost, endpoint, model, start, "failed", protocolErrorHTTPStatus(err), err.Error(), urls, requestCapture)
 		return result, err
@@ -1838,6 +1875,46 @@ func collectURLs(v any) []string {
 		var urls []string
 		for _, item := range x {
 			urls = append(urls, collectURLs(item)...)
+		}
+		return urls
+	default:
+		return nil
+	}
+}
+
+func collectImageRecordURLs(v any) []string {
+	switch x := v.(type) {
+	case map[string]any:
+		var urls []string
+		if localURL := util.Clean(x["local_url"]); localURL != "" {
+			urls = append(urls, localURL)
+		} else if u := util.Clean(x["url"]); u != "" {
+			urls = append(urls, u)
+		}
+		if rawURLs, ok := x["urls"]; ok {
+			for _, raw := range anyList(rawURLs) {
+				if u := util.Clean(raw); u != "" {
+					urls = append(urls, u)
+				}
+			}
+		}
+		for key, value := range x {
+			if key == "url" || key == "local_url" || key == "urls" {
+				continue
+			}
+			urls = append(urls, collectImageRecordURLs(value)...)
+		}
+		return urls
+	case []any:
+		var urls []string
+		for _, item := range x {
+			urls = append(urls, collectImageRecordURLs(item)...)
+		}
+		return urls
+	case []map[string]any:
+		var urls []string
+		for _, item := range x {
+			urls = append(urls, collectImageRecordURLs(item)...)
 		}
 		return urls
 	default:

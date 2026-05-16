@@ -229,6 +229,7 @@ export type SettingsConfig = {
   default_subscription_period?: BillingPeriod;
   image_retention_days?: number | string;
   image_storage_limit_mb?: number | string;
+  image_max_saved_per_user?: number | string;
   log_retention_days?: number | string;
   auto_remove_invalid_accounts?: boolean;
   auto_remove_rate_limited_accounts?: boolean;
@@ -357,6 +358,7 @@ export type ImageStorageGovernanceSummary = {
 export type ImageStorageCleanupResult = {
   retention_days?: number;
   max_bytes?: number;
+  max_images_per_user?: number;
   include_public?: boolean;
   deleted_images: number;
   deleted_thumbnails: number;
@@ -723,6 +725,14 @@ export async function verifySession(token: string) {
     headers: {
       Authorization: `Bearer ${String(token || "").trim()}`,
     },
+    redirectOnUnauthorized: false,
+  });
+}
+
+export async function launchSub2API(token: string) {
+  return httpRequest<LoginResponse>("/auth/sub2api/launch", {
+    method: "POST",
+    body: { token },
     redirectOnUnauthorized: false,
   });
 }

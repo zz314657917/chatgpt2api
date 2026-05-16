@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"chatgpt2api/internal/backend"
+	"chatgpt2api/internal/imagestore"
 	"chatgpt2api/internal/service"
 	"chatgpt2api/internal/storage"
 	"chatgpt2api/internal/util"
@@ -49,6 +50,11 @@ type Engine struct {
 
 	responseContextMu sync.Mutex
 	ResponseContexts  *ResponseContextStore
+}
+
+type savedImageResult struct {
+	URL      string
+	LocalURL string
 }
 
 type ImageOutputSlotAcquirer func(context.Context, int) (func(), error)
@@ -1057,8 +1063,11 @@ func (e *Engine) formatImageResultWithOptions(items []map[string]any, prompt, re
 			}
 		}
 		outputFormat := NormalizeImageOutputFormat(itemOptions.Format)
-		urlValue := e.SaveImageBytesForOwnerWithFormat(imageBytes, baseURL, ownerID, ownerName, outputFormat)
-		responseItem := map[string]any{"url": urlValue, "revised_prompt": revised, "output_format": outputFormat}
+		saved := e.SaveImageBytesForOwnerWithFormatResult(imageBytes, baseURL, ownerID, ownerName, outputFormat)
+		responseItem := map[string]any{"url": saved.URL, "revised_prompt": revised, "output_format": outputFormat}
+		if saved.LocalURL != "" && saved.LocalURL != saved.URL {
+			responseItem["local_url"] = saved.LocalURL
+		}
 		if responseFormat == "b64_json" {
 			responseItem["b64_json"] = base64.StdEncoding.EncodeToString(imageBytes)
 		}
@@ -1083,6 +1092,10 @@ func (e *Engine) SaveImageBytesForOwner(imageData []byte, baseURL, ownerID, owne
 }
 
 func (e *Engine) SaveImageBytesForOwnerWithFormat(imageData []byte, baseURL, ownerID, ownerName, outputFormat string) string {
+	return e.SaveImageBytesForOwnerWithFormatResult(imageData, baseURL, ownerID, ownerName, outputFormat).URL
+}
+
+func (e *Engine) SaveImageBytesForOwnerWithFormatResult(imageData []byte, baseURL, ownerID, ownerName, outputFormat string) savedImageResult {
 	outputFormat = NormalizeImageOutputFormat(outputFormat)
 	sum := md5.Sum(imageData)
 	filename := fmt.Sprintf("%d_%s.%s", time.Now().Unix(), hex.EncodeToString(sum[:]), imageFileExtension(outputFormat))
@@ -1091,11 +1104,46 @@ func (e *Engine) SaveImageBytesForOwnerWithFormat(imageData []byte, baseURL, own
 	filePath := filepath.Join(e.Config.ImagesDir(), rel)
 	_ = os.MkdirAll(filepath.Dir(filePath), 0o755)
 	_ = os.WriteFile(filePath, imageData, 0o644)
-	e.writeImageOwnerMetadata(rel, ownerID, ownerName)
 	if baseURL == "" {
 		baseURL = e.Config.BaseURL()
 	}
-	return strings.TrimRight(baseURL, "/") + "/images/" + filepath.ToSlash(rel)
+	localURL := strings.TrimRight(baseURL, "/") + "/images/" + filepath.ToSlash(rel)
+	stored := e.uploadImageObject(rel, imageData, outputFormat)
+	e.writeImageOwnerMetadata(rel, ownerID, ownerName, stored)
+	if stored.URL != "" {
+		return savedImageResult{URL: stored.URL, LocalURL: localURL}
+	}
+	return savedImageResult{URL: localURL, LocalURL: localURL}
+}
+
+func (e *Engine) uploadImageObject(rel string, imageData []byte, outputFormat string) imagestore.StoredObject {
+	ctx, cancel := imagestore.UploadTimeoutContext()
+	defer cancel()
+	store, enabled, err := imagestore.NewFromEnv(ctx)
+	if !enabled {
+		return imagestore.StoredObject{}
+	}
+	if err != nil {
+		if e != nil && e.Logger != nil {
+			e.Logger.Warning("image object storage unavailable", "error", err.Error())
+		}
+		return imagestore.StoredObject{}
+	}
+	key, err := store.ObjectKey(rel)
+	if err != nil {
+		if e != nil && e.Logger != nil {
+			e.Logger.Warning("image object key invalid", "error", err.Error())
+		}
+		return imagestore.StoredObject{}
+	}
+	stored, err := store.UploadBytes(ctx, key, imageData, imageContentType(outputFormat))
+	if err != nil {
+		if e != nil && e.Logger != nil {
+			e.Logger.Warning("image object upload failed", "error", err.Error(), "key", key)
+		}
+		return imagestore.StoredObject{}
+	}
+	return stored
 }
 
 func imageFileExtension(outputFormat string) string {
@@ -1103,6 +1151,17 @@ func imageFileExtension(outputFormat string) string {
 		return "jpg"
 	}
 	return NormalizeImageOutputFormat(outputFormat)
+}
+
+func imageContentType(outputFormat string) string {
+	switch NormalizeImageOutputFormat(outputFormat) {
+	case "jpeg":
+		return "image/jpeg"
+	case "webp":
+		return "image/webp"
+	default:
+		return "image/png"
+	}
 }
 
 func encodeImageBytes(data []byte, options ImageOutputOptions) ([]byte, error) {
@@ -1164,15 +1223,27 @@ func blendOverWhite(channel, alpha int) uint8 {
 	return uint8(value >> 8)
 }
 
-func (e *Engine) writeImageOwnerMetadata(rel, ownerID, ownerName string) {
+func (e *Engine) writeImageOwnerMetadata(rel, ownerID, ownerName string, stored imagestore.StoredObject) {
 	ownerID = strings.TrimSpace(ownerID)
 	ownerName = strings.TrimSpace(ownerName)
-	if e == nil || e.Config == nil || ownerID == "" {
+	if e == nil || e.Config == nil || (ownerID == "" && stored.Key == "" && stored.URL == "") {
 		return
 	}
-	value := map[string]any{"owner_id": ownerID, "updated_at": time.Now().UTC().Format(time.RFC3339Nano)}
+	value := map[string]any{"updated_at": time.Now().UTC().Format(time.RFC3339Nano)}
+	if ownerID != "" {
+		value["owner_id"] = ownerID
+	}
 	if ownerName != "" {
 		value["owner_name"] = ownerName
+	}
+	if stored.Backend != "" {
+		value["storage_backend"] = stored.Backend
+	}
+	if stored.Key != "" {
+		value["object_key"] = stored.Key
+	}
+	if stored.URL != "" {
+		value["object_url"] = stored.URL
 	}
 	if e.Storage != nil {
 		_ = e.Storage.SaveJSONDocument(imageOwnerDocumentName(rel), value)
