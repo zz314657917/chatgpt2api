@@ -57,6 +57,17 @@ function normalizeDefaultSubscriptionPeriod(value: unknown): BillingPeriod {
   return "monthly";
 }
 
+function nonNegativeNumberOrDefault(value: unknown, fallback: number) {
+  if (value === "" || value === null || value === undefined) {
+    return fallback;
+  }
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return fallback;
+  }
+  return Math.max(0, numeric);
+}
+
 function normalizeConfig(config: SettingsConfig): SettingsConfig {
   const loginImageTransform = normalizeLoginPageImageTransform({
     zoom: Number(config.login_page_image_zoom),
@@ -75,6 +86,7 @@ function normalizeConfig(config: SettingsConfig): SettingsConfig {
     default_subscription_period: normalizeDefaultSubscriptionPeriod(config.default_subscription_period),
     image_retention_days: Number(config.image_retention_days || 30),
     image_storage_limit_mb: Math.max(0, Number(config.image_storage_limit_mb) || 0),
+    image_max_saved_per_user: nonNegativeNumberOrDefault(config.image_max_saved_per_user, 50),
     log_retention_days: Number(config.log_retention_days || 7),
     auto_remove_invalid_accounts: Boolean(config.auto_remove_invalid_accounts),
     auto_remove_rate_limited_accounts: Boolean(config.auto_remove_rate_limited_accounts),
@@ -169,6 +181,7 @@ type SettingsStore = {
   setDefaultSubscriptionPeriod: (value: BillingPeriod) => void;
   setImageRetentionDays: (value: string) => void;
   setImageStorageLimitMb: (value: string) => void;
+  setImageMaxSavedPerUser: (value: string) => void;
   setLogRetentionDays: (value: string) => void;
   setAutoRemoveInvalidAccounts: (value: boolean) => void;
   setAutoRemoveRateLimitedAccounts: (value: boolean) => void;
@@ -312,6 +325,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         default_subscription_period: normalizeDefaultSubscriptionPeriod(config.default_subscription_period),
         image_retention_days: Math.max(1, Number(config.image_retention_days) || 30),
         image_storage_limit_mb: Math.max(0, Number(config.image_storage_limit_mb) || 0),
+        image_max_saved_per_user: nonNegativeNumberOrDefault(config.image_max_saved_per_user, 50),
         log_retention_days: Math.min(3650, Math.max(1, Number(config.log_retention_days) || 7)),
         auto_remove_invalid_accounts: Boolean(config.auto_remove_invalid_accounts),
         auto_remove_rate_limited_accounts: Boolean(config.auto_remove_rate_limited_accounts),
@@ -367,6 +381,10 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
 
   setImageStorageLimitMb: (value) => {
     set((state) => state.config ? { config: { ...state.config, image_storage_limit_mb: value } } : {});
+  },
+
+  setImageMaxSavedPerUser: (value) => {
+    set((state) => state.config ? { config: { ...state.config, image_max_saved_per_user: value } } : {});
   },
 
   setLogRetentionDays: (value) => {

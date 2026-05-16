@@ -144,6 +144,74 @@ func TestImageTaskServiceRejectsBlankPromptBeforeQueueing(t *testing.T) {
 	}
 }
 
+func TestImageTaskServiceAllowsEightQueuedOutputs(t *testing.T) {
+	handlerCalls := make(chan map[string]any, 1)
+	handler := func(ctx context.Context, identity Identity, payload map[string]any) (map[string]any, error) {
+		handlerCalls <- payload
+		count := imageTaskCount(payload)
+		data := make([]map[string]any, 0, count)
+		for index := 0; index < count; index++ {
+			data = append(data, map[string]any{"url": "https://example.test/image.png"})
+		}
+		return map[string]any{"data": data}, nil
+	}
+	svc := newTestImageTaskService(t, handler, handler, handler, func() int { return 30 })
+	identity := Identity{ID: "alice", Name: "Alice", Role: "user"}
+
+	task, err := svc.SubmitGeneration(context.Background(), identity, "task-1", "draw", "gpt-image-2", "1024x1024", "high", "https://base.test", 8, nil)
+	if err != nil {
+		t.Fatalf("SubmitGeneration() error = %v", err)
+	}
+	statuses, ok := task["output_statuses"].([]string)
+	if !ok || len(statuses) != 8 {
+		t.Fatalf("initial output_statuses = %#v, want 8 queued statuses", task["output_statuses"])
+	}
+	select {
+	case payload := <-handlerCalls:
+		if got := imageTaskCount(payload); got != 8 {
+			t.Fatalf("handler imageTaskCount = %d, want 8 in %#v", got, payload)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for handler payload")
+	}
+	waitForTaskStatus(t, svc, identity, "task-1", TaskStatusSuccess)
+	got := svc.ListTasks(identity, []string{"task-1"})
+	items := got["items"].([]map[string]any)
+	if len(items) != 1 {
+		t.Fatalf("ListTasks items = %#v, want one task", got)
+	}
+	if data := util.AsMapSlice(items[0]["data"]); len(data) != 8 {
+		t.Fatalf("stored task data count = %d, want 8", len(data))
+	}
+}
+
+func TestImageTaskServiceClampsQueuedOutputsToEight(t *testing.T) {
+	handlerCalls := make(chan map[string]any, 1)
+	handler := func(ctx context.Context, identity Identity, payload map[string]any) (map[string]any, error) {
+		handlerCalls <- payload
+		return map[string]any{"data": []map[string]any{{"url": "https://example.test/image.png"}}}, nil
+	}
+	svc := newTestImageTaskService(t, handler, handler, handler, func() int { return 30 })
+	identity := Identity{ID: "alice", Name: "Alice", Role: "user"}
+
+	task, err := svc.SubmitGeneration(context.Background(), identity, "task-1", "draw", "gpt-image-2", "1024x1024", "high", "https://base.test", 12, nil)
+	if err != nil {
+		t.Fatalf("SubmitGeneration() error = %v", err)
+	}
+	statuses, ok := task["output_statuses"].([]string)
+	if !ok || len(statuses) != 8 {
+		t.Fatalf("initial output_statuses = %#v, want 8 queued statuses", task["output_statuses"])
+	}
+	select {
+	case payload := <-handlerCalls:
+		if got := imageTaskCount(payload); got != 8 {
+			t.Fatalf("handler imageTaskCount = %d, want 8 in %#v", got, payload)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for handler payload")
+	}
+}
+
 func TestImageTaskServicePassesMessagesToHandler(t *testing.T) {
 	handlerCalls := make(chan map[string]any, 1)
 	handler := func(ctx context.Context, identity Identity, payload map[string]any) (map[string]any, error) {

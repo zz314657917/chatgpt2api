@@ -608,6 +608,16 @@ func TestRecordGeneratedImagesForPayloadStoresReusableRequestMetadata(t *testing
 	}
 }
 
+func TestSub2APIImageRequestErrorMessageExplainsUpstreamPoolFailure(t *testing.T) {
+	message := sub2APIImageRequestErrorMessage(http.StatusBadGateway, "map[message:Upstream service temporarily unavailable type:upstream_error]")
+	if !strings.Contains(message, "Sub2API 图片上游账号池暂不可用") {
+		t.Fatalf("message = %q", message)
+	}
+	if !strings.Contains(message, "HTTP 502") || !strings.Contains(message, "Upstream service temporarily unavailable") {
+		t.Fatalf("message should keep original error details: %q", message)
+	}
+}
+
 func TestDirectImageGenerationUsesCreationLimiter(t *testing.T) {
 	t.Setenv("CHATGPT2API_USER_DEFAULT_CONCURRENT_LIMIT", "2")
 	app := newTestApp(t)

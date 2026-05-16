@@ -178,6 +178,9 @@ export function ConfigCard() {
   const setImageStorageLimitMb = useSettingsStore(
     (state) => state.setImageStorageLimitMb,
   );
+  const setImageMaxSavedPerUser = useSettingsStore(
+    (state) => state.setImageMaxSavedPerUser,
+  );
   const setAutoRemoveInvalidAccounts = useSettingsStore(
     (state) => state.setAutoRemoveInvalidAccounts,
   );
@@ -307,6 +310,19 @@ export function ConfigCard() {
                 onChange={setImageStorageLimitMb}
                 placeholder="0"
                 unit="MB"
+              />
+            </Field>
+            <Field className={configFieldClassName}>
+              <ConfigFieldLabel htmlFor="settings-image-max-saved-per-user">
+                每用户图片上限
+              </ConfigFieldLabel>
+              <NumberInputWithUnit
+                id="settings-image-max-saved-per-user"
+                min={0}
+                value={config?.image_max_saved_per_user ?? ""}
+                onChange={setImageMaxSavedPerUser}
+                placeholder="50"
+                unit="张"
               />
             </Field>
             <Field className={configFieldClassName}>

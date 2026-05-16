@@ -6,6 +6,8 @@ import (
 	"image/color"
 	"image/jpeg"
 	"image/png"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -13,6 +15,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"chatgpt2api/internal/imagestore"
 )
 
 type testImageConfig struct {
@@ -40,6 +44,8 @@ func (c testImageConfig) ImageMetadataDir() string {
 func (c testImageConfig) ImageRetentionDays() int { return 30 }
 
 func (c testImageConfig) ImageStorageLimitBytes() int64 { return 0 }
+
+func (c testImageConfig) ImageMaxSavedPerUser() int { return 50 }
 
 var allImages = ImageAccessScope{All: true}
 
@@ -577,6 +583,106 @@ func TestImageServiceListImagesReturnsGenerationReuseMetadata(t *testing.T) {
 	}
 }
 
+func TestImageServiceListImagesUsesObjectURL(t *testing.T) {
+	root := t.TempDir()
+	config := testImageConfig{root: root}
+	rel := "2026/05/16/object.png"
+	path := filepath.Join(config.ImagesDir(), filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := writeTestPNG(path); err != nil {
+		t.Fatalf("writeTestPNG() error = %v", err)
+	}
+	metaPath := filepath.Join(config.ImageMetadataDir(), filepath.FromSlash(rel)+".json")
+	if err := os.MkdirAll(filepath.Dir(metaPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(metadata) error = %v", err)
+	}
+	meta := map[string]any{
+		"owner_id":        "linuxdo:123",
+		"visibility":      ImageVisibilityPrivate,
+		"storage_backend": "cos",
+		"object_key":      "chatgpt2api/" + rel,
+		"object_url":      "https://cdn.example.com/chatgpt2api/" + rel,
+		"updated_at":      time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	data, _ := json.Marshal(meta)
+	if err := os.WriteFile(metaPath, data, 0o644); err != nil {
+		t.Fatalf("WriteFile(metadata) error = %v", err)
+	}
+
+	service := NewImageService(config)
+	list := service.ListImages("http://127.0.0.1:8000", "", "", ImageAccessScope{OwnerID: "linuxdo:123"})
+	items, _ := list["items"].([]map[string]any)
+	if len(items) != 1 {
+		t.Fatalf("ListImages() = %#v", list)
+	}
+	if items[0]["url"] != "https://cdn.example.com/chatgpt2api/"+rel || items[0]["object_key"] != "chatgpt2api/"+rel {
+		t.Fatalf("image item = %#v", items[0])
+	}
+}
+
+func TestImageServiceDeleteImagesDeletesObjectStorageImage(t *testing.T) {
+	var deletedPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete {
+			t.Fatalf("method = %s, want DELETE", r.Method)
+		}
+		deletedPath = r.URL.Path
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+	t.Setenv(imagestore.EnvImageStorageBackend, "cos")
+	t.Setenv(imagestore.EnvImageObjectStorageEndpoint, server.URL)
+	t.Setenv(imagestore.EnvImageObjectStorageRegion, "ap-guangzhou")
+	t.Setenv(imagestore.EnvImageObjectStorageBucket, "bucket")
+	t.Setenv(imagestore.EnvImageObjectStorageAccessKeyID, "ak")
+	t.Setenv(imagestore.EnvImageObjectStorageSecretKey, "sk")
+	t.Setenv(imagestore.EnvImageObjectStorageForcePath, "true")
+
+	root := t.TempDir()
+	config := testImageConfig{root: root}
+	rel := "2026/05/16/delete.png"
+	imagePath := filepath.Join(config.ImagesDir(), filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(imagePath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := writeTestPNG(imagePath); err != nil {
+		t.Fatalf("writeTestPNG() error = %v", err)
+	}
+	metaPath := filepath.Join(config.ImageMetadataDir(), filepath.FromSlash(rel)+".json")
+	if err := os.MkdirAll(filepath.Dir(metaPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(metadata) error = %v", err)
+	}
+	meta := map[string]any{
+		"owner_id":        "linuxdo:123",
+		"visibility":      ImageVisibilityPrivate,
+		"storage_backend": "cos",
+		"object_key":      "chatgpt2api/" + rel,
+		"object_url":      "https://cdn.example.com/chatgpt2api/" + rel,
+		"updated_at":      time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	data, _ := json.Marshal(meta)
+	if err := os.WriteFile(metaPath, data, 0o644); err != nil {
+		t.Fatalf("WriteFile(metadata) error = %v", err)
+	}
+
+	service := NewImageService(config)
+	result, err := service.DeleteImages([]string{rel}, allImages)
+	if err != nil {
+		t.Fatalf("DeleteImages() error = %v", err)
+	}
+	if result["deleted"] != 1 {
+		t.Fatalf("DeleteImages() = %#v", result)
+	}
+	if deletedPath != "/bucket/chatgpt2api/"+rel {
+		t.Fatalf("deletedPath = %q", deletedPath)
+	}
+	if _, err := os.Stat(imagePath); !os.IsNotExist(err) {
+		t.Fatalf("image should be removed, stat error = %v", err)
+	}
+}
+
 func TestImageServicePublicListHidesUnsharedGenerationMetadata(t *testing.T) {
 	root := t.TempDir()
 	config := testImageConfig{root: root}
@@ -690,6 +796,90 @@ func TestImageServiceCleanupStorageRetentionRemovesImageGroup(t *testing.T) {
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Fatalf("%s still exists or stat failed unexpectedly: %v", path, err)
 		}
+	}
+}
+
+func TestImageServiceCleanupStorageUserLimitKeepsNewestPrivateImages(t *testing.T) {
+	root := t.TempDir()
+	config := testImageConfig{root: root}
+	rels := []string{
+		"2026/04/29/alice-old.png",
+		"2026/04/29/alice-middle.png",
+		"2026/04/29/alice-new.png",
+		"2026/04/29/bob-old.png",
+	}
+	baseTime := time.Now().Add(-4 * time.Hour)
+	for index, rel := range rels {
+		path := filepath.Join(config.ImagesDir(), filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("MkdirAll() error = %v", err)
+		}
+		if err := writeTestPNG(path); err != nil {
+			t.Fatalf("writeTestPNG(%s) error = %v", rel, err)
+		}
+		stamp := baseTime.Add(time.Duration(index) * time.Hour)
+		if err := os.Chtimes(path, stamp, stamp); err != nil {
+			t.Fatalf("Chtimes(%s) error = %v", rel, err)
+		}
+	}
+
+	service := NewImageService(config)
+	service.RecordGeneratedImages(rels[:3], "linuxdo:123", "alice", ImageVisibilityPrivate)
+	service.RecordGeneratedImages([]string{rels[3]}, "linuxdo:456", "bob", ImageVisibilityPrivate)
+	result, err := service.CleanupStorage(ImageStorageCleanupOptions{MaxImagesPerUser: 2})
+	if err != nil {
+		t.Fatalf("CleanupStorage(user limit) error = %v", err)
+	}
+	if result.DeletedImages != 1 || result.MaxImagesPerUser != 2 {
+		t.Fatalf("CleanupStorage(user limit) = %#v", result)
+	}
+	if _, err := os.Stat(filepath.Join(config.ImagesDir(), filepath.FromSlash(rels[0]))); !os.IsNotExist(err) {
+		t.Fatalf("oldest alice image should be deleted, stat error = %v", err)
+	}
+	for _, rel := range rels[1:] {
+		if _, err := os.Stat(filepath.Join(config.ImagesDir(), filepath.FromSlash(rel))); err != nil {
+			t.Fatalf("%s should remain, stat error = %v", rel, err)
+		}
+	}
+}
+
+func TestImageServiceCleanupStorageUserLimitIncludesPublicImages(t *testing.T) {
+	root := t.TempDir()
+	config := testImageConfig{root: root}
+	rels := []string{
+		"2026/04/29/alice-public-old.png",
+		"2026/04/29/alice-private-new.png",
+	}
+	baseTime := time.Now().Add(-2 * time.Hour)
+	for index, rel := range rels {
+		path := filepath.Join(config.ImagesDir(), filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("MkdirAll() error = %v", err)
+		}
+		if err := writeTestPNG(path); err != nil {
+			t.Fatalf("writeTestPNG(%s) error = %v", rel, err)
+		}
+		stamp := baseTime.Add(time.Duration(index) * time.Hour)
+		if err := os.Chtimes(path, stamp, stamp); err != nil {
+			t.Fatalf("Chtimes(%s) error = %v", rel, err)
+		}
+	}
+
+	service := NewImageService(config)
+	service.RecordGeneratedImages([]string{rels[0]}, "linuxdo:123", "alice", ImageVisibilityPublic)
+	service.RecordGeneratedImages([]string{rels[1]}, "linuxdo:123", "alice", ImageVisibilityPrivate)
+	result, err := service.CleanupStorage(ImageStorageCleanupOptions{MaxImagesPerUser: 1})
+	if err != nil {
+		t.Fatalf("CleanupStorage(user limit) error = %v", err)
+	}
+	if result.DeletedImages != 1 || result.PreservedPublicImages != 0 {
+		t.Fatalf("CleanupStorage(user limit) = %#v", result)
+	}
+	if _, err := os.Stat(filepath.Join(config.ImagesDir(), filepath.FromSlash(rels[0]))); !os.IsNotExist(err) {
+		t.Fatalf("old public image should be deleted, stat error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(config.ImagesDir(), filepath.FromSlash(rels[1]))); err != nil {
+		t.Fatalf("new private image should remain, stat error = %v", err)
 	}
 }
 

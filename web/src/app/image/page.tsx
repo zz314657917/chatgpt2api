@@ -766,6 +766,9 @@ function formatCreationTaskError(error: unknown, fallback = "生成图片失败"
 }
 
 function formatBillingSummary(session: NonNullable<ReturnType<typeof useAuthGuard>["session"]>) {
+  if (session.provider === "sub2api") {
+    return "统一账户扣费";
+  }
   const billing = session.billing;
   if (!billing) {
     return "本地额度 --";
@@ -780,6 +783,9 @@ function formatBillingSummary(session: NonNullable<ReturnType<typeof useAuthGuar
 }
 
 function hasEnoughBilling(session: NonNullable<ReturnType<typeof useAuthGuard>["session"]>, estimated: number) {
+  if (session.provider === "sub2api") {
+    return true;
+  }
   const billing = session.billing;
   return !billing || billing.unlimited || Math.max(0, Number(billing.available) || 0) >= estimated;
 }

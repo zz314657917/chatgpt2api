@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"image"
@@ -19,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"chatgpt2api/internal/imagestore"
 	"chatgpt2api/internal/storage"
 )
 
@@ -40,6 +42,7 @@ type ImageConfig interface {
 	ImageMetadataDir() string
 	ImageRetentionDays() int
 	ImageStorageLimitBytes() int64
+	ImageMaxSavedPerUser() int
 }
 
 type ImageAccessScope struct {
@@ -53,6 +56,9 @@ type imageMetadata struct {
 	OwnerName         string
 	Visibility        string
 	PublishedAt       string
+	StorageBackend    string
+	ObjectKey         string
+	ObjectURL         string
 	Prompt            string
 	Model             string
 	Quality           string
@@ -95,10 +101,11 @@ type GeneratedImageReference struct {
 }
 
 type ImageStorageCleanupOptions struct {
-	RetentionDays   int
-	MaxBytes        int64
-	ClearThumbnails bool
-	IncludePublic   bool
+	RetentionDays    int
+	MaxBytes         int64
+	MaxImagesPerUser int
+	ClearThumbnails  bool
+	IncludePublic    bool
 }
 
 type ImageStorageGovernanceSummary struct {
@@ -122,6 +129,7 @@ type ImageStorageGovernanceSummary struct {
 type ImageStorageCleanupResult struct {
 	RetentionDays         int    `json:"retention_days,omitempty"`
 	MaxBytes              int64  `json:"max_bytes,omitempty"`
+	MaxImagesPerUser      int    `json:"max_images_per_user,omitempty"`
 	IncludePublic         bool   `json:"include_public,omitempty"`
 	DeletedImages         int    `json:"deleted_images"`
 	DeletedThumbnails     int    `json:"deleted_thumbnails"`
@@ -233,9 +241,10 @@ func (s *ImageService) StorageGovernance() ImageStorageGovernanceSummary {
 
 func (s *ImageService) CleanupStorage(options ImageStorageCleanupOptions) (ImageStorageCleanupResult, error) {
 	result := ImageStorageCleanupResult{
-		RetentionDays: options.RetentionDays,
-		MaxBytes:      options.MaxBytes,
-		IncludePublic: options.IncludePublic,
+		RetentionDays:    options.RetentionDays,
+		MaxBytes:         options.MaxBytes,
+		MaxImagesPerUser: options.MaxImagesPerUser,
+		IncludePublic:    options.IncludePublic,
 	}
 	if options.ClearThumbnails {
 		stats, err := s.clearThumbnailCache()
@@ -254,6 +263,17 @@ func (s *ImageService) CleanupStorage(options ImageStorageCleanupOptions) (Image
 		}
 		if result.Action == "" {
 			result.Action = "retention"
+		}
+		result.addRemovalStats(stats)
+		result.PreservedPublicImages += preserved
+	}
+	if options.MaxImagesPerUser > 0 {
+		stats, preserved, err := s.cleanupByUserImageLimit(options.MaxImagesPerUser, options.IncludePublic)
+		if err != nil {
+			return result, err
+		}
+		if result.Action == "" {
+			result.Action = "user-limit"
 		}
 		result.addRemovalStats(stats)
 		result.PreservedPublicImages += preserved
@@ -285,8 +305,9 @@ func (r *ImageStorageCleanupResult) addRemovalStats(stats imageStorageRemovalSta
 
 func (s *ImageService) ListImages(baseURL, startDate, endDate string, scope ImageAccessScope) map[string]any {
 	_, _ = s.CleanupStorage(ImageStorageCleanupOptions{
-		RetentionDays: s.config.ImageRetentionDays(),
-		MaxBytes:      s.config.ImageStorageLimitBytes(),
+		RetentionDays:    s.config.ImageRetentionDays(),
+		MaxBytes:         s.config.ImageStorageLimitBytes(),
+		MaxImagesPerUser: s.config.ImageMaxSavedPerUser(),
 	})
 	root := s.config.ImagesDir()
 	items := make([]map[string]any, 0)
@@ -329,7 +350,7 @@ func (s *ImageService) ListImages(baseURL, startDate, endDate string, scope Imag
 			"path":       rel,
 			"date":       day,
 			"size":       info.Size(),
-			"url":        publicAssetURL(baseURL, "images", rel),
+			"url":        firstNonEmptyString(meta.ObjectURL, publicAssetURL(baseURL, "images", rel)),
 			"created_at": info.ModTime().Format("2006-01-02 15:04:05"),
 			"visibility": meta.Visibility,
 		}
@@ -807,6 +828,9 @@ func normalizeImageMetadata(raw map[string]any) imageMetadata {
 		OwnerName:         strings.TrimSpace(toString(raw["owner_name"])),
 		Visibility:        visibility,
 		PublishedAt:       strings.TrimSpace(toString(raw["published_at"])),
+		StorageBackend:    strings.TrimSpace(toString(raw["storage_backend"])),
+		ObjectKey:         strings.TrimSpace(toString(raw["object_key"])),
+		ObjectURL:         strings.TrimSpace(toString(raw["object_url"])),
 		Prompt:            strings.TrimSpace(toString(raw["prompt"])),
 		Model:             strings.TrimSpace(toString(raw["model"])),
 		Quality:           strings.TrimSpace(toString(raw["quality"])),
@@ -921,6 +945,15 @@ func (s *ImageService) writeImageMetadata(rel string, meta imageMetadata) error 
 	}
 	if meta.PublishedAt != "" {
 		value["published_at"] = meta.PublishedAt
+	}
+	if meta.StorageBackend != "" {
+		value["storage_backend"] = meta.StorageBackend
+	}
+	if meta.ObjectKey != "" {
+		value["object_key"] = meta.ObjectKey
+	}
+	if meta.ObjectURL != "" {
+		value["object_url"] = meta.ObjectURL
 	}
 	if meta.Prompt != "" {
 		value["prompt"] = meta.Prompt
@@ -1144,6 +1177,38 @@ func (s *ImageService) cleanupByRetention(retentionDays int, includePublic bool)
 	return total, preservedPublic, nil
 }
 
+func (s *ImageService) cleanupByUserImageLimit(maxImagesPerUser int, includePublic bool) (imageStorageRemovalStats, int, error) {
+	if maxImagesPerUser <= 0 {
+		return imageStorageRemovalStats{}, 0, nil
+	}
+	owned := map[string][]imageCleanupCandidate{}
+	for _, candidate := range s.imageCleanupCandidates() {
+		ownerID := strings.TrimSpace(candidate.meta.OwnerID)
+		if ownerID == "" {
+			continue
+		}
+		owned[ownerID] = append(owned[ownerID], candidate)
+	}
+	var total imageStorageRemovalStats
+	preservedPublic := 0
+	for _, candidates := range owned {
+		sort.Slice(candidates, func(i, j int) bool {
+			return candidates[i].info.ModTime().After(candidates[j].info.ModTime())
+		})
+		for index, candidate := range candidates {
+			if index < maxImagesPerUser {
+				continue
+			}
+			stats, err := s.removeImageGroup(candidate.rel)
+			if err != nil {
+				return total, preservedPublic, err
+			}
+			total.add(stats)
+		}
+	}
+	return total, preservedPublic, nil
+}
+
 func (s *ImageService) cleanupByStorageLimit(maxBytes int64, includePublic bool) (imageStorageRemovalStats, int, error) {
 	if maxBytes <= 0 {
 		return imageStorageRemovalStats{}, 0, nil
@@ -1191,7 +1256,16 @@ func (s *ImageService) removeImageGroup(rel string) (imageStorageRemovalStats, e
 	if err != nil {
 		return imageStorageRemovalStats{}, err
 	}
+	meta := s.imageMetadata(rel)
 	var stats imageStorageRemovalStats
+	if meta.ObjectKey != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		err := imagestore.DeleteFromEnv(ctx, meta.ObjectKey)
+		cancel()
+		if err != nil {
+			return stats, err
+		}
+	}
 	thumbnailRoot, err := filepath.Abs(s.config.ImageThumbnailsDir())
 	if err != nil {
 		return stats, err
@@ -1406,6 +1480,15 @@ func addImageMetadataFields(item map[string]any, meta imageMetadata, optionsValu
 	}
 	if meta.PublishedAt != "" {
 		item["published_at"] = meta.PublishedAt
+	}
+	if meta.StorageBackend != "" {
+		item["storage_backend"] = meta.StorageBackend
+	}
+	if meta.ObjectKey != "" {
+		item["object_key"] = meta.ObjectKey
+	}
+	if meta.ObjectURL != "" {
+		item["object_url"] = meta.ObjectURL
 	}
 	item["share_prompt_parameters"] = meta.SharePromptParams
 	item["share_reference_images"] = meta.ShareReferences

@@ -69,6 +69,13 @@ function formatBillingQuota(billing?: BillingState | null) {
   return String(Math.max(0, Number(billing.available) || 0));
 }
 
+function sessionQuotaLabel(session: StoredAuthSession | null) {
+  if (session?.provider === "sub2api") {
+    return "统一账户";
+  }
+  return formatBillingQuota(session?.billing);
+}
+
 function ThemeToggleButton({
   theme,
   onToggle,
@@ -309,7 +316,7 @@ export function TopNav() {
 
   useEffect(() => {
     if (session?.role === "user") {
-      setAvailableQuota(formatBillingQuota(session.billing));
+      setAvailableQuota(sessionQuotaLabel(session));
       return;
     }
     if (!hasAPIPermission(session, "GET", "/api/accounts")) {

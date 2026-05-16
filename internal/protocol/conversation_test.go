@@ -10,6 +10,7 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -20,6 +21,7 @@ import (
 	"time"
 
 	"chatgpt2api/internal/backend"
+	"chatgpt2api/internal/imagestore"
 	"chatgpt2api/internal/service"
 )
 
@@ -82,6 +84,74 @@ func TestFormatImageResultStoresOwnerName(t *testing.T) {
 	}
 	if meta["owner_id"] != "linuxdo:41499" || meta["owner_name"] != "Cassianvale" {
 		t.Fatalf("metadata = %#v", meta)
+	}
+}
+
+func TestFormatImageResultUploadsToObjectStorage(t *testing.T) {
+	var uploadedPath string
+	var uploadedBody []byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut {
+			t.Fatalf("method = %s, want PUT", r.Method)
+		}
+		uploadedPath = r.URL.Path
+		uploadedBody, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	t.Setenv(imagestore.EnvImageStorageBackend, "cos")
+	t.Setenv(imagestore.EnvImageObjectStorageEndpoint, server.URL)
+	t.Setenv(imagestore.EnvImageObjectStorageRegion, "ap-guangzhou")
+	t.Setenv(imagestore.EnvImageObjectStorageBucket, "bucket")
+	t.Setenv(imagestore.EnvImageObjectStorageAccessKeyID, "ak")
+	t.Setenv(imagestore.EnvImageObjectStorageSecretKey, "sk")
+	t.Setenv(imagestore.EnvImageObjectStoragePrefix, "chatgpt2api")
+	t.Setenv(imagestore.EnvImageObjectStorageForcePath, "true")
+	t.Setenv(imagestore.EnvImageObjectStoragePublicBase, "https://cdn.example.com/images")
+
+	config := testProtocolImageConfig{root: t.TempDir()}
+	engine := &Engine{Config: config}
+	result := engine.FormatImageResult(
+		[]map[string]any{{"b64_json": base64.StdEncoding.EncodeToString([]byte("png-bytes"))}},
+		"draw",
+		"url",
+		"https://example.test",
+		"linuxdo:41499",
+		"Cassianvale",
+		123,
+		"",
+	)
+
+	items, _ := result["data"].([]map[string]any)
+	if len(items) != 1 {
+		t.Fatalf("FormatImageResult() data = %#v", result["data"])
+	}
+	imageURL, _ := items[0]["url"].(string)
+	if !strings.HasPrefix(imageURL, "https://cdn.example.com/images/chatgpt2api/") {
+		t.Fatalf("url = %q", imageURL)
+	}
+	localURL, _ := items[0]["local_url"].(string)
+	if !strings.HasPrefix(localURL, "https://example.test/images/") {
+		t.Fatalf("local_url = %q", localURL)
+	}
+	rel := strings.TrimPrefix(localURL, "https://example.test/images/")
+	metaData, err := os.ReadFile(filepath.Join(config.ImageMetadataDir(), filepath.FromSlash(rel)+".json"))
+	if err != nil {
+		t.Fatalf("ReadFile(metadata) error = %v", err)
+	}
+	var meta map[string]any
+	if err := json.Unmarshal(metaData, &meta); err != nil {
+		t.Fatalf("Unmarshal(metadata) error = %v", err)
+	}
+	if meta["object_url"] != imageURL || meta["storage_backend"] != "cos" {
+		t.Fatalf("metadata = %#v", meta)
+	}
+	objectKey, _ := meta["object_key"].(string)
+	if objectKey == "" || !strings.HasPrefix(uploadedPath, "/bucket/") || !strings.HasSuffix(uploadedPath, filepath.ToSlash(rel)) {
+		t.Fatalf("uploadedPath=%q objectKey=%q rel=%q", uploadedPath, objectKey, rel)
+	}
+	if !bytes.Equal(uploadedBody, []byte("png-bytes")) {
+		t.Fatalf("uploadedBody = %q", uploadedBody)
 	}
 }
 
