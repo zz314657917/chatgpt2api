@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ChevronDown, ChevronUp, Github, LogOut, MoonStar, Send, Sun, UserCircle2 } from "lucide-react";
+import { ChevronDown, ChevronUp, LogOut, MoonStar, Sun, UserCircle2 } from "lucide-react";
 import { motion, useReducedMotion, type Transition } from "motion/react";
 import { Link, NavLink, useLocation, useNavigate } from "react-router-dom";
 
@@ -22,6 +22,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { fetchAccounts, logout, type Account, type BillingState } from "@/lib/api";
+import { useAppMeta } from "@/lib/use-app-meta";
 import { cn } from "@/lib/utils";
 import {
   applyColorTheme,
@@ -219,11 +220,11 @@ function AccountMenu({
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid gap-2">
             <Link
               to={profileNavItem.href}
               className={cn(
-                "col-span-2 flex items-center justify-center gap-2 rounded-xl px-3 py-2 text-sm font-medium transition hover:bg-accent hover:text-accent-foreground",
+                "flex items-center justify-center gap-2 rounded-xl px-3 py-2 text-sm font-medium transition hover:bg-accent hover:text-accent-foreground",
                 profileActive ? "bg-[#edf4ff] text-[#1456f0] dark:bg-sky-950/30 dark:text-sky-300" : "text-foreground",
               )}
               onClick={() => setOpen(false)}
@@ -231,26 +232,6 @@ function AccountMenu({
               <UserCircle2 className="size-4" />
               个人中心
             </Link>
-            <a
-              href="https://t.me/+YBR7t_CPOYBkYzU1"
-              target="_blank"
-              rel="noreferrer"
-              className="flex items-center justify-center gap-2 rounded-xl px-3 py-2 text-sm text-muted-foreground transition hover:bg-accent hover:text-accent-foreground"
-              onClick={() => setOpen(false)}
-            >
-              <Send className="size-4" />
-              Telegram
-            </a>
-            <a
-              href="https://github.com/ZyphrZero/chatgpt2api"
-              target="_blank"
-              rel="noreferrer"
-              className="flex items-center justify-center gap-2 rounded-xl px-3 py-2 text-sm text-muted-foreground transition hover:bg-accent hover:text-accent-foreground"
-              onClick={() => setOpen(false)}
-            >
-              <Github className="size-4" />
-              GitHub
-            </a>
           </div>
 
           <button
@@ -273,6 +254,7 @@ function AccountMenu({
 export function TopNav() {
   const location = useLocation();
   const navigate = useNavigate();
+  const appMeta = useAppMeta();
   const pathname = location.pathname.replace(/\/+$/, "") || "/";
   const [session, setSession] = useState<StoredAuthSession | null | undefined>(() => getCachedAuthSession());
   const [theme, setTheme] = useState<ColorTheme>(() => getPreferredColorTheme());
@@ -411,7 +393,7 @@ export function TopNav() {
               aria-hidden="true"
               className="size-7 rounded-[10px] shadow-[0_4px_10px_rgba(184,90,127,0.16)]"
             />
-            <span className="truncate">chatgpt2api</span>
+            <span className="truncate">{appMeta.app_title || "落叶网络"}</span>
             {navCollapsed ? <ChevronDown aria-hidden="true" /> : <ChevronUp aria-hidden="true" />}
           </Button>
           <div className="ml-auto flex shrink-0 items-center gap-1 lg:hidden">

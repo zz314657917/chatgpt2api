@@ -553,8 +553,8 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       const nextConfig = normalizeConfig(data.config);
       set({ config: nextConfig });
       dispatchAppMetaUpdated({
-        app_title: "chatgpt2api",
-        project_name: "chatgpt2api",
+        app_title: "落叶网络",
+        project_name: "落叶网络",
         login_page_image_url: String(nextConfig.login_page_image_url || ""),
         login_page_image_mode: normalizeLoginPageImageMode(nextConfig.login_page_image_mode),
         login_page_image_zoom: Number(nextConfig.login_page_image_zoom),
