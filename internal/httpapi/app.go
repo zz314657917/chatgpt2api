@@ -592,8 +592,8 @@ func (a *App) handleSettings(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) handleAppMeta(w http.ResponseWriter, r *http.Request) {
 	util.WriteJSON(w, http.StatusOK, map[string]any{
-		"app_title":                   "chatgpt2api",
-		"project_name":                "chatgpt2api",
+		"app_title":                   "落叶网络",
+		"project_name":                "落叶网络",
 		"login_page_image_url":        a.config.LoginPageImageURL(),
 		"login_page_image_mode":       a.config.LoginPageImageMode(),
 		"login_page_image_zoom":       a.config.LoginPageImageZoom(),
