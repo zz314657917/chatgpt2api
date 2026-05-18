@@ -57,6 +57,7 @@ const (
 	defaultImageTaskTimeoutSeconds = 300
 	minImageTaskTimeoutSeconds     = 30
 	maxImageTaskTimeoutSeconds     = 3600
+	defaultImageMaxSavedPerUser    = 30
 )
 
 type Store struct {
@@ -205,7 +206,7 @@ func (s *Store) ImageStorageLimitBytes() int64 {
 }
 
 func (s *Store) ImageMaxSavedPerUser() int {
-	value := intSetting(s.settingValue("image_max_saved_per_user", 50), 50)
+	value := normalizeImageMaxSavedPerUserSetting(s.settingValue("image_max_saved_per_user", defaultImageMaxSavedPerUser))
 	if value < 0 {
 		return 0
 	}
@@ -506,7 +507,7 @@ func (s *Store) Update(data map[string]any) (map[string]any, error) {
 		next["image_storage_limit_mb"] = normalizeNonNegativeInt(value)
 	}
 	if value, ok := next["image_max_saved_per_user"]; ok {
-		next["image_max_saved_per_user"] = normalizeNonNegativeInt(value)
+		next["image_max_saved_per_user"] = normalizeImageMaxSavedPerUserSetting(value)
 	}
 	if value, ok := next["default_billing_type"]; ok {
 		next["default_billing_type"] = normalizeDefaultBillingType(value)
@@ -809,6 +810,14 @@ func normalizeNonNegativeInt(value any) int {
 	n := intSetting(value, 0)
 	if n < 0 {
 		return 0
+	}
+	return n
+}
+
+func normalizeImageMaxSavedPerUserSetting(value any) int {
+	n := normalizeNonNegativeInt(value)
+	if n > defaultImageMaxSavedPerUser {
+		return defaultImageMaxSavedPerUser
 	}
 	return n
 }
