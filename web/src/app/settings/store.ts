@@ -43,6 +43,7 @@ import {
 } from "@/lib/login-page-image-layout";
 
 export const PAGE_SIZE_OPTIONS = ["50", "100", "200"] as const;
+const IMAGE_MAX_SAVED_PER_USER_LIMIT = 30;
 
 export type PageSizeOption = (typeof PAGE_SIZE_OPTIONS)[number];
 
@@ -68,6 +69,13 @@ function nonNegativeNumberOrDefault(value: unknown, fallback: number) {
   return Math.max(0, numeric);
 }
 
+function imageMaxSavedPerUserOrDefault(value: unknown) {
+  return Math.min(
+    IMAGE_MAX_SAVED_PER_USER_LIMIT,
+    nonNegativeNumberOrDefault(value, IMAGE_MAX_SAVED_PER_USER_LIMIT),
+  );
+}
+
 function normalizeConfig(config: SettingsConfig): SettingsConfig {
   const loginImageTransform = normalizeLoginPageImageTransform({
     zoom: Number(config.login_page_image_zoom),
@@ -86,7 +94,7 @@ function normalizeConfig(config: SettingsConfig): SettingsConfig {
     default_subscription_period: normalizeDefaultSubscriptionPeriod(config.default_subscription_period),
     image_retention_days: Number(config.image_retention_days || 30),
     image_storage_limit_mb: Math.max(0, Number(config.image_storage_limit_mb) || 0),
-    image_max_saved_per_user: nonNegativeNumberOrDefault(config.image_max_saved_per_user, 50),
+    image_max_saved_per_user: imageMaxSavedPerUserOrDefault(config.image_max_saved_per_user),
     log_retention_days: Number(config.log_retention_days || 7),
     auto_remove_invalid_accounts: Boolean(config.auto_remove_invalid_accounts),
     auto_remove_rate_limited_accounts: Boolean(config.auto_remove_rate_limited_accounts),
@@ -325,7 +333,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         default_subscription_period: normalizeDefaultSubscriptionPeriod(config.default_subscription_period),
         image_retention_days: Math.max(1, Number(config.image_retention_days) || 30),
         image_storage_limit_mb: Math.max(0, Number(config.image_storage_limit_mb) || 0),
-        image_max_saved_per_user: nonNegativeNumberOrDefault(config.image_max_saved_per_user, 50),
+        image_max_saved_per_user: imageMaxSavedPerUserOrDefault(config.image_max_saved_per_user),
         log_retention_days: Math.min(3650, Math.max(1, Number(config.log_retention_days) || 7)),
         auto_remove_invalid_accounts: Boolean(config.auto_remove_invalid_accounts),
         auto_remove_rate_limited_accounts: Boolean(config.auto_remove_rate_limited_accounts),

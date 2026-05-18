@@ -36,6 +36,7 @@ const (
 	maxLoginPageImageSize      = 10 << 20
 	imageThumbnailCacheControl = "public, max-age=31536000, immutable"
 	authSessionCookieName      = "chatgpt2api_session"
+	imageMaxSavedPerUserLimit  = 30
 )
 
 type App struct {
@@ -1054,7 +1055,7 @@ func (a *App) handleImageStorageGovernance(w http.ResponseWriter, r *http.Reques
 		case "retention":
 			options.RetentionDays = util.ToInt(body["retention_days"], a.config.ImageRetentionDays())
 		case "user-limit":
-			options.MaxImagesPerUser = util.ToInt(body["max_images_per_user"], a.config.ImageMaxSavedPerUser())
+			options.MaxImagesPerUser = normalizedImageMaxSavedPerUser(util.ToInt(body["max_images_per_user"], a.config.ImageMaxSavedPerUser()))
 		case "quota":
 			options.MaxBytes = imageCleanupMaxBytes(body["max_bytes"], body["max_mb"], a.config.ImageStorageLimitBytes())
 		case "thumbnails":
@@ -1062,7 +1063,7 @@ func (a *App) handleImageStorageGovernance(w http.ResponseWriter, r *http.Reques
 		case "all":
 			options.RetentionDays = util.ToInt(body["retention_days"], a.config.ImageRetentionDays())
 			options.MaxBytes = imageCleanupMaxBytes(body["max_bytes"], body["max_mb"], a.config.ImageStorageLimitBytes())
-			options.MaxImagesPerUser = util.ToInt(body["max_images_per_user"], a.config.ImageMaxSavedPerUser())
+			options.MaxImagesPerUser = normalizedImageMaxSavedPerUser(util.ToInt(body["max_images_per_user"], a.config.ImageMaxSavedPerUser()))
 			options.ClearThumbnails = util.ToBool(body["clear_thumbnails"])
 		default:
 			util.WriteError(w, http.StatusBadRequest, "action must be retention, user-limit, quota, thumbnails, or all")
@@ -1090,6 +1091,16 @@ func imageCleanupMaxBytes(rawBytes, rawMB any, fallback int64) int64 {
 		return int64(mb) * 1024 * 1024
 	}
 	return fallback
+}
+
+func normalizedImageMaxSavedPerUser(value int) int {
+	if value <= 0 {
+		return 0
+	}
+	if value > imageMaxSavedPerUserLimit {
+		return imageMaxSavedPerUserLimit
+	}
+	return value
 }
 
 func (a *App) handleStorageInfo(w http.ResponseWriter, r *http.Request) {
