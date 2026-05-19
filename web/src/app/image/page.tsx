@@ -238,7 +238,15 @@ function buildReferenceImageFromResult(image: StoredImage, fileName: string): St
 }
 
 async function fetchImageAsFile(url: string, fileName: string) {
-  const blob = await fetchAuthenticatedImageBlob(url);
+  let blob: Blob;
+  try {
+    blob = await fetchAuthenticatedImageBlob(url);
+  } catch (error) {
+    if (error instanceof TypeError && /fetch/i.test(error.message)) {
+      throw new Error("读取图片失败：浏览器无法访问原图，请刷新页面后重试");
+    }
+    throw error;
+  }
   return new File([blob], fileName, { type: blob.type || "image/png" });
 }
 
@@ -296,10 +304,23 @@ async function buildReferenceImageFromStoredImage(image: StoredImage, fileName: 
     };
   }
 
-  if (!image.url) {
+  const referenceUrls = Array.from(new Set([image.localUrl, image.url].filter((value): value is string => Boolean(value))));
+  if (referenceUrls.length === 0) {
     return null;
   }
-  const file = await fetchImageAsFile(image.url, fileName);
+  let file: File | null = null;
+  let lastError: unknown = null;
+  for (const referenceUrl of referenceUrls) {
+    try {
+      file = await fetchImageAsFile(referenceUrl, fileName);
+      break;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  if (!file) {
+    throw lastError instanceof Error ? lastError : new Error("读取图片失败");
+  }
   return {
     referenceImage: {
       name: file.name,
@@ -459,6 +480,7 @@ const STORED_IMAGE_FIELDS: Array<keyof StoredImage> = [
   "visibility",
   "b64_json",
   "url",
+  "localUrl",
   "width",
   "height",
   "resolution",
@@ -489,13 +511,16 @@ function taskDataToStoredImage(image: StoredImage, task: CreationTask, dataIndex
   const successUpdates = (item: CreationTaskDataItem) => {
     const width = positiveDimension(item.width);
     const height = positiveDimension(item.height);
+    const localUrl = item.local_url || image.localUrl;
+    const imageUrl = item.url || localUrl;
     return {
       taskId: task.id,
       taskStatus: "success" as const,
       status: "success" as const,
       b64_json: item.b64_json,
-      url: item.url,
-      path: item.url ? getManagedImagePathFromUrl(item.url) || image.path : image.path,
+      url: imageUrl,
+      localUrl,
+      path: localUrl || imageUrl ? getManagedImagePathFromUrl(localUrl || imageUrl || "") || image.path : image.path,
       visibility: taskVisibility,
       width,
       height,
@@ -515,6 +540,7 @@ function taskDataToStoredImage(image: StoredImage, task: CreationTask, dataIndex
         text_response: task.data?.[dataIndex]?.text_response || task.error || "",
         b64_json: undefined,
         url: undefined,
+        localUrl: undefined,
         path: undefined,
         visibility: undefined,
         revised_prompt: undefined,
@@ -522,7 +548,7 @@ function taskDataToStoredImage(image: StoredImage, task: CreationTask, dataIndex
       });
     }
     const item = task.data?.[dataIndex];
-    if (!item?.b64_json && !item?.url) {
+    if (!item?.b64_json && !item?.url && !item?.local_url) {
       if (dataIndex > 0 && image.taskId !== image.id) {
         const slotStatus = creationTaskImageStatus(task, dataIndex);
         if (slotStatus === "error" || slotStatus === "cancelled") {
@@ -552,7 +578,7 @@ function taskDataToStoredImage(image: StoredImage, task: CreationTask, dataIndex
 
   if (task.status === "queued" || task.status === "running") {
     const item = task.data?.[dataIndex];
-    if (item?.b64_json || item?.url) {
+    if (item?.b64_json || item?.url || item?.local_url) {
       return updateStoredImage(image, successUpdates(item));
     }
     return updateStoredImage(image, {
@@ -573,6 +599,7 @@ function taskDataToStoredImage(image: StoredImage, task: CreationTask, dataIndex
         text_response: task.error || "",
         b64_json: undefined,
         url: undefined,
+        localUrl: undefined,
         path: undefined,
         visibility: undefined,
         revised_prompt: undefined,
@@ -580,7 +607,7 @@ function taskDataToStoredImage(image: StoredImage, task: CreationTask, dataIndex
       });
     }
     const item = task.data?.[dataIndex];
-    if (item?.b64_json || item?.url) {
+    if (item?.b64_json || item?.url || item?.local_url) {
       return updateStoredImage(image, successUpdates(item));
     }
     return updateStoredImage(image, {
@@ -594,7 +621,7 @@ function taskDataToStoredImage(image: StoredImage, task: CreationTask, dataIndex
 
   if (task.status === "cancelled") {
     const item = task.data?.[dataIndex];
-    if (item?.b64_json || item?.url) {
+    if (item?.b64_json || item?.url || item?.local_url) {
       return updateStoredImage(image, successUpdates(item));
     }
     return updateStoredImage(image, {
@@ -1898,7 +1925,8 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         toast.error("图片生成成功后才能修改公开状态");
         return;
       }
-      const path = targetImage.path || (targetImage.url ? getManagedImagePathFromUrl(targetImage.url) : "");
+      const imageUrl = targetImage.localUrl || targetImage.url || "";
+      const path = targetImage.path || (imageUrl ? getManagedImagePathFromUrl(imageUrl) : "");
       if (!path) {
         toast.error("未找到可同步到图库的图片路径");
         return;
@@ -2524,6 +2552,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                       status: "loading" as const,
                       b64_json: undefined,
                       url: undefined,
+                      localUrl: undefined,
                       path: undefined,
                       width: undefined,
                       height: undefined,

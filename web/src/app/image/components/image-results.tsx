@@ -71,7 +71,7 @@ function getStoredImageSrc(image: StoredImage) {
   if (image.b64_json) {
     return `data:image/${image.outputFormat || "png"};base64,${image.b64_json}`;
   }
-  return image.url || "";
+  return image.localUrl || image.url || "";
 }
 
 function isTurnBusy(turn: ImageTurn) {
@@ -88,7 +88,8 @@ function imageSelectionKey(conversationId: string, turnId: string, imageId: stri
 
 function getImageFormatLabel(image: StoredImage, src: string) {
   const dataUrlFormat = src.match(/^data:image\/([^;,]+)/i)?.[1];
-  const urlFormat = image.url ? image.url.split("?")[0]?.match(/\.([a-z0-9]+)$/i)?.[1] : "";
+  const imageUrl = image.localUrl || image.url || "";
+  const urlFormat = imageUrl ? imageUrl.split("?")[0]?.match(/\.([a-z0-9]+)$/i)?.[1] : "";
   const normalized = String(dataUrlFormat || urlFormat || (image.b64_json ? "png" : "png")).toLowerCase();
   const format = normalized === "jpeg" ? "jpg" : normalized;
   return `IMAGE ${format.toUpperCase()}`;
@@ -731,7 +732,7 @@ export function ImageResults({
                       const nextVisibility = visibility === "public" ? "private" : "public";
                       const visibilityMutatingKey = `${selectedConversation.id}:${turn.id}:${image.id}`;
                       const isVisibilityMutating = visibilityMutatingImageKey === visibilityMutatingKey;
-                      const canUpdateVisibility = Boolean(image.path || image.url);
+                      const canUpdateVisibility = Boolean(image.path || image.localUrl || image.url);
 
                       return (
                         <figure
