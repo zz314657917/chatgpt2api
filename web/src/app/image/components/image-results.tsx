@@ -52,6 +52,7 @@ type ImageResultsProps = {
   onOpenLightbox: (images: ImageLightboxItem[], index: number) => void;
   onApplyPromptPreset: (preset: ImagePromptPreset) => void | Promise<void>;
   onContinueEdit: (conversationId: string, image: StoredImage | StoredReferenceImage) => void;
+  onContinueEditBatch: (conversationId: string, images: StoredImage[]) => void;
   onEditTurn: (conversationId: string, turnId: string) => void;
   onCancelTurn: (conversationId: string, turnId: string) => void | Promise<void>;
   onRegenerateTurn: (conversationId: string, turnId: string) => void | Promise<void>;
@@ -263,6 +264,7 @@ export function ImageResults({
   onOpenLightbox,
   onApplyPromptPreset,
   onContinueEdit,
+  onContinueEditBatch,
   onEditTurn,
   onCancelTurn,
   onRegenerateTurn,
@@ -415,6 +417,12 @@ export function ImageResults({
             : [];
         });
         const selectedDownloadableImages = downloadableImages.filter((image) => selectedImageIds[image.selectionKey]);
+        const selectedEditableImages = turn.images.filter(
+          (image) =>
+            image.status === "success" &&
+            getStoredImageSrc(image) &&
+            selectedImageIds[imageSelectionKey(selectedConversation.id, turn.id, image.id)],
+        );
         const successfulTurnImages = turn.images.flatMap((image, index) => {
           const src = image.status === "success" ? getStoredImageSrc(image) : "";
           return src
@@ -485,6 +493,17 @@ export function ImageResults({
                   <Download className="size-3" />
                 )}
                 下载已选 ({selectedDownloadableImages.length})
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-8 rounded-full border-[#e5e7eb] bg-white px-2.5 text-[11px] text-[#45515e] shadow-sm hover:bg-black/[0.05]"
+                disabled={selectedEditableImages.length === 0}
+                onClick={() => onContinueEditBatch(selectedConversation.id, selectedEditableImages)}
+              >
+                <PencilLine className="size-3" />
+                加入编辑已选 ({selectedEditableImages.length})
               </Button>
               <Button
                 type="button"
@@ -575,19 +594,37 @@ export function ImageResults({
                   {turn.referenceImages.length > 0 ? (
                     <div className="mt-3 flex flex-wrap justify-start gap-2">
                       {turn.referenceImages.map((image, index) => (
-                        <button
+                        <div
                           key={`${turn.id}-${image.name}-${index}`}
-                          type="button"
-                          onClick={() => onOpenLightbox(referenceLightboxImages, index)}
-                          className="group relative size-20 shrink-0 overflow-hidden rounded-2xl border border-stone-200/80 bg-stone-100/60 text-left transition hover:border-stone-300 sm:size-24"
-                          aria-label={`预览参考图 ${image.name || index + 1}`}
+                          className="group relative size-20 shrink-0 overflow-hidden rounded-2xl border border-stone-200/80 bg-stone-100/60 transition hover:border-stone-300 sm:size-24"
+                          onMouseLeave={(event) => blurFocusedElementInContainer(event.currentTarget)}
                         >
-                          <img
-                            src={image.dataUrl}
-                            alt={image.name || `参考图 ${index + 1}`}
-                            className="absolute inset-0 h-full w-full object-cover transition duration-200 group-hover:scale-[1.02]"
-                          />
-                        </button>
+                          <button
+                            type="button"
+                            onClick={() => onOpenLightbox(referenceLightboxImages, index)}
+                            className="block size-full text-left"
+                            aria-label={`预览参考图 ${image.name || index + 1}`}
+                          >
+                            <img
+                              src={image.dataUrl}
+                              alt={image.name || `参考图 ${index + 1}`}
+                              className="absolute inset-0 h-full w-full object-cover transition duration-200 group-hover:scale-[1.02] group-hover:brightness-90"
+                            />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              event.currentTarget.blur();
+                              onContinueEdit(selectedConversation.id, image);
+                            }}
+                            className="absolute top-2 right-2 z-10 inline-flex size-7 items-center justify-center rounded-full bg-white/95 text-stone-800 opacity-0 shadow-sm transition hover:bg-white hover:text-stone-950 group-hover:opacity-100 group-focus-within:opacity-100"
+                            aria-label={`继续编辑参考图 ${image.name || index + 1}`}
+                            title="继续编辑"
+                          >
+                            <PencilLine className="size-3.5" />
+                          </button>
+                        </div>
                       ))}
                     </div>
                   ) : null}
@@ -683,6 +720,7 @@ export function ImageResults({
                     const imageSrc = image.status === "success" ? getStoredImageSrc(image) : "";
                     if (image.status === "success" && imageSrc) {
                       const currentIndex = successfulTurnImages.findIndex((item) => item.id === image.id);
+                      const imageNumber = currentIndex >= 0 ? currentIndex + 1 : index + 1;
                       const selectionKey = imageSelectionKey(selectedConversation.id, turn.id, image.id);
                       const selected = Boolean(selectedImageIds[selectionKey]);
                       const sizeLabel = image.b64_json ? formatBase64ImageFileSize(image.b64_json) : imageSizeLabels[image.id] || "";
@@ -740,14 +778,14 @@ export function ImageResults({
                               event.currentTarget.blur();
                             }}
                             className={cn(
-                              "absolute top-2 left-2 z-10 inline-flex size-6 items-center justify-center rounded-full border transition duration-150",
+                              "absolute top-2 left-2 z-10 inline-flex h-6 min-w-6 items-center justify-center rounded-full border px-1.5 text-[11px] font-semibold tabular-nums transition duration-150",
                               selected
                                 ? "border-[#1456f0] bg-[#1456f0] text-white opacity-100 shadow-sm"
-                                : "pointer-events-none border-white/90 bg-black/20 text-transparent opacity-0 shadow-sm group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 hover:bg-black/30",
+                                : "border-white/80 bg-black/45 text-white opacity-100 shadow-sm backdrop-blur-sm hover:bg-black/60",
                             )}
-                            aria-label={selected ? "取消选择图片" : "选择图片"}
+                            aria-label={selected ? `取消选择图片 ${imageNumber}` : `选择图片 ${imageNumber}`}
                           >
-                            {selected ? <Check className="size-3.5" /> : null}
+                            {selected ? <Check className="size-3.5" /> : `#${imageNumber}`}
                           </button>
                           <div className="pointer-events-none absolute top-2 right-2 z-10 flex items-center gap-1 opacity-0 transition duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100">
                             <button

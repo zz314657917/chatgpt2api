@@ -862,12 +862,16 @@ function buildCreationTaskMessages(conversation: ImageConversation, activeTurnId
       break;
     }
 
-    const assistantParts = turn.images.flatMap((image) => {
+    const assistantParts = turn.images.flatMap((image, index) => {
+      const imageNumber = index + 1;
       if (image.status === "message" && image.text_response?.trim()) {
         return [image.text_response.trim()];
       }
       if (image.status === "success" && image.revised_prompt?.trim()) {
-        return [`Generated image: ${image.revised_prompt.trim()}`];
+        return [`Generated image #${imageNumber}: ${image.revised_prompt.trim()}`];
+      }
+      if (image.status === "success") {
+        return [`Generated image #${imageNumber}: image result was created successfully.`];
       }
       return [];
     });
@@ -1784,6 +1788,20 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     });
   }, []);
 
+  const appendConversationReferenceImages = useCallback((conversationId: string, images: StoredReferenceImage[]) => {
+    setSelectedConversationId(conversationId);
+    setComposerMode("image");
+    setReferenceImages((prev) => [
+      ...prev,
+      ...images.map((image) => ({
+        ...image,
+        source: "conversation" as const,
+      })),
+    ]);
+    setImagePrompt("");
+    textareaRef.current?.focus();
+  }, []);
+
   const handleContinueEdit = useCallback(
     async (conversationId: string, image: StoredImage | StoredReferenceImage) => {
       try {
@@ -1800,24 +1818,55 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
           return;
         }
 
-        setSelectedConversationId(conversationId);
-        setComposerMode("image");
-        setReferenceImages((prev) => [
-          ...prev,
-          {
-            ...nextReference.referenceImage,
-            source: "conversation",
-          },
-        ]);
-        setImagePrompt("");
-        textareaRef.current?.focus();
+        appendConversationReferenceImages(conversationId, [nextReference.referenceImage]);
         toast.success("已加入当前参考图，继续输入描述即可编辑");
       } catch (error) {
         const message = error instanceof Error ? error.message : "读取结果图失败";
         toast.error(message);
       }
     },
-    [],
+    [appendConversationReferenceImages],
+  );
+
+  const handleContinueEditBatch = useCallback(
+    async (conversationId: string, images: StoredImage[]) => {
+      if (images.length === 0) {
+        return;
+      }
+
+      const toastId = toast.loading(`正在读取 ${images.length} 张图片...`);
+      try {
+        const results = await Promise.allSettled(
+          images.map((image, index) =>
+            buildReferenceImageFromStoredImage(
+              image,
+              `conversation-${conversationId}-${Date.now()}-${index + 1}.${imageFileExtensionForOutputFormat(image.outputFormat)}`,
+            ),
+          ),
+        );
+        const references = results.flatMap((result) =>
+          result.status === "fulfilled" && result.value ? [result.value.referenceImage] : [],
+        );
+        toast.dismiss(toastId);
+        if (references.length === 0) {
+          toast.error("读取已选图片失败");
+          return;
+        }
+
+        appendConversationReferenceImages(conversationId, references);
+        const failedCount = images.length - references.length;
+        toast.success(
+          failedCount > 0
+            ? `已加入 ${references.length} 张参考图，${failedCount} 张读取失败`
+            : `已加入 ${references.length} 张参考图，继续输入描述即可编辑`,
+        );
+      } catch (error) {
+        toast.dismiss(toastId);
+        const message = error instanceof Error ? error.message : "读取已选图片失败";
+        toast.error(message);
+      }
+    },
+    [appendConversationReferenceImages],
   );
 
   const openLightbox = useCallback((images: ImageLightboxItem[], index: number) => {
@@ -3333,6 +3382,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
               onOpenLightbox={openLightbox}
               onApplyPromptPreset={handleApplyPromptPreset}
               onContinueEdit={handleContinueEdit}
+              onContinueEditBatch={handleContinueEditBatch}
               onEditTurn={openEditTurnDialog}
               onCancelTurn={handleCancelTurn}
               onRegenerateTurn={handleRegenerateTurn}
