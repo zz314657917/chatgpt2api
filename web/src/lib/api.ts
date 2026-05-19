@@ -408,6 +408,7 @@ export type ImageResponse = {
 export type CreationTaskData = {
   b64_json?: string;
   url?: string;
+  local_url?: string;
   revised_prompt?: string;
   text_response?: string;
   width?: number;

@@ -38,6 +38,7 @@ export type StoredImage = {
   visibility?: ImageVisibility;
   b64_json?: string;
   url?: string;
+  localUrl?: string;
   width?: number;
   height?: number;
   resolution?: string;
@@ -160,6 +161,7 @@ async function imageConversationsStorageKey() {
 
 function normalizeStoredImage(image: StoredImage): StoredImage {
   const url = typeof image.url === "string" && image.url ? image.url : undefined;
+  const localUrl = typeof image.localUrl === "string" && image.localUrl ? image.localUrl : undefined;
   const width = Number(image.width);
   const height = Number(image.height);
   const resolution = typeof image.resolution === "string" && image.resolution ? image.resolution : undefined;
@@ -180,12 +182,13 @@ function normalizeStoredImage(image: StoredImage): StoredImage {
     path:
       typeof image.path === "string" && image.path
         ? image.path
-        : url
-          ? getManagedImagePathFromUrl(url) || undefined
+        : localUrl || url
+          ? getManagedImagePathFromUrl(localUrl || url || "") || undefined
           : undefined,
     visibility:
       image.visibility === "public" || image.visibility === "private" ? image.visibility : undefined,
     url,
+    localUrl,
     width: Number.isFinite(width) && width > 0 ? width : undefined,
     height: Number.isFinite(height) && height > 0 ? height : undefined,
     resolution,
@@ -198,7 +201,7 @@ function normalizeStoredImage(image: StoredImage): StoredImage {
   }
   return {
     ...normalized,
-    status: image.b64_json || image.url ? "success" : "loading",
+    status: image.b64_json || image.url || image.localUrl ? "success" : "loading",
   };
 }
 
