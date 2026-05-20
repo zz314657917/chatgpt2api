@@ -1896,6 +1896,29 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     [appendConversationReferenceImages],
   );
 
+  const handleImageResultDrop = useCallback(
+    async (imageIds: string[]) => {
+      if (!selectedConversationId || imageIds.length === 0) {
+        return;
+      }
+      const conversation = conversationsRef.current.find((item) => item.id === selectedConversationId);
+      if (!conversation) {
+        toast.error("未找到当前会话");
+        return;
+      }
+      const imageIdSet = new Set(imageIds);
+      const images = conversation.turns.flatMap((turn) =>
+        turn.images.filter((image) => imageIdSet.has(image.id) && image.status === "success"),
+      );
+      if (images.length === 0) {
+        toast.error("未找到可编辑的图片");
+        return;
+      }
+      await handleContinueEditBatch(conversation.id, images);
+    },
+    [handleContinueEditBatch, selectedConversationId],
+  );
+
   const openLightbox = useCallback((images: ImageLightboxItem[], index: number) => {
     if (images.length === 0) {
       return;
@@ -3468,6 +3491,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                 onSubmit={handleSubmit}
                 onOpenPromptMarket={() => setIsPromptMarketOpen(true)}
                 onReferenceImageChange={handleReferenceImageChange}
+                onImageResultDrop={handleImageResultDrop}
                 onRemoveReferenceImage={handleRemoveReferenceImage}
               />
             </div>
