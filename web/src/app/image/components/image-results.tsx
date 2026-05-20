@@ -5,6 +5,7 @@ import { Check, CircleStop, Clock3, Download, Eye, Globe2, LoaderCircle, Lock, P
 
 import { AuthenticatedImage } from "@/components/authenticated-image";
 import { Button } from "@/components/ui/button";
+import { IMAGE_RESULT_DRAG_MIME, type ImageResultDragPayload } from "@/app/image/image-result-drag";
 import type { ImagePromptPreset } from "@/app/image/image-presets";
 import { formatImageSizeDisplay, getImageSizeRequirementLabel, isHighResolutionImageSize } from "@/app/image/image-options";
 import { IMAGE_MODEL_ROUTE_DETAILS, supportsImageOutputCompression } from "@/lib/api";
@@ -84,6 +85,14 @@ function isTurnBusy(turn: ImageTurn) {
 
 function imageSelectionKey(conversationId: string, turnId: string, imageId: string) {
   return `${conversationId}:${turnId}:${imageId}`;
+}
+
+function setImageResultDragData(dataTransfer: DataTransfer, payload: ImageResultDragPayload, imageSrc: string) {
+  const encoded = JSON.stringify(payload);
+  dataTransfer.effectAllowed = "copy";
+  dataTransfer.setData(IMAGE_RESULT_DRAG_MIME, encoded);
+  dataTransfer.setData("text/plain", imageSrc);
+  dataTransfer.setData("text/uri-list", imageSrc);
 }
 
 function getImageFormatLabel(image: StoredImage, src: string) {
@@ -745,6 +754,27 @@ export function ImageResults({
                         >
                           <button
                             type="button"
+                            draggable
+                            onDragStart={(event) => {
+                              const selectedImages = selected
+                                ? turn.images.filter(
+                                    (candidate) =>
+                                      candidate.status === "success" &&
+                                      getStoredImageSrc(candidate) &&
+                                      selectedImageIds[imageSelectionKey(selectedConversation.id, turn.id, candidate.id)],
+                                  )
+                                : [image];
+                              setImageResultDragData(
+                                event.dataTransfer,
+                                {
+                                  items: selectedImages.map((candidate) => ({
+                                    conversationId: selectedConversation.id,
+                                    imageId: candidate.id,
+                                  })),
+                                },
+                                imageSrc,
+                              );
+                            }}
                             onClick={(event) => {
                               toggleImageSelection(selectionKey);
                               event.currentTarget.blur();

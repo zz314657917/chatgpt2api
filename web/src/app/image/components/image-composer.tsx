@@ -30,6 +30,7 @@ import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { hasImageResultDragPayload, parseImageResultDragPayload } from "@/app/image/image-result-drag";
 import {
   CUSTOM_IMAGE_ASPECT_RATIO,
   IMAGE_ASPECT_RATIO_OPTIONS,
@@ -94,6 +95,7 @@ type ImageComposerProps = {
   onSubmit: () => void | Promise<void>;
   onOpenPromptMarket: () => void;
   onReferenceImageChange: (files: File[]) => void | Promise<void>;
+  onImageResultDrop: (imageIds: string[]) => void | Promise<void>;
   onRemoveReferenceImage: (index: number) => void;
 };
 
@@ -127,6 +129,9 @@ function hasDraggedFiles(dataTransfer: DataTransfer) {
 }
 
 function hasDraggedImage(dataTransfer: DataTransfer) {
+  if (hasImageResultDragPayload(dataTransfer)) {
+    return true;
+  }
   if (!hasDraggedFiles(dataTransfer)) {
     return false;
   }
@@ -313,6 +318,7 @@ export function ImageComposer({
   onSubmit,
   onOpenPromptMarket,
   onReferenceImageChange,
+  onImageResultDrop,
   onRemoveReferenceImage,
 }: ImageComposerProps) {
   const [lightboxOpen, setLightboxOpen] = useState(false);
@@ -512,12 +518,17 @@ export function ImageComposer({
   };
 
   const handleReferenceImageDrop = (event: DragEvent<HTMLDivElement>) => {
-    if (!hasDraggedFiles(event.dataTransfer)) {
+    const imageResultPayload = parseImageResultDragPayload(event.dataTransfer);
+    if (!imageResultPayload && !hasDraggedFiles(event.dataTransfer)) {
       return;
     }
 
     event.preventDefault();
     resetReferenceImageDragState();
+    if (imageResultPayload) {
+      void onImageResultDrop(imageResultPayload.items.map((item) => item.imageId));
+      return;
+    }
     addReferenceImages(Array.from(event.dataTransfer.files));
   };
 
