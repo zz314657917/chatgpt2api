@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   ArrowRight,
+  ChevronDown,
   KeyRound,
   LoaderCircle,
   LogIn,
@@ -35,6 +36,12 @@ import { getDefaultRouteForSession } from "@/store/auth";
 const loginBackgroundClass =
   "bg-[#fff9fb] bg-[radial-gradient(rgba(20,86,240,0.12)_1px,transparent_1px),linear-gradient(145deg,#fff8fa_0%,#ffffff_48%,#f4f8ff_100%)] [background-position:0_0,center] [background-size:12px_12px,cover] dark:bg-[#090d16] dark:bg-[radial-gradient(rgba(96,165,250,0.16)_1px,transparent_1px),linear-gradient(145deg,#080b13_0%,#101827_52%,#070b12_100%)]";
 
+type LeafNetworkLogin = {
+  enabled: boolean;
+  launchUrl: string;
+  brandName: string;
+};
+
 export default function LoginPage() {
   const navigate = useNavigate();
   const appMeta = useAppMeta();
@@ -46,6 +53,12 @@ export default function LoginPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [linuxDoEnabled, setLinuxDoEnabled] = useState(false);
   const [registrationEnabled, setRegistrationEnabled] = useState(false);
+  const [adminLoginOpen, setAdminLoginOpen] = useState(false);
+  const [leafLogin, setLeafLogin] = useState<LeafNetworkLogin>({
+    enabled: false,
+    launchUrl: "",
+    brandName: "落叶网络",
+  });
   const [theme, setTheme] = useState<ColorTheme>(() => getPreferredColorTheme());
   const { isCheckingAuth } = useRedirectIfAuthenticated();
 
@@ -57,11 +70,21 @@ export default function LoginPage() {
         if (active) {
           setLinuxDoEnabled(Boolean(providers.linuxdo?.enabled));
           setRegistrationEnabled(Boolean(providers.registration?.enabled));
+          setLeafLogin({
+            enabled: Boolean(providers.sub2api?.enabled && providers.sub2api?.launch_url),
+            launchUrl: String(providers.sub2api?.launch_url || ""),
+            brandName: String(providers.sub2api?.brand_name || "").trim() || "落叶网络",
+          });
         }
       } catch {
         if (active) {
           setLinuxDoEnabled(false);
           setRegistrationEnabled(false);
+          setLeafLogin({
+            enabled: false,
+            launchUrl: "",
+            brandName: "落叶网络",
+          });
         }
       }
     };
@@ -109,6 +132,16 @@ export default function LoginPage() {
     const redirectTo = params.get("redirect") || "/image";
     const base = webConfig.apiUrl.replace(/\/$/, "");
     window.location.href = `${base}/auth/linuxdo/start?redirect=${encodeURIComponent(redirectTo)}`;
+  };
+
+  const handleLeafNetworkLogin = () => {
+    if (!leafLogin.enabled || !leafLogin.launchUrl) {
+      toast.error(`${leafLogin.brandName}账号登录未配置，请联系管理员`);
+      return;
+    }
+    const launchURL = new URL(leafLogin.launchUrl);
+    launchURL.searchParams.set("auto_launch", "1");
+    window.location.href = launchURL.toString();
   };
 
   const handleThemeToggle = () => {
@@ -183,134 +216,182 @@ export default function LoginPage() {
               </div>
               <div className="flex flex-col gap-2 transition-all duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none">
                 <h1 className="text-[2.1rem] leading-[1.12] font-semibold tracking-[-0.04em] text-[#222222] transition-opacity duration-200 dark:text-white sm:text-[2.5rem]">
-                  {isRegisterMode ? "CreateAccount" : "WelcomeBack"}
+                  使用{leafLogin.brandName}账号进入工作台
                 </h1>
                 <p className="max-w-[340px] text-sm leading-6 text-[#45515e] transition-opacity duration-200 dark:text-white/62">
-                  {isRegisterMode
-                    ? `创建账号后进入 ${appMeta.app_title || "chatgpt2api"} 控制台。`
-                    : `使用账号和密码进入 ${appMeta.app_title || "chatgpt2api"} 控制台。`}
+                  一个账号即可管理额度、订阅和创作记录。
                 </p>
               </div>
             </div>
 
-            <form
-              className="flex flex-col gap-5"
-              onSubmit={(event) => {
-                event.preventDefault();
-                void handleSubmit();
-              }}
-            >
-              <div className="flex flex-col gap-2">
-                <label htmlFor="login-username" className="block text-sm font-semibold text-[#222222] dark:text-white/88">
-                  用户名
-                </label>
-                <div className="relative">
-                  <UserRound className="pointer-events-none absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-[#8e8e93] dark:text-white/42" />
-                  <Input
-                    id="login-username"
-                    type="text"
-                    autoComplete="username"
-                    value={username}
-                    onChange={(event) => setUsername(event.target.value)}
-                    placeholder="admin"
-                    className="h-12 rounded-[16px] bg-white/90 pl-10 shadow-[0_6px_18px_rgba(24,40,72,0.05)] dark:border-white/12 dark:bg-white/8 dark:text-white dark:placeholder:text-white/38 dark:shadow-[0_12px_26px_rgba(2,6,23,0.24)]"
-                  />
-                </div>
-              </div>
-              <div
-                className={`-m-4 grid overflow-hidden px-4 py-4 transition-[grid-template-rows,opacity,transform] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:translate-y-0 motion-reduce:transition-none ${
-                  isRegisterMode ? "grid-rows-[1fr] opacity-100 translate-y-0" : "pointer-events-none grid-rows-[0fr] opacity-0 -translate-y-1.5"
-                }`}
-                aria-hidden={!isRegisterMode}
+            <div className="flex flex-col gap-4">
+              <Button
+                type="button"
+                variant="outline"
+                className="relative h-12 w-full overflow-hidden rounded-[1.45rem] border-slate-300/85 bg-white/72 text-[#18181b] shadow-[0_12px_28px_rgba(148,163,184,0.18)] backdrop-blur-md transition-all duration-200 hover:-translate-y-0.5 hover:border-slate-300 hover:bg-white/90 hover:text-[#18181b] hover:shadow-[0_16px_34px_rgba(148,163,184,0.22)] focus-visible:ring-slate-300/55 disabled:border-slate-200/80 disabled:bg-white/58 disabled:text-slate-500 disabled:opacity-100 disabled:shadow-none disabled:hover:translate-y-0 dark:border-white/15 dark:bg-white/12 dark:text-white dark:shadow-[0_14px_30px_rgba(2,6,23,0.32)] dark:hover:border-white/22 dark:hover:bg-white/16 dark:hover:text-white dark:hover:shadow-[0_18px_36px_rgba(2,6,23,0.38)] dark:disabled:border-white/10 dark:disabled:bg-white/8 dark:disabled:text-white/45"
+                onClick={handleLeafNetworkLogin}
+                disabled={!leafLogin.enabled || isSubmitting}
               >
-                <div className="min-h-0 overflow-visible">
-                  <div className="flex flex-col gap-2">
-                    <label htmlFor="login-display-name" className="block text-sm font-semibold text-[#222222] dark:text-white/88">
-                      昵称
-                    </label>
-                    <div className="relative">
-                      <UserPlus className="pointer-events-none absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-[#8e8e93] dark:text-white/42" />
-                      <Input
-                        id="login-display-name"
-                        type="text"
-                        autoComplete="nickname"
-                        tabIndex={isRegisterMode ? undefined : -1}
-                        value={displayName}
-                        onChange={(event) => setDisplayName(event.target.value)}
-                        placeholder="可选"
-                        className="h-12 rounded-[16px] bg-white/90 pl-10 shadow-[0_6px_18px_rgba(24,40,72,0.05)] dark:border-white/12 dark:bg-white/8 dark:text-white dark:placeholder:text-white/38 dark:shadow-[0_12px_26px_rgba(2,6,23,0.24)]"
-                      />
-                    </div>
-                  </div>
-                </div>
-              </div>
-              <div className="flex flex-col gap-2">
-                <label htmlFor="login-password" className="block text-sm font-semibold text-[#222222] dark:text-white/88">
-                  密码
-                </label>
-                <div className="relative">
-                  <KeyRound className="pointer-events-none absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-[#8e8e93] dark:text-white/42" />
-                  <Input
-                    id="login-password"
-                    type="password"
-                    autoComplete={isRegisterMode ? "new-password" : "current-password"}
-                    value={password}
-                    onChange={(event) => setPassword(event.target.value)}
-                    placeholder={isRegisterMode ? "至少 8 位" : "请输入密码"}
-                    className="h-12 rounded-[16px] bg-white/90 pl-10 shadow-[0_6px_18px_rgba(24,40,72,0.05)] dark:border-white/12 dark:bg-white/8 dark:text-white dark:placeholder:text-white/38 dark:shadow-[0_12px_26px_rgba(2,6,23,0.24)]"
-                  />
-                </div>
-              </div>
+                <span className="pointer-events-none absolute inset-x-4 top-1 h-3 rounded-full bg-white/75 blur-sm dark:bg-white/14" />
+                <span className="pointer-events-none absolute inset-[1px] rounded-[1.35rem] border border-white/55 dark:border-white/10" />
+                <span className="relative z-10 flex items-center justify-center gap-2 font-semibold tracking-[-0.01em]">
+                  <LogIn className="size-4" />
+                  登录或注册{leafLogin.brandName}账号
+                  <ArrowRight className="size-4" />
+                </span>
+              </Button>
 
-              <div className="flex flex-col gap-3 pt-1">
-                <Button
-                  type="submit"
-                  variant="outline"
-                  className="relative mx-auto h-12 w-[88%] overflow-hidden rounded-[1.45rem] border-slate-300/85 bg-white/72 text-[#18181b] shadow-[0_12px_28px_rgba(148,163,184,0.18)] backdrop-blur-md transition-all duration-200 hover:-translate-y-0.5 hover:border-slate-300 hover:bg-white/90 hover:text-[#18181b] hover:shadow-[0_16px_34px_rgba(148,163,184,0.22)] focus-visible:ring-slate-300/55 disabled:border-slate-200/80 disabled:bg-white/58 disabled:text-slate-500 disabled:opacity-100 disabled:shadow-none disabled:hover:translate-y-0 dark:border-white/15 dark:bg-white/12 dark:text-white dark:shadow-[0_14px_30px_rgba(2,6,23,0.32)] dark:hover:border-white/22 dark:hover:bg-white/16 dark:hover:text-white dark:hover:shadow-[0_18px_36px_rgba(2,6,23,0.38)] dark:disabled:border-white/10 dark:disabled:bg-white/8 dark:disabled:text-white/45"
-                  disabled={isSubmitting}
+              <p className="text-xs leading-5 text-[#6b7280] dark:text-white/50">
+                {leafLogin.enabled
+                  ? "登录或注册完成后，会自动回到创作工作台。"
+                  : `${leafLogin.brandName}账号登录暂未配置，请联系管理员或使用管理员本地登录。`}
+              </p>
+
+              <div className="rounded-[20px] border border-slate-200/80 bg-white/58 shadow-[0_10px_24px_rgba(148,163,184,0.10)] dark:border-white/10 dark:bg-white/6 dark:shadow-[0_12px_28px_rgba(2,6,23,0.18)]">
+                <button
+                  type="button"
+                  className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left text-sm font-semibold text-[#45515e] transition-colors hover:text-[#18181b] dark:text-white/68 dark:hover:text-white"
+                  onClick={() => setAdminLoginOpen((value) => !value)}
+                  aria-expanded={adminLoginOpen}
                 >
-                  <span className="pointer-events-none absolute inset-x-4 top-1 h-3 rounded-full bg-white/75 blur-sm dark:bg-white/14" />
-                  <span className="pointer-events-none absolute inset-[1px] rounded-[1.35rem] border border-white/55 dark:border-white/10" />
-                  <span className="relative z-10 flex items-center gap-2 font-semibold tracking-[-0.01em] transition-opacity duration-150">
-                    {isSubmitting ? (
-                      <LoaderCircle className="size-4 animate-spin" />
-                    ) : (
-                      <ArrowRight className="size-4" />
-                    )}
-                    {isRegisterMode ? "注册并进入" : "登录控制台"}
+                  <span className="flex items-center gap-2">
+                    <ShieldCheck className="size-4 text-[#8e8e93] dark:text-white/44" />
+                    管理员本地登录
                   </span>
-                </Button>
-                {registrationEnabled ? (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    className="mx-auto h-10 w-[88%] rounded-[1.2rem] text-[#45515e] hover:bg-black/5 hover:text-[#18181b] dark:text-white/62 dark:hover:bg-white/8 dark:hover:text-white"
-                    onClick={() => setIsRegisterMode((value) => !value)}
-                    disabled={isSubmitting}
+                  <ChevronDown className={`size-4 transition-transform ${adminLoginOpen ? "rotate-180" : ""}`} />
+                </button>
+
+                {adminLoginOpen ? (
+                  <form
+                    className="flex flex-col gap-5 border-t border-slate-200/70 px-4 py-4 dark:border-white/10"
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      void handleSubmit();
+                    }}
                   >
-                    <span className="transition-opacity duration-150">
-                      {isRegisterMode ? "已有账号，返回登录" : "没有账号，注册一个"}
-                    </span>
-                  </Button>
-                ) : null}
-                {linuxDoEnabled ? (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="relative mx-auto h-12 w-[88%] overflow-hidden rounded-[1.45rem] border-slate-200/95 bg-white/60 text-[#18181b] shadow-[0_10px_24px_rgba(148,163,184,0.14)] backdrop-blur-md transition-all duration-200 hover:-translate-y-0.5 hover:border-slate-300 hover:bg-white/84 hover:text-[#18181b] hover:shadow-[0_14px_30px_rgba(148,163,184,0.18)] focus-visible:ring-slate-300/55 disabled:opacity-50 disabled:hover:translate-y-0 dark:border-white/12 dark:bg-white/8 dark:text-white/88 dark:shadow-[0_12px_28px_rgba(2,6,23,0.26)] dark:hover:border-white/20 dark:hover:bg-white/13 dark:hover:text-white"
-                    onClick={handleLinuxDoLogin}
-                    disabled={isSubmitting}
-                  >
-                    <span className="pointer-events-none absolute inset-x-4 top-1 h-3 rounded-full bg-white/70 blur-sm dark:bg-white/12" />
-                    <span className="pointer-events-none absolute inset-[1px] rounded-[1.35rem] border border-white/50 dark:border-white/10" />
-                    <span className="relative z-10 flex items-center gap-2 font-semibold tracking-[-0.01em]">
-                      <LogIn className="size-4" />
-                      使用 Linuxdo 登录
-                    </span>
-                  </Button>
+                    <div className="flex flex-col gap-1">
+                      <div className="text-sm font-semibold text-[#222222] dark:text-white/88">
+                        {isRegisterMode ? "创建本地管理员账号" : "本地管理员入口"}
+                      </div>
+                      <p className="text-xs leading-5 text-[#6b7280] dark:text-white/50">
+                        用于后台维护账号登录，普通用户请使用{leafLogin.brandName}账号。
+                      </p>
+                    </div>
+
+                    <div className="flex flex-col gap-2">
+                      <label htmlFor="login-username" className="block text-sm font-semibold text-[#222222] dark:text-white/88">
+                        用户名
+                      </label>
+                      <div className="relative">
+                        <UserRound className="pointer-events-none absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-[#8e8e93] dark:text-white/42" />
+                        <Input
+                          id="login-username"
+                          type="text"
+                          autoComplete="username"
+                          value={username}
+                          onChange={(event) => setUsername(event.target.value)}
+                          placeholder="admin"
+                          className="h-12 rounded-[16px] bg-white/90 pl-10 shadow-[0_6px_18px_rgba(24,40,72,0.05)] dark:border-white/12 dark:bg-white/8 dark:text-white dark:placeholder:text-white/38 dark:shadow-[0_12px_26px_rgba(2,6,23,0.24)]"
+                        />
+                      </div>
+                    </div>
+                    <div
+                      className={`-m-4 grid overflow-hidden px-4 py-4 transition-[grid-template-rows,opacity,transform] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:translate-y-0 motion-reduce:transition-none ${
+                        isRegisterMode ? "grid-rows-[1fr] opacity-100 translate-y-0" : "pointer-events-none grid-rows-[0fr] opacity-0 -translate-y-1.5"
+                      }`}
+                      aria-hidden={!isRegisterMode}
+                    >
+                      <div className="min-h-0 overflow-visible">
+                        <div className="flex flex-col gap-2">
+                          <label htmlFor="login-display-name" className="block text-sm font-semibold text-[#222222] dark:text-white/88">
+                            昵称
+                          </label>
+                          <div className="relative">
+                            <UserPlus className="pointer-events-none absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-[#8e8e93] dark:text-white/42" />
+                            <Input
+                              id="login-display-name"
+                              type="text"
+                              autoComplete="nickname"
+                              tabIndex={isRegisterMode ? undefined : -1}
+                              value={displayName}
+                              onChange={(event) => setDisplayName(event.target.value)}
+                              placeholder="可选"
+                              className="h-12 rounded-[16px] bg-white/90 pl-10 shadow-[0_6px_18px_rgba(24,40,72,0.05)] dark:border-white/12 dark:bg-white/8 dark:text-white dark:placeholder:text-white/38 dark:shadow-[0_12px_26px_rgba(2,6,23,0.24)]"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex flex-col gap-2">
+                      <label htmlFor="login-password" className="block text-sm font-semibold text-[#222222] dark:text-white/88">
+                        密码
+                      </label>
+                      <div className="relative">
+                        <KeyRound className="pointer-events-none absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-[#8e8e93] dark:text-white/42" />
+                        <Input
+                          id="login-password"
+                          type="password"
+                          autoComplete={isRegisterMode ? "new-password" : "current-password"}
+                          value={password}
+                          onChange={(event) => setPassword(event.target.value)}
+                          placeholder={isRegisterMode ? "至少 8 位" : "请输入密码"}
+                          className="h-12 rounded-[16px] bg-white/90 pl-10 shadow-[0_6px_18px_rgba(24,40,72,0.05)] dark:border-white/12 dark:bg-white/8 dark:text-white dark:placeholder:text-white/38 dark:shadow-[0_12px_26px_rgba(2,6,23,0.24)]"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="flex flex-col gap-3 pt-1">
+                      <Button
+                        type="submit"
+                        variant="outline"
+                        className="relative h-12 w-full overflow-hidden rounded-[1.45rem] border-slate-300/85 bg-white/72 text-[#18181b] shadow-[0_12px_28px_rgba(148,163,184,0.18)] backdrop-blur-md transition-all duration-200 hover:-translate-y-0.5 hover:border-slate-300 hover:bg-white/90 hover:text-[#18181b] hover:shadow-[0_16px_34px_rgba(148,163,184,0.22)] focus-visible:ring-slate-300/55 disabled:border-slate-200/80 disabled:bg-white/58 disabled:text-slate-500 disabled:opacity-100 disabled:shadow-none disabled:hover:translate-y-0 dark:border-white/15 dark:bg-white/12 dark:text-white dark:shadow-[0_14px_30px_rgba(2,6,23,0.32)] dark:hover:border-white/22 dark:hover:bg-white/16 dark:hover:text-white dark:hover:shadow-[0_18px_36px_rgba(2,6,23,0.38)] dark:disabled:border-white/10 dark:disabled:bg-white/8 dark:disabled:text-white/45"
+                        disabled={isSubmitting}
+                      >
+                        <span className="pointer-events-none absolute inset-x-4 top-1 h-3 rounded-full bg-white/75 blur-sm dark:bg-white/14" />
+                        <span className="pointer-events-none absolute inset-[1px] rounded-[1.35rem] border border-white/55 dark:border-white/10" />
+                        <span className="relative z-10 flex items-center gap-2 font-semibold tracking-[-0.01em] transition-opacity duration-150">
+                          {isSubmitting ? (
+                            <LoaderCircle className="size-4 animate-spin" />
+                          ) : (
+                            <ArrowRight className="size-4" />
+                          )}
+                          {isRegisterMode ? "注册本地账号" : "登录后台"}
+                        </span>
+                      </Button>
+                      {registrationEnabled ? (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          className="h-10 w-full rounded-[1.2rem] text-[#45515e] hover:bg-black/5 hover:text-[#18181b] dark:text-white/62 dark:hover:bg-white/8 dark:hover:text-white"
+                          onClick={() => setIsRegisterMode((value) => !value)}
+                          disabled={isSubmitting}
+                        >
+                          <span className="transition-opacity duration-150">
+                            {isRegisterMode ? "已有本地账号，返回登录" : "创建本地账号"}
+                          </span>
+                        </Button>
+                      ) : null}
+                      {linuxDoEnabled ? (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="relative h-12 w-full overflow-hidden rounded-[1.45rem] border-slate-200/95 bg-white/60 text-[#18181b] shadow-[0_10px_24px_rgba(148,163,184,0.14)] backdrop-blur-md transition-all duration-200 hover:-translate-y-0.5 hover:border-slate-300 hover:bg-white/84 hover:text-[#18181b] hover:shadow-[0_14px_30px_rgba(148,163,184,0.18)] focus-visible:ring-slate-300/55 disabled:opacity-50 disabled:hover:translate-y-0 dark:border-white/12 dark:bg-white/8 dark:text-white/88 dark:shadow-[0_12px_28px_rgba(2,6,23,0.26)] dark:hover:border-white/20 dark:hover:bg-white/13 dark:hover:text-white"
+                          onClick={handleLinuxDoLogin}
+                          disabled={isSubmitting}
+                        >
+                          <span className="pointer-events-none absolute inset-x-4 top-1 h-3 rounded-full bg-white/70 blur-sm dark:bg-white/12" />
+                          <span className="pointer-events-none absolute inset-[1px] rounded-[1.35rem] border border-white/50 dark:border-white/10" />
+                          <span className="relative z-10 flex items-center gap-2 font-semibold tracking-[-0.01em]">
+                            <LogIn className="size-4" />
+                            使用 Linuxdo 登录
+                          </span>
+                        </Button>
+                      ) : null}
+                    </div>
+                  </form>
                 ) : null}
               </div>
-            </form>
+            </div>
           </div>
         </section>
 

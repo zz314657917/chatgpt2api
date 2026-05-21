@@ -53,12 +53,18 @@ func (a *App) handleAuthProviders(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
+	sub2APILaunchURL := a.config.Sub2APILaunchURL()
 	util.WriteJSON(w, http.StatusOK, map[string]any{
 		"linuxdo": map[string]any{
 			"enabled": a.config.LinuxDoOAuth().Ready(),
 		},
 		"registration": map[string]any{
 			"enabled": a.config.RegistrationEnabled(),
+		},
+		"sub2api": map[string]any{
+			"enabled":    sub2APILaunchURL != "" && a.config.Sub2APIRedeemURL() != "" && a.config.Sub2APIRedeemSecret() != "",
+			"launch_url": sub2APILaunchURL,
+			"brand_name": a.config.Sub2APIBrandName(),
 		},
 	})
 }
