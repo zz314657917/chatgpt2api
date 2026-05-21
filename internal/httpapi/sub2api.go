@@ -5,13 +5,15 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"mime/multipart"
 	"net/http"
+	"net/textproto"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"chatgpt2api/internal/protocol"
@@ -63,6 +65,32 @@ func (a *App) runLoggedSub2APIImageEditTask(ctx context.Context, identity servic
 	})
 }
 
+func (a *App) runLoggedSub2APIChatTask(ctx context.Context, identity service.Identity, payload map[string]any, binding service.Sub2APIBinding) (map[string]any, error) {
+	start := time.Now()
+	requestCapture := payloadAuditCapture(payload)
+	payload["owner_id"] = identityScope(identity)
+	payload["owner_name"] = identityDisplayName(identity)
+	payload["stream"] = false
+	model := firstNonEmpty(util.Clean(payload["model"]), util.ImageModelAuto)
+	result, err := a.callSub2APIChatCompletions(ctx, payload, binding)
+	if err != nil {
+		a.logCall(identity, "文本生成", http.MethodPost, "/api/creation-tasks/chat-completions", model, start, "failed", protocolErrorHTTPStatus(err), err.Error(), nil, requestCapture)
+		return result, err
+	}
+	text := chatCompletionResultText(result)
+	if text == "" {
+		err = errors.New("模型没有返回文本内容")
+		a.logCall(identity, "文本生成", http.MethodPost, "/api/creation-tasks/chat-completions", model, start, "failed", http.StatusBadGateway, err.Error(), nil, requestCapture)
+		return result, err
+	}
+	a.logCall(identity, "文本生成", http.MethodPost, "/api/creation-tasks/chat-completions", model, start, "success", http.StatusOK, "", nil, requestCapture)
+	return sub2APIChatTaskResult(result, text), nil
+}
+
+func (a *App) callSub2APIChatCompletions(ctx context.Context, payload map[string]any, binding service.Sub2APIBinding) (map[string]any, error) {
+	return a.postSub2APIJSON(ctx, binding, "chat/completions", sub2APIChatPayload(payload))
+}
+
 func (a *App) callSub2APIImageGenerations(ctx context.Context, identity service.Identity, payload map[string]any, binding service.Sub2APIBinding) (map[string]any, error) {
 	return a.callSub2APIImageBatches(ctx, identity, payload, func(batchPayload map[string]any) (map[string]any, error) {
 		body := sub2APIImageJSONPayload(batchPayload)
@@ -87,11 +115,7 @@ func (a *App) callSub2APIImageEdits(ctx context.Context, identity service.Identi
 		}
 		_ = writer.WriteField("response_format", "b64_json")
 		for _, image := range images {
-			field, err := writer.CreateFormFile("image", firstNonEmpty(image.Filename, "image.png"))
-			if err != nil {
-				return nil, err
-			}
-			if _, err := field.Write(image.Data); err != nil {
+			if err := writeSub2APIImagePart(writer, image); err != nil {
 				return nil, err
 			}
 		}
@@ -111,26 +135,13 @@ func (a *App) callSub2APIImageBatches(ctx context.Context, identity service.Iden
 	created := time.Now().Unix()
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	resultCh := make(chan sub2APIImageBatchOutput, requested)
-	var wg sync.WaitGroup
-	for index := 1; index <= requested; index++ {
-		wg.Add(1)
-		go func(index int) {
-			defer wg.Done()
-			resultCh <- a.callSub2APIImageBatch(ctx, identity, payload, call, acquire, index)
-		}(index)
-	}
-	go func() {
-		wg.Wait()
-		close(resultCh)
-	}()
 	results := make([]sub2APIImageBatchOutput, 0, requested)
-	var firstErr error
-	for result := range resultCh {
+	for index := 1; index <= requested; index++ {
+		result := a.callSub2APIImageBatch(ctx, identity, payload, call, acquire, index)
 		results = append(results, result)
-		if result.err != nil && firstErr == nil {
-			firstErr = result.err
+		if result.err != nil {
 			cancel()
+			return sub2APIImageBatchResult(created, sub2APIIndexedImageData(results, true)), result.err
 		}
 		if result.created != 0 {
 			created = result.created
@@ -142,11 +153,7 @@ func (a *App) callSub2APIImageBatches(ctx context.Context, identity service.Iden
 			}
 		}
 	}
-	allData := sub2APIIndexedImageData(results, firstErr != nil)
-	if firstErr != nil {
-		return sub2APIImageBatchResult(created, allData), firstErr
-	}
-	return sub2APIImageBatchResult(created, allData), nil
+	return sub2APIImageBatchResult(created, sub2APIIndexedImageData(results, false)), nil
 }
 
 type sub2APIImageBatchOutput struct {
@@ -287,7 +294,7 @@ func sub2APIImageJSONPayload(payload map[string]any) map[string]any {
 		"model":   sub2APIImageModel(payload["model"]),
 		"prompt":  util.Clean(payload["prompt"]),
 		"n":       util.ToInt(payload["n"], 1),
-		"size":    util.Clean(payload["size"]),
+		"size":    sub2APIImageSize(payload),
 		"quality": util.Clean(payload["quality"]),
 	}
 	for _, key := range []string{"background", "moderation", "style", "partial_images", "output_format", "output_compression", "input_image_mask"} {
@@ -295,15 +302,86 @@ func sub2APIImageJSONPayload(payload map[string]any) map[string]any {
 			out[key] = value
 		}
 	}
-	if size := firstNonEmpty(util.Clean(payload["requested_size"]), util.Clean(payload["image_resolution"])); size != "" && out["size"] == "" {
-		out["size"] = size
-	}
 	for key, value := range out {
 		if value == "" {
 			delete(out, key)
 		}
 	}
 	return out
+}
+
+func sub2APIImageSize(payload map[string]any) string {
+	size := firstNonEmpty(util.Clean(payload["size"]), util.Clean(payload["requested_size"]), util.Clean(payload["image_resolution"]))
+	size = protocol.NormalizeImageGenerationSize(size)
+	switch strings.ToLower(strings.TrimSpace(size)) {
+	case "1:1":
+		return "1024x1024"
+	case "16:9":
+		return "1536x864"
+	case "9:16":
+		return "864x1536"
+	default:
+		return strings.TrimSpace(size)
+	}
+}
+
+func writeSub2APIImagePart(writer *multipart.Writer, image protocol.UploadedImage) error {
+	filename := firstNonEmpty(image.Filename, "image.png")
+	header := make(textproto.MIMEHeader)
+	header.Set("Content-Disposition", mime.FormatMediaType("form-data", map[string]string{
+		"name":     "image",
+		"filename": filename,
+	}))
+	header.Set("Content-Type", sub2APIImageContentType(image))
+	part, err := writer.CreatePart(header)
+	if err != nil {
+		return err
+	}
+	_, err = part.Write(image.Data)
+	return err
+}
+
+func sub2APIImageContentType(image protocol.UploadedImage) string {
+	contentType := strings.TrimSpace(strings.Split(image.ContentType, ";")[0])
+	if strings.HasPrefix(strings.ToLower(contentType), "image/") {
+		return contentType
+	}
+	if detected := http.DetectContentType(image.Data); strings.HasPrefix(strings.ToLower(detected), "image/") {
+		return detected
+	}
+	filename := strings.ToLower(strings.TrimSpace(image.Filename))
+	switch {
+	case strings.HasSuffix(filename, ".jpg"), strings.HasSuffix(filename, ".jpeg"):
+		return "image/jpeg"
+	case strings.HasSuffix(filename, ".webp"):
+		return "image/webp"
+	default:
+		return "image/png"
+	}
+}
+
+func sub2APIChatPayload(payload map[string]any) map[string]any {
+	out := map[string]any{
+		"model":    firstNonEmpty(util.Clean(payload["model"]), util.ImageModelAuto),
+		"messages": util.AsMapSlice(payload["messages"]),
+		"stream":   false,
+	}
+	if n := util.ToInt(payload["n"], 1); n > 1 {
+		out["n"] = n
+	}
+	return out
+}
+
+func sub2APIChatTaskResult(result map[string]any, text string) map[string]any {
+	if result == nil {
+		result = map[string]any{}
+	}
+	created := int64(util.ToInt(result["created"], int(time.Now().Unix())))
+	return map[string]any{
+		"created":     created,
+		"output_type": "text",
+		"data":        []map[string]any{{"text_response": text}},
+	}
 }
 
 func sub2APIImageModel(value any) string {
@@ -347,7 +425,7 @@ func (a *App) doSub2APIRequest(ctx context.Context, binding service.Sub2APIBindi
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		upstreamMessage := sub2APIErrorMessage(data)
 		return nil, &protocol.ImageGenerationError{
-			Message:    sub2APIImageRequestErrorMessage(resp.StatusCode, upstreamMessage),
+			Message:    sub2APIRequestErrorMessage(endpoint, resp.StatusCode, upstreamMessage),
 			StatusCode: resp.StatusCode,
 			Type:       "server_error",
 			Code:       "upstream_error",
@@ -355,7 +433,7 @@ func (a *App) doSub2APIRequest(ctx context.Context, binding service.Sub2APIBindi
 	}
 	var result map[string]any
 	if err := json.Unmarshal(data, &result); err != nil {
-		return nil, &protocol.ImageGenerationError{Message: "sub2api image response is invalid", StatusCode: http.StatusBadGateway, Type: "server_error", Code: "upstream_error"}
+		return nil, &protocol.ImageGenerationError{Message: sub2APIInvalidResponseMessage(endpoint), StatusCode: http.StatusBadGateway, Type: "server_error", Code: "upstream_error"}
 	}
 	return result, nil
 }
@@ -459,16 +537,33 @@ func sub2APIErrorMessage(data []byte) string {
 }
 
 func sub2APIImageRequestErrorMessage(status int, upstreamMessage string) string {
+	return sub2APIRequestErrorMessage("images/generations", status, upstreamMessage)
+}
+
+func sub2APIRequestErrorMessage(endpoint string, status int, upstreamMessage string) string {
 	upstreamMessage = strings.TrimSpace(upstreamMessage)
 	normalized := strings.ToLower(upstreamMessage)
 	if status == http.StatusBadGateway || strings.Contains(normalized, "upstream service temporarily unavailable") || strings.Contains(normalized, "no available accounts") {
 		if upstreamMessage == "" {
 			upstreamMessage = "empty response"
 		}
+		if strings.Contains(endpoint, "chat/completions") {
+			return fmt.Sprintf("Sub2API 对话上游账号池暂不可用，请稍后重试或在 Sub2API 中检查对话账号/分组。原始错误：HTTP %d %s", status, upstreamMessage)
+		}
 		return fmt.Sprintf("Sub2API 图片上游账号池暂不可用，请稍后重试或在 Sub2API 中检查图片账号/分组。原始错误：HTTP %d %s", status, upstreamMessage)
 	}
 	if upstreamMessage == "" {
 		upstreamMessage = "empty response"
 	}
+	if strings.Contains(endpoint, "chat/completions") {
+		return fmt.Sprintf("Sub2API 对话请求失败：HTTP %d %s", status, upstreamMessage)
+	}
 	return fmt.Sprintf("Sub2API 图片请求失败：HTTP %d %s", status, upstreamMessage)
+}
+
+func sub2APIInvalidResponseMessage(endpoint string) string {
+	if strings.Contains(endpoint, "chat/completions") {
+		return "sub2api chat response is invalid"
+	}
+	return "sub2api image response is invalid"
 }

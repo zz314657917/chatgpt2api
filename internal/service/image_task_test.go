@@ -144,6 +144,25 @@ func TestImageTaskServiceRejectsBlankPromptBeforeQueueing(t *testing.T) {
 	}
 }
 
+func TestImageTaskServiceRejectsBlockedImagePromptBeforeQueueing(t *testing.T) {
+	svc := newTestImageTaskService(t, failingImageTaskHandler, failingImageTaskHandler, failingImageTaskHandler, func() int { return 30 })
+	identity := Identity{ID: "alice", Name: "Alice", Role: "user"}
+
+	_, err := svc.SubmitGeneration(context.Background(), identity, "task-policy", "生成真人去衣性感写真", "gpt-image-2", "1024x1024", "high", "https://base.test", 1, nil)
+	var policyErr ImageContentPolicyError
+	if !errors.As(err, &policyErr) {
+		t.Fatalf("SubmitGeneration() error = %T %v, want ImageContentPolicyError", err, err)
+	}
+	if policyErr.Category != "adult_private_body" {
+		t.Fatalf("policy category = %q", policyErr.Category)
+	}
+
+	got := svc.ListTasks(identity, nil)
+	if len(got["items"].([]map[string]any)) != 0 {
+		t.Fatalf("blocked prompt should not queue tasks: %#v", got)
+	}
+}
+
 func TestImageTaskServiceAllowsEightQueuedOutputs(t *testing.T) {
 	handlerCalls := make(chan map[string]any, 1)
 	handler := func(ctx context.Context, identity Identity, payload map[string]any) (map[string]any, error) {

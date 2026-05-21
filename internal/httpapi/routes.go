@@ -1579,6 +1579,11 @@ func imageOutputCompressionFromBody(value any) (int, bool) {
 }
 
 func writeCreationTaskSubmitError(w http.ResponseWriter, err error) {
+	var policyErr service.ImageContentPolicyError
+	if errors.As(err, &policyErr) {
+		util.WriteJSON(w, http.StatusBadRequest, policyErr.OpenAIError())
+		return
+	}
 	var billingErr service.BillingLimitError
 	if errors.As(err, &billingErr) {
 		util.WriteJSON(w, http.StatusTooManyRequests, billingErr.OpenAIError())

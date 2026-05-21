@@ -2,6 +2,7 @@
 build/
 dist/
 web_dist
+output/
 chatgpt2api.exe
 .omx/
 .codex/

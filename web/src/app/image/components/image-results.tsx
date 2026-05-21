@@ -15,6 +15,7 @@ import {
   getCachedAuthenticatedImageByteSize,
   shouldUseAuthenticatedImageFallback,
 } from "@/lib/authenticated-image";
+import { getManagedImageUrlFromPath } from "@/lib/image-path";
 import { formatBase64ImageFileSize, formatImageFileSize } from "@/lib/image-size";
 import { cn } from "@/lib/utils";
 import {
@@ -72,7 +73,10 @@ function getStoredImageSrc(image: StoredImage) {
   if (image.b64_json) {
     return `data:image/${image.outputFormat || "png"};base64,${image.b64_json}`;
   }
-  return image.localUrl || image.url || "";
+  if (image.localUrl || image.url) {
+    return image.localUrl || image.url || "";
+  }
+  return image.path ? getManagedImageUrlFromPath(image.path) : "";
 }
 
 function isTurnBusy(turn: ImageTurn) {
@@ -896,6 +900,32 @@ export function ImageResults({
                             </div>
                           </div>
                         </figure>
+                      );
+                    }
+
+                    if (image.status === "success") {
+                      return (
+                        <div
+                          key={image.id}
+                          className="mb-3 inline-flex h-[160px] w-full break-inside-avoid flex-col overflow-hidden rounded-[18px] border border-rose-200 bg-rose-50 sm:mb-4"
+                        >
+                          <div className="flex min-h-0 flex-1 items-center justify-center whitespace-pre-line px-4 py-3 text-center text-sm leading-6 text-rose-600 sm:px-5">
+                            生成已完成，但结果图片数据缺失
+                          </div>
+                          <div className="flex justify-end border-t border-rose-100 bg-white/70 px-3 py-2.5">
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              className="h-8 rounded-full border-rose-200 bg-white px-3 text-xs text-rose-600 shadow-none hover:bg-rose-50 hover:text-rose-700"
+                              disabled={turnBusy || !turn.prompt.trim()}
+                              onClick={() => void onRetryImage(selectedConversation.id, turn.id, index)}
+                            >
+                              <RotateCcw className="size-3.5" />
+                              重试
+                            </Button>
+                          </div>
+                        </div>
                       );
                     }
 

@@ -331,7 +331,7 @@ async function buildReferenceImageFromStoredImage(image: StoredImage, fileName: 
   };
 }
 
-const IMAGE_TASK_IMAGE_COUNT = 4;
+const IMAGE_TASK_IMAGE_COUNT = 1;
 
 function normalizeRequestedImageCount(value: string | number) {
   return Math.max(1, Math.min(10, Number(value) || 1));

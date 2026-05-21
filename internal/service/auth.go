@@ -1712,6 +1712,9 @@ func mergeDefaultManagedRole(roles []ManagedRole) []ManagedRole {
 			if role.Description == "" {
 				role.Description = defaultRole.Description
 			}
+			role.APIPermissions = mergeNormalizedStrings(role.APIPermissions, []string{
+				APIPermissionKey("DELETE", "/api/images"),
+			})
 			out = append(out, role)
 			seenDefault = true
 			continue
@@ -1735,6 +1738,23 @@ func defaultManagedRole() ManagedRole {
 		MenuPaths:      permissions.MenuPaths,
 		APIPermissions: permissions.APIPermissions,
 	}
+}
+
+func mergeNormalizedStrings(base, additions []string) []string {
+	seen := make(map[string]struct{}, len(base)+len(additions))
+	out := make([]string, 0, len(base)+len(additions))
+	for _, value := range append(append([]string(nil), base...), additions...) {
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func sortManagedRoles(roles []ManagedRole) {
