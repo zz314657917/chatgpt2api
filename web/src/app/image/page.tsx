@@ -1612,7 +1612,6 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
 
   const handleCreateDraft = () => {
     setSelectedConversationId(null);
-    resetComposer();
     textareaRef.current?.focus();
   };
 
@@ -1815,7 +1814,11 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     });
   }, []);
 
-  const appendConversationReferenceImages = useCallback((conversationId: string, images: StoredReferenceImage[]) => {
+  const appendConversationReferenceImages = useCallback((
+    conversationId: string,
+    images: StoredReferenceImage[],
+    options: { clearPrompt?: boolean } = {},
+  ) => {
     setSelectedConversationId(conversationId);
     setComposerMode("image");
     setReferenceImages((prev) => [
@@ -1825,7 +1828,9 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         source: "conversation" as const,
       })),
     ]);
-    setImagePrompt("");
+    if (options.clearPrompt !== false) {
+      setImagePrompt("");
+    }
     textareaRef.current?.focus();
   }, []);
 
@@ -1856,7 +1861,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
   );
 
   const handleContinueEditBatch = useCallback(
-    async (conversationId: string, images: StoredImage[]) => {
+    async (conversationId: string, images: StoredImage[], options: { clearPrompt?: boolean } = {}) => {
       if (images.length === 0) {
         return;
       }
@@ -1880,7 +1885,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
           return;
         }
 
-        appendConversationReferenceImages(conversationId, references);
+        appendConversationReferenceImages(conversationId, references, options);
         const failedCount = images.length - references.length;
         toast.success(
           failedCount > 0
@@ -1914,7 +1919,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         toast.error("未找到可编辑的图片");
         return;
       }
-      await handleContinueEditBatch(conversation.id, images);
+      await handleContinueEditBatch(conversation.id, images, { clearPrompt: false });
     },
     [handleContinueEditBatch, selectedConversationId],
   );
