@@ -481,6 +481,11 @@ export type AuthProviders = {
   linuxdo: {
     enabled: boolean;
   };
+  sub2api?: {
+    enabled: boolean;
+    launch_url?: string;
+    brand_name?: string;
+  };
   registration?: {
     enabled: boolean;
   };

@@ -302,6 +302,17 @@ func (s *Store) Sub2APIGatewayBaseURL() string {
 	return strings.TrimRight(strings.TrimSpace(os.Getenv("CHATGPT2API_SUB2API_GATEWAY_BASE_URL")), "/")
 }
 
+func (s *Store) Sub2APILaunchURL() string {
+	return strings.TrimSpace(os.Getenv("CHATGPT2API_SUB2API_LAUNCH_URL"))
+}
+
+func (s *Store) Sub2APIBrandName() string {
+	if value := strings.TrimSpace(os.Getenv("CHATGPT2API_SUB2API_BRAND_NAME")); value != "" {
+		return value
+	}
+	return "落叶网络"
+}
+
 func (s *Store) Proxy() string {
 	return strings.TrimSpace(fmt.Sprint(s.settingValue("proxy", "")))
 }
