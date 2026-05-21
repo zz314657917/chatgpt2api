@@ -17,12 +17,14 @@ type AuthenticatedImageProps = Omit<ImgHTMLAttributes<HTMLImageElement>, "src"> 
   placeholderClassName?: string;
 };
 
+const AUTHENTICATED_IMAGE_FALLBACK_TIMEOUT_MS = 10000;
+
 function positiveNumericDimension(value: string | number | undefined) {
   const numeric = Number(value);
   return Number.isFinite(numeric) && numeric > 0 ? numeric : 0;
 }
 
-export function AuthenticatedImage({ alt, className, placeholderClassName, src, style, ...props }: AuthenticatedImageProps) {
+export function AuthenticatedImage({ alt, className, onError, onLoad, placeholderClassName, src, style, ...props }: AuthenticatedImageProps) {
   const [objectSrc, setObjectSrc] = useState("");
   const [fallbackToDirectSrc, setFallbackToDirectSrc] = useState(false);
   const [retainedCacheKey, setRetainedCacheKey] = useState("");
@@ -50,13 +52,20 @@ export function AuthenticatedImage({ alt, className, placeholderClassName, src, 
 
     let active = true;
     let activeCacheKey = "";
+    const fallbackTimer = window.setTimeout(() => {
+      if (active) {
+        setFallbackToDirectSrc(true);
+      }
+    }, AUTHENTICATED_IMAGE_FALLBACK_TIMEOUT_MS);
     const cached = retainCachedAuthenticatedImage(src);
     if (cached) {
+      window.clearTimeout(fallbackTimer);
       activeCacheKey = cached.key;
       setObjectSrc(cached.objectURL);
       setRetainedCacheKey(cached.key);
       return () => {
         active = false;
+        window.clearTimeout(fallbackTimer);
         releaseCachedAuthenticatedImage(activeCacheKey);
       };
     }
@@ -75,6 +84,7 @@ export function AuthenticatedImage({ alt, className, placeholderClassName, src, 
         activeCacheKey = image.key;
         setObjectSrc(image.objectURL);
         setRetainedCacheKey(image.key);
+        window.clearTimeout(fallbackTimer);
       })
       .catch(() => {
         if (active) {
@@ -84,6 +94,7 @@ export function AuthenticatedImage({ alt, className, placeholderClassName, src, 
 
     return () => {
       active = false;
+      window.clearTimeout(fallbackTimer);
       if (activeCacheKey) {
         releaseCachedAuthenticatedImage(activeCacheKey);
       }
@@ -112,7 +123,11 @@ export function AuthenticatedImage({ alt, className, placeholderClassName, src, 
         role={alt ? "img" : undefined}
         aria-label={typeof alt === "string" && alt ? alt : undefined}
       >
-        {showPlaceholder ? <LoaderCircle className="size-5 animate-spin" aria-hidden="true" /> : null}
+        {showPlaceholder ? (
+          <LoaderCircle className="size-5 animate-spin" aria-hidden="true" />
+        ) : (
+          <span className="px-3 text-center text-xs font-medium text-stone-500">图片加载失败</span>
+        )}
       </span>
     );
   }
@@ -125,9 +140,13 @@ export function AuthenticatedImage({ alt, className, placeholderClassName, src, 
       className={className}
       style={style}
       data-authenticated-image-cache-key={retainedCacheKey || undefined}
+      onLoad={(event) => {
+        setLoadFailed(false);
+        onLoad?.(event);
+      }}
       onError={(event) => {
         setLoadFailed(true);
-        props.onError?.(event);
+        onError?.(event);
       }}
     />
   );

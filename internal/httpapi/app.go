@@ -124,6 +124,9 @@ func NewApp() (*App, error) {
 			})
 		},
 		func(ctx context.Context, identity service.Identity, payload map[string]any) (map[string]any, error) {
+			if binding, ok := app.sub2APIBindingForIdentity(identity); ok {
+				return app.runLoggedSub2APIChatTask(ctx, identity, payload, binding)
+			}
 			return app.runLoggedChatTask(ctx, identity, payload)
 		},
 		cfg.ImageRetentionDays,
@@ -396,6 +399,10 @@ func protocolErrorHTTPStatus(err error) int {
 	if errors.As(err, &httpErr) {
 		return httpErr.Status
 	}
+	var policyErr service.ImageContentPolicyError
+	if errors.As(err, &policyErr) {
+		return http.StatusBadRequest
+	}
 	var billingErr service.BillingLimitError
 	if errors.As(err, &billingErr) {
 		return http.StatusTooManyRequests
@@ -415,6 +422,11 @@ func (a *App) writeProtocolError(w http.ResponseWriter, err error) {
 	var httpErr protocol.HTTPError
 	if errors.As(err, &httpErr) {
 		util.WriteError(w, httpErr.Status, httpErr.Message)
+		return
+	}
+	var policyErr service.ImageContentPolicyError
+	if errors.As(err, &policyErr) {
+		util.WriteJSON(w, http.StatusBadRequest, policyErr.OpenAIError())
 		return
 	}
 	var billingErr service.BillingLimitError
@@ -798,7 +810,7 @@ func (a *App) handleImages(w http.ResponseWriter, r *http.Request) {
 			util.WriteError(w, http.StatusBadRequest, "invalid json body")
 			return
 		}
-		result, err := a.images.DeleteImages(util.AsStringSlice(body["paths"]), service.ImageAccessScope{All: true})
+		result, err := a.images.DeleteImages(util.AsStringSlice(body["paths"]), imageAccessScope(identity))
 		if err != nil {
 			util.WriteError(w, http.StatusBadRequest, err.Error())
 			return
@@ -1398,6 +1410,10 @@ func jsonString(v any) string {
 }
 
 func openAIErrorForStream(err error) map[string]any {
+	var policyErr service.ImageContentPolicyError
+	if errors.As(err, &policyErr) {
+		return policyErr.OpenAIError()
+	}
 	var billingErr service.BillingLimitError
 	if errors.As(err, &billingErr) {
 		return billingErr.OpenAIError()

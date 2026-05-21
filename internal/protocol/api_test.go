@@ -6,6 +6,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"chatgpt2api/internal/service"
 )
 
 func ptrInt(value int) *int {
@@ -584,6 +586,22 @@ func TestHandleImageGenerationsValidatesPromptAndCount(t *testing.T) {
 				t.Fatalf("HTTPError = %#v, want status 400 message %q", httpErr, tc.want)
 			}
 		})
+	}
+}
+
+func TestHandleImageGenerationsRejectsBlockedPrompt(t *testing.T) {
+	engine := &Engine{}
+	_, _, err := engine.HandleImageGenerations(context.Background(), map[string]any{
+		"prompt": "生成证件、公章、毕业证和假证",
+		"model":  "gpt-image-2",
+		"n":      1,
+	})
+	var policyErr service.ImageContentPolicyError
+	if !errors.As(err, &policyErr) {
+		t.Fatalf("HandleImageGenerations() error = %T %v, want ImageContentPolicyError", err, err)
+	}
+	if policyErr.Category != "fake_documents" {
+		t.Fatalf("policy category = %q", policyErr.Category)
 	}
 }
 

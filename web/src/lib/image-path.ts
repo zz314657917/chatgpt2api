@@ -28,3 +28,11 @@ export function getManagedImagePathFromUrl(value: string) {
     return extractFromPath(text);
   }
 }
+
+export function getManagedImageUrlFromPath(value: string) {
+  const path = value.trim().replace(/\\/g, "/").replace(/^\/+/, "");
+  if (!path) {
+    return "";
+  }
+  return `/images/${path.split("/").filter(Boolean).map(encodeURIComponent).join("/")}`;
+}

@@ -16,7 +16,7 @@ import {
   type ImageQuality,
   type ImageVisibility,
 } from "@/lib/api";
-import { getManagedImagePathFromUrl } from "@/lib/image-path";
+import { getManagedImagePathFromUrl, getManagedImageUrlFromPath } from "@/lib/image-path";
 import { getStoredAuthSession, type StoredAuthSession } from "@/store/auth";
 
 export type ImageConversationMode = "chat" | "generate" | "image" | "edit";
@@ -120,7 +120,7 @@ function dispatchImageConversationsChanged() {
 export function getImageTurnLoadingCounts(turn: { images: StoredImage[] }): ImageTurnLoadingCounts {
   const loadingImages = turn.images.filter((image) => image.status === "loading");
   return {
-    queued: loadingImages.filter((image) => image.taskStatus === "queued").length,
+    queued: loadingImages.filter((image) => image.taskStatus !== "running").length,
     running: loadingImages.filter((image) => image.taskStatus === "running").length,
   };
 }
@@ -161,7 +161,13 @@ async function imageConversationsStorageKey() {
 
 function normalizeStoredImage(image: StoredImage): StoredImage {
   const url = typeof image.url === "string" && image.url ? image.url : undefined;
-  const localUrl = typeof image.localUrl === "string" && image.localUrl ? image.localUrl : undefined;
+  const path = typeof image.path === "string" && image.path ? image.path : undefined;
+  const localUrl =
+    typeof image.localUrl === "string" && image.localUrl
+      ? image.localUrl
+      : path
+        ? getManagedImageUrlFromPath(path)
+        : undefined;
   const width = Number(image.width);
   const height = Number(image.height);
   const resolution = typeof image.resolution === "string" && image.resolution ? image.resolution : undefined;
@@ -180,8 +186,8 @@ function normalizeStoredImage(image: StoredImage): StoredImage {
     taskId: typeof image.taskId === "string" && image.taskId ? image.taskId : undefined,
     taskStatus,
     path:
-      typeof image.path === "string" && image.path
-        ? image.path
+      path
+        ? path
         : localUrl || url
           ? getManagedImagePathFromUrl(localUrl || url || "") || undefined
           : undefined,
@@ -196,12 +202,18 @@ function normalizeStoredImage(image: StoredImage): StoredImage {
     revised_prompt: typeof image.revised_prompt === "string" ? image.revised_prompt : undefined,
     text_response: typeof image.text_response === "string" && image.text_response ? image.text_response : undefined,
   };
-  if (image.status === "loading" || image.status === "error" || image.status === "success" || image.status === "cancelled" || image.status === "message") {
-    return normalized;
+  const hasImageOutput = Boolean(image.b64_json || image.url || image.localUrl || path);
+  if (image.status === "loading") {
+    return hasImageOutput ? { ...normalized, status: "success" } : normalized;
+  }
+  if (image.status === "error" || image.status === "success" || image.status === "cancelled" || image.status === "message") {
+    return image.status === "success" && !hasImageOutput
+      ? { ...normalized, status: "error", error: image.error || "生成已完成，但结果图片数据缺失" }
+      : normalized;
   }
   return {
     ...normalized,
-    status: image.b64_json || image.url || image.localUrl ? "success" : "loading",
+    status: hasImageOutput ? "success" : "loading",
   };
 }
 
@@ -336,6 +348,15 @@ function normalizeTurn(turn: ImageTurn & Record<string, unknown>): ImageTurn {
           : images.some((image) => image.status === "message")
             ? "message"
             : "success";
+  const storedStatus: ImageTurnStatus | undefined =
+    turn.status === "queued" ||
+    turn.status === "generating" ||
+    turn.status === "success" ||
+    turn.status === "error" ||
+    turn.status === "cancelled" ||
+    turn.status === "message"
+      ? turn.status
+      : undefined;
 
   return {
     id: String(turn.id || `${Date.now()}`),
@@ -356,15 +377,7 @@ function normalizeTurn(turn: ImageTurn & Record<string, unknown>): ImageTurn {
     images,
     createdAt: String(turn.createdAt || new Date().toISOString()),
     processingStartedAt: typeof turn.processingStartedAt === "string" ? turn.processingStartedAt : undefined,
-    status:
-      turn.status === "queued" ||
-      turn.status === "generating" ||
-      turn.status === "success" ||
-      turn.status === "error" ||
-      turn.status === "cancelled" ||
-      turn.status === "message"
-        ? turn.status
-        : derivedStatus,
+    status: images.length > 0 ? derivedStatus : storedStatus || derivedStatus,
     error: typeof turn.error === "string" ? turn.error : undefined,
   };
 }

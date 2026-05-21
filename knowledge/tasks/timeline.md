@@ -1,5 +1,15 @@
 # Project Timeline
 
+## 2026-05-18 00:20 +08:00 - Current Task 从白标 UI 收尾推进到 Sub2API 工作台主线
+
+- 当前阶段：知识快照从上一轮品牌改名/外链移除/个人中心收缩，推进到最近真实提交主线。
+- 本段重点：根据 2026-05-16 的 `feat: white label profile experience` 和 `feat: integrate sub2api image workspace`，更新 `knowledge/tasks/current-task.md`，明确本仓库当前默认心智应是“白标化的独立生图工作台服务”。
+- 已完成：把当前任务页重写为 Sub2API image workspace + white-label profile experience 语境，并补入最近实际触达的后端、前端、存储和 auth 路径。
+- 关键决策：保留白标 UI 调整的阶段性事实在时间轴中，但不再让其占据当前任务快照主体；当前任务页应优先服务最近继续开发的人。
+- 验证记录：本轮只更新知识文件，依据最近提交主题和改动文件名收口；未新增构建、测试或本地服务验证。
+- 遗留问题：仓库仍缺一份更稳定的 Sub2API 集成专题页，后续若继续推进 launch/redeem、对象存储或图片任务治理，建议单独沉淀。
+- 下一步：如继续维护知识库，优先补“Sub2API 集成验证入口 / 独立生图工作台默认链路”专题页。
+
 ## 2026-05-16 21:10 +08:00 - Hide Profile Local Account Panels
 
 - 当前阶段：完成 chatgpt2api 个人中心面向 Sub2API 跳转用户的界面收敛。

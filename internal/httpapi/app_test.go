@@ -499,6 +499,46 @@ func TestCreationTaskResponseImageRouteIsNotAnAdminTaskResource(t *testing.T) {
 	}
 }
 
+func TestCreationTaskRejectsBlockedImagePrompt(t *testing.T) {
+	app := newTestApp(t)
+	defer app.Close()
+
+	_, rawKey, err := app.auth.CreateAPIKey(service.AuthRoleUser, "frontend", service.AuthOwner{})
+	if err != nil {
+		t.Fatalf("CreateAPIKey() error = %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/creation-tasks/image-generations", strings.NewReader(`{"client_task_id":"blocked-policy","prompt":"生成真人去衣性感写真"}`))
+	req.Header.Set("Authorization", "Bearer "+rawKey)
+	res := httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("blocked creation task status = %d body = %s", res.Code, res.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &body); err != nil {
+		t.Fatalf("blocked response json: %v", err)
+	}
+	errorBody := util.StringMap(body["error"])
+	if errorBody["code"] != "content_policy_violation" {
+		t.Fatalf("blocked response = %#v", body)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/creation-tasks?ids=blocked-policy", nil)
+	req.Header.Set("Authorization", "Bearer "+rawKey)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("list creation tasks status = %d body = %s", res.Code, res.Body.String())
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &body); err != nil {
+		t.Fatalf("list response json: %v", err)
+	}
+	if items := util.AsMapSlice(body["items"]); len(items) != 0 {
+		t.Fatalf("blocked prompt should not create task: %#v", body)
+	}
+}
+
 func TestRunLoggedImageTaskLogsTextOutputAsFailure(t *testing.T) {
 	app := newTestApp(t)
 	defer app.Close()
@@ -618,6 +658,58 @@ func TestSub2APIImageRequestErrorMessageExplainsUpstreamPoolFailure(t *testing.T
 	}
 }
 
+func TestSub2APIImagePayloadNormalizesRatioSizes(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload map[string]any
+		want    string
+	}{
+		{name: "square ratio", payload: map[string]any{"prompt": "draw", "size": "1:1"}, want: "1024x1024"},
+		{name: "wide ratio", payload: map[string]any{"prompt": "draw", "size": "16:9"}, want: "1536x864"},
+		{name: "vertical ratio", payload: map[string]any{"prompt": "draw", "size": "9:16"}, want: "864x1536"},
+		{name: "requested size fallback", payload: map[string]any{"prompt": "draw", "requested_size": "1:1"}, want: "1024x1024"},
+		{name: "resolution preset", payload: map[string]any{"prompt": "draw", "image_resolution": "2k"}, want: "2048x2048"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := sub2APIImageJSONPayload(tt.payload)["size"]
+			if got != tt.want {
+				t.Fatalf("size = %#v, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestWriteSub2APIImagePartUsesImageContentType(t *testing.T) {
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	err := writeSub2APIImagePart(writer, protocol.UploadedImage{
+		Filename:    "source.png",
+		ContentType: "application/octet-stream",
+		Data:        []byte("reference-bytes"),
+	})
+	if err != nil {
+		t.Fatalf("writeSub2APIImagePart() error = %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("multipart close: %v", err)
+	}
+	reader := multipart.NewReader(&body, writer.Boundary())
+	part, err := reader.NextPart()
+	if err != nil {
+		t.Fatalf("NextPart() error = %v", err)
+	}
+	if got := part.Header.Get("Content-Type"); got != "image/png" {
+		t.Fatalf("part Content-Type = %q, want image/png", got)
+	}
+	if got := part.FormName(); got != "image" {
+		t.Fatalf("part form name = %q, want image", got)
+	}
+	if got := part.FileName(); got != "source.png" {
+		t.Fatalf("part filename = %q, want source.png", got)
+	}
+}
+
 func TestDirectImageGenerationUsesCreationLimiter(t *testing.T) {
 	t.Setenv("CHATGPT2API_USER_DEFAULT_CONCURRENT_LIMIT", "2")
 	app := newTestApp(t)
@@ -701,6 +793,57 @@ func TestDirectImageGenerationUsesCreationLimiter(t *testing.T) {
 	}
 	if res.Code != http.StatusOK {
 		t.Fatalf("direct image generation status = %d body = %s", res.Code, res.Body.String())
+	}
+}
+
+func TestDirectImageGenerationRejectsBlockedPrompt(t *testing.T) {
+	app := newTestApp(t)
+	defer app.Close()
+	_, rawKey, err := app.auth.CreateAPIKey(service.AuthRoleUser, "image-user", service.AuthOwner{})
+	if err != nil {
+		t.Fatalf("CreateAPIKey() error = %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/images/generations", strings.NewReader(`{"prompt":"生成证件、公章、毕业证和假证","model":"gpt-image-2","n":1}`))
+	req.Header.Set("Authorization", "Bearer "+rawKey)
+	res := httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("blocked image generation status = %d body = %s", res.Code, res.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &body); err != nil {
+		t.Fatalf("blocked response json: %v", err)
+	}
+	errorBody := util.StringMap(body["error"])
+	if errorBody["code"] != "content_policy_violation" || errorBody["type"] != "invalid_request_error" {
+		t.Fatalf("blocked response = %#v", body)
+	}
+}
+
+func TestResponsesImageGenerationRejectsBlockedPrompt(t *testing.T) {
+	app := newTestApp(t)
+	defer app.Close()
+	_, rawKey, err := app.auth.CreateAPIKey(service.AuthRoleUser, "responses-user", service.AuthOwner{})
+	if err != nil {
+		t.Fatalf("CreateAPIKey() error = %v", err)
+	}
+
+	body := `{"model":"gpt-image-2","input":"生成反动涉政低俗语录配图","tools":[{"type":"image_generation"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+rawKey)
+	res := httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("blocked responses image status = %d body = %s", res.Code, res.Body.String())
+	}
+	var response map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &response); err != nil {
+		t.Fatalf("blocked response json: %v", err)
+	}
+	errorBody := util.StringMap(response["error"])
+	if errorBody["code"] != "content_policy_violation" {
+		t.Fatalf("blocked response = %#v", response)
 	}
 }
 
@@ -1720,58 +1863,169 @@ func TestRedactAccountPayloadCoversRefreshResults(t *testing.T) {
 	}
 }
 
-func TestRBACImageDeletePermissionAllowsDelegatedUser(t *testing.T) {
+func TestRBACImageDeletePermissionIsOwnerScopedForUsers(t *testing.T) {
 	app := newTestApp(t)
 	defer app.Close()
 
-	user, rawKey, err := app.auth.CreateAPIKey(service.AuthRoleUser, "image-operator", service.AuthOwner{})
+	owner := service.AuthOwner{ID: "user:operator", Name: "image-operator", Provider: service.AuthProviderLocal}
+	_, rawKey, err := app.auth.CreateAPIKey(service.AuthRoleUser, "image-operator", owner)
 	if err != nil {
 		t.Fatalf("CreateAPIKey() error = %v", err)
 	}
-	imageRel := "delegated-delete.png"
-	imagePath := filepath.Join(app.config.ImagesDir(), filepath.FromSlash(imageRel))
-	if err := writeHTTPTestPNG(imagePath); err != nil {
-		t.Fatalf("write test image: %v", err)
+	ownRel := "delegated-own-delete.png"
+	otherRel := "delegated-other-delete.png"
+	for _, rel := range []string{ownRel, otherRel} {
+		if err := writeHTTPTestPNG(filepath.Join(app.config.ImagesDir(), filepath.FromSlash(rel))); err != nil {
+			t.Fatalf("write test image %s: %v", rel, err)
+		}
 	}
-	app.images.RecordGeneratedImages([]string{imageRel}, "another-owner", "Another Owner", service.ImageVisibilityPrivate)
+	app.images.RecordGeneratedImages([]string{ownRel}, owner.ID, owner.Name, service.ImageVisibilityPrivate)
+	app.images.RecordGeneratedImages([]string{otherRel}, "another-owner", "Another Owner", service.ImageVisibilityPrivate)
 
-	req := httptest.NewRequest(http.MethodDelete, "/api/images", strings.NewReader(`{"paths":["delegated-delete.png"]}`))
+	req := httptest.NewRequest(http.MethodDelete, "/api/images", strings.NewReader(`{"paths":["`+ownRel+`","`+otherRel+`"]}`))
 	req.Header.Set("Authorization", "Bearer "+rawKey)
 	res := httptest.NewRecorder()
 	app.Handler().ServeHTTP(res, req)
-	if res.Code != http.StatusForbidden {
-		t.Fatalf("default user delete status = %d body = %s", res.Code, res.Body.String())
-	}
-
-	role, err := app.auth.CreateRole(map[string]any{
-		"name":            "image manager",
-		"menu_paths":      []string{"/image-manager"},
-		"api_permissions": []string{service.APIPermissionKey(http.MethodDelete, "/api/images")},
-	})
-	if err != nil {
-		t.Fatalf("CreateRole() error = %v", err)
-	}
-	updated := app.auth.UpdateUser(user["id"].(string), map[string]any{"role_id": role["id"]})
-	if updated == nil {
-		t.Fatal("UpdateUser() returned nil")
-	}
-
-	req = httptest.NewRequest(http.MethodDelete, "/api/images", strings.NewReader(`{"paths":["delegated-delete.png"]}`))
-	req.Header.Set("Authorization", "Bearer "+rawKey)
-	res = httptest.NewRecorder()
-	app.Handler().ServeHTTP(res, req)
 	if res.Code != http.StatusOK {
-		t.Fatalf("granted user delete status = %d body = %s", res.Code, res.Body.String())
+		t.Fatalf("default user delete status = %d body = %s", res.Code, res.Body.String())
 	}
 	var payload map[string]any
 	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("delete json: %v", err)
 	}
-	if deleted, _ := payload["deleted"].(float64); int(deleted) != 1 {
-		t.Fatalf("deleted = %#v body = %#v", payload["deleted"], payload)
+	if payload["deleted"] != float64(1) || payload["missing"] != float64(1) {
+		t.Fatalf("delete body = %#v", payload)
 	}
-	if _, err := os.Stat(imagePath); !os.IsNotExist(err) {
-		t.Fatalf("image path still exists or stat failed unexpectedly: %v", err)
+	if _, err := os.Stat(filepath.Join(app.config.ImagesDir(), filepath.FromSlash(ownRel))); !os.IsNotExist(err) {
+		t.Fatalf("own image should be deleted, stat error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(app.config.ImagesDir(), filepath.FromSlash(otherRel))); err != nil {
+		t.Fatalf("other image should not be deleted, stat error = %v", err)
+	}
+}
+
+func TestSub2APIImageDeletePermissionIsOwnerScoped(t *testing.T) {
+	app := newTestApp(t)
+	defer app.Close()
+
+	owner := service.AuthOwner{ID: "sub2api:123", Name: "sub2api-user", Provider: service.AuthProviderSub2API}
+	_, sessionKey, err := app.auth.UpsertSub2APISession(owner)
+	if err != nil {
+		t.Fatalf("UpsertSub2APISession() error = %v", err)
+	}
+	ownRel := "sub2api-own-delete.png"
+	otherRel := "sub2api-other-delete.png"
+	for _, rel := range []string{ownRel, otherRel} {
+		if err := writeHTTPTestPNG(filepath.Join(app.config.ImagesDir(), filepath.FromSlash(rel))); err != nil {
+			t.Fatalf("write test image %s: %v", rel, err)
+		}
+	}
+	app.images.RecordGeneratedImages([]string{ownRel}, owner.ID, owner.Name, service.ImageVisibilityPrivate)
+	app.images.RecordGeneratedImages([]string{otherRel}, "sub2api:456", "other-user", service.ImageVisibilityPrivate)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/images", strings.NewReader(`{"paths":["`+ownRel+`","`+otherRel+`"]}`))
+	req.Header.Set("Authorization", "Bearer "+sessionKey)
+	res := httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("sub2api delete images status = %d body = %s", res.Code, res.Body.String())
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("sub2api delete images json: %v", err)
+	}
+	if payload["deleted"] != float64(1) || payload["missing"] != float64(1) {
+		t.Fatalf("sub2api delete images body = %#v", payload)
+	}
+	if _, err := os.Stat(filepath.Join(app.config.ImagesDir(), filepath.FromSlash(ownRel))); !os.IsNotExist(err) {
+		t.Fatalf("own image should be deleted by Sub2API user, stat error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(app.config.ImagesDir(), filepath.FromSlash(otherRel))); err != nil {
+		t.Fatalf("other image should not be deleted by Sub2API user, stat error = %v", err)
+	}
+}
+
+func TestSub2APIChatCreationTaskUsesGateway(t *testing.T) {
+	app := newTestApp(t)
+	defer app.Close()
+
+	var received map[string]any
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/chat/completions" {
+			t.Fatalf("gateway request = %s %s", r.Method, r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer sub2-key" {
+			t.Fatalf("gateway Authorization = %q", got)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
+			t.Fatalf("gateway json: %v", err)
+		}
+		util.WriteJSON(w, http.StatusOK, map[string]any{
+			"created": 123,
+			"choices": []map[string]any{{
+				"index":         0,
+				"message":       map[string]any{"role": "assistant", "content": "sub2 reply"},
+				"finish_reason": "stop",
+			}},
+		})
+	}))
+	defer gateway.Close()
+
+	owner := service.AuthOwner{ID: "sub2api:chat-user", Name: "sub2api-chat", Provider: service.AuthProviderSub2API}
+	_, sessionKey, err := app.auth.UpsertSub2APISession(owner)
+	if err != nil {
+		t.Fatalf("UpsertSub2APISession() error = %v", err)
+	}
+	if err := app.sub2Bindings.Save(service.Sub2APIBinding{
+		OwnerID:        owner.ID,
+		Sub2APIUserID:  "chat-user",
+		APIKey:         "sub2-key",
+		GatewayBaseURL: gateway.URL,
+	}); err != nil {
+		t.Fatalf("Save(Sub2APIBinding) error = %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/creation-tasks/chat-completions", strings.NewReader(`{"client_task_id":"sub2-chat-task","prompt":"hello","model":"gpt-5","messages":[{"role":"user","content":"hello"}]}`))
+	req.Header.Set("Authorization", "Bearer "+sessionKey)
+	res := httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("submit sub2api chat task status = %d body = %s", res.Code, res.Body.String())
+	}
+
+	var listed map[string]any
+	waitForHTTPTestCondition(t, func() bool {
+		req = httptest.NewRequest(http.MethodGet, "/api/creation-tasks?ids=sub2-chat-task", nil)
+		req.Header.Set("Authorization", "Bearer "+sessionKey)
+		res = httptest.NewRecorder()
+		app.Handler().ServeHTTP(res, req)
+		if res.Code != http.StatusOK {
+			t.Fatalf("list sub2api chat task status = %d body = %s", res.Code, res.Body.String())
+		}
+		if err := json.Unmarshal(res.Body.Bytes(), &listed); err != nil {
+			t.Fatalf("list sub2api chat task json: %v", err)
+		}
+		items := util.AsMapSlice(listed["items"])
+		return len(items) == 1 && items[0]["status"] == service.TaskStatusSuccess
+	})
+
+	if received["model"] != "gpt-5" || received["stream"] != false {
+		t.Fatalf("gateway request body = %#v", received)
+	}
+	if messages := util.AsMapSlice(received["messages"]); len(messages) != 1 || messages[0]["role"] != "user" {
+		t.Fatalf("gateway messages = %#v", received["messages"])
+	}
+	items := util.AsMapSlice(listed["items"])
+	if len(items) != 1 {
+		t.Fatalf("listed sub2api chat task = %#v", listed)
+	}
+	task := items[0]
+	if task["output_type"] != "text" {
+		t.Fatalf("sub2api chat output_type = %#v", task)
+	}
+	data := util.AsMapSlice(task["data"])
+	if len(data) != 1 || data[0]["text_response"] != "sub2 reply" {
+		t.Fatalf("sub2api chat task data = %#v", task)
 	}
 }
 
@@ -1983,11 +2237,18 @@ func TestImageManagementIsScopedByOwner(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer "+sessionKey)
 	res = httptest.NewRecorder()
 	app.Handler().ServeHTTP(res, req)
-	if res.Code != http.StatusForbidden {
+	if res.Code != http.StatusOK {
 		t.Fatalf("linuxdo delete images status = %d body = %s", res.Code, res.Body.String())
 	}
-	if _, err := os.Stat(filepath.Join(app.config.ImagesDir(), filepath.FromSlash(aliceRel))); err != nil {
-		t.Fatalf("alice image should not be deleted by Linuxdo user, stat error = %v", err)
+	var scopedDeleteBody map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &scopedDeleteBody); err != nil {
+		t.Fatalf("linuxdo delete images json: %v", err)
+	}
+	if scopedDeleteBody["deleted"] != float64(1) || scopedDeleteBody["missing"] != float64(1) {
+		t.Fatalf("linuxdo delete images body = %#v", scopedDeleteBody)
+	}
+	if _, err := os.Stat(filepath.Join(app.config.ImagesDir(), filepath.FromSlash(aliceRel))); !os.IsNotExist(err) {
+		t.Fatalf("alice image should be deleted by Linuxdo user, stat error = %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(app.config.ImagesDir(), filepath.FromSlash(bobRel))); err != nil {
 		t.Fatalf("bob image should not be deleted, stat error = %v", err)
@@ -1997,12 +2258,21 @@ func TestImageManagementIsScopedByOwner(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateAPIKey(local) error = %v", err)
 	}
-	req = httptest.NewRequest(http.MethodDelete, "/api/images", strings.NewReader(`{"paths":["`+aliceRel+`"]}`))
+	req = httptest.NewRequest(http.MethodDelete, "/api/images", strings.NewReader(`{"paths":["`+bobRel+`"]}`))
 	req.Header.Set("Authorization", "Bearer "+localKey)
 	res = httptest.NewRecorder()
 	app.Handler().ServeHTTP(res, req)
-	if res.Code != http.StatusForbidden {
+	if res.Code != http.StatusOK {
 		t.Fatalf("local user delete images status = %d body = %s", res.Code, res.Body.String())
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &scopedDeleteBody); err != nil {
+		t.Fatalf("local user delete images json: %v", err)
+	}
+	if scopedDeleteBody["deleted"] != float64(0) || scopedDeleteBody["missing"] != float64(1) {
+		t.Fatalf("local user delete images body = %#v", scopedDeleteBody)
+	}
+	if _, err := os.Stat(filepath.Join(app.config.ImagesDir(), filepath.FromSlash(bobRel))); err != nil {
+		t.Fatalf("bob image should still exist after local user delete, stat error = %v", err)
 	}
 
 	req = httptest.NewRequest(http.MethodGet, "/api/images", nil)
@@ -2015,11 +2285,11 @@ func TestImageManagementIsScopedByOwner(t *testing.T) {
 	if err := json.Unmarshal(res.Body.Bytes(), &list); err != nil {
 		t.Fatalf("admin images json: %v", err)
 	}
-	if items := logItems(list); len(items) != 3 {
+	if items := logItems(list); len(items) != 2 {
 		t.Fatalf("admin should see owned and legacy images, got %#v", list)
 	}
 
-	req = httptest.NewRequest(http.MethodDelete, "/api/images", strings.NewReader(`{"paths":["`+aliceRel+`"]}`))
+	req = httptest.NewRequest(http.MethodDelete, "/api/images", strings.NewReader(`{"paths":["`+bobRel+`"]}`))
 	req.Header.Set("Authorization", adminAuthHeader(t, app))
 	res = httptest.NewRecorder()
 	app.Handler().ServeHTTP(res, req)
@@ -2033,8 +2303,8 @@ func TestImageManagementIsScopedByOwner(t *testing.T) {
 	if deleteBody["deleted"] != float64(1) || deleteBody["missing"] != float64(0) {
 		t.Fatalf("admin delete images body = %#v", deleteBody)
 	}
-	if _, err := os.Stat(filepath.Join(app.config.ImagesDir(), filepath.FromSlash(aliceRel))); !os.IsNotExist(err) {
-		t.Fatalf("alice image should be deleted by admin, stat error = %v", err)
+	if _, err := os.Stat(filepath.Join(app.config.ImagesDir(), filepath.FromSlash(bobRel))); !os.IsNotExist(err) {
+		t.Fatalf("bob image should be deleted by admin, stat error = %v", err)
 	}
 }
 

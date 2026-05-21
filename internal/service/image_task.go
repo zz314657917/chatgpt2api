@@ -139,6 +139,9 @@ func (s *ImageTaskService) SubmitGeneration(ctx context.Context, identity Identi
 	if prompt == "" {
 		return nil, fmt.Errorf("prompt is required")
 	}
+	if err := ValidateImageContentPolicy(prompt, messages); err != nil {
+		return nil, err
+	}
 	visibility, err := imageTaskVisibility(visibilityValues...)
 	if err != nil {
 		return nil, err
@@ -162,6 +165,9 @@ func (s *ImageTaskService) SubmitEdit(ctx context.Context, identity Identity, cl
 	prompt = strings.TrimSpace(prompt)
 	if prompt == "" {
 		return nil, fmt.Errorf("prompt is required")
+	}
+	if err := ValidateImageContentPolicy(prompt, messages); err != nil {
+		return nil, err
 	}
 	visibility, err := imageTaskVisibility(visibilityValues...)
 	if err != nil {
@@ -187,6 +193,11 @@ func (s *ImageTaskService) SubmitChat(ctx context.Context, identity Identity, cl
 	if prompt == "" {
 		return nil, fmt.Errorf("prompt is required")
 	}
+	if billable {
+		if err := ValidateImageContentPolicy(prompt, messages); err != nil {
+			return nil, err
+		}
+	}
 	if len(util.AsMapSlice(messages)) == 0 {
 		return nil, fmt.Errorf("messages are required")
 	}
@@ -209,6 +220,9 @@ func (s *ImageTaskService) submitImageWithMetadataAndOptions(ctx context.Context
 	prompt = strings.TrimSpace(prompt)
 	if prompt == "" {
 		return nil, fmt.Errorf("prompt is required")
+	}
+	if err := ValidateImageContentPolicy(prompt, messages); err != nil {
+		return nil, err
 	}
 	visibility, err := imageTaskVisibility(visibilityValues...)
 	if err != nil {
