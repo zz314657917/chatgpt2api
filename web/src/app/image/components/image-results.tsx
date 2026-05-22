@@ -479,7 +479,9 @@ export function ImageResults({
         const progressMessage =
           progress?.message ||
           (isWaitingForQuota
-            ? "等待创作并发额度"
+            ? turn.mode === "chat"
+              ? "正在思考"
+              : "等待创作并发额度"
             : turnBusy
               ? "正在处理图片"
               : "");
@@ -980,26 +982,36 @@ export function ImageResults({
                         key={image.id}
                         className="mb-3 inline-block h-[160px] w-full break-inside-avoid overflow-hidden rounded-[18px] border border-stone-200/80 bg-stone-100/80 sm:mb-4"
                       >
-                        <div className="flex h-full flex-col items-center justify-center gap-2 px-5 py-5 text-center text-stone-500">
-                          <div className="rounded-full bg-white p-3 shadow-sm">
+                        <div className="flex h-full flex-col items-center justify-center gap-1.5 px-4 py-3 text-center text-stone-500">
+                          <div className="rounded-full bg-white p-2.5 shadow-sm">
                             {imageLoadingPhase === "queued" ? (
                               <Clock3 className="size-5" />
                             ) : (
                               <LoaderCircle className="size-5 animate-spin" />
                             )}
                           </div>
-                          <p className="text-sm">
+                          <p className="text-xs leading-5 sm:text-sm">
                             {turn.mode === "chat"
                               ? imageLoadingPhase === "queued"
-                                ? "等待创作并发额度..."
+                                ? "正在思考..."
                                 : "正在等待回复..."
                               : imageBusyLabel}
                           </p>
                           {imageLoadingPhase === "running" ? (
-                            <p className="min-w-[7.5rem] rounded-full bg-white/70 px-2.5 py-1 font-mono text-xs tabular-nums text-stone-400">
+                            <p className="min-w-[7.5rem] rounded-full bg-white/70 px-2.5 py-1 font-mono text-xs leading-4 tabular-nums text-stone-400">
                               已运行 {elapsedClock}
                             </p>
                           ) : null}
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            className="h-7 rounded-full border-amber-200 bg-white/85 px-2.5 text-[11px] text-amber-700 shadow-none hover:bg-amber-50 hover:text-amber-800"
+                            onClick={() => void onCancelTurn(selectedConversation.id, turn.id)}
+                          >
+                            <CircleStop className="size-3.5" />
+                            终止本轮
+                          </Button>
                         </div>
                       </div>
                     );

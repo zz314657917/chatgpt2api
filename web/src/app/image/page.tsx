@@ -410,8 +410,8 @@ function imageTaskProgressMessage(turn: ImageTurn, elapsedSeconds = 0) {
   if (turn.status === "queued") {
     return turn.mode === "chat"
       ? {
-          message: "等待创作并发额度",
-          detail: "对话任务已入队，等待可用额度",
+          message: "正在思考",
+          detail: "对话任务已入队，等待模型回复",
         }
       : {
           message: "等待创作并发额度",

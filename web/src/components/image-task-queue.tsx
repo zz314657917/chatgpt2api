@@ -148,7 +148,7 @@ function getQueueLongTaskHint(turn: ImageTurn, elapsedSeconds: number) {
 function getQueueLoadingDetail(item: TaskQueueItem, loadingPhase: ImageTurnLoadingPhase) {
   if (item.turn.mode === "chat") {
     if (loadingPhase === "queued") {
-      return "对话任务排队中";
+      return "正在准备回复";
     }
     if (loadingPhase === "running") {
       return "对话任务处理中";
@@ -298,7 +298,9 @@ function QueueItem({
   const progressMessage =
     progress?.message ||
     (isWaitingForQuota
-      ? "等待创作并发额度"
+      ? item.turn.mode === "chat"
+        ? "正在思考"
+        : "等待创作并发额度"
       : item.turn.mode === "chat"
         ? "等待对话回复"
         : "等待图片处理");
