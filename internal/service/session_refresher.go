@@ -10,18 +10,37 @@ import (
 	"time"
 )
 
-// SessionRefresher 使用 uTLS 调用 /api/auth/session 刷新 token
+// SessionRefresher refreshes tokens through /api/auth/session with a uTLS client.
 type SessionRefresher struct {
 	mu        sync.Mutex
-	inFlight  map[string]chan refreshResult // key: access_token, 去重
-	semaphore chan struct{}                 // 并发控制 (max 5 concurrent)
+	inFlight  map[string]*refreshCall // key: access_token, deduplicates refreshes
+	semaphore chan struct{}           // concurrency control (max 5 concurrent)
 	httpDo    func(req *http.Request) (*http.Response, error)
+}
+
+type refreshCall struct {
+	done   chan struct{}
+	result refreshResult
+}
+
+type SessionRefreshData struct {
+	AccessToken  string
+	SessionToken string
+	Expires      string
+	User         SessionRefreshUser
+}
+
+type SessionRefreshUser struct {
+	ID    string
+	Name  string
+	Email string
 }
 
 type refreshResult struct {
 	accessToken    string
 	sessionToken   string
 	sessionExpires string
+	user           SessionRefreshUser
 	err            error
 }
 
@@ -33,55 +52,67 @@ const (
 
 func NewSessionRefresher(httpDo func(req *http.Request) (*http.Response, error)) *SessionRefresher {
 	return &SessionRefresher{
-		inFlight:  make(map[string]chan refreshResult),
+		inFlight:  make(map[string]*refreshCall),
 		semaphore: make(chan struct{}, maxConcurrentRefreshes),
 		httpDo:    httpDo,
 	}
 }
 
-// RefreshToken 使用 session_token 刷新 access_token
-// 如果同一 token 正在刷新中，等待并返回结果（去重）
+// RefreshToken refreshes access_token with session_token.
+// If the same token is already refreshing, it waits for the in-flight result.
 func (r *SessionRefresher) RefreshToken(ctx context.Context, accessToken, sessionToken string) (newAccessToken, newSessionToken, newExpires string, err error) {
+	result, err := r.RefreshSession(ctx, accessToken, sessionToken)
+	return result.AccessToken, result.SessionToken, result.Expires, err
+}
+
+func (r *SessionRefresher) RefreshSession(ctx context.Context, accessToken, sessionToken string) (SessionRefreshData, error) {
 	if sessionToken == "" {
-		return "", "", "", fmt.Errorf("session_token is empty")
+		return SessionRefreshData{}, fmt.Errorf("session_token is empty")
 	}
 
-	// 去重：检查是否已有进行中的刷新
+	// Deduplicate in-flight refreshes for the same access token.
 	r.mu.Lock()
-	if ch, ok := r.inFlight[accessToken]; ok {
+	if call, ok := r.inFlight[accessToken]; ok {
 		r.mu.Unlock()
 		select {
-		case result := <-ch:
-			return result.accessToken, result.sessionToken, result.sessionExpires, result.err
+		case <-call.done:
+			return call.result.sessionData(), call.result.err
 		case <-ctx.Done():
-			return "", "", "", ctx.Err()
+			return SessionRefreshData{}, ctx.Err()
 		}
 	}
-	ch := make(chan refreshResult, 1)
-	r.inFlight[accessToken] = ch
+	call := &refreshCall{done: make(chan struct{})}
+	r.inFlight[accessToken] = call
 	r.mu.Unlock()
 
-	// 确保清理
-	defer func() {
+	finish := func(result refreshResult) (SessionRefreshData, error) {
+		call.result = result
+		close(call.done)
 		r.mu.Lock()
 		delete(r.inFlight, accessToken)
 		r.mu.Unlock()
-	}()
+		return result.sessionData(), result.err
+	}
 
-	// 获取信号量
+	// Acquire the refresh concurrency slot.
 	select {
 	case r.semaphore <- struct{}{}:
 		defer func() { <-r.semaphore }()
 	case <-ctx.Done():
-		result := refreshResult{err: ctx.Err()}
-		ch <- result
-		return "", "", "", ctx.Err()
+		return finish(refreshResult{err: ctx.Err()})
 	}
 
-	// 执行刷新
-	result := r.doRefresh(ctx, sessionToken)
-	ch <- result
-	return result.accessToken, result.sessionToken, result.sessionExpires, result.err
+	// Execute the refresh request.
+	return finish(r.doRefresh(ctx, sessionToken))
+}
+
+func (r refreshResult) sessionData() SessionRefreshData {
+	return SessionRefreshData{
+		AccessToken:  r.accessToken,
+		SessionToken: r.sessionToken,
+		Expires:      r.sessionExpires,
+		User:         r.user,
+	}
 }
 
 func (r *SessionRefresher) doRefresh(ctx context.Context, sessionToken string) refreshResult {
@@ -128,6 +159,11 @@ func (r *SessionRefresher) doRefresh(ctx context.Context, sessionToken string) r
 		AccessToken  string `json:"accessToken"`
 		Expires      string `json:"expires"`
 		SessionToken string `json:"sessionToken"`
+		User         struct {
+			ID    string `json:"id"`
+			Name  string `json:"name"`
+			Email string `json:"email"`
+		} `json:"user"`
 	}
 	if err := json.Unmarshal(body, &session); err != nil {
 		return refreshResult{err: fmt.Errorf("parse session response: %w", err)}
@@ -137,7 +173,7 @@ func (r *SessionRefresher) doRefresh(ctx context.Context, sessionToken string) r
 		return refreshResult{err: fmt.Errorf("session response missing accessToken")}
 	}
 
-	// 如果响应中没有新的 sessionToken，保留旧值
+	// Keep the previous sessionToken when the response omits a replacement.
 	newSessionToken := session.SessionToken
 	if newSessionToken == "" {
 		newSessionToken = sessionToken
@@ -147,10 +183,15 @@ func (r *SessionRefresher) doRefresh(ctx context.Context, sessionToken string) r
 		accessToken:    session.AccessToken,
 		sessionToken:   newSessionToken,
 		sessionExpires: session.Expires,
+		user: SessionRefreshUser{
+			ID:    session.User.ID,
+			Name:  session.User.Name,
+			Email: session.User.Email,
+		},
 	}
 }
 
-// IsRefreshing 返回指定 token 是否正在刷新中
+// IsRefreshing reports whether the given token is being refreshed.
 func (r *SessionRefresher) IsRefreshing(accessToken string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -158,8 +199,8 @@ func (r *SessionRefresher) IsRefreshing(accessToken string) bool {
 	return ok
 }
 
-// TryRefreshAsync 异步触发刷新（fire-and-forget），用于实时请求场景
-// 返回 true 表示已提交刷新任务
+// TryRefreshAsync triggers a fire-and-forget refresh for live request paths.
+// It returns true when a refresh has been submitted or is already in flight.
 func (r *SessionRefresher) TryRefreshAsync(accessToken, sessionToken string) bool {
 	if sessionToken == "" {
 		return false
@@ -167,7 +208,7 @@ func (r *SessionRefresher) TryRefreshAsync(accessToken, sessionToken string) boo
 	r.mu.Lock()
 	if _, ok := r.inFlight[accessToken]; ok {
 		r.mu.Unlock()
-		return true // 已在刷新中
+		return true // Already refreshing.
 	}
 	r.mu.Unlock()
 

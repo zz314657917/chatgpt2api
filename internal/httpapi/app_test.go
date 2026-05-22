@@ -481,6 +481,49 @@ func TestCreationTaskFailureWritesCallLog(t *testing.T) {
 	}
 }
 
+func TestLogsEndpointUsesDefaultLogView(t *testing.T) {
+	app := newTestApp(t)
+	defer app.Close()
+	if _, err := app.config.Update(map[string]any{"default_log_view": "business"}); err != nil {
+		t.Fatalf("Update(default_log_view) error = %v", err)
+	}
+	if err := app.logs.Add("新增账号", map[string]any{"module": "accounts", "operation_type": "新增"}); err != nil {
+		t.Fatalf("Add(business log) error = %v", err)
+	}
+	if err := app.logs.Add("GET /api/profile", map[string]any{"method": "GET", "path": "/api/profile", "module": "profile", "status": 200, "log_level": "info"}); err != nil {
+		t.Fatalf("Add(noisy audit log) error = %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/logs", nil)
+	req.Header.Set("Authorization", adminAuthHeader(t, app))
+	res := httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("logs status = %d body = %s", res.Code, res.Body.String())
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("logs json: %v", err)
+	}
+	if summaries := logPayloadSummaries(logItems(payload)); !reflect.DeepEqual(summaries, []string{"新增账号"}) {
+		t.Fatalf("default logs summaries = %#v", summaries)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/logs?view=all", nil)
+	req.Header.Set("Authorization", adminAuthHeader(t, app))
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("logs all status = %d body = %s", res.Code, res.Body.String())
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("logs all json: %v", err)
+	}
+	if summaries := logPayloadSummaries(logItems(payload)); !reflect.DeepEqual(summaries, []string{"GET /api/profile", "新增账号"}) {
+		t.Fatalf("all logs summaries = %#v", summaries)
+	}
+}
+
 func TestCreationTaskResponseImageRouteIsNotAnAdminTaskResource(t *testing.T) {
 	app := newTestApp(t)
 	defer app.Close()
@@ -3843,7 +3886,7 @@ func TestAPIAuditLogCapturesRequestMetadata(t *testing.T) {
 		t.Fatalf("settings status = %d body = %s", res.Code, res.Body.String())
 	}
 
-	req = httptest.NewRequest(http.MethodGet, "/api/logs?username=admin&method=GET&status=200&summary=%2Fapi%2Fsettings", nil)
+	req = httptest.NewRequest(http.MethodGet, "/api/logs?username=admin&method=GET&status=200&summary=%2Fapi%2Fsettings&view=all", nil)
 	req.Header.Set("Authorization", adminAuthHeader(t, app))
 	res = httptest.NewRecorder()
 	app.Handler().ServeHTTP(res, req)
@@ -3908,7 +3951,7 @@ func TestCreationTaskSubmitLogsRequestAndPollingAvoidsGenericAuditNoise(t *testi
 		t.Fatalf("poll creation task status = %d body = %s", res.Code, res.Body.String())
 	}
 
-	req = httptest.NewRequest(http.MethodGet, "/api/logs", nil)
+	req = httptest.NewRequest(http.MethodGet, "/api/logs?view=all", nil)
 	req.Header.Set("Authorization", adminAuthHeader(t, app))
 	res = httptest.NewRecorder()
 	app.Handler().ServeHTTP(res, req)
@@ -3988,6 +4031,54 @@ func TestLogGovernanceEndpointCleansOldLogs(t *testing.T) {
 	}
 }
 
+func TestNewAppStartsLogRetentionCleaner(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("CHATGPT2API_ROOT", root)
+	t.Setenv("CHATGPT2API_ADMIN_USERNAME", testAdminUsername)
+	t.Setenv("CHATGPT2API_ADMIN_PASSWORD", testAdminPassword)
+	t.Setenv("STORAGE_BACKEND", "sqlite")
+	t.Setenv("DATABASE_URL", "")
+	t.Setenv("CHATGPT2API_LOG_RETENTION_DAYS", "1")
+	unsetTestEnv(t, "CHATGPT2API_REGISTRATION_ENABLED")
+
+	dataDir := filepath.Join(root, "data")
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		t.Fatalf("mkdir data dir: %v", err)
+	}
+	backend, err := storage.NewBackendFromEnv(dataDir)
+	if err != nil {
+		t.Fatalf("NewBackendFromEnv() error = %v", err)
+	}
+	logStore, ok := backend.(storage.LogBackend)
+	if !ok {
+		t.Fatalf("storage backend %T does not implement LogBackend", backend)
+	}
+	for _, item := range []map[string]any{
+		{"time": "2000-01-01 00:00:00", "type": "event", "summary": "旧日志", "detail": map[string]any{"status": "success"}},
+		{"time": time.Now().Format("2006-01-02 15:04:05"), "type": "event", "summary": "新日志", "detail": map[string]any{"status": 200}},
+	} {
+		if err := logStore.AppendLog(item); err != nil {
+			t.Fatalf("AppendLog() error = %v", err)
+		}
+	}
+	if closer, ok := backend.(interface{ Close() error }); ok {
+		if err := closer.Close(); err != nil {
+			t.Fatalf("close seed backend: %v", err)
+		}
+	}
+
+	app, err := NewApp()
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	defer app.Close()
+
+	waitForHTTPTestCondition(t, func() bool {
+		items := app.logs.Search(service.LogQuery{Limit: 10})
+		return len(items) == 1 && items[0]["summary"] == "新日志"
+	})
+}
+
 func TestImageStorageGovernanceEndpointCleansThumbnails(t *testing.T) {
 	app := newTestApp(t)
 	defer app.Close()
@@ -4044,6 +4135,14 @@ func TestImageStorageGovernanceEndpointCleansThumbnails(t *testing.T) {
 	if _, err := os.Stat(thumbPath); !os.IsNotExist(err) {
 		t.Fatalf("thumbnail still exists, stat error = %v", err)
 	}
+}
+
+func logPayloadSummaries(items []map[string]any) []string {
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		out = append(out, util.Clean(item["summary"]))
+	}
+	return out
 }
 
 func logItems(payload map[string]any) []map[string]any {
@@ -4176,6 +4275,7 @@ func newTestAppWithBillingDefaults(t *testing.T, billingType, standardBalance, s
 	t.Setenv("CHATGPT2API_DEFAULT_SUBSCRIPTION_QUOTA", subscriptionQuota)
 	t.Setenv("CHATGPT2API_DEFAULT_SUBSCRIPTION_PERIOD", subscriptionPeriod)
 	unsetTestEnv(t, "CHATGPT2API_REGISTRATION_ENABLED")
+	unsetTestEnv(t, "CHATGPT2API_DEFAULT_LOG_VIEW")
 	t.Setenv("STORAGE_BACKEND", "sqlite")
 	t.Setenv("DATABASE_URL", "")
 	app, err := NewApp()
