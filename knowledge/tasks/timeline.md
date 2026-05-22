@@ -1,5 +1,15 @@
 # Project Timeline
 
+## 2026-05-22 12:15 +08:00 - Current Task 补入 leaf network login 与 image policy 默认约束
+
+- 当前阶段：知识快照继续从 5 月 18 日的 Sub2API image workspace / white-label 主线，推进到最近两天已经稳定的登录入口与策略约束事实。
+- 本段重点：根据 2026-05-21 的 `feat(image): harden image workspace policies` 和 2026-05-22 的 `feat(auth): add leaf network launch login`，更新 `knowledge/05-current-focus.md` 与 `knowledge/tasks/current-task.md`。
+- 已完成：把当前稳定心智从“双主线”改为“Sub2API image workspace + white-label profile experience + leaf network 登录承接”，并明确 image workspace policies、per-user retention、continued edits 与登录页承接能力已进入默认主线。
+- 关键决策：不把最近登录入口和策略收紧继续留在提交历史里隐含表达；后续续做登录页、图片策略、Sub2API 跳转和对象存储链路时，应直接从当前知识入口读到这些默认约束。
+- 验证记录：本轮只更新知识文件，依据最近提交主题和改动文件名收口；未新增构建、测试或本地服务验证。
+- 遗留问题：仓库仍缺一份更稳定的“Sub2API / leaf network 登录与 image workspace 最小闭环验证”专题页，后续若继续推进登录入口或图片策略治理，建议单独沉淀。
+- 下一步：如继续维护知识库，优先补“launch/redeem / leaf network login / `/image` 工作台 / 对象存储与本地图片访问”专题页。
+
 ## 2026-05-18 00:20 +08:00 - Current Task 从白标 UI 收尾推进到 Sub2API 工作台主线
 
 - 当前阶段：知识快照从上一轮品牌改名/外链移除/个人中心收缩，推进到最近真实提交主线。
