@@ -52,10 +52,10 @@ var imageContentPolicyRules = []imageContentPolicyRule{
 	},
 	{
 		Category: "face_abuse",
-		Reason:   "人脸换脸、人脸合成或恶搞真人肖像不允许生成",
+		Reason:   "人脸换脸、Deepfake 或恶搞真人肖像不允许生成",
 		Any: []string{
-			"人脸换脸", "ai换脸", "换脸", "脸部替换", "替换脸", "把脸换成", "脸换到", "人脸合成",
-			"脸部合成", "合成脸", "真人肖像合成", "deepfake", "deep fake", "恶搞真人", "恶搞肖像",
+			"人脸换脸", "ai换脸", "换脸", "脸部替换", "替换脸", "把脸换成", "脸换到",
+			"deepfake", "deep fake", "恶搞真人", "恶搞肖像",
 			"恶搞照片", "丑化真人", "侮辱肖像", "真人肖像恶搞",
 		},
 	},

@@ -47,10 +47,30 @@ func TestValidateImageContentPolicyRejectsBlockedCategories(t *testing.T) {
 }
 
 func TestValidateImageContentPolicyAllowsOrdinaryPrompt(t *testing.T) {
-	err := ValidateImageContentPolicy("生成一张产品海报，包含白色陶瓷杯和晨光", []map[string]any{
-		{"role": "user", "content": "干净的商业摄影风格"},
-	})
-	if err != nil {
-		t.Fatalf("ValidateImageContentPolicy() error = %v", err)
+	tests := []struct {
+		name    string
+		prompt  string
+		context any
+	}{
+		{
+			name:   "product poster",
+			prompt: "生成一张产品海报，包含白色陶瓷杯和晨光",
+			context: []map[string]any{
+				{"role": "user", "content": "干净的商业摄影风格"},
+			},
+		},
+		{
+			name:   "ordinary face composition wording",
+			prompt: "生成一个虚构角色的人脸合成设定图，不参考真人照片",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := ValidateImageContentPolicy(tc.prompt, tc.context)
+			if err != nil {
+				t.Fatalf("ValidateImageContentPolicy() error = %v", err)
+			}
+		})
 	}
 }
