@@ -15,7 +15,7 @@ import {
   getCachedAuthenticatedImageByteSize,
   shouldUseAuthenticatedImageFallback,
 } from "@/lib/authenticated-image";
-import { getManagedImageUrlFromPath } from "@/lib/image-path";
+import { getManagedImagePathFromUrl, getManagedImageThumbnailUrlFromPath, getManagedImageUrlFromPath } from "@/lib/image-path";
 import { formatBase64ImageFileSize, formatImageFileSize } from "@/lib/image-size";
 import { cn } from "@/lib/utils";
 import {
@@ -59,6 +59,7 @@ type ImageResultsProps = {
   onCancelTurn: (conversationId: string, turnId: string) => void | Promise<void>;
   onRegenerateTurn: (conversationId: string, turnId: string) => void | Promise<void>;
   onRetryImage: (conversationId: string, turnId: string, imageIndex: number) => void | Promise<void>;
+  onRetryImages: (conversationId: string, turnId: string, imageIndexes: number[]) => void | Promise<void>;
   onImageVisibilityChange: (
     conversationId: string,
     turnId: string,
@@ -79,12 +80,28 @@ function getStoredImageSrc(image: StoredImage) {
   return image.path ? getManagedImageUrlFromPath(image.path) : "";
 }
 
+function getStoredImagePreviewSrc(image: StoredImage) {
+  if (image.b64_json) {
+    return getStoredImageSrc(image);
+  }
+  const managedPath = image.path || getManagedImagePathFromUrl(image.localUrl || image.url || "");
+  return managedPath ? getManagedImageThumbnailUrlFromPath(managedPath) : getStoredImageSrc(image);
+}
+
 function isTurnBusy(turn: ImageTurn) {
   return (
     turn.status === "queued" ||
     turn.status === "generating" ||
     turn.images.some((image) => image.status === "loading")
   );
+}
+
+function hasStoredImageOutput(image: StoredImage) {
+  return Boolean(image.b64_json || image.url || image.localUrl || image.path);
+}
+
+function isRetryableImageResult(image: StoredImage) {
+  return image.status === "error" || image.status === "message" || (image.status === "success" && !hasStoredImageOutput(image));
 }
 
 function imageSelectionKey(conversationId: string, turnId: string, imageId: string) {
@@ -283,6 +300,7 @@ export function ImageResults({
   onCancelTurn,
   onRegenerateTurn,
   onRetryImage,
+  onRetryImages,
   onImageVisibilityChange,
   visibilityMutatingImageKey,
   formatConversationTime,
@@ -290,6 +308,7 @@ export function ImageResults({
   const [imageDimensions, setImageDimensions] = useState<Record<string, string>>({});
   const [imageSizeLabels, setImageSizeLabels] = useState<Record<string, string>>({});
   const [selectedImageIds, setSelectedImageIds] = useState<Record<string, boolean>>({});
+  const [previewFallbackImageIds, setPreviewFallbackImageIds] = useState<Record<string, boolean>>({});
   const [downloadingKey, setDownloadingKey] = useState<string | null>(null);
   const pendingImageSizeIdsRef = useRef<Set<string>>(new Set());
 
@@ -437,6 +456,7 @@ export function ImageResults({
             getStoredImageSrc(image) &&
             selectedImageIds[imageSelectionKey(selectedConversation.id, turn.id, image.id)],
         );
+        const retryableImageIndexes = turn.images.flatMap((image, index) => isRetryableImageResult(image) ? [index] : []);
         const successfulTurnImages = turn.images.flatMap((image, index) => {
           const src = image.status === "success" ? getStoredImageSrc(image) : "";
           return src
@@ -488,59 +508,76 @@ export function ImageResults({
         const requestedSizeLabel = getRequestedSizeLabel(turn);
         const routeDetail = IMAGE_MODEL_ROUTE_DETAILS[turn.model];
         const longTaskHint = getLongTaskHint(turn, elapsedSeconds);
-        const downloadActions =
-          downloadableImages.length > 0 ? (
+        const resultActions =
+          retryableImageIndexes.length > 0 || downloadableImages.length > 0 ? (
             <>
-              <Button
-                type="button"
-                size="sm"
-                className="h-8 rounded-full bg-[#1456f0] px-2.5 text-[11px] text-white shadow-sm hover:bg-[#2563eb]"
-                disabled={selectedDownloadableImages.length === 0 || downloadingKey !== null}
-                onClick={() =>
-                  void downloadItems(
-                    `selected:${selectedConversation.id}:${turn.id}`,
-                    selectedDownloadableImages,
-                  )
-                }
-              >
-                {downloadingKey === `selected:${selectedConversation.id}:${turn.id}` ? (
-                  <LoaderCircle className="size-3 animate-spin" />
-                ) : (
-                  <Download className="size-3" />
-                )}
-                下载已选 ({selectedDownloadableImages.length})
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="h-8 rounded-full border-[#e5e7eb] bg-white px-2.5 text-[11px] text-[#45515e] shadow-sm hover:bg-black/[0.05]"
-                disabled={selectedEditableImages.length === 0}
-                onClick={() => onContinueEditBatch(selectedConversation.id, selectedEditableImages)}
-              >
-                <PencilLine className="size-3" />
-                加入编辑已选 ({selectedEditableImages.length})
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="h-8 rounded-full border-[#e5e7eb] bg-white px-2.5 text-[11px] text-[#45515e] shadow-sm hover:bg-black/[0.05]"
-                disabled={downloadingKey !== null}
-                onClick={() =>
-                  void downloadItems(
-                    `all:${selectedConversation.id}:${turn.id}`,
-                    downloadableImages,
-                  )
-                }
-              >
-                {downloadingKey === `all:${selectedConversation.id}:${turn.id}` ? (
-                  <LoaderCircle className="size-3 animate-spin" />
-                ) : (
-                  <Download className="size-3" />
-                )}
-                下载全部
-              </Button>
+              {retryableImageIndexes.length > 0 ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-8 rounded-full border-rose-200 bg-white px-2.5 text-[11px] text-rose-600 shadow-sm hover:bg-rose-50 hover:text-rose-700"
+                  disabled={!turn.prompt.trim()}
+                  onClick={() => void onRetryImages(selectedConversation.id, turn.id, retryableImageIndexes)}
+                >
+                  <RotateCcw className="size-3" />
+                  重试失败项 ({retryableImageIndexes.length})
+                </Button>
+              ) : null}
+              {downloadableImages.length > 0 ? (
+                <>
+                  <Button
+                    type="button"
+                    size="sm"
+                    className="h-8 rounded-full bg-[#1456f0] px-2.5 text-[11px] text-white shadow-sm hover:bg-[#2563eb]"
+                    disabled={selectedDownloadableImages.length === 0 || downloadingKey !== null}
+                    onClick={() =>
+                      void downloadItems(
+                        `selected:${selectedConversation.id}:${turn.id}`,
+                        selectedDownloadableImages,
+                      )
+                    }
+                  >
+                    {downloadingKey === `selected:${selectedConversation.id}:${turn.id}` ? (
+                      <LoaderCircle className="size-3 animate-spin" />
+                    ) : (
+                      <Download className="size-3" />
+                    )}
+                    下载已选 ({selectedDownloadableImages.length})
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-8 rounded-full border-[#e5e7eb] bg-white px-2.5 text-[11px] text-[#45515e] shadow-sm hover:bg-black/[0.05]"
+                    disabled={selectedEditableImages.length === 0}
+                    onClick={() => onContinueEditBatch(selectedConversation.id, selectedEditableImages)}
+                  >
+                    <PencilLine className="size-3" />
+                    加入编辑已选 ({selectedEditableImages.length})
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-8 rounded-full border-[#e5e7eb] bg-white px-2.5 text-[11px] text-[#45515e] shadow-sm hover:bg-black/[0.05]"
+                    disabled={downloadingKey !== null}
+                    onClick={() =>
+                      void downloadItems(
+                        `all:${selectedConversation.id}:${turn.id}`,
+                        downloadableImages,
+                      )
+                    }
+                  >
+                    {downloadingKey === `all:${selectedConversation.id}:${turn.id}` ? (
+                      <LoaderCircle className="size-3 animate-spin" />
+                    ) : (
+                      <Download className="size-3" />
+                    )}
+                    下载全部
+                  </Button>
+                </>
+              ) : null}
             </>
           ) : null;
 
@@ -685,7 +722,7 @@ export function ImageResults({
                         {getTurnStatusLabel(turn.status)}
                       </span>
                     </div>
-                    {turnBusy || downloadActions ? (
+                    {turnBusy || resultActions ? (
                       <div className="flex flex-wrap items-center justify-end gap-2">
                         {turnBusy ? (
                           <span className="flex max-w-full flex-col gap-0.5 rounded-2xl bg-amber-50 px-3 py-1 text-[11px] leading-5 text-amber-700 sm:text-xs">
@@ -693,7 +730,7 @@ export function ImageResults({
                             {longTaskHint ? <span className="max-w-[20rem] text-[11px] leading-5">{longTaskHint}</span> : null}
                           </span>
                         ) : null}
-                        {downloadActions}
+                        {resultActions}
                       </div>
                     ) : null}
                   </div>
@@ -734,7 +771,9 @@ export function ImageResults({
                   <div className="columns-1 gap-3 sm:columns-2 sm:gap-4 xl:columns-3">
                     {visualImages.map(({ image, index }) => {
                     const imageSrc = image.status === "success" ? getStoredImageSrc(image) : "";
+                    const previewSrc = image.status === "success" ? getStoredImagePreviewSrc(image) : "";
                     if (image.status === "success" && imageSrc) {
+                      const displaySrc = previewFallbackImageIds[image.id] ? imageSrc : previewSrc || imageSrc;
                       const currentIndex = successfulTurnImages.findIndex((item) => item.id === image.id);
                       const imageNumber = currentIndex >= 0 ? currentIndex + 1 : index + 1;
                       const selectionKey = imageSelectionKey(selectedConversation.id, turn.id, image.id);
@@ -789,7 +828,7 @@ export function ImageResults({
                             aria-label={selected ? "取消选择图片" : "选择图片"}
                           >
                             <AuthenticatedImage
-                              src={imageSrc}
+                              src={displaySrc}
                               alt={`Generated result ${index + 1}`}
                               width={image.width || undefined}
                               height={image.height || undefined}
@@ -804,6 +843,13 @@ export function ImageResults({
                                 );
                                 if (!image.b64_json) {
                                   ensureImageSizeLabel(image.id, imageSrc);
+                                }
+                              }}
+                              onError={(event) => {
+                                if (previewSrc && displaySrc !== imageSrc) {
+                                  setPreviewFallbackImageIds((current) =>
+                                    current[image.id] ? current : { ...current, [image.id]: true },
+                                  );
                                 }
                               }}
                             />

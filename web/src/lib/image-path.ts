@@ -36,3 +36,11 @@ export function getManagedImageUrlFromPath(value: string) {
   }
   return `/images/${path.split("/").filter(Boolean).map(encodeURIComponent).join("/")}`;
 }
+
+export function getManagedImageThumbnailUrlFromPath(value: string) {
+  const path = value.trim().replace(/\\/g, "/").replace(/^\/+/, "");
+  if (!path) {
+    return "";
+  }
+  return `/image-thumbnails/${path.split("/").filter(Boolean).map(encodeURIComponent).join("/")}.jpg`;
+}

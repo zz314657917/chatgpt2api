@@ -496,6 +496,14 @@ function updateStoredImage(image: StoredImage, updates: Partial<StoredImage>): S
   return STORED_IMAGE_FIELDS.every((field) => image[field] === next[field]) ? image : next;
 }
 
+function hasStoredImageOutput(image: StoredImage) {
+  return Boolean(image.b64_json || image.url || image.localUrl || image.path);
+}
+
+function isRetryableImageResult(image: StoredImage) {
+  return image.status === "error" || image.status === "message" || (image.status === "success" && !hasStoredImageOutput(image));
+}
+
 function creationTaskImageStatus(task: CreationTask, dataIndex = 0): "queued" | "running" | "success" | "error" | "cancelled" | undefined {
   const outputStatus = task.output_statuses?.[dataIndex];
   if (outputStatus === "queued" || outputStatus === "running" || outputStatus === "success" || outputStatus === "error" || outputStatus === "cancelled") {
@@ -1879,7 +1887,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
           return;
         }
 
-        appendConversationReferenceImages(conversationId, [nextReference.referenceImage]);
+        appendConversationReferenceImages(conversationId, [nextReference.referenceImage], { clearPrompt: false });
         toast.success("已加入当前参考图，继续输入描述即可编辑");
       } catch (error) {
         const message = error instanceof Error ? error.message : "读取结果图失败";
@@ -1890,7 +1898,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
   );
 
   const handleContinueEditBatch = useCallback(
-    async (conversationId: string, images: StoredImage[], options: { clearPrompt?: boolean } = {}) => {
+    async (conversationId: string, images: StoredImage[], options: { clearPrompt?: boolean } = { clearPrompt: false }) => {
       if (images.length === 0) {
         return;
       }
@@ -2563,30 +2571,32 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     [clearTurnProgress, updateConversation],
   );
 
-  const handleRetryImage = useCallback(
-    async (conversationId: string, turnId: string, imageIndex: number) => {
-      const retryKey = `${conversationId}:${turnId}:${imageIndex}`;
-      if (retryingImageIdsRef.current.has(retryKey)) {
+  const handleRetryImages = useCallback(
+    async (conversationId: string, turnId: string, imageIndexes: number[]) => {
+      const uniqueImageIndexes = Array.from(new Set(imageIndexes)).sort((a, b) => a - b);
+      if (uniqueImageIndexes.length === 0) {
+        return;
+      }
+      if (uniqueImageIndexes.some((imageIndex) => retryingImageIdsRef.current.has(`${conversationId}:${turnId}:${imageIndex}`))) {
         return;
       }
 
       const targetConversation = conversationsRef.current.find((conversation) => conversation.id === conversationId);
       const targetTurn = targetConversation?.turns.find((turn) => turn.id === turnId);
-      const targetImage = targetTurn?.images[imageIndex];
-      if (!targetConversation || !targetTurn || !targetImage) {
-        toast.error("未找到对应的图片记录");
+      if (!targetConversation || !targetTurn) {
+        toast.error("未找到对应的对话轮次");
         return;
       }
-      if (isTurnInProgress(targetTurn)) {
-        toast.error("当前轮次正在处理，稍后再重试");
+      const retryableIndexes = uniqueImageIndexes.filter((imageIndex) => {
+        const image = targetTurn.images[imageIndex];
+        return image ? isRetryableImageResult(image) : false;
+      });
+      if (retryableIndexes.length === 0) {
+        toast.error(uniqueImageIndexes.length === 1 ? "只有失败图片、缺失数据图片或模型文本回复可以重试" : "没有可重试的失败项");
         return;
       }
       if (!targetTurn.prompt.trim()) {
         toast.error("请输入提示词");
-        return;
-      }
-      if (targetImage.status !== "error" && targetImage.status !== "message") {
-        toast.error("只有失败图片或模型文本回复可以单独重试");
         return;
       }
       if (usesReferenceImages(targetTurn.mode) && targetTurn.referenceImages.length === 0) {
@@ -2594,9 +2604,17 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         return;
       }
 
-      retryingImageIdsRef.current.add(retryKey);
+      for (const imageIndex of retryableIndexes) {
+        retryingImageIdsRef.current.add(`${conversationId}:${turnId}:${imageIndex}`);
+      }
       const now = new Date().toISOString();
-      const retryTaskId = imageTaskBatchId(`${targetTurn.id}-${createId()}`, imageIndex);
+      const retryRunId = createId();
+      const retryTaskIds = new Map(
+        retryableIndexes.map((imageIndex) => [
+          imageIndex,
+          imageTaskBatchId(`${targetTurn.id}-${retryRunId}`, imageIndex),
+        ]),
+      );
       try {
         await updateConversation(conversationId, (current) => {
           const conversation = current ?? targetConversation;
@@ -2608,10 +2626,10 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                 return turn;
               }
               const images: StoredImage[] = turn.images.map((image, index) =>
-                index === imageIndex
+                retryTaskIds.has(index)
                   ? {
                       ...image,
-                      taskId: retryTaskId,
+                      taskId: retryTaskIds.get(index),
                       taskStatus: "queued" as const,
                       status: "loading" as const,
                       b64_json: undefined,
@@ -2632,21 +2650,30 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
               return {
                 ...turn,
                 ...derived,
-                processingStartedAt: undefined,
+                processingStartedAt: isTurnInProgress(turn) ? turn.processingStartedAt : undefined,
                 images,
               };
             }),
           };
         });
         void runConversationQueue(conversationId);
-        toast.success("已加入重试队列");
+        toast.success(retryableIndexes.length === 1 ? "已加入重试队列" : `已加入 ${retryableIndexes.length} 个重试任务`);
       } catch (error) {
         toast.error(formatCreationTaskError(error, "提交重试失败"));
       } finally {
-        retryingImageIdsRef.current.delete(retryKey);
+        for (const imageIndex of retryableIndexes) {
+          retryingImageIdsRef.current.delete(`${conversationId}:${turnId}:${imageIndex}`);
+        }
       }
     },
     [runConversationQueue, updateConversation],
+  );
+
+  const handleRetryImage = useCallback(
+    async (conversationId: string, turnId: string, imageIndex: number) => {
+      await handleRetryImages(conversationId, turnId, [imageIndex]);
+    },
+    [handleRetryImages],
   );
 
   const handleRegenerateTurn = useCallback(
@@ -3480,6 +3507,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
               onCancelTurn={handleCancelTurn}
               onRegenerateTurn={handleRegenerateTurn}
               onRetryImage={handleRetryImage}
+              onRetryImages={handleRetryImages}
               onImageVisibilityChange={handleImageVisibilityChange}
               visibilityMutatingImageKey={visibilityMutatingImageKey}
               formatConversationTime={formatConversationTime}
