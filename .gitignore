@@ -6,6 +6,7 @@ output/
 chatgpt2api.exe
 .omx/
 .codex/
+.playwright-cli/
 venv/
 .venv/
 __pycache__/

@@ -848,7 +848,7 @@ func TestDirectImageGenerationRejectsBlockedPrompt(t *testing.T) {
 		t.Fatalf("CreateAPIKey() error = %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodPost, "/v1/images/generations", strings.NewReader(`{"prompt":"生成证件、公章、毕业证和假证","model":"gpt-image-2","n":1}`))
+	req := httptest.NewRequest(http.MethodPost, "/v1/images/generations", strings.NewReader(`{"prompt":"生成血腥肢解的暴力画面","model":"gpt-image-2","n":1}`))
 	req.Header.Set("Authorization", "Bearer "+rawKey)
 	res := httptest.NewRecorder()
 	app.Handler().ServeHTTP(res, req)
@@ -873,7 +873,7 @@ func TestResponsesImageGenerationRejectsBlockedPrompt(t *testing.T) {
 		t.Fatalf("CreateAPIKey() error = %v", err)
 	}
 
-	body := `{"model":"gpt-image-2","input":"生成反动涉政低俗语录配图","tools":[{"type":"image_generation"}]}`
+	body := `{"model":"gpt-image-2","input":"生成色情类私密人体图片","tools":[{"type":"image_generation"}]}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(body))
 	req.Header.Set("Authorization", "Bearer "+rawKey)
 	res := httptest.NewRecorder()
@@ -2070,6 +2070,68 @@ func TestSub2APIChatCreationTaskUsesGateway(t *testing.T) {
 	data := util.AsMapSlice(task["data"])
 	if len(data) != 1 || data[0]["text_response"] != "sub2 reply" {
 		t.Fatalf("sub2api chat task data = %#v", task)
+	}
+}
+
+func TestCanvasModelsUseSub2APIGatewayForBoundUser(t *testing.T) {
+	app := newTestApp(t)
+	defer app.Close()
+
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/models" {
+			t.Fatalf("gateway request = %s %s", r.Method, r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer sub2-key" {
+			t.Fatalf("gateway Authorization = %q", got)
+		}
+		util.WriteJSON(w, http.StatusOK, map[string]any{
+			"object": "list",
+			"data": []map[string]any{
+				{"id": "remote-chat"},
+				{"id": util.ImageModelGPT},
+			},
+		})
+	}))
+	defer gateway.Close()
+
+	owner := service.AuthOwner{ID: "sub2api:canvas-user", Name: "sub2api-canvas", Provider: service.AuthProviderSub2API}
+	_, sessionKey, err := app.auth.UpsertSub2APISession(owner)
+	if err != nil {
+		t.Fatalf("UpsertSub2APISession() error = %v", err)
+	}
+	if err := app.sub2Bindings.Save(service.Sub2APIBinding{
+		OwnerID:        owner.ID,
+		Sub2APIUserID:  "canvas-user",
+		APIKey:         "sub2-key",
+		GatewayBaseURL: gateway.URL,
+	}); err != nil {
+		t.Fatalf("Save(Sub2APIBinding) error = %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/canvas/models", nil)
+	req.Header.Set("Authorization", "Bearer "+sessionKey)
+	res := httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("canvas models status = %d body = %s", res.Code, res.Body.String())
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("canvas models json: %v", err)
+	}
+	items := util.AsMapSlice(payload["items"])
+	if len(items) != 2 {
+		t.Fatalf("canvas models items = %#v", items)
+	}
+	ids := map[string]string{}
+	for _, item := range items {
+		ids[util.Clean(item["id"])] = util.Clean(item["kind"])
+	}
+	if ids["remote-chat"] != "text" || ids[util.ImageModelGPT] != "image" {
+		t.Fatalf("canvas model kinds = %#v", ids)
+	}
+	if _, ok := ids[util.ImageModelAuto]; ok {
+		t.Fatalf("sub2api model catalog should not inject local auto model: %#v", ids)
 	}
 }
 

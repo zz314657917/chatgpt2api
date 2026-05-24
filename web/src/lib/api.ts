@@ -449,6 +449,122 @@ export type CreationTaskMessage = {
   content: string;
 };
 
+export type CanvasNodeType = "text" | "image" | "prompt" | "image_generation" | "image_edit" | "result";
+export type CanvasRunStatus = "queued" | "running" | "success" | "error" | "cancelled" | "blocked";
+
+export type CanvasImageRef = {
+  url?: string;
+  local_url?: string;
+  path?: string;
+  name?: string;
+};
+
+export type CanvasNodeOutput = {
+  text?: string;
+  images?: CanvasImageRef[];
+  task_id?: string;
+  raw?: Record<string, unknown>;
+};
+
+export type CanvasNodeData = {
+  label?: string;
+  text?: string;
+  prompt?: string;
+  instruction?: string;
+  model?: string;
+  size?: string;
+  quality?: string;
+  image_resolution?: string;
+  n?: number;
+  visibility?: ImageVisibility;
+  url?: string;
+  local_url?: string;
+  path?: string;
+  image_url?: string;
+  image_path?: string;
+  output_format?: ImageOutputFormat;
+  output_compression?: number;
+  background?: string;
+  moderation?: string;
+  style?: string;
+  partial_images?: number;
+  [key: string]: unknown;
+};
+
+export type CanvasNode = {
+  id: string;
+  type: CanvasNodeType;
+  name?: string;
+  position?: { x?: number; y?: number; [key: string]: unknown };
+  data?: CanvasNodeData;
+};
+
+export type CanvasEdge = {
+  id: string;
+  source: string;
+  target: string;
+  source_handle?: string;
+  target_handle?: string;
+};
+
+export type CanvasRunSummary = {
+  run_id?: string;
+  status: CanvasRunStatus;
+  total_nodes: number;
+  success_nodes: number;
+  failed_nodes: number;
+  blocked_nodes: number;
+  text_output?: string;
+  image_outputs?: CanvasImageRef[];
+  started_at?: string;
+  completed_at?: string;
+};
+
+export type CanvasDocument = {
+  id: string;
+  owner_id?: string;
+  name: string;
+  nodes: CanvasNode[];
+  edges: CanvasEdge[];
+  viewport?: Record<string, unknown>;
+  last_run?: CanvasRunSummary;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type CanvasNodeRunState = {
+  id: string;
+  type: CanvasNodeType;
+  name?: string;
+  status: CanvasRunStatus;
+  error?: string;
+  task_id?: string;
+  output?: CanvasNodeOutput;
+  started_at?: string;
+  completed_at?: string;
+};
+
+export type CanvasRun = {
+  id: string;
+  canvas_id: string;
+  canvas_name?: string;
+  mode: "canvas" | "nodes";
+  selected_node_ids?: string[];
+  status: CanvasRunStatus;
+  error?: string;
+  node_states: Record<string, CanvasNodeRunState>;
+  summary: CanvasRunSummary;
+  created_at: string;
+  updated_at: string;
+  completed_at?: string;
+};
+
+export type CanvasModelOption = {
+  id: string;
+  name: string;
+  kind: "text" | "image" | "both";
+};
+
 export type FallbackReferenceImage = {
   path?: string;
   url?: string;
@@ -1104,6 +1220,94 @@ export async function cancelCreationTask(clientTaskId: string) {
     method: "POST",
     body: {},
   });
+}
+
+export async function fetchCanvasModels() {
+  const data = await httpRequest<{ items?: CanvasModelOption[] }>("/api/canvas/models", {
+    headers: {
+      "Cache-Control": "no-cache",
+      Pragma: "no-cache",
+    },
+  });
+  return Array.isArray(data.items) ? data.items : [];
+}
+
+export async function fetchCanvases() {
+  const data = await httpRequest<{ items?: CanvasDocument[] }>("/api/canvases", {
+    headers: {
+      "Cache-Control": "no-cache",
+      Pragma: "no-cache",
+    },
+  });
+  return Array.isArray(data.items) ? data.items : [];
+}
+
+export async function createCanvas(canvas: Partial<CanvasDocument>) {
+  const data = await httpRequest<{ item: CanvasDocument }>("/api/canvases", {
+    method: "POST",
+    body: canvas,
+  });
+  return data.item;
+}
+
+export async function fetchCanvas(canvasId: string) {
+  const data = await httpRequest<{ item: CanvasDocument }>(`/api/canvases/${encodeURIComponent(canvasId)}`, {
+    headers: {
+      "Cache-Control": "no-cache",
+      Pragma: "no-cache",
+    },
+  });
+  return data.item;
+}
+
+export async function saveCanvas(canvas: CanvasDocument) {
+  const data = await httpRequest<{ item: CanvasDocument }>(`/api/canvases/${encodeURIComponent(canvas.id)}`, {
+    method: "POST",
+    body: canvas,
+  });
+  return data.item;
+}
+
+export async function deleteCanvas(canvasId: string) {
+  return httpRequest<{ ok: boolean }>(`/api/canvases/${encodeURIComponent(canvasId)}`, {
+    method: "DELETE",
+  });
+}
+
+export async function startCanvasRun(canvasId: string, nodeIds: string[] = []) {
+  const data = await httpRequest<{ item: CanvasRun }>(`/api/canvases/${encodeURIComponent(canvasId)}/runs`, {
+    method: "POST",
+    body: nodeIds.length ? { node_ids: nodeIds } : {},
+  });
+  return data.item;
+}
+
+export async function fetchCanvasRuns(canvasId: string) {
+  const data = await httpRequest<{ items?: CanvasRun[] }>(`/api/canvases/${encodeURIComponent(canvasId)}/runs`, {
+    headers: {
+      "Cache-Control": "no-cache",
+      Pragma: "no-cache",
+    },
+  });
+  return Array.isArray(data.items) ? data.items : [];
+}
+
+export async function fetchCanvasRun(runId: string) {
+  const data = await httpRequest<{ item: CanvasRun }>(`/api/canvas-runs/${encodeURIComponent(runId)}`, {
+    headers: {
+      "Cache-Control": "no-cache",
+      Pragma: "no-cache",
+    },
+  });
+  return data.item;
+}
+
+export async function cancelCanvasRun(runId: string) {
+  const data = await httpRequest<{ item: CanvasRun }>(`/api/canvas-runs/${encodeURIComponent(runId)}/cancel`, {
+    method: "POST",
+    body: {},
+  });
+  return data.item;
 }
 
 export async function fetchSettingsConfig() {
