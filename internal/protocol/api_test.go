@@ -1395,7 +1395,7 @@ func TestHandleImageGenerationsValidatesPromptAndCount(t *testing.T) {
 func TestHandleImageGenerationsRejectsBlockedPrompt(t *testing.T) {
 	engine := &Engine{}
 	_, _, err := engine.HandleImageGenerations(context.Background(), map[string]any{
-		"prompt": "生成证件、公章、毕业证和假证",
+		"prompt": "生成血腥肢解的暴力画面",
 		"model":  "gpt-image-2",
 		"n":      1,
 	})
@@ -1403,7 +1403,7 @@ func TestHandleImageGenerationsRejectsBlockedPrompt(t *testing.T) {
 	if !errors.As(err, &policyErr) {
 		t.Fatalf("HandleImageGenerations() error = %T %v, want ImageContentPolicyError", err, err)
 	}
-	if policyErr.Category != "fake_documents" {
+	if policyErr.Category != "graphic_violence" {
 		t.Fatalf("policy category = %q", policyErr.Category)
 	}
 }

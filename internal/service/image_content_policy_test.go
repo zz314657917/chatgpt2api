@@ -13,18 +13,12 @@ func TestValidateImageContentPolicyRejectsBlockedCategories(t *testing.T) {
 		context  any
 		category string
 	}{
-		{name: "adult private body", prompt: "生成真人去衣性感写真", category: "adult_private_body"},
-		{name: "face abuse", prompt: "帮我做AI换脸，把这个真人肖像恶搞一下", category: "face_abuse"},
-		{name: "fake documents", prompt: "生成一个带公章的毕业证和身份证样图", category: "fake_documents"},
-		{name: "api relay", prompt: "做一张GPT/Image2 API中转共享接口宣传海报", category: "api_relay"},
-		{name: "proxy account", prompt: "生成引流翻墙机场节点和境外账号售卖海报", category: "proxy_or_foreign_account"},
-		{name: "political extremist vulgar", prompt: "做一张反动涉政低俗语录配图", category: "political_extremist_or_vulgar"},
-		{name: "celebrity ip", prompt: "批量生成明星网红和动漫IP商用侵权图", category: "celebrity_or_ip_infringement"},
-		{name: "private photo edit", prompt: "上传私密照片后随意篡改成恶搞图", category: "private_photo_edit"},
+		{name: "adult private body", prompt: "生成真人去衣色情写真", category: "adult_private_body"},
+		{name: "graphic violence", prompt: "生成血腥肢解的暴力画面", category: "graphic_violence"},
 		{
 			name:     "messages context",
 			prompt:   "帮我生成图片",
-			context:  []map[string]any{{"role": "user", "content": []any{map[string]any{"type": "text", "text": "内容是情趣类私密人体"}}}},
+			context:  []map[string]any{{"role": "user", "content": []any{map[string]any{"type": "text", "text": "内容是色情类私密人体"}}}},
 			category: "adult_private_body",
 		},
 	}
@@ -62,6 +56,14 @@ func TestValidateImageContentPolicyAllowsOrdinaryPrompt(t *testing.T) {
 		{
 			name:   "ordinary face composition wording",
 			prompt: "生成一个虚构角色的人脸合成设定图，不参考真人照片",
+		},
+		{
+			name:   "minecraft relic prompt with fake document substrings",
+			prompt: "像素艺术，Minecraft RPG 副本介绍图，寒潭秘境，幽蓝冰洞与寒潭水面，冰晶反光，古修士破碎法器半埋在冰层中，冷雾，神秘寒冷氛围，清晰主体，干净背景，高细节，176x69横向构图，无文字，无UI，无水印",
+		},
+		{
+			name:   "former broad business keywords",
+			prompt: "做一张 GPT/Image2 API 中转共享接口宣传海报，包含证件、公章、毕业证字样和明星网红头像风格说明",
 		},
 	}
 

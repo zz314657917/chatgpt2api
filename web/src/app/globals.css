@@ -181,6 +181,56 @@
   }
 }
 
+.canvas-flow {
+  --xy-controls-button-background-color: color-mix(in srgb, var(--card) 94%, transparent);
+  --xy-controls-button-background-color-hover: var(--accent);
+  --xy-controls-button-border-color: var(--border);
+  --xy-controls-button-color: var(--foreground);
+  --xy-controls-button-color-hover: var(--accent-foreground);
+  --xy-controls-box-shadow: 0 16px 38px rgb(15 23 42 / 16%);
+  --xy-minimap-background-color: color-mix(in srgb, var(--card) 94%, transparent);
+  color: var(--foreground);
+}
+
+.canvas-flow .react-flow__controls {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+}
+
+.canvas-flow .react-flow__controls-button {
+  width: 1.75rem;
+  height: 1.75rem;
+}
+
+.canvas-flow .react-flow__controls-button svg {
+  fill: currentColor;
+}
+
+.canvas-flow .react-flow__minimap {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  box-shadow: 0 16px 38px rgb(15 23 42 / 16%);
+}
+
+.canvas-flow .react-flow__minimap svg {
+  background: var(--xy-minimap-background-color);
+}
+
+.dark .canvas-flow {
+  --xy-controls-button-background-color: oklch(0.205 0 0 / 92%);
+  --xy-controls-button-background-color-hover: var(--accent);
+  --xy-controls-button-color: oklch(0.985 0 0);
+  --xy-controls-button-color-hover: oklch(0.985 0 0);
+  --xy-controls-box-shadow: 0 20px 48px rgb(0 0 0 / 42%);
+  --xy-minimap-background-color: oklch(0.205 0 0 / 92%);
+}
+
+.dark .canvas-flow .react-flow__minimap {
+  box-shadow: 0 20px 48px rgb(0 0 0 / 42%);
+}
+
 @layer utilities {
   .brand-card-shadow {
     box-shadow: var(--shadow-brand);

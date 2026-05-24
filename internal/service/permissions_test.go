@@ -55,3 +55,29 @@ func TestAccountPoolPermissionsAreExplicit(t *testing.T) {
 		}
 	}
 }
+
+func TestCanvasPermissionsAreExplicit(t *testing.T) {
+	permissions := NormalizeAPIPermissions([]string{
+		APIPermissionKey("GET", "/api/canvases"),
+		APIPermissionKey("POST", "/api/canvases"),
+		APIPermissionKey("DELETE", "/api/canvases"),
+		APIPermissionKey("GET", "/api/canvas/models"),
+		APIPermissionKey("GET", "/api/canvas-runs"),
+		APIPermissionKey("POST", "/api/canvas-runs"),
+	})
+	for _, tc := range []struct {
+		method string
+		path   string
+	}{
+		{"GET", "/api/canvases"},
+		{"POST", "/api/canvases/abc"},
+		{"DELETE", "/api/canvases/abc"},
+		{"GET", "/api/canvas/models"},
+		{"GET", "/api/canvas-runs"},
+		{"POST", "/api/canvas-runs/abc/cancel"},
+	} {
+		if !HasAPIPermission(PermissionSet{APIPermissions: permissions}, tc.method, tc.path) {
+			t.Fatalf("missing explicit canvas permission for %s %s in %#v", tc.method, tc.path, permissions)
+		}
+	}
+}

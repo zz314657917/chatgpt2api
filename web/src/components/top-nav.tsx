@@ -33,9 +33,10 @@ import {
 
 const navItems = [
   { href: "/image", label: "创作台" },
+  { href: "/canvas", label: "无限画布" },
+  { href: "/image-manager", label: "图片库" },
   { href: "/accounts", label: "号池管理" },
   { href: "/register", label: "注册机" },
-  { href: "/image-manager", label: "图片库" },
   { href: "/users", label: "用户管理" },
   { href: "/rbac", label: "角色权限" },
   { href: "/logs", label: "日志管理" },

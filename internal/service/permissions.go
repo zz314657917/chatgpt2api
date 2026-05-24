@@ -32,13 +32,14 @@ type PermissionSet struct {
 
 var fullMenuPermissions = []MenuPermission{
 	{ID: "image", Label: "创作台", Path: "/image", Icon: "image", Order: 10},
-	{ID: "image-manager", Label: "图片库", Path: "/image-manager", Icon: "images", Order: 20},
-	{ID: "accounts", Label: "号池管理", Path: "/accounts", Icon: "wallet-cards", Order: 30},
-	{ID: "register", Label: "注册机", Path: "/register", Icon: "user-plus", Order: 40},
-	{ID: "users", Label: "用户管理", Path: "/users", Icon: "users", Order: 50},
-	{ID: "rbac", Label: "角色权限", Path: "/rbac", Icon: "shield-check", Order: 60},
-	{ID: "logs", Label: "日志管理", Path: "/logs", Icon: "scroll-text", Order: 70},
-	{ID: "settings", Label: "设置", Path: "/settings", Icon: "settings", Order: 80},
+	{ID: "canvas", Label: "无限画布", Path: "/canvas", Icon: "layout-grid", Order: 20},
+	{ID: "image-manager", Label: "图片库", Path: "/image-manager", Icon: "images", Order: 30},
+	{ID: "accounts", Label: "号池管理", Path: "/accounts", Icon: "wallet-cards", Order: 40},
+	{ID: "register", Label: "注册机", Path: "/register", Icon: "user-plus", Order: 50},
+	{ID: "users", Label: "用户管理", Path: "/users", Icon: "users", Order: 60},
+	{ID: "rbac", Label: "角色权限", Path: "/rbac", Icon: "shield-check", Order: 70},
+	{ID: "logs", Label: "日志管理", Path: "/logs", Icon: "scroll-text", Order: 80},
+	{ID: "settings", Label: "设置", Path: "/settings", Icon: "settings", Order: 90},
 }
 
 var apiPermissionCatalog = []APIPermission{
@@ -50,6 +51,12 @@ var apiPermissionCatalog = []APIPermission{
 	apiPermission("POST", "/v1/messages", "Messages", "创作", false),
 	apiPermission("GET", "/api/creation-tasks", "查看创作任务", "创作", true),
 	apiPermission("POST", "/api/creation-tasks", "提交/取消创作任务", "创作", true),
+	apiPermission("GET", "/api/canvases", "查看画布", "画布", true),
+	apiPermission("POST", "/api/canvases", "创建/保存画布", "画布", true),
+	apiPermission("DELETE", "/api/canvases", "删除画布", "画布", true),
+	apiPermission("GET", "/api/canvas/models", "查看画布模型目录", "画布", false),
+	apiPermission("GET", "/api/canvas-runs", "查看画布运行", "画布", true),
+	apiPermission("POST", "/api/canvas-runs", "运行/取消画布", "画布", true),
 	apiPermission("GET", "/api/images", "查看图片库", "图片库", false),
 	apiPermission("PATCH", "/api/images/visibility", "发布/收回图片", "图片库", false),
 	apiPermission("DELETE", "/api/images", "删除图片", "图片库", false),
@@ -133,6 +140,7 @@ func DefaultPermissionSetForRole(role string) PermissionSet {
 	return PermissionSet{
 		MenuPaths: NormalizeMenuPermissions([]string{
 			"/image",
+			"/canvas",
 			"/image-manager",
 		}),
 		APIPermissions: NormalizeAPIPermissions([]string{
@@ -144,6 +152,12 @@ func DefaultPermissionSetForRole(role string) PermissionSet {
 			APIPermissionKey("POST", "/v1/messages"),
 			APIPermissionKey("GET", "/api/creation-tasks"),
 			APIPermissionKey("POST", "/api/creation-tasks"),
+			APIPermissionKey("GET", "/api/canvases"),
+			APIPermissionKey("POST", "/api/canvases"),
+			APIPermissionKey("DELETE", "/api/canvases"),
+			APIPermissionKey("GET", "/api/canvas/models"),
+			APIPermissionKey("GET", "/api/canvas-runs"),
+			APIPermissionKey("POST", "/api/canvas-runs"),
 			APIPermissionKey("GET", "/api/images"),
 			APIPermissionKey("PATCH", "/api/images/visibility"),
 			APIPermissionKey("DELETE", "/api/images"),

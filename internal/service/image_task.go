@@ -276,6 +276,26 @@ func (s *ImageTaskService) ListTasks(identity Identity, taskIDs []string) map[st
 	return map[string]any{"items": items, "missing_ids": missing}
 }
 
+func (s *ImageTaskService) GetTask(identity Identity, clientTaskID string) (map[string]any, bool) {
+	taskID := strings.TrimSpace(clientTaskID)
+	if taskID == "" {
+		return nil, false
+	}
+	key := taskKey(ownerID(identity), taskID)
+	s.mu.Lock()
+	if s.cleanupLocked() {
+		_ = s.saveLocked()
+	}
+	task := s.tasks[key]
+	if task == nil {
+		s.mu.Unlock()
+		return nil, false
+	}
+	out := publicTask(task)
+	s.mu.Unlock()
+	return out, true
+}
+
 func (s *ImageTaskService) CancelTask(identity Identity, clientTaskID string) (map[string]any, error) {
 	taskID := strings.TrimSpace(clientTaskID)
 	if taskID == "" {

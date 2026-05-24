@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import AccountsPage from "@/app/accounts/page";
 import LinuxDoCallbackPage from "@/app/auth/linuxdo/callback/page";
 import Sub2APILaunchPage from "@/app/auth/sub2api/launch/page";
+import CanvasPage from "@/app/canvas/page";
 import ImagePage from "@/app/image/page";
 import ImageManagerPage from "@/app/image-manager/page";
 import HomePage from "@/app/page";
@@ -35,5 +36,6 @@ export const appRoutes: AppRouteConfig[] = [
   { path: "/logs", element: <LogsPage />, requiredPath: "/logs" },
   { path: "/settings", element: <SettingsPage />, requiredPath: "/settings" },
   { path: "/image", element: <ImagePage />, requiredPath: "/image" },
+  { path: "/canvas", element: <CanvasPage />, requiredPath: "/canvas" },
   { path: "*", element: <HomePage /> },
 ];
