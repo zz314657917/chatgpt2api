@@ -1,6 +1,6 @@
 # Current Task
 
-更新时间：2026-05-22 12:15 +08:00
+更新时间：2026-05-25 06:00 +08:00
 
 ## 背景
 
@@ -34,6 +34,10 @@
   - 后端：`internal/config/config.go`、`internal/httpapi/linuxdo.go`
   - 前端：`web/src/app/login/page.tsx`、`web/src/lib/api.ts`
   - 配置：`.env.example`
+- 已完成 `feat(canvas): add canvas workspace and narrow image policy`，最近改动覆盖：
+  - 后端：`internal/service/canvas.go`、`internal/httpapi/canvas.go`、`internal/httpapi/router.go`、`internal/service/permissions.go`
+  - 前端：`web/src/app/canvas/page.tsx`、`web/src/lib/api.ts`、`web/src/app/route-config.tsx`、`web/src/components/top-nav.tsx`
+  - 策略：`internal/service/image_content_policy.go` 已收窄为仅本地拦截成人私密/色情和暴力血腥内容，证件、公章、API 中转、代理、涉政、明星/IP、换脸等宽泛关键词不再本地拦截。
 
 ## 已确认事实
 
@@ -66,3 +70,4 @@ chatgpt2api 当前应被理解为“白标化后的独立生图工作台服务 +
 - 最近三条主线提交及对应改动文件已通过仓库提交记录确认。
 - `feat(image): harden image workspace policies` 提交中已有对应 Go 测试与前端文件改动，可作为当前默认约束的直接依据。
 - 上一阶段白标化与个人中心收缩的构建/测试记录仍保留在时间轴，可作为补读历史。
+- `feat(canvas): add canvas workspace and narrow image policy` 已验证：`go test ./internal/service ./internal/httpapi ./internal/protocol`、`cd web && npm run build`、`cd web && npm run lint`。
