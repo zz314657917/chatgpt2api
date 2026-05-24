@@ -1,5 +1,15 @@
 # Project Timeline
 
+## 2026-05-25 06:05 +08:00 - Canvas 工作台合并与图片策略收窄归档
+
+- 当前阶段：`codex/chatgpt2api-canvas` 已整理、提交、fast-forward 合并到 `main`，并推送到 `origin/main`。
+- 本段重点：新增无限画布工作台，覆盖 canvas 存储、运行、节点执行、权限、路由、前端画布页和 API 客户端；同时把本地图片关键词策略从多类业务拦截收窄为仅拦截成人私密/色情与暴力血腥，解决 Minecraft 提示中“古修士破碎法器”误命中证件规则的问题。
+- 已完成：提交 `ba1979a feat(canvas): add canvas workspace and narrow image policy` 与 `13a90b1 docs: update current task after canvas merge`；`main` 与 `origin/main` 已对齐到 `13a90b1`；`.playwright-cli/` 已加入 `.gitignore`，本地调试输出未提交。
+- 关键决策：本地内容策略不再拦截证件、公章、API 中转、代理、涉政、明星/IP、换脸等宽泛关键词，减少误判；这些内容是否可生成交给上游策略或后续更高置信规则处理。
+- 验证记录：`go test ./internal/service ./internal/httpapi ./internal/protocol` 通过；`cd web && npm run build` 通过，仅 Vite 大 chunk 提示；`cd web && npm run lint` 通过；`git push origin main` 成功。
+- 遗留问题：上游 `upstream/main` 仍因权限限制无法推送；canvas 是首版工作台，后续建议用真实浏览器/本地服务做一次端到端操作验证，包括建画布、连线、运行文生图/图生图、取消运行与历史记录。
+- 下一步：若继续推进该仓库，优先补一份项目内专题知识页，收口 Sub2API launch、leaf network login、image workspace、canvas workspace、对象存储和图片任务验证链路；暂不需要创建全局 skill。
+
 ## 2026-05-22 12:15 +08:00 - Current Task 补入 leaf network login 与 image policy 默认约束
 
 - 当前阶段：知识快照继续从 5 月 18 日的 Sub2API image workspace / white-label 主线，推进到最近两天已经稳定的登录入口与策略约束事实。
