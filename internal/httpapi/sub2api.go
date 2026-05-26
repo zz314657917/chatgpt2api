@@ -297,6 +297,9 @@ func sub2APIImageJSONPayload(payload map[string]any) map[string]any {
 		"size":    sub2APIImageSize(payload),
 		"quality": util.Clean(payload["quality"]),
 	}
+	if resolution := sub2APIImageResolution(payload); resolution != "" {
+		out["resolution"] = resolution
+	}
 	for _, key := range []string{"background", "moderation", "style", "partial_images", "output_format", "output_compression", "input_image_mask"} {
 		if value := payload[key]; value != nil && util.Clean(value) != "" {
 			out[key] = value
@@ -322,6 +325,16 @@ func sub2APIImageSize(payload map[string]any) string {
 		return "864x1536"
 	default:
 		return strings.TrimSpace(size)
+	}
+}
+
+func sub2APIImageResolution(payload map[string]any) string {
+	resolution := strings.ToLower(strings.TrimSpace(firstNonEmpty(util.Clean(payload["resolution"]), util.Clean(payload["image_resolution"]))))
+	switch resolution {
+	case "1k", "2k", "4k":
+		return resolution
+	default:
+		return ""
 	}
 }
 

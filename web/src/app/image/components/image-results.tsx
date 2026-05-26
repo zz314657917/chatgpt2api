@@ -427,7 +427,7 @@ export function ImageResults({
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-[980px] flex-col gap-5 sm:gap-8">
+    <div className="mx-auto flex w-full max-w-[1240px] flex-col gap-5 sm:gap-8">
       {selectedConversation.turns.map((turn, turnIndex) => {
         const progress = progressByTurnKey[turnProgressKey(selectedConversation.id, turn.id)];
         const referenceLightboxImages = turn.referenceImages.map((image, index) => ({
@@ -768,7 +768,7 @@ export function ImageResults({
                 ) : null}
 
                 {visualImages.length > 0 ? (
-                  <div className="columns-1 gap-3 sm:columns-2 sm:gap-4 xl:columns-3">
+                  <div className="columns-1 gap-3 sm:columns-2 sm:gap-4 xl:columns-3 2xl:columns-4">
                     {visualImages.map(({ image, index }) => {
                     const imageSrc = image.status === "success" ? getStoredImageSrc(image) : "";
                     const previewSrc = image.status === "success" ? getStoredImagePreviewSrc(image) : "";

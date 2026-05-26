@@ -62,8 +62,10 @@ import {
   createImageGenerationTask,
   DEFAULT_CHAT_MODEL,
   DEFAULT_IMAGE_MODEL,
+  estimateImageCostUSD,
   fetchCreationTasks,
   fetchProfile,
+  formatImageCostUSD,
   IMAGE_CREATION_MODEL_OPTIONS,
   IMAGE_MODEL_ROUTE_DETAILS,
   IMAGE_OUTPUT_FORMAT_OPTIONS,
@@ -74,7 +76,6 @@ import {
   supportsImageOutputCompression,
   supportsImageOutputControls,
   supportsStructuredImageParameters,
-  usesOfficialImageRoute,
   updateManagedImageVisibility,
   type ImageModel,
   type ImageOutputFormat,
@@ -674,7 +675,7 @@ function getStoredImageModel(): ImageModel {
     return DEFAULT_IMAGE_MODEL;
   }
   const storedModel = window.localStorage.getItem(IMAGE_MODEL_STORAGE_KEY);
-  return isImageModel(storedModel) ? storedModel : DEFAULT_IMAGE_MODEL;
+  return isImageCreationModel(storedModel) ? storedModel : DEFAULT_IMAGE_MODEL;
 }
 
 function getStoredComposerMode(): ComposerMode {
@@ -1199,9 +1200,6 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
   const editingDraftOutputControls = editingTurnDraft
     ? supportsImageOutputControls(editingTurnDraft.model)
     : false;
-  const editingDraftOfficialRoute = editingTurnDraft
-    ? usesOfficialImageRoute(editingTurnDraft.model)
-    : false;
   const editingDraftCustomRatioInvalid = editingTurnDraft && editingDraftEffectiveSizeSelection
     ? isInvalidCustomRatioSelection(
         editingDraftEffectiveSizeSelection.mode,
@@ -1226,24 +1224,16 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         ? "比例需要填写为宽:高"
         : editingDraftEffectiveSizeSelection.resolution === "auto"
           ? editingDraftImageSize
-            ? editingDraftOfficialRoute
-              ? `将把 ${editingDraftImageSize} 写入提示词作为构图偏好`
-              : `将按 ${editingDraftImageSize} 比例下发`
-            : editingDraftOfficialRoute
-              ? "不写入固定比例，交给官方链路决定"
-              : "Auto 比例将交给模型决定"
+            ? `将按 ${editingDraftImageSize} 比例下发`
+            : "Auto 比例将交给模型决定"
           : editingDraftImageSize
-            ? editingDraftOfficialRoute
-              ? `将把 ${formatImageSizeDisplay(editingDraftImageSize)} 作为提示词构图偏好，实际像素以结果为准`
-              : `将下发计算后的 ${formatImageSizeDisplay(editingDraftImageSize)}，${getImageSizeRequirementLabel(editingDraftImageSize)}`
+            ? `将下发计算后的 ${formatImageSizeDisplay(editingDraftImageSize)}，${getImageSizeRequirementLabel(editingDraftImageSize)}`
             : "比例需要填写为宽:高"
       : editingDraftEffectiveSizeSelection?.mode === "custom"
         ? editingDraftImageSize
           ? `已按链路限制校准为 ${formatImageSizeDisplay(editingDraftImageSize)}，${getImageSizeRequirementLabel(editingDraftImageSize)}`
           : "宽高需要填写正整数"
-        : editingDraftOfficialRoute
-          ? "不写入尺寸提示，实际像素由官方返回决定"
-          : "不会强制指定尺寸";
+        : "不会强制指定尺寸";
   const editingDraftSizeIsHighResolution = Boolean(
     editingDraftStructuredParameters && editingDraftImageSize && isHighResolutionImageSize(editingDraftImageSize),
   );
@@ -1262,6 +1252,19 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
   );
   const billingSummary = formatBillingSummary(session);
   const estimatedBillingUnits = composerMode === "chat" ? 1 : parsedCount;
+  const estimatedImageCost = useMemo(() => {
+    if (composerMode === "chat") {
+      return null;
+    }
+    const estimateResolution =
+      imageSizeMode === "ratio" && imageResolution !== "auto"
+        ? imageResolution
+        : imageSizeMode === "custom"
+          ? "custom"
+          : "1k";
+    return estimateImageCostUSD(imageModel, parsedCount, estimateResolution);
+  }, [composerMode, imageModel, imageResolution, imageSizeMode, parsedCount]);
+  const estimatedImageCostLabel = formatImageCostUSD(estimatedImageCost);
   const billingBlocked = !hasEnoughBilling(session, estimatedBillingUnits);
   const deleteConfirmTitle = deleteConfirm?.type === "all" ? "清空历史记录" : deleteConfirm?.type === "one" ? "删除对话" : "";
   const deleteConfirmDescription =
@@ -3034,7 +3037,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
 
   return (
     <>
-      <section className="mx-auto grid h-[calc(100dvh-6.25rem)] min-h-0 w-full max-w-[1380px] grid-cols-1 gap-2 px-0 pb-[calc(env(safe-area-inset-bottom)+0.5rem)] sm:h-[calc(100dvh-5rem)] sm:gap-3 sm:px-3 sm:pb-6 lg:grid-cols-[240px_minmax(0,1fr)]">
+      <section className="grid h-full min-h-0 w-full grid-cols-1 gap-2 px-0 pb-[calc(env(safe-area-inset-bottom)+0.5rem)] sm:gap-3 sm:pb-3 lg:grid-cols-[280px_minmax(0,1fr)] xl:grid-cols-[300px_minmax(0,1fr)]">
         <div className="hidden h-full min-h-0 border-r border-[#f2f3f5] pr-3 lg:block">
           <ImageSidebar
             conversations={conversations}
@@ -3212,12 +3215,10 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                     {editingTurnDraft.mode !== "chat" && editingDraftEffectiveSizeSelection ? (
                       <>
                         <div className="rounded-2xl border border-sky-100 bg-sky-50 px-3 py-2 text-xs leading-5 text-sky-900 sm:col-span-2 lg:col-span-4">
-                          {editingDraftOfficialRoute
-                            ? "官方链路只会把比例写入提示词作为构图偏好，不下发 1080P / 2K / 4K 或质量参数；格式由后端保存结果时处理，压缩率仅适用于 JPEG。"
-                            : "Codex 链路会下发结构化尺寸、格式和 JPEG 压缩率参数；后端只保存上游返回的图片，不做格式二次转换。Free 账号会被上游 Codex 图片接口拒绝。"}
+                          图片任务会下发分辨率档位；格式由后端保存结果时处理，压缩率仅适用于 JPEG。
                         </div>
                         <label className="flex flex-col gap-2 text-sm font-medium text-stone-700">
-                          {editingDraftOfficialRoute ? "构图" : "尺寸"}
+                          尺寸
                           <Select
                             value={editingDraftEffectiveSizeSelection.mode}
                             onValueChange={(value) =>
@@ -3415,7 +3416,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                             <div className="rounded-2xl border border-stone-200 bg-stone-50 px-3 py-2 text-sm sm:col-span-2 lg:col-span-4">
                               <div className="flex min-w-0 items-center justify-between gap-3">
                                 <span className="shrink-0 font-medium text-stone-600">
-                                  {editingDraftOfficialRoute ? "构图偏好" : "计算后分辨率"}
+                                  计算后分辨率
                                 </span>
                                 <span className={cn(
                                   "min-w-0 truncate text-right font-mono font-semibold",
@@ -3460,7 +3461,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
           </Dialog>
         ) : null}
 
-        <div className="relative flex min-h-0 flex-col gap-2 sm:gap-4">
+        <div className="relative flex min-h-0 min-w-0 flex-col gap-2 sm:gap-4">
           <div className="flex items-center justify-between gap-2 px-1 sm:px-4">
             <div className="flex min-w-0 flex-1 items-center gap-2 lg:hidden">
               <Button
@@ -3491,7 +3492,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
 
           <div
             ref={resultsViewportRef}
-            className="hide-scrollbar min-h-0 flex-1 overflow-y-auto px-1 pt-2 pb-[14rem] sm:px-4 sm:pt-4 sm:pb-[15rem]"
+            className="hide-scrollbar min-h-0 flex-1 overflow-y-auto px-1 pt-2 pb-[14rem] sm:px-4 sm:pt-4 sm:pb-[15rem] xl:px-6"
             style={composerDockHeight > 0 ? { paddingBottom: composerDockHeight + 24 } : undefined}
           >
             <ImageResults
@@ -3523,7 +3524,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
               } as CSSProperties
             }
           >
-            <div className="pointer-events-auto mx-auto w-full max-w-[900px]">
+            <div className="pointer-events-auto mx-auto w-full max-w-[1120px]">
               <ImageComposer
                 composerMode={composerMode}
                 prompt={imagePrompt}
@@ -3541,6 +3542,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                 highResolutionHint={highResolutionHint}
                 billingSummary={billingSummary}
                 estimatedBillingUnits={estimatedBillingUnits}
+                estimatedImageCostLabel={estimatedImageCostLabel}
                 billingBlocked={billingBlocked}
                 referenceImages={referenceImages}
                 textareaRef={textareaRef}

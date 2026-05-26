@@ -9,7 +9,7 @@ import { applyColorTheme, getPreferredColorTheme } from "@/lib/theme";
 const rootElement = document.getElementById("root");
 
 if (!rootElement) {
-  throw new Error("Root element #root was not found");
+  throw new Error("页面根节点 #root 不存在");
 }
 
 applyColorTheme(getPreferredColorTheme());

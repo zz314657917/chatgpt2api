@@ -52,8 +52,6 @@ import {
   supportsImageOutputControls,
   supportsImageOutputCompression,
   supportsStructuredImageParameters,
-  usesCodexImageRoute,
-  usesOfficialImageRoute,
   type ImageModel,
   type ImageOutputFormat,
 } from "@/lib/api";
@@ -76,6 +74,7 @@ type ImageComposerProps = {
   highResolutionHint?: ReactNode;
   billingSummary: string;
   estimatedBillingUnits: number;
+  estimatedImageCostLabel?: string;
   billingBlocked: boolean;
   referenceImages: Array<{ name: string; dataUrl: string }>;
   textareaRef: RefObject<HTMLTextAreaElement | null>;
@@ -248,18 +247,16 @@ function ImageSizePreviewPanel({
   label,
   detail,
   highResolution,
-  officialRoute,
 }: {
   label: string;
   detail: string;
   highResolution: boolean;
-  officialRoute: boolean;
 }) {
   return (
     <div className="col-span-2 rounded-xl border border-[#e5e7eb] bg-[#f8fafc] px-3 py-1 dark:border-border dark:bg-background/50 sm:col-span-3">
       <div className="flex min-w-0 items-center justify-between gap-3">
         <span className="shrink-0 text-[11px] font-medium text-[#45515e] dark:text-muted-foreground">
-          {officialRoute ? "构图偏好" : "计算后分辨率"}
+          计算后分辨率
         </span>
         <span
           className={cn(
@@ -299,6 +296,7 @@ export function ImageComposer({
   highResolutionHint,
   billingSummary,
   estimatedBillingUnits,
+  estimatedImageCostLabel,
   billingBlocked,
   referenceImages,
   textareaRef,
@@ -349,7 +347,6 @@ export function ImageComposer({
     IMAGE_RESOLUTION_OPTIONS.find((option) => option.value === imageResolution)?.label || "Auto";
   const compressionSupported = supportsImageOutputCompression(imageOutputFormat);
   const compressionDisabled = !compressionSupported;
-  const officialImageRoute = usesOfficialImageRoute(imageModel);
   const structuredImageParameters = supportsStructuredImageParameters(imageModel);
   const outputControlsSupported = supportsImageOutputControls(imageModel);
   const availableImageSizeModeOptions = structuredImageParameters
@@ -358,6 +355,9 @@ export function ImageComposer({
   const effectiveImageSizeMode = structuredImageParameters || imageSizeMode !== "custom" ? imageSizeMode : "auto";
   const effectiveImageResolution = structuredImageParameters ? imageResolution : "auto";
   const submitLabel = composerMode === "chat" ? "发送对话" : referenceImages.length > 0 ? "编辑图片" : "生成图片";
+  const estimateLabel = estimatedImageCostLabel
+    ? `预计消耗 ${estimatedBillingUnits} 图片单位，约 ${estimatedImageCostLabel}`
+    : `预计消耗 ${estimatedBillingUnits} 图片单位`;
   const computedImageSize = useMemo(
     () =>
       buildImageSize({
@@ -389,26 +389,18 @@ export function ImageComposer({
         ? "比例需要填写为宽:高"
         : effectiveImageResolution === "auto"
           ? activeImageAspectRatio
-            ? officialImageRoute
-              ? `将把 ${activeImageAspectRatio} 写入提示词作为构图偏好`
-              : `将按 ${activeImageAspectRatio} 比例下发`
-            : officialImageRoute
-              ? "不写入固定比例，交给官方链路决定"
-              : "Auto 比例将交给模型决定"
+            ? `将按 ${activeImageAspectRatio} 比例下发`
+            : "Auto 比例将交给模型决定"
           : computedImageSize
-            ? officialImageRoute
-              ? `将把 ${formatImageSizeDisplay(computedImageSize)} 作为提示词构图偏好，实际像素以结果为准`
-              : `将下发计算后的 ${formatImageSizeDisplay(computedImageSize)}，${sizeRequirementLabel}`
+            ? `将下发计算后的 ${formatImageSizeDisplay(computedImageSize)}，${sizeRequirementLabel}`
             : "比例需要填写为宽:高"
       : effectiveImageSizeMode === "custom"
         ? computedImageSize
           ? structuredImageParameters
             ? `已按链路限制校准为 ${formatImageSizeDisplay(computedImageSize)}，${sizeRequirementLabel}`
-            : "官方链路不支持手动宽高"
+            : "当前链路不支持手动宽高"
           : "宽高需要填写正整数"
-        : officialImageRoute
-          ? "不写入尺寸提示，实际像素由官方返回决定"
-          : "不会强制指定尺寸";
+        : "不会强制指定尺寸";
 
   useEffect(() => {
     if (composerMode === "chat") {
@@ -892,7 +884,7 @@ export function ImageComposer({
                         </div>
                         <div className={imageSettingsFieldClass}>
                           <span className="shrink-0 font-medium text-[#45515e] dark:text-muted-foreground">
-                            {officialImageRoute ? "构图" : "尺寸"}
+                            尺寸
                           </span>
                           <span className={cn(
                             "min-w-0 truncate text-right text-xs font-semibold dark:text-foreground",
@@ -1019,7 +1011,6 @@ export function ImageComposer({
                               label={sizePreviewLabel}
                               detail={sizePreviewDetail}
                               highResolution={sizeIsHighResolution}
-                              officialRoute={officialImageRoute}
                             />
                           </>
                         ) : null}
@@ -1028,7 +1019,6 @@ export function ImageComposer({
                             label={sizePreviewLabel}
                             detail={sizePreviewDetail}
                             highResolution={sizeIsHighResolution}
-                            officialRoute={officialImageRoute}
                           />
                         ) : null}
                         {structuredImageParameters && effectiveImageSizeMode !== "auto" && sizeIsHighResolution && highResolutionHint ? (
@@ -1036,13 +1026,9 @@ export function ImageComposer({
                             {highResolutionHint}
                           </div>
                         ) : null}
-                        {officialImageRoute ? (
+                        {composerMode === "image" ? (
                           <p className="col-span-2 rounded-xl border border-sky-100 bg-sky-50 px-3 py-1.5 text-[11px] leading-5 text-sky-900 dark:border-sky-900/60 dark:bg-sky-950/30 dark:text-sky-100 sm:col-span-3">
-                            官方链路只会把比例写入提示词作为构图偏好，不会下发 1080P / 2K / 4K 或质量参数；格式由后端在保存结果时处理，压缩率仅适用于 JPEG。
-                          </p>
-                        ) : usesCodexImageRoute(imageModel) ? (
-                          <p className="col-span-2 rounded-xl border border-amber-100 bg-amber-50 px-3 py-1.5 text-[11px] leading-5 text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200 sm:col-span-3">
-                            Codex 链路会把尺寸、格式和 JPEG 压缩率作为上游工具参数提交；后端只保存上游返回的图片，不做格式二次转换。Free 账号会被上游拒绝。
+                            图片任务会下发分辨率档位；格式由后端保存结果时处理，压缩率仅适用于 JPEG。
                           </p>
                         ) : null}
                         {outputControlsSupported ? (
@@ -1110,9 +1096,7 @@ export function ImageComposer({
                         <p className="col-span-2 px-1 text-[11px] leading-5 text-[#8e8e93] dark:text-muted-foreground sm:col-span-3">
                           {compressionDisabled
                             ? "PNG 和 WebP 不接收压缩率。结果卡会显示实际保存后的格式、尺寸和文件大小。"
-                            : officialImageRoute
-                              ? "JPEG 压缩率由后端保存结果时应用；实际上游返回格式不受此项控制。"
-                              : "JPEG 压缩率会作为 Codex 上游工具参数提交；后端不再二次转换格式。"}
+                            : "JPEG 压缩率由后端保存结果时应用；实际上游返回格式不受此项控制。"}
                         </p>
                         </>
                         ) : null}
@@ -1140,7 +1124,7 @@ export function ImageComposer({
                   disabled={!prompt.trim() || billingBlocked}
                   className="inline-flex size-11 shrink-0 items-center justify-center rounded-full bg-[#181e25] text-white shadow-[0_4px_10px_rgba(24,30,37,0.12)] transition hover:bg-[#2a323d] disabled:cursor-not-allowed disabled:bg-[#e1e2e4] disabled:text-[#73777f] dark:bg-foreground dark:text-background dark:hover:bg-foreground/90 dark:disabled:bg-muted dark:disabled:text-muted-foreground sm:size-10"
                   aria-label={submitLabel}
-                  title={billingBlocked ? "用户余额或配额不足" : `${submitLabel}，预计消耗 ${estimatedBillingUnits}`}
+                  title={billingBlocked ? "用户余额或配额不足" : `${submitLabel}，${estimateLabel}`}
                 >
                   <ArrowUp className="size-5 sm:size-4" />
                 </button>
@@ -1151,7 +1135,7 @@ export function ImageComposer({
               billingBlocked ? "text-rose-600 dark:text-rose-400" : "text-[#8e8e93] dark:text-muted-foreground",
             )}>
               <span>{billingSummary}</span>
-              <span>预计消耗 {estimatedBillingUnits} 图片单位</span>
+              <span>{estimateLabel}</span>
             </div>
           </div>
         </div>

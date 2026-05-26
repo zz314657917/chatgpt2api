@@ -1,9 +1,13 @@
 package service
 
 import (
+	"bytes"
 	"context"
+	"crypto/md5"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"image"
 	"image/color"
 	"image/draw"
@@ -96,6 +100,12 @@ type GeneratedImageMetadata struct {
 }
 
 type GeneratedImageReference struct {
+	Filename    string
+	ContentType string
+	Data        []byte
+}
+
+type UploadedManagedImage struct {
 	Filename    string
 	ContentType string
 	Data        []byte
@@ -325,11 +335,7 @@ func (s *ImageService) ListImages(baseURL, startDate, endDate string, scope Imag
 		if err != nil {
 			return nil
 		}
-		parts := strings.Split(rel, "/")
-		day := info.ModTime().Format("2006-01-02")
-		if len(parts) >= 4 {
-			day = strings.Join(parts[:3], "-")
-		}
+		day := imageDay(rel, info.ModTime())
 		if startDate != "" && day < startDate {
 			return nil
 		}
@@ -345,31 +351,8 @@ func (s *ImageService) ListImages(baseURL, startDate, endDate string, scope Imag
 		} else if !scope.All && (scope.OwnerID == "" || ownerID != scope.OwnerID) {
 			return nil
 		}
-		thumb := s.thumbnailInfo(rel, info)
-		item := map[string]any{
-			"name":       filepath.Base(path),
-			"path":       rel,
-			"date":       day,
-			"size":       info.Size(),
-			"url":        firstNonEmptyString(meta.ObjectURL, publicAssetURL(baseURL, "images", rel)),
-			"created_at": info.ModTime().Format("2006-01-02 15:04:05"),
-			"visibility": meta.Visibility,
-		}
-		addImageMetadataFields(item, meta, imageMetadataFieldOptions{
-			BaseURL:                baseURL,
-			IncludeReusableFields:  !scope.Public || meta.SharePromptParams,
-			IncludeReferenceImages: !scope.Public || meta.ShareReferences,
-		})
-		if thumbRel, ok := thumb["thumbnail_rel"].(string); ok && thumbRel != "" {
-			item["thumbnail_url"] = thumbnailURL(baseURL, thumbRel, info.ModTime())
-		} else {
-			item["thumbnail_url"] = ""
-		}
-		if !setImageItemDimensions(item, thumb["width"], thumb["height"]) {
-			if width, height, ok := imageFileDimensions(path); ok {
-				setImageItemDimensions(item, width, height)
-			}
-		}
+		ref := imageFileRef{rel: rel, path: path, info: info}
+		item := s.managedImageItem(baseURL, ref, info, scope)
 		items = append(items, item)
 		return nil
 	})
@@ -396,6 +379,79 @@ func (s *ImageService) ListImages(baseURL, startDate, endDate string, scope Imag
 		groups = append(groups, map[string]any{"date": day, "items": groupMap[day]})
 	}
 	return map[string]any{"items": items, "groups": groups}
+}
+
+func (s *ImageService) managedImageItem(baseURL string, ref imageFileRef, info os.FileInfo, scope ImageAccessScope) map[string]any {
+	day := imageDay(ref.rel, info.ModTime())
+	meta := s.imageMetadata(ref.rel)
+	thumb := s.thumbnailInfo(ref.rel, info)
+	item := map[string]any{
+		"name":       filepath.Base(ref.path),
+		"path":       ref.rel,
+		"date":       day,
+		"size":       info.Size(),
+		"url":        firstNonEmptyString(meta.ObjectURL, publicAssetURL(baseURL, "images", ref.rel)),
+		"created_at": info.ModTime().Format("2006-01-02 15:04:05"),
+		"visibility": meta.Visibility,
+	}
+	addImageMetadataFields(item, meta, imageMetadataFieldOptions{
+		BaseURL:                baseURL,
+		IncludeReusableFields:  !scope.Public || meta.SharePromptParams,
+		IncludeReferenceImages: !scope.Public || meta.ShareReferences,
+	})
+	if thumbRel, ok := thumb["thumbnail_rel"].(string); ok && thumbRel != "" {
+		item["thumbnail_url"] = thumbnailURL(baseURL, thumbRel, info.ModTime())
+	} else {
+		item["thumbnail_url"] = ""
+	}
+	if !setImageItemDimensions(item, thumb["width"], thumb["height"]) {
+		if width, height, ok := imageFileDimensions(ref.path); ok {
+			setImageItemDimensions(item, width, height)
+		}
+	}
+	return item
+}
+
+func (s *ImageService) StoreUploadedImage(baseURL string, upload UploadedManagedImage, ownerID, ownerName, visibility string) (map[string]any, error) {
+	if s == nil || s.config == nil {
+		return nil, errors.New("image service is not initialized")
+	}
+	if len(upload.Data) == 0 {
+		return nil, errors.New("image file is empty")
+	}
+	if _, _, err := image.DecodeConfig(bytes.NewReader(upload.Data)); err != nil {
+		return nil, errors.New("unsupported image file")
+	}
+	normalizedVisibility, err := NormalizeImageVisibility(visibility)
+	if err != nil {
+		return nil, err
+	}
+	contentType := uploadedImageContentType(upload.Data, upload.ContentType)
+	ext := uploadedImageExtension(upload.Filename, contentType)
+	now := time.Now()
+	sum := md5.Sum(upload.Data)
+	filename := fmt.Sprintf("%d_%s%s", now.UnixNano(), hex.EncodeToString(sum[:])[:16], ext)
+	rel := filepath.ToSlash(filepath.Join(now.Format("2006"), now.Format("01"), now.Format("02"), filename))
+	target := filepath.Join(s.config.ImagesDir(), filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(target, upload.Data, 0o644); err != nil {
+		return nil, err
+	}
+	ref, err := s.imageFileRef(s.config.ImagesDir(), rel)
+	if err != nil {
+		return nil, err
+	}
+	stored := s.uploadImageObject(rel, upload.Data, contentType)
+	if err := s.writeUploadedImageMetadataForRef(ref, ownerID, ownerName, normalizedVisibility, strings.TrimPrefix(ext, "."), stored); err != nil {
+		return nil, err
+	}
+	info, err := os.Stat(target)
+	if err != nil {
+		return nil, err
+	}
+	return s.managedImageItem(baseURL, ref, info, ImageAccessScope{OwnerID: strings.TrimSpace(ownerID)}), nil
 }
 
 func (s *ImageService) UpdateImageVisibility(value, visibility string, scope ImageAccessScope, optionValues ...ImageVisibilityUpdateOptions) (map[string]any, error) {
@@ -943,6 +999,48 @@ func (s *ImageService) writeImageMetadataForRef(ref imageFileRef, ownerID, owner
 		meta.Visibility = ImageVisibilityPrivate
 	}
 	return s.writeImageMetadata(ref.rel, meta)
+}
+
+func (s *ImageService) writeUploadedImageMetadataForRef(ref imageFileRef, ownerID, ownerName, visibility, outputFormat string, stored imagestore.StoredObject) error {
+	meta := s.imageMetadata(ref.rel)
+	meta.OwnerID = strings.TrimSpace(ownerID)
+	meta.OwnerName = strings.TrimSpace(ownerName)
+	normalized, err := NormalizeImageVisibility(visibility)
+	if err != nil {
+		return err
+	}
+	meta.Visibility = normalized
+	if normalized == ImageVisibilityPublic {
+		meta.PublishedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	} else {
+		meta.PublishedAt = ""
+	}
+	meta.OutputFormat = NormalizeImageOutputFormat(outputFormat)
+	if meta.OutputFormat == "" {
+		meta.OutputFormat = strings.TrimSpace(outputFormat)
+	}
+	meta.StorageBackend = strings.TrimSpace(stored.Backend)
+	meta.ObjectKey = strings.TrimSpace(stored.Key)
+	meta.ObjectURL = strings.TrimSpace(stored.URL)
+	return s.writeImageMetadata(ref.rel, meta)
+}
+
+func (s *ImageService) uploadImageObject(rel string, data []byte, contentType string) imagestore.StoredObject {
+	ctx, cancel := imagestore.UploadTimeoutContext()
+	defer cancel()
+	store, enabled, err := imagestore.NewFromEnv(ctx)
+	if !enabled || err != nil {
+		return imagestore.StoredObject{}
+	}
+	key, err := store.ObjectKey(rel)
+	if err != nil {
+		return imagestore.StoredObject{}
+	}
+	stored, err := store.UploadBytes(ctx, key, data, contentType)
+	if err != nil {
+		return imagestore.StoredObject{}
+	}
+	return stored
 }
 
 func (s *ImageService) writeImageMetadata(rel string, meta imageMetadata) error {
@@ -1589,6 +1687,49 @@ func NormalizeImageVisibility(value string) (string, error) {
 		return ImageVisibilityPublic, nil
 	default:
 		return "", errors.New("visibility must be private or public")
+	}
+}
+
+func uploadedImageContentType(data []byte, value string) string {
+	switch strings.TrimSpace(strings.ToLower(value)) {
+	case "image/png", "image/jpeg", "image/jpg", "image/gif", "image/webp":
+		if strings.TrimSpace(strings.ToLower(value)) == "image/jpg" {
+			return "image/jpeg"
+		}
+		return strings.TrimSpace(strings.ToLower(value))
+	}
+	switch http.DetectContentType(data) {
+	case "image/jpeg":
+		return "image/jpeg"
+	case "image/gif":
+		return "image/gif"
+	case "image/webp":
+		return "image/webp"
+	default:
+		return "image/png"
+	}
+}
+
+func uploadedImageExtension(filename, contentType string) string {
+	switch strings.TrimSpace(strings.ToLower(contentType)) {
+	case "image/jpeg", "image/jpg":
+		return ".jpg"
+	case "image/gif":
+		return ".gif"
+	case "image/webp":
+		return ".webp"
+	case "image/png":
+		return ".png"
+	}
+	switch strings.ToLower(filepath.Ext(filename)) {
+	case ".jpg", ".jpeg":
+		return ".jpg"
+	case ".gif":
+		return ".gif"
+	case ".webp":
+		return ".webp"
+	default:
+		return ".png"
 	}
 }
 

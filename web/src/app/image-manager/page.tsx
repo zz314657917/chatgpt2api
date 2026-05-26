@@ -384,6 +384,8 @@ function blurFocusedElementInContainer(container: HTMLElement) {
 }
 
 const IMAGE_MASONRY_BREAKPOINTS = [
+  { minWidth: 1800, columns: 6 },
+  { minWidth: 1536, columns: 5 },
   { minWidth: 1280, columns: 4 },
   { minWidth: 1024, columns: 3 },
   { minWidth: 640, columns: 2 },
@@ -1251,11 +1253,11 @@ function ImageManagerContent({
   );
 
   return (
-    <section className="flex flex-col gap-5 pb-20 sm:pb-24">
+    <section className="flex h-full min-h-0 flex-col gap-5 overflow-y-auto pb-20 sm:pb-24">
       <PageHeader eyebrow="Images" title="图片库" />
 
-      <div className="flex flex-col gap-4">
-        <section className="grid gap-4 rounded-[18px] border border-border bg-background/80 p-3 shadow-[0_6px_20px_rgba(15,23,42,0.04)] sm:p-4 lg:grid-cols-[minmax(180px,220px)_minmax(0,1fr)] lg:items-start">
+      <div className="grid min-w-0 gap-4 lg:grid-cols-[300px_minmax(0,1fr)] xl:grid-cols-[320px_minmax(0,1fr)]">
+        <aside className="min-w-0 rounded-[18px] border border-border bg-background/80 p-3 shadow-[0_6px_20px_rgba(15,23,42,0.04)] sm:p-4 lg:sticky lg:top-24 lg:self-start">
           <div className="flex min-w-0 flex-col gap-2">
             <div className="inline-flex w-full rounded-lg border border-border bg-muted/50 p-1">
               {[
@@ -1376,7 +1378,9 @@ function ImageManagerContent({
             </div>
           </div>
 
-        </section>
+        </aside>
+
+        <div className="min-w-0">
 
         <Popover open={isImageActionsOpen} onOpenChange={setIsImageActionsOpen}>
           <div className="fixed right-4 bottom-[calc(env(safe-area-inset-bottom)+1rem)] z-40 sm:right-6 sm:bottom-6">
@@ -1776,6 +1780,7 @@ function ImageManagerContent({
             </CardContent>
           </Card>
         ) : null}
+        </div>
       </div>
       <ImageLightbox
         images={lightboxImages}

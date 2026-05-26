@@ -828,6 +828,24 @@ func TestResponseImageGenerationRouteStillWinsWhenOtherToolsPresent(t *testing.T
 	}
 }
 
+func TestResponseImageGenerationRequestPreservesOfficialImage2Model(t *testing.T) {
+	body := map[string]any{
+		"model": "gpt-image-2-official",
+		"input": "生成一张产品图",
+		"tools": []any{
+			map[string]any{"type": "image_generation", "model": "gpt-image-2-official", "size": "16:9"},
+		},
+	}
+
+	request, _, err := ResponseImageGenerationRequest(body, "linuxdo:1", nil)
+	if err != nil {
+		t.Fatalf("ResponseImageGenerationRequest() error = %v", err)
+	}
+	if request.Model != "gpt-image-2-official" || !request.UsesResponsesImageRoute() {
+		t.Fatalf("request route/model = %q responses=%v, want gpt-image-2-official responses image route", request.Model, request.UsesResponsesImageRoute())
+	}
+}
+
 func TestResponseImageGenerationRequestKeepsJPEGOutputCompression(t *testing.T) {
 	body := map[string]any{
 		"model": "gpt-5.5",

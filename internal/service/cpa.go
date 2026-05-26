@@ -217,7 +217,7 @@ func (s *CPAImportService) runImport(poolID string, pool map[string]any, names [
 			for name := range jobs {
 				token, err := s.fetchRemoteAccessToken(context.Background(), pool, name)
 				if err != nil {
-					results <- result{name: name, err: err.Error()}
+					results <- result{name: name, err: util.LocalizeErrorMessage(err.Error())}
 				} else {
 					results <- result{name: name, token: token}
 				}
@@ -299,7 +299,7 @@ func (s *CPAImportService) appendJobError(poolID, name, message string) {
 		return
 	}
 	errors := anyList(current["errors"])
-	errors = append(errors, map[string]any{"name": name, "error": message})
+	errors = append(errors, map[string]any{"name": name, "error": util.LocalizeErrorMessage(message)})
 	s.updateJob(poolID, map[string]any{"errors": errors, "failed": len(errors)})
 }
 

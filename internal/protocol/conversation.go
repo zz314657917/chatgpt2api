@@ -186,7 +186,7 @@ func (r ConversationRequest) SupportsImageGenerationModel() bool {
 
 func (r ConversationRequest) UsesResponsesImageRoute() bool {
 	model := strings.TrimSpace(r.Model)
-	return model == "" || model == util.ImageModelAuto || model == util.ImageModelGPT || model == util.ImageModelCodex
+	return model == "" || model == util.ImageModelAuto || model == util.ImageModelGPT || model == util.ImageModelGPTOfficial || model == util.ImageModelCodex
 }
 
 type ConversationState struct {
@@ -240,7 +240,7 @@ type imageRunResult struct {
 func (e *ImageGenerationError) Error() string { return e.Message }
 
 func (e *ImageGenerationError) OpenAIError() map[string]any {
-	return map[string]any{"error": map[string]any{"message": e.Message, "type": e.Type, "param": e.Param, "code": e.Code}}
+	return map[string]any{"error": map[string]any{"message": util.LocalizeErrorMessage(e.Message), "type": e.Type, "param": e.Param, "code": e.Code}}
 }
 
 func NewImageGenerationError(message string) *ImageGenerationError {

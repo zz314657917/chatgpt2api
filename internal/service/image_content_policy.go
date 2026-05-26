@@ -25,7 +25,7 @@ func (e ImageContentPolicyError) Error() string {
 
 func (e ImageContentPolicyError) OpenAIError() map[string]any {
 	return map[string]any{"error": map[string]any{
-		"message": e.Error(),
+		"message": util.LocalizeErrorMessage(e.Error()),
 		"type":    "invalid_request_error",
 		"param":   "prompt",
 		"code":    "content_policy_violation",

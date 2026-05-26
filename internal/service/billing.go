@@ -76,7 +76,7 @@ func (e BillingLimitError) Error() string {
 func (e BillingLimitError) OpenAIError() map[string]any {
 	return map[string]any{
 		"error": map[string]any{
-			"message": e.Message,
+			"message": util.LocalizeErrorMessage(e.Message),
 			"type":    "insufficient_quota",
 			"param":   nil,
 			"code":    e.Code,
@@ -453,7 +453,7 @@ func (s *BillingService) ApplyBulkAdjustment(userIDs []string, operator Identity
 		s.resetSubscriptionIfDueLocked(state, now)
 		before := publicBillingState(state)
 		if err := s.applyAdjustmentLocked(state, adjustmentType, amount, body, now); err != nil {
-			result.Error = err.Error()
+			result.Error = util.LocalizeErrorMessage(err.Error())
 			result.Billing = publicBillingState(state)
 			results = append(results, result)
 			continue
