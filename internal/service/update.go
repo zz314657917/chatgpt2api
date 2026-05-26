@@ -22,6 +22,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"chatgpt2api/internal/util"
 )
 
 const (
@@ -125,14 +127,14 @@ func (s *UpdateService) CheckUpdate(ctx context.Context, force bool) (*UpdateInf
 	info, err := s.fetchLatestRelease(ctx)
 	if err != nil {
 		if cached := s.cachedInfo(); cached != nil {
-			cached.Warning = "Using cached data: " + err.Error()
+			cached.Warning = "正在使用缓存数据：" + util.LocalizeErrorMessage(err.Error())
 			return cached, nil
 		}
 		return &UpdateInfo{
 			CurrentVersion: s.currentVersion,
 			LatestVersion:  s.currentVersion,
 			HasUpdate:      false,
-			Warning:        err.Error(),
+			Warning:        util.LocalizeErrorMessage(err.Error()),
 			BuildType:      s.buildType,
 		}, nil
 	}

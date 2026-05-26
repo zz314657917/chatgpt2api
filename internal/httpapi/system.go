@@ -61,7 +61,7 @@ func (a *App) handleAdminSystem(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		util.WriteJSON(w, http.StatusOK, map[string]any{
-			"message":      "Update completed. Please restart the service.",
+			"message":      "更新已完成，请重启服务。",
 			"need_restart": true,
 		})
 	case base + "/rollback":
@@ -74,7 +74,7 @@ func (a *App) handleAdminSystem(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		util.WriteJSON(w, http.StatusOK, map[string]any{
-			"message":      "Rollback completed. Please restart the service.",
+			"message":      "回滚已完成，请重启服务。",
 			"need_restart": true,
 		})
 	case base + "/restart":
@@ -86,7 +86,7 @@ func (a *App) handleAdminSystem(w http.ResponseWriter, r *http.Request) {
 			time.Sleep(500 * time.Millisecond)
 			os.Exit(0)
 		}()
-		util.WriteJSON(w, http.StatusOK, map[string]any{"message": "Service restart initiated"})
+		util.WriteJSON(w, http.StatusOK, map[string]any{"message": "服务正在重启"})
 	default:
 		http.NotFound(w, r)
 	}

@@ -246,7 +246,7 @@ func (s *RegisterService) runWorker(index int, config map[string]any) registerWo
 	worker, err := newRegisterWorker(s, index, config)
 	if err != nil {
 		s.appendLog(fmt.Sprintf("任务%d 初始化失败，原因: %v", index, err), "red")
-		return registerWorkerResult{ok: false, index: index, err: err.Error(), cost: time.Since(start).Seconds()}
+		return registerWorkerResult{ok: false, index: index, err: util.LocalizeErrorMessage(err.Error()), cost: time.Since(start).Seconds()}
 	}
 	defer worker.close()
 	s.appendLog(fmt.Sprintf("[任务%d] 任务启动", index), "")
@@ -254,13 +254,13 @@ func (s *RegisterService) runWorker(index int, config map[string]any) registerWo
 	cost := time.Since(start).Seconds()
 	if runErr != nil {
 		s.appendLog(fmt.Sprintf("任务%d 注册失败，本次耗时%.1fs，原因: %v", index, cost, runErr), "red")
-		return registerWorkerResult{ok: false, index: index, err: runErr.Error(), cost: cost}
+		return registerWorkerResult{ok: false, index: index, err: util.LocalizeErrorMessage(runErr.Error()), cost: cost}
 	}
 	accessToken := util.Clean(result["access_token"])
 	if accessToken == "" {
 		err = fmt.Errorf("register flow did not return access_token")
 		s.appendLog(fmt.Sprintf("任务%d 注册失败，本次耗时%.1fs，原因: %v", index, cost, err), "red")
-		return registerWorkerResult{ok: false, index: index, err: err.Error(), cost: cost}
+		return registerWorkerResult{ok: false, index: index, err: util.LocalizeErrorMessage(err.Error()), cost: cost}
 	}
 	if s.accounts != nil {
 		s.accounts.AddAccounts([]string{accessToken})

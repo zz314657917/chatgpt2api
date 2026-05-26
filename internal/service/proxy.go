@@ -54,11 +54,11 @@ func (s *ProxyService) Test(candidate string, timeout time.Duration) map[string]
 	}
 	candidate = strings.TrimSpace(candidate)
 	if candidate == "" {
-		return map[string]any{"ok": false, "status": 0, "latency_ms": 0, "error": "proxy url is required"}
+		return map[string]any{"ok": false, "status": 0, "latency_ms": 0, "error": util.LocalizeErrorMessage("proxy url is required")}
 	}
 	parsed, err := url.Parse(candidate)
 	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https" && parsed.Scheme != "socks5" && parsed.Scheme != "socks5h") {
-		return map[string]any{"ok": false, "status": 0, "latency_ms": 0, "error": "invalid proxy url"}
+		return map[string]any{"ok": false, "status": 0, "latency_ms": 0, "error": util.LocalizeErrorMessage("invalid proxy url")}
 	}
 	client := browserHTTPClientForProfile(candidate, "", timeout)
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -73,13 +73,13 @@ func (s *ProxyService) Test(candidate string, timeout time.Duration) map[string]
 		if detail, ok := util.SummarizeUpstreamConnectionError(message); ok {
 			message = detail
 		}
-		return map[string]any{"ok": false, "status": 0, "latency_ms": latency, "error": message}
+		return map[string]any{"ok": false, "status": 0, "latency_ms": latency, "error": util.LocalizeErrorMessage(message)}
 	}
 	defer resp.Body.Close()
 	ok := resp.StatusCode < 500
 	var message any
 	if !ok {
-		message = resp.Status
+		message = "代理测试请求失败：" + resp.Status
 	}
 	return map[string]any{"ok": ok, "status": resp.StatusCode, "latency_ms": latency, "error": message}
 }

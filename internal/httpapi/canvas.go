@@ -421,10 +421,11 @@ func canvasImageNodeOutput(node service.CanvasNode) service.CanvasNodeOutput {
 	})
 	for _, item := range util.AsMapSlice(node.Data["images"]) {
 		appendRef(service.CanvasImageRef{
-			URL:      util.Clean(item["url"]),
-			LocalURL: util.Clean(item["local_url"]),
-			Path:     util.Clean(item["path"]),
-			Name:     util.Clean(item["name"]),
+			URL:          util.Clean(item["url"]),
+			LocalURL:     util.Clean(item["local_url"]),
+			Path:         util.Clean(item["path"]),
+			Name:         util.Clean(item["name"]),
+			ThumbnailURL: util.Clean(item["thumbnail_url"]),
 		})
 	}
 	return service.CanvasNodeOutput{Images: refs}
@@ -456,10 +457,11 @@ func canvasOutputFromTask(task map[string]any) service.CanvasNodeOutput {
 			}
 		}
 		ref := service.CanvasImageRef{
-			URL:      util.Clean(item["url"]),
-			LocalURL: firstNonEmpty(util.Clean(item["local_url"]), util.Clean(item["url"])),
-			Path:     util.Clean(item["path"]),
-			Name:     util.Clean(item["name"]),
+			URL:          util.Clean(item["url"]),
+			LocalURL:     firstNonEmpty(util.Clean(item["local_url"]), util.Clean(item["url"])),
+			Path:         util.Clean(item["path"]),
+			Name:         util.Clean(item["name"]),
+			ThumbnailURL: util.Clean(item["thumbnail_url"]),
 		}
 		if ref.URL != "" || ref.LocalURL != "" || ref.Path != "" {
 			out.Images = append(out.Images, ref)

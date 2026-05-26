@@ -6,6 +6,7 @@ export type AccountStatus = "正常" | "限流" | "异常" | "禁用" | "刷新�
 export const IMAGE_MODEL_OPTIONS = [
   { value: "auto", label: "Auto" },
   { value: "gpt-image-2", label: "gpt-image-2" },
+  { value: "gpt-image-2-official", label: "gpt-image-2-official" },
   { value: "codex-gpt-image-2", label: "codex-gpt-image-2" },
   { value: "gpt-5-mini", label: "gpt-5-mini" },
   { value: "gpt-5-3-mini", label: "gpt-5-3-mini" },
@@ -17,11 +18,12 @@ export const IMAGE_MODEL_OPTIONS = [
   { value: "gpt-5.5", label: "gpt-5.5" },
 ] as const;
 export type ImageModel = (typeof IMAGE_MODEL_OPTIONS)[number]["value"];
-export const DEFAULT_IMAGE_MODEL: ImageModel = "auto";
+export const DEFAULT_IMAGE_MODEL: ImageModel = "gpt-image-2";
 export const DEFAULT_CHAT_MODEL: ImageModel = "auto";
 export const CODEX_IMAGE_MODEL: ImageModel = "codex-gpt-image-2";
+export const OFFICIAL_IMAGE_MODEL: ImageModel = "gpt-image-2-official";
 const IMAGE_MODEL_VALUES = new Set<string>(IMAGE_MODEL_OPTIONS.map((option) => option.value));
-const IMAGE_TASK_MODEL_VALUES = new Set<ImageModel>(["auto", "gpt-image-2", "codex-gpt-image-2"]);
+const IMAGE_TASK_MODEL_VALUES = new Set<ImageModel>(["gpt-image-2", "gpt-image-2-official"]);
 const CHAT_MODEL_VALUES = new Set<ImageModel>([
   "auto",
   "gpt-5-mini",
@@ -36,6 +38,9 @@ const CHAT_MODEL_VALUES = new Set<ImageModel>([
 export const IMAGE_TASK_MODEL_OPTIONS = IMAGE_MODEL_OPTIONS.filter((option) => IMAGE_TASK_MODEL_VALUES.has(option.value));
 export const IMAGE_CREATION_MODEL_OPTIONS = IMAGE_TASK_MODEL_OPTIONS;
 export const CHAT_MODEL_OPTIONS = IMAGE_MODEL_OPTIONS.filter((option) => CHAT_MODEL_VALUES.has(option.value));
+const IMAGE_PRICE_1K_USD = 0.006;
+const OFFICIAL_IMAGE_PRICE_1K_USD = 0.0462;
+
 export const IMAGE_MODEL_ROUTE_DETAILS: Partial<Record<
   ImageModel,
   {
@@ -44,17 +49,13 @@ export const IMAGE_MODEL_ROUTE_DETAILS: Partial<Record<
     badge?: string;
   }
 >> = {
-  auto: {
-    routeLabel: "官方图片工具",
-    description: "默认等价 gpt-image-2；比例只作为提示词构图偏好，实际像素由官方返回决定。",
-  },
   "gpt-image-2": {
-    routeLabel: "官方图片工具",
-    description: "走官方 f/conversation 图片链路；尺寸只作为构图偏好，格式由后端保存结果时处理。",
+    routeLabel: "常规",
+    description: "常规图片线路，按当前分辨率档位估算成本。",
   },
-  "codex-gpt-image-2": {
-    routeLabel: "Codex 链路",
-    description: "走 Codex Responses 图片接口；尺寸、格式和 JPEG 压缩率交给上游工具处理，需要 Plus / Team / Pro 账号。",
+  "gpt-image-2-official": {
+    routeLabel: "官方",
+    description: "官方图片线路，价格明显高于常规线路，仅在确有需要时选择。",
   },
 };
 
@@ -75,7 +76,7 @@ export function isChatModel(value: unknown): value is ImageModel {
 }
 
 export function usesOfficialImageRoute(model: ImageModel) {
-  return model === "auto" || model === "gpt-image-2";
+  return model === "auto" || model === "gpt-image-2" || model === OFFICIAL_IMAGE_MODEL;
 }
 
 export function usesCodexImageRoute(model: ImageModel) {
@@ -83,7 +84,7 @@ export function usesCodexImageRoute(model: ImageModel) {
 }
 
 export function supportsStructuredImageParameters(model: ImageModel) {
-  return usesCodexImageRoute(model);
+  return usesCodexImageRoute(model) || model === "gpt-image-2" || model === OFFICIAL_IMAGE_MODEL;
 }
 
 export function supportsImageOutputControls(model: ImageModel) {
@@ -92,6 +93,30 @@ export function supportsImageOutputControls(model: ImageModel) {
 
 export function supportsImageQuality(_model: ImageModel) {
   return false;
+}
+
+export type ImageCostResolution = "1k" | "2k" | "4k";
+
+export const IMAGE_MODEL_PRICE_USD: Partial<Record<ImageModel, Record<ImageCostResolution, number>>> = {
+  "gpt-image-2": { "1k": IMAGE_PRICE_1K_USD, "2k": IMAGE_PRICE_1K_USD, "4k": IMAGE_PRICE_1K_USD },
+  "gpt-image-2-official": { "1k": OFFICIAL_IMAGE_PRICE_1K_USD, "2k": OFFICIAL_IMAGE_PRICE_1K_USD, "4k": OFFICIAL_IMAGE_PRICE_1K_USD },
+};
+
+export function estimateImageCostUSD(model: ImageModel, count: number, resolution: string) {
+  const prices = IMAGE_MODEL_PRICE_USD[model];
+  if (!prices) {
+    return null;
+  }
+  const normalizedResolution = resolution === "2k" || resolution === "4k" ? resolution : "1k";
+  const normalizedCount = Math.max(1, Math.floor(Number(count) || 1));
+  return prices[normalizedResolution] * normalizedCount;
+}
+
+export function formatImageCostUSD(value: number | null) {
+  if (value === null || !Number.isFinite(value)) {
+    return "";
+  }
+  return `$${value.toFixed(4)}`;
 }
 
 export type ImageQuality = "low" | "medium" | "high";
@@ -457,6 +482,7 @@ export type CanvasImageRef = {
   local_url?: string;
   path?: string;
   name?: string;
+  thumbnail_url?: string;
 };
 
 export type CanvasNodeOutput = {
@@ -480,6 +506,7 @@ export type CanvasNodeData = {
   url?: string;
   local_url?: string;
   path?: string;
+  images?: CanvasImageRef[];
   image_url?: string;
   image_path?: string;
   output_format?: ImageOutputFormat;
@@ -488,6 +515,19 @@ export type CanvasNodeData = {
   moderation?: string;
   style?: string;
   partial_images?: number;
+  status?: CreationTask["status"];
+  error?: string;
+  output?: CanvasNodeOutput;
+  task_id?: string;
+  input_images?: CanvasImageRef[];
+  mention_images?: CanvasImageRef[];
+  // Routing secrets are owned by Sub2API / server-side routing, not canvas nodes.
+  api_key?: never;
+  apiKey?: never;
+  base_url?: never;
+  baseURL?: never;
+  group_id?: never;
+  groupId?: never;
   [key: string]: unknown;
 };
 
@@ -524,6 +564,8 @@ export type CanvasDocument = {
   id: string;
   owner_id?: string;
   name: string;
+  kind?: string;
+  schema_version?: number;
   nodes: CanvasNode[];
   edges: CanvasEdge[];
   viewport?: Record<string, unknown>;
@@ -1029,7 +1071,7 @@ export async function editImage(files: File | File[], prompt: string, model?: Im
 export async function createImageGenerationTask(
   clientTaskId: string,
   prompt: string,
-  model?: ImageModel,
+  model?: string,
   size?: string,
   quality?: ImageQuality,
   count = 1,
@@ -1075,7 +1117,7 @@ export async function createImageEditTask(
   clientTaskId: string,
   files: File | File[],
   prompt: string,
-  model?: ImageModel,
+  model?: string,
   size?: string,
   quality?: ImageQuality,
   count = 1,
@@ -1156,7 +1198,7 @@ export async function createImageEditTask(
 export async function createChatCompletionTask(
   clientTaskId: string,
   prompt: string,
-  model: ImageModel,
+  model: string,
   messages: CreationTaskMessage[],
   referenceImages?: { name: string; dataUrl: string }[],
 ) {
@@ -1357,6 +1399,19 @@ export async function fetchManagedImages(
     items: Array.isArray(data.items) ? data.items : [],
     groups: Array.isArray(data.groups) ? data.groups : [],
   };
+}
+
+export async function uploadManagedImages(files: File[], visibility: ImageVisibility = "private") {
+  const formData = new FormData();
+  files.forEach((file) => {
+    formData.append("image[]", file);
+  });
+  formData.append("visibility", visibility);
+  const data = await httpRequest<{ items?: ManagedImage[] | null }>("/api/images/uploads", {
+    method: "POST",
+    body: formData,
+  });
+  return Array.isArray(data.items) ? data.items : [];
 }
 
 export async function updateManagedImageVisibility(

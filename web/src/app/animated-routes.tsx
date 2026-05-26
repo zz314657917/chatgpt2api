@@ -64,6 +64,8 @@ function PermissionRoute({ requiredPath, children }: { requiredPath?: string; ch
 export function AnimatedRoutes() {
   const location = useLocation();
   const prefersReducedMotion = useReducedMotion();
+  const pathname = location.pathname.replace(/\/+$/, "") || "/";
+  const isViewportWorkspacePage = pathname === "/canvas" || pathname === "/image" || pathname === "/image-manager";
 
   return (
     <AnimatePresence mode="wait" initial={false}>
@@ -74,7 +76,7 @@ export function AnimatedRoutes() {
         animate="animate"
         exit="exit"
         transition={prefersReducedMotion ? reducedRouteTransition : routeTransition}
-        className="min-w-0"
+        className={isViewportWorkspacePage ? "min-h-0 min-w-0 flex-1 overflow-hidden" : "min-w-0"}
       >
         <Routes location={location}>
           {appRoutes.map((route) => (

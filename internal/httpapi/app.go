@@ -365,7 +365,7 @@ func (a *App) writeProtocol(w http.ResponseWriter, r *http.Request, result map[s
 			a.logCall(identity, summary, r.Method, endpoint, model, start, "failed", protocolErrorHTTPStatus(err), err.Error(), urls, requestCapture)
 			markRequestBusinessLogged(r)
 			fmt.Fprintf(w, "event: error\n")
-			fmt.Fprintf(w, "data: %s\n\n", jsonString(map[string]any{"type": "error", "error": map[string]any{"type": fmt.Sprintf("%T", err), "message": err.Error()}}))
+			fmt.Fprintf(w, "data: %s\n\n", jsonString(map[string]any{"type": "error", "error": map[string]any{"type": fmt.Sprintf("%T", err), "message": util.LocalizeErrorMessage(err.Error())}}))
 			return
 		}
 		a.recordProtocolGeneratedImages(identity, recordURLs, visibility, imagePayloads...)
@@ -432,25 +432,25 @@ func (a *App) writeProtocolError(w http.ResponseWriter, err error) {
 	}
 	var policyErr service.ImageContentPolicyError
 	if errors.As(err, &policyErr) {
-		util.WriteJSON(w, http.StatusBadRequest, policyErr.OpenAIError())
+		util.WriteJSON(w, http.StatusBadRequest, util.LocalizeOpenAIErrorPayload(policyErr.OpenAIError()))
 		return
 	}
 	var billingErr service.BillingLimitError
 	if errors.As(err, &billingErr) {
-		util.WriteJSON(w, http.StatusTooManyRequests, billingErr.OpenAIError())
+		util.WriteJSON(w, http.StatusTooManyRequests, util.LocalizeOpenAIErrorPayload(billingErr.OpenAIError()))
 		return
 	}
 	var imageErr *protocol.ImageGenerationError
 	if errors.As(err, &imageErr) {
-		util.WriteJSON(w, imageErr.StatusCode, imageErr.OpenAIError())
+		util.WriteJSON(w, imageErr.StatusCode, util.LocalizeOpenAIErrorPayload(imageErr.OpenAIError()))
 		return
 	}
 	message := err.Error()
 	if strings.Contains(strings.ToLower(message), "no available image quota") {
-		util.WriteJSON(w, http.StatusTooManyRequests, map[string]any{"error": map[string]any{"message": "no available image quota", "type": "insufficient_quota", "param": nil, "code": "insufficient_quota"}})
+		util.WriteJSON(w, http.StatusTooManyRequests, map[string]any{"error": map[string]any{"message": util.LocalizeErrorMessage("no available image quota"), "type": "insufficient_quota", "param": nil, "code": "insufficient_quota"}})
 		return
 	}
-	util.WriteJSON(w, http.StatusBadGateway, map[string]any{"detail": map[string]any{"error": message}})
+	util.WriteJSON(w, http.StatusBadGateway, map[string]any{"detail": map[string]any{"error": util.LocalizeErrorMessage(message)}})
 }
 
 func (a *App) handleLogin(w http.ResponseWriter, r *http.Request) {
@@ -825,6 +825,50 @@ func (a *App) handleImages(w http.ResponseWriter, r *http.Request) {
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
+}
+
+func (a *App) handleImageUploads(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	identity, ok := a.requireIdentity(w, r, "")
+	if !ok {
+		return
+	}
+	body, images, err := readMultipartImageBody(r)
+	if err != nil {
+		util.WriteError(w, http.StatusBadRequest, "invalid multipart form")
+		return
+	}
+	if len(images) == 0 {
+		util.WriteError(w, http.StatusBadRequest, "image file is required")
+		return
+	}
+	visibility, err := service.NormalizeImageVisibility(util.Clean(body["visibility"]))
+	if err != nil {
+		util.WriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	items := make([]map[string]any, 0, len(images))
+	for _, image := range images {
+		item, err := a.images.StoreUploadedImage(a.resolveImageBaseURL(r), service.UploadedManagedImage{
+			Filename:    image.Filename,
+			ContentType: image.ContentType,
+			Data:        image.Data,
+		}, identityScope(identity), identityDisplayName(identity), visibility)
+		if err != nil {
+			util.WriteError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		items = append(items, item)
+	}
+	a.cleanupImageStorage()
+	ownerNames := a.imageOwnerDisplayNames()
+	for _, item := range items {
+		a.decorateImageItem(item, ownerNames)
+	}
+	util.WriteJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
 func (a *App) handleImageVisibility(w http.ResponseWriter, r *http.Request) {
@@ -1430,17 +1474,17 @@ func jsonString(v any) string {
 func openAIErrorForStream(err error) map[string]any {
 	var policyErr service.ImageContentPolicyError
 	if errors.As(err, &policyErr) {
-		return policyErr.OpenAIError()
+		return util.LocalizeOpenAIErrorPayload(policyErr.OpenAIError())
 	}
 	var billingErr service.BillingLimitError
 	if errors.As(err, &billingErr) {
-		return billingErr.OpenAIError()
+		return util.LocalizeOpenAIErrorPayload(billingErr.OpenAIError())
 	}
 	var imageErr *protocol.ImageGenerationError
 	if errors.As(err, &imageErr) {
-		return imageErr.OpenAIError()
+		return util.LocalizeOpenAIErrorPayload(imageErr.OpenAIError())
 	}
-	return map[string]any{"error": map[string]any{"message": err.Error(), "type": fmt.Sprintf("%T", err)}}
+	return map[string]any{"error": map[string]any{"message": util.LocalizeErrorMessage(err.Error()), "type": fmt.Sprintf("%T", err)}}
 }
 
 func (a *App) logCall(identity service.Identity, summary, method, endpoint, model string, started time.Time, outcome string, status int, errText string, urls []string, requestCapture auditRequestCapture) {

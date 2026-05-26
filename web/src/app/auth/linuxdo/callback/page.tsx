@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { verifySession } from "@/lib/api";
+import { localizeErrorMessage } from "@/lib/request";
 import { authSessionFromLoginResponse, clearVerifiedAuthSession, setVerifiedAuthSession } from "@/lib/session";
 import { getDefaultRouteForSession } from "@/store/auth";
 
@@ -50,7 +51,7 @@ export default function LinuxDoCallbackPage() {
         await clearVerifiedAuthSession();
         const message = params.get("error_description") || params.get("error_message") || error;
         if (active) {
-          setErrorMessage(message);
+          setErrorMessage(localizeErrorMessage(message));
         }
         return;
       }

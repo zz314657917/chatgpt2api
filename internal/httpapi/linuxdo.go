@@ -138,7 +138,7 @@ func (a *App) handleLinuxDoOAuthCallback(w http.ResponseWriter, r *http.Request)
 
 	expectedState, err := readLinuxDoCookieDecoded(r, linuxDoOAuthStateCookieName)
 	if err != nil || expectedState == "" || state != expectedState {
-		redirectLinuxDoOAuthError(w, r, frontendCallback, "invalid_state", "invalid oauth state", "")
+		redirectLinuxDoOAuthError(w, r, frontendCallback, "invalid_state", "OAuth state 无效", "")
 		return
 	}
 
@@ -152,19 +152,19 @@ func (a *App) handleLinuxDoOAuthCallback(w http.ResponseWriter, r *http.Request)
 	if cfg.UsePKCE {
 		codeVerifier, _ = readLinuxDoCookieDecoded(r, linuxDoOAuthVerifierCookie)
 		if codeVerifier == "" {
-			redirectLinuxDoOAuthError(w, r, frontendCallback, "missing_verifier", "missing pkce verifier", "")
+			redirectLinuxDoOAuthError(w, r, frontendCallback, "missing_verifier", "缺少 PKCE verifier", "")
 			return
 		}
 	}
 
 	token, err := linuxDoExchangeCode(r.Context(), a.proxy.HTTPClient(30*time.Second), cfg, code, codeVerifier)
 	if err != nil {
-		redirectLinuxDoOAuthError(w, r, frontendCallback, "token_exchange_failed", "failed to exchange oauth code", singleLine(err.Error()))
+		redirectLinuxDoOAuthError(w, r, frontendCallback, "token_exchange_failed", "OAuth code 兑换失败", singleLine(util.LocalizeErrorMessage(err.Error())))
 		return
 	}
 	userInfo, err := linuxDoFetchUserInfo(r.Context(), a.proxy.HTTPClient(30*time.Second), cfg, token)
 	if err != nil {
-		redirectLinuxDoOAuthError(w, r, frontendCallback, "userinfo_failed", "failed to fetch user info", singleLine(err.Error()))
+		redirectLinuxDoOAuthError(w, r, frontendCallback, "userinfo_failed", "获取用户信息失败", singleLine(util.LocalizeErrorMessage(err.Error())))
 		return
 	}
 
@@ -180,7 +180,7 @@ func (a *App) handleLinuxDoOAuthCallback(w http.ResponseWriter, r *http.Request)
 			redirectLinuxDoOAuthError(w, r, frontendCallback, "registration_disabled", "已关闭注册通道", "")
 			return
 		}
-		redirectLinuxDoOAuthError(w, r, frontendCallback, "login_failed", "failed to create local session", "")
+		redirectLinuxDoOAuthError(w, r, frontendCallback, "login_failed", "创建本地会话失败", "")
 		return
 	}
 	if !util.ToBool(sessionItem["enabled"]) {

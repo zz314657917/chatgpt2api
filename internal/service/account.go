@@ -807,9 +807,9 @@ func (s *AccountService) RefreshAccounts(ctx context.Context, accessTokens []str
 			details = append(details, detail)
 			continue
 		}
-		message := res.err.Error()
+		message := util.LocalizeErrorMessage(res.err.Error())
 		if normalized, handled := s.ApplyAccountError(res.token, "refresh_accounts", res.err); handled {
-			message = normalized
+			message = util.LocalizeErrorMessage(normalized)
 		}
 		pendingSessionRefresh := false
 		if current := s.GetAccount(res.token); current != nil {
@@ -853,7 +853,7 @@ func (s *AccountService) RefreshAccounts(ctx context.Context, accessTokens []str
 		if err != nil {
 			s.UpdateAccount(item.accessToken, map[string]any{"status": "异常"})
 			failedRefreshCount++
-			message := fmt.Sprintf("token刷新失败: %s", err.Error())
+			message := "token刷新失败: " + util.LocalizeErrorMessage(err.Error())
 			errors = append(errors, map[string]string{
 				"account_id":   accountIDFromToken(item.accessToken),
 				"access_token": item.accessToken,

@@ -450,7 +450,7 @@ func (s *ImageTaskService) runTask(ctx context.Context, key, mode string, identi
 		release, err := s.AcquireCreationUnit(runCtx, identity)
 		if err != nil {
 			status := TaskStatusError
-			message := err.Error()
+			message := util.LocalizeErrorMessage(err.Error())
 			if ctx.Err() != nil {
 				status = TaskStatusCancelled
 				message = "任务已终止"
@@ -469,7 +469,7 @@ func (s *ImageTaskService) runTask(ctx context.Context, key, mode string, identi
 	result, err := handler(runCtx, identity, payload)
 	if err != nil {
 		status := TaskStatusError
-		message := err.Error()
+		message := util.LocalizeErrorMessage(err.Error())
 		if ctx.Err() != nil {
 			status = TaskStatusCancelled
 			message = "任务已终止"
@@ -504,7 +504,7 @@ func (s *ImageTaskService) runTask(ctx context.Context, key, mode string, identi
 		}
 	}
 	if len(data) == 0 {
-		message := firstNonEmpty(util.Clean(result["message"]), "task returned no output data")
+		message := util.LocalizeErrorMessage(firstNonEmpty(util.Clean(result["message"]), "task returned no output data"))
 		updates := map[string]any{"status": TaskStatusError, "error": message, "data": []any{}}
 		if outputType != "" {
 			updates["output_type"] = outputType

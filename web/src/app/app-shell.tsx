@@ -5,14 +5,17 @@ import { useLocation } from "react-router-dom";
 
 export function AppShell() {
   const location = useLocation();
-  const isCanvasPage = location.pathname.replace(/\/+$/, "") === "/canvas";
+  const pathname = location.pathname.replace(/\/+$/, "") || "/";
+  const isViewportWorkspacePage = pathname === "/canvas" || pathname === "/image" || pathname === "/image-manager";
 
   return (
-    <main className="min-h-screen bg-background text-foreground">
+    <main className={cn("bg-background text-foreground", isViewportWorkspacePage ? "h-dvh overflow-hidden" : "min-h-screen")}>
       <div
         className={cn(
-          "flex min-h-screen w-full flex-col gap-2 px-3 py-3 sm:px-5 lg:px-6",
-          isCanvasPage ? "max-w-none" : "mx-auto max-w-[1440px]",
+          "flex w-full flex-col gap-2 px-3 pt-2 pb-3 sm:px-5 lg:px-6",
+          isViewportWorkspacePage
+            ? "h-full min-h-0 max-w-none overflow-hidden"
+            : "mx-auto min-h-screen max-w-[1440px]",
         )}
       >
         <TopNav />

@@ -252,7 +252,7 @@ func (s *Sub2APIService) runImport(serverID string, server map[string]any, ids [
 			for id := range jobs {
 				token, err := s.fetchAccessTokenForAccount(context.Background(), server, id)
 				if err != nil {
-					results <- result{id: id, err: err.Error()}
+					results <- result{id: id, err: util.LocalizeErrorMessage(err.Error())}
 				} else {
 					results <- result{id: id, token: token}
 				}
@@ -409,7 +409,7 @@ func (s *Sub2APIService) appendJobError(serverID, name, message string) {
 		return
 	}
 	errors := anyList(current["errors"])
-	errors = append(errors, map[string]any{"name": name, "error": message})
+	errors = append(errors, map[string]any{"name": name, "error": util.LocalizeErrorMessage(message)})
 	s.updateJob(serverID, map[string]any{"errors": errors, "failed": len(errors)})
 }
 

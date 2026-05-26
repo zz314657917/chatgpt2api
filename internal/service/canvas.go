@@ -27,16 +27,31 @@ const (
 	maxCanvasRunCount  = 20
 )
 
+var canvasNodeBlockedDataFields = map[string]struct{}{
+	"api_key":     {},
+	"apiKey":      {},
+	"base_url":    {},
+	"baseURL":     {},
+	"group_id":    {},
+	"groupId":     {},
+	"secret_key":  {},
+	"secretKey":   {},
+	"gateway_url": {},
+	"gatewayURL":  {},
+}
+
 type CanvasDocument struct {
-	ID        string            `json:"id"`
-	OwnerID   string            `json:"owner_id"`
-	Name      string            `json:"name"`
-	Nodes     []CanvasNode      `json:"nodes"`
-	Edges     []CanvasEdge      `json:"edges"`
-	Viewport  map[string]any    `json:"viewport,omitempty"`
-	LastRun   *CanvasRunSummary `json:"last_run,omitempty"`
-	CreatedAt string            `json:"created_at"`
-	UpdatedAt string            `json:"updated_at"`
+	ID            string            `json:"id"`
+	OwnerID       string            `json:"owner_id"`
+	Name          string            `json:"name"`
+	Kind          string            `json:"kind,omitempty"`
+	SchemaVersion int               `json:"schema_version,omitempty"`
+	Nodes         []CanvasNode      `json:"nodes"`
+	Edges         []CanvasEdge      `json:"edges"`
+	Viewport      map[string]any    `json:"viewport,omitempty"`
+	LastRun       *CanvasRunSummary `json:"last_run,omitempty"`
+	CreatedAt     string            `json:"created_at"`
+	UpdatedAt     string            `json:"updated_at"`
 }
 
 type CanvasNode struct {
@@ -108,10 +123,11 @@ type CanvasNodeOutput struct {
 }
 
 type CanvasImageRef struct {
-	URL      string `json:"url,omitempty"`
-	LocalURL string `json:"local_url,omitempty"`
-	Path     string `json:"path,omitempty"`
-	Name     string `json:"name,omitempty"`
+	URL          string `json:"url,omitempty"`
+	LocalURL     string `json:"local_url,omitempty"`
+	Path         string `json:"path,omitempty"`
+	Name         string `json:"name,omitempty"`
+	ThumbnailURL string `json:"thumbnail_url,omitempty"`
 }
 
 type CanvasNodeInput struct {
@@ -415,7 +431,7 @@ func (s *CanvasService) executeRun(ctx context.Context, identity Identity, canva
 
 	order, incoming, err := canvasExecutionPlan(canvas)
 	if err != nil {
-		s.failRun(owner, runID, err.Error())
+		s.failRun(owner, runID, util.LocalizeErrorMessage(err.Error()))
 		return
 	}
 	executionSet := canvasExecutionSet(canvas, selected)
@@ -464,7 +480,7 @@ func (s *CanvasService) executeRun(ctx context.Context, identity Identity, canva
 		if err != nil {
 			s.updateNodeState(owner, runID, node, func(state *CanvasNodeRunState) {
 				state.Status = TaskStatusError
-				state.Error = err.Error()
+				state.Error = util.LocalizeErrorMessage(err.Error())
 				state.CompletedAt = util.NowLocal()
 			})
 			continue
@@ -704,6 +720,7 @@ func normalizeCanvasDocument(canvas CanvasDocument) CanvasDocument {
 	canvas.ID = util.Clean(canvas.ID)
 	canvas.OwnerID = util.Clean(canvas.OwnerID)
 	canvas.Name = util.Clean(canvas.Name)
+	canvas.Kind = util.Clean(canvas.Kind)
 	canvas.Nodes = normalizeCanvasNodes(canvas.Nodes)
 	canvas.Edges = normalizeCanvasEdges(canvas.Edges)
 	canvas.Viewport = cloneAnyMap(canvas.Viewport)
@@ -732,8 +749,25 @@ func normalizeCanvasNodes(nodes []CanvasNode) []CanvasNode {
 		}
 		seen[node.ID] = struct{}{}
 		node.Position = cloneAnyMap(node.Position)
-		node.Data = cloneAnyMap(node.Data)
+		node.Data = sanitizeCanvasNodeData(node.Data)
 		out = append(out, node)
+	}
+	return out
+}
+
+func sanitizeCanvasNodeData(data map[string]any) map[string]any {
+	if len(data) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(data))
+	for key, value := range data {
+		if _, blocked := canvasNodeBlockedDataFields[key]; blocked {
+			continue
+		}
+		out[key] = value
+	}
+	if len(out) == 0 {
+		return nil
 	}
 	return out
 }

@@ -724,6 +724,22 @@ func TestSub2APIImagePayloadNormalizesRatioSizes(t *testing.T) {
 	}
 }
 
+func TestSub2APIImagePayloadPassesModelAndResolution(t *testing.T) {
+	payload := sub2APIImageJSONPayload(map[string]any{
+		"prompt":           "draw",
+		"model":            "gpt-image-2-official",
+		"size":             "16:9",
+		"image_resolution": "4k",
+	})
+
+	if payload["model"] != "gpt-image-2-official" {
+		t.Fatalf("model = %#v, want gpt-image-2-official", payload["model"])
+	}
+	if payload["resolution"] != "4k" {
+		t.Fatalf("resolution = %#v, want 4k", payload["resolution"])
+	}
+}
+
 func TestWriteSub2APIImagePartUsesImageContentType(t *testing.T) {
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
@@ -987,7 +1003,7 @@ func TestProtocolImageBillingInsufficientErrors(t *testing.T) {
 			standardBalance:   "0",
 			subscriptionQuota: "100",
 			wantCode:          "user_balance_insufficient",
-			wantMessage:       "user balance insufficient",
+			wantMessage:       "用户余额不足",
 		},
 		{
 			name:              "subscription",
@@ -995,7 +1011,7 @@ func TestProtocolImageBillingInsufficientErrors(t *testing.T) {
 			standardBalance:   "100",
 			subscriptionQuota: "0",
 			wantCode:          "user_quota_exceeded",
-			wantMessage:       "user quota exceeded",
+			wantMessage:       "用户配额不足",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -2210,6 +2226,126 @@ func TestLoginPageImageUploadSettings(t *testing.T) {
 	}
 	if meta["login_page_image_url"] != imageURL || meta["login_page_image_mode"] != "cover" {
 		t.Fatalf("app meta after upload = %#v", meta)
+	}
+}
+
+func TestManagedImageUploadsStoreOwnerScopedImages(t *testing.T) {
+	app := newTestApp(t)
+	defer app.Close()
+
+	owner := service.AuthOwner{ID: "linuxdo:upload", Name: "uploader", Provider: service.AuthProviderLinuxDo}
+	_, rawKey, err := app.auth.CreateAPIKey(service.AuthRoleUser, "uploader", owner)
+	if err != nil {
+		t.Fatalf("CreateAPIKey() error = %v", err)
+	}
+
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	part, err := writer.CreateFormFile("image", "first.png")
+	if err != nil {
+		t.Fatalf("CreateFormFile(first) error = %v", err)
+	}
+	if err := encodeHTTPTestPNG(part); err != nil {
+		t.Fatalf("encode first png: %v", err)
+	}
+	part, err = writer.CreateFormFile("image[]", "second.png")
+	if err != nil {
+		t.Fatalf("CreateFormFile(second) error = %v", err)
+	}
+	if err := encodeHTTPTestPNG(part); err != nil {
+		t.Fatalf("encode second png: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("multipart close: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/images/uploads", body)
+	req.Header.Set("Authorization", "Bearer "+rawKey)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	res := httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("upload status = %d body = %s", res.Code, res.Body.String())
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("upload json: %v", err)
+	}
+	items := util.AsMapSlice(payload["items"])
+	if len(items) != 2 {
+		t.Fatalf("upload items = %#v", payload)
+	}
+	for _, item := range items {
+		pathValue := util.Clean(item["path"])
+		if pathValue == "" || util.Clean(item["visibility"]) != service.ImageVisibilityPrivate {
+			t.Fatalf("upload item = %#v", item)
+		}
+		if _, err := os.Stat(filepath.Join(app.config.ImagesDir(), filepath.FromSlash(pathValue))); err != nil {
+			t.Fatalf("uploaded image stat %q: %v", pathValue, err)
+		}
+		if _, _, err := app.images.ImageBytes(pathValue, service.ImageAccessScope{OwnerID: owner.ID}); err != nil {
+			t.Fatalf("owner ImageBytes(%q) error = %v", pathValue, err)
+		}
+		if _, _, err := app.images.ImageBytes(pathValue, service.ImageAccessScope{OwnerID: "linuxdo:other"}); err == nil {
+			t.Fatalf("other owner ImageBytes(%q) should fail", pathValue)
+		}
+	}
+
+	list := app.images.ListImages("http://127.0.0.1:8000", "", "", service.ImageAccessScope{OwnerID: owner.ID})
+	if got := len(list["items"].([]map[string]any)); got != 2 {
+		t.Fatalf("owner list count = %d, list = %#v", got, list)
+	}
+}
+
+func TestManagedImageUploadsRejectInvalidInput(t *testing.T) {
+	app := newTestApp(t)
+	defer app.Close()
+
+	_, rawKey, err := app.auth.CreateAPIKey(service.AuthRoleUser, "uploader", service.AuthOwner{ID: "linuxdo:upload", Name: "uploader", Provider: service.AuthProviderLinuxDo})
+	if err != nil {
+		t.Fatalf("CreateAPIKey() error = %v", err)
+	}
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	part, err := writer.CreateFormFile("image", "note.txt")
+	if err != nil {
+		t.Fatalf("CreateFormFile() error = %v", err)
+	}
+	if _, err := part.Write([]byte("not an image")); err != nil {
+		t.Fatalf("write part: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("multipart close: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/images/uploads", body)
+	req.Header.Set("Authorization", "Bearer "+rawKey)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	res := httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("invalid image upload status = %d body = %s", res.Code, res.Body.String())
+	}
+
+	emptyBody := &bytes.Buffer{}
+	emptyWriter := multipart.NewWriter(emptyBody)
+	if err := emptyWriter.Close(); err != nil {
+		t.Fatalf("empty multipart close: %v", err)
+	}
+	req = httptest.NewRequest(http.MethodPost, "/api/images/uploads", emptyBody)
+	req.Header.Set("Authorization", "Bearer "+rawKey)
+	req.Header.Set("Content-Type", emptyWriter.FormDataContentType())
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("empty upload status = %d body = %s", res.Code, res.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/images/uploads", nil)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusUnauthorized {
+		t.Fatalf("anonymous upload status = %d body = %s", res.Code, res.Body.String())
 	}
 }
 
