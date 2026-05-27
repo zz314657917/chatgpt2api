@@ -57,7 +57,7 @@ func TestImageServiceListImagesReturnsEmptyArrays(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Marshal() error = %v", err)
 	}
-	if string(data) != `{"groups":[],"items":[]}` {
+	if string(data) != `{"groups":[],"has_more":false,"items":[],"next_cursor":"","page_size":50}` {
 		t.Fatalf("ListImages() JSON = %s", data)
 	}
 }
@@ -490,11 +490,18 @@ func TestImageServiceListImagesReturnsRequestedResolutionPreset(t *testing.T) {
 	if len(items) != 1 {
 		t.Fatalf("ListImages() = %#v", list)
 	}
-	if items[0]["resolution_preset"] != "2k" || items[0]["requested_size"] != "2048x2048" {
-		t.Fatalf("request metadata = %#v", items[0])
+	if items[0]["resolution_preset"] != nil || items[0]["requested_size"] != nil {
+		t.Fatalf("list item should not include request metadata = %#v", items[0])
 	}
 	if items[0]["resolution"] != "32x24" {
 		t.Fatalf("actual resolution = %#v, want 32x24", items[0]["resolution"])
+	}
+	detail, err := service.ImageDetail("http://127.0.0.1:8000", rel, allImages)
+	if err != nil {
+		t.Fatalf("ImageDetail() error = %v", err)
+	}
+	if detail["resolution_preset"] != "2k" || detail["requested_size"] != "2048x2048" {
+		t.Fatalf("detail request metadata = %#v", detail)
 	}
 }
 
@@ -539,6 +546,13 @@ func TestImageServiceListImagesReturnsGenerationReuseMetadata(t *testing.T) {
 		t.Fatalf("ListImages() = %#v", list)
 	}
 	item := items[0]
+	if item["prompt"] != nil || item["reference_image_urls"] != nil || item["model"] != nil {
+		t.Fatalf("list item exposed reusable metadata = %#v", item)
+	}
+	item, err := service.ImageDetail("http://127.0.0.1:8000", rel, ImageAccessScope{Public: true})
+	if err != nil {
+		t.Fatalf("ImageDetail() error = %v", err)
+	}
 	if item["prompt"] != "draw a reusable image" ||
 		item["model"] != "gpt-image-2" ||
 		item["quality"] != "high" ||
@@ -714,8 +728,92 @@ func TestImageServicePublicListHidesUnsharedGenerationMetadata(t *testing.T) {
 
 	ownerList := service.ListImages("http://127.0.0.1:8000", "", "", ImageAccessScope{OwnerID: "linuxdo:123"})
 	ownerItems := ownerList["items"].([]map[string]any)
-	if len(ownerItems) != 1 || ownerItems[0]["prompt"] != "private recipe" || ownerItems[0]["reference_image_urls"] == nil {
-		t.Fatalf("owner item did not include private metadata = %#v", ownerList)
+	if len(ownerItems) != 1 || ownerItems[0]["prompt"] != nil || ownerItems[0]["reference_image_urls"] != nil {
+		t.Fatalf("owner list item should stay lightweight = %#v", ownerList)
+	}
+	ownerDetail, err := service.ImageDetail("http://127.0.0.1:8000", rel, ImageAccessScope{OwnerID: "linuxdo:123"})
+	if err != nil {
+		t.Fatalf("ImageDetail(owner) error = %v", err)
+	}
+	if ownerDetail["prompt"] != "private recipe" || ownerDetail["reference_image_urls"] == nil {
+		t.Fatalf("owner detail did not include private metadata = %#v", ownerDetail)
+	}
+}
+
+func TestImageServiceListImagesPageUsesCursorAndLightweightItems(t *testing.T) {
+	root := t.TempDir()
+	config := testImageConfig{root: root}
+	rels := []string{
+		"2026/04/29/old.png",
+		"2026/04/29/middle.png",
+		"2026/04/29/new.png",
+	}
+	baseTime := time.Date(2026, 4, 29, 9, 0, 0, 0, time.UTC)
+	for index, rel := range rels {
+		path := filepath.Join(config.ImagesDir(), filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("MkdirAll() error = %v", err)
+		}
+		if err := writeTestPNG(path); err != nil {
+			t.Fatalf("writeTestPNG(%s) error = %v", rel, err)
+		}
+		stamp := baseTime.Add(time.Duration(index) * time.Hour)
+		if err := os.Chtimes(path, stamp, stamp); err != nil {
+			t.Fatalf("Chtimes(%s) error = %v", rel, err)
+		}
+	}
+	service := NewImageService(config)
+	service.RecordGeneratedImages(rels, "linuxdo:123", "alice", ImageVisibilityPrivate, GeneratedImageMetadata{
+		Prompt: "heavy prompt",
+	})
+
+	first := service.ListImagesPage("http://127.0.0.1:8000", ImageListOptions{PageSize: 2}, ImageAccessScope{OwnerID: "linuxdo:123"})
+	firstItems := first["items"].([]map[string]any)
+	if len(firstItems) != 2 || firstItems[0]["path"] != rels[2] || firstItems[1]["path"] != rels[1] {
+		t.Fatalf("first page = %#v", first)
+	}
+	if firstItems[0]["prompt"] != nil || firstItems[0]["reference_image_urls"] != nil {
+		t.Fatalf("list item should be lightweight = %#v", firstItems[0])
+	}
+	cursor := toString(first["next_cursor"])
+	if cursor == "" || first["has_more"] != true {
+		t.Fatalf("first page cursor = %#v", first)
+	}
+	second := service.ListImagesPage("http://127.0.0.1:8000", ImageListOptions{PageSize: 2, Cursor: cursor}, ImageAccessScope{OwnerID: "linuxdo:123"})
+	secondItems := second["items"].([]map[string]any)
+	if len(secondItems) != 1 || secondItems[0]["path"] != rels[0] || second["has_more"] != false {
+		t.Fatalf("second page = %#v", second)
+	}
+}
+
+func TestImageServiceRebuildsImageIndexWhenIndexIsCorrupt(t *testing.T) {
+	root := t.TempDir()
+	config := testImageConfig{root: root}
+	rel := "2026/04/29/rebuild.png"
+	path := filepath.Join(config.ImagesDir(), filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := writeTestPNG(path); err != nil {
+		t.Fatalf("writeTestPNG() error = %v", err)
+	}
+	indexPath := filepath.Join(config.ImageMetadataDir(), imageIndexDocumentName)
+	if err := os.WriteFile(indexPath, []byte(`not-json`), 0o644); err != nil {
+		t.Fatalf("write corrupt index: %v", err)
+	}
+
+	service := NewImageService(config)
+	list := service.ListImagesPage("http://127.0.0.1:8000", ImageListOptions{PageSize: 50}, allImages)
+	items := list["items"].([]map[string]any)
+	if len(items) != 1 || items[0]["path"] != rel {
+		t.Fatalf("ListImagesPage() = %#v", list)
+	}
+	data, err := os.ReadFile(indexPath)
+	if err != nil {
+		t.Fatalf("read rebuilt index: %v", err)
+	}
+	if !strings.Contains(string(data), rel) {
+		t.Fatalf("rebuilt index = %s", data)
 	}
 }
 
@@ -960,6 +1058,58 @@ func TestImageServiceDeleteImagesRejectsTraversal(t *testing.T) {
 	}
 	if _, err := os.Stat(outsidePath); err != nil {
 		t.Fatalf("outside file was changed: %v", err)
+	}
+}
+
+func TestImageServiceTempReferenceImagesAreOwnerScopedAndIdempotent(t *testing.T) {
+	root := t.TempDir()
+	config := testImageConfig{root: root}
+	service := NewImageService(config)
+
+	imagePath := filepath.Join(root, "reference.png")
+	if err := writeTestPNG(imagePath); err != nil {
+		t.Fatalf("writeTestPNG() error = %v", err)
+	}
+	data, err := os.ReadFile(imagePath)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+
+	ref, err := service.StoreTempReferenceImage(UploadedTempReferenceImage{
+		ClientReferenceID: "client-1",
+		Filename:          "source.png",
+		ContentType:       "image/png",
+		Data:              data,
+	}, "owner-a")
+	if err != nil {
+		t.Fatalf("StoreTempReferenceImage() error = %v", err)
+	}
+	if ref.ID == "" || ref.ClientReferenceID != "client-1" || ref.Width != 32 || ref.Height != 24 || ref.Size == 0 {
+		t.Fatalf("stored temp reference = %#v", ref)
+	}
+
+	again, err := service.StoreTempReferenceImage(UploadedTempReferenceImage{
+		ClientReferenceID: "client-1",
+		Filename:          "source-renamed.png",
+		ContentType:       "image/png",
+		Data:              data,
+	}, "owner-a")
+	if err != nil {
+		t.Fatalf("StoreTempReferenceImage(idempotent) error = %v", err)
+	}
+	if again.ID != ref.ID || again.Filename != ref.Filename {
+		t.Fatalf("idempotent temp reference = %#v, want %#v", again, ref)
+	}
+
+	images, err := service.TempReferenceImageBytes([]string{ref.ID}, "owner-a")
+	if err != nil {
+		t.Fatalf("TempReferenceImageBytes(owner) error = %v", err)
+	}
+	if len(images) != 1 || images[0].Filename != "source.png" || len(images[0].Data) == 0 {
+		t.Fatalf("TempReferenceImageBytes(owner) = %#v", images)
+	}
+	if _, err := service.TempReferenceImageBytes([]string{ref.ID}, "owner-b"); err == nil {
+		t.Fatalf("TempReferenceImageBytes(other owner) should fail")
 	}
 }
 

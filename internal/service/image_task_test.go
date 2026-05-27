@@ -671,6 +671,12 @@ func TestImageTaskServiceCancelsRunningTask(t *testing.T) {
 		t.Fatal("task handler did not observe cancellation")
 	}
 	waitForTaskStatus(t, svc, identity, "task-1", TaskStatusCancelled)
+	got := svc.ListTasks(identity, []string{"task-1"})
+	item := got["items"].([]map[string]any)[0]
+	statuses := util.AsStringSlice(item["output_statuses"])
+	if len(statuses) != 1 || statuses[0] != TaskStatusCancelled {
+		t.Fatalf("cancelled output_statuses = %#v, want cancelled", statuses)
+	}
 }
 
 func TestImageTaskServicePreservesPartialDataOnFailure(t *testing.T) {
@@ -1042,6 +1048,29 @@ func TestImageTaskServiceMarksTimedOutTaskAsError(t *testing.T) {
 	if item["error"] != "图片生成超时，请稍后重试或降低分辨率" {
 		t.Fatalf("timeout error = %#v", item)
 	}
+	statuses := util.AsStringSlice(item["output_statuses"])
+	if len(statuses) != 1 || statuses[0] != TaskStatusError {
+		t.Fatalf("timeout output_statuses = %#v, want error", statuses)
+	}
+}
+
+func TestImageTaskServiceMarksNoOutputTaskStatusesAsError(t *testing.T) {
+	handler := func(ctx context.Context, identity Identity, payload map[string]any) (map[string]any, error) {
+		return map[string]any{"data": []map[string]any{}}, nil
+	}
+	svc := newTestImageTaskService(t, handler, handler, handler, func() int { return 30 })
+	identity := Identity{ID: "alice", Name: "Alice", Role: "user"}
+
+	if _, err := svc.SubmitGeneration(context.Background(), identity, "task-1", "draw", "gpt-image-2", "1024x1024", "high", "https://base.test", 2, nil); err != nil {
+		t.Fatalf("SubmitGeneration() error = %v", err)
+	}
+	waitForTaskStatus(t, svc, identity, "task-1", TaskStatusError)
+	got := svc.ListTasks(identity, []string{"task-1"})
+	item := got["items"].([]map[string]any)[0]
+	statuses := util.AsStringSlice(item["output_statuses"])
+	if len(statuses) != 2 || statuses[0] != TaskStatusError || statuses[1] != TaskStatusError {
+		t.Fatalf("no-output output_statuses = %#v, want all error", statuses)
+	}
 }
 
 func TestImageTaskServicePreservesTextOutputType(t *testing.T) {
@@ -1098,8 +1127,8 @@ func TestImageTaskServiceStoresTextOutputFromHandlerError(t *testing.T) {
 func TestImageTaskServiceRestoresUnfinishedTasksAsErrors(t *testing.T) {
 	backend := newTestStorageBackend(t)
 	raw := map[string]any{"tasks": []map[string]any{
-		{"id": "queued", "owner_id": "alice", "status": TaskStatusQueued, "mode": "generate", "created_at": "2026-01-01 00:00:00", "updated_at": "2026-01-01 00:00:00"},
-		{"id": "running", "owner_id": "alice", "status": TaskStatusRunning, "mode": "edit", "created_at": "2026-01-01 00:00:00", "updated_at": "2026-01-01 00:00:00"},
+		{"id": "queued", "owner_id": "alice", "status": TaskStatusQueued, "mode": "generate", "count": 2, "output_statuses": []any{TaskStatusQueued, TaskStatusRunning}, "created_at": "2026-01-01 00:00:00", "updated_at": "2026-01-01 00:00:00"},
+		{"id": "running", "owner_id": "alice", "status": TaskStatusRunning, "mode": "edit", "count": 3, "data": []any{map[string]any{"url": "https://example.test/first.png"}}, "output_statuses": []any{TaskStatusSuccess, TaskStatusRunning, TaskStatusQueued}, "created_at": "2026-01-01 00:00:00", "updated_at": "2026-01-01 00:00:00"},
 	}}
 	store, ok := backend.(storage.JSONDocumentBackend)
 	if !ok {
@@ -1121,6 +1150,17 @@ func TestImageTaskServiceRestoresUnfinishedTasksAsErrors(t *testing.T) {
 		}
 		if item["error"] == nil {
 			t.Fatalf("restored task missing error text: %#v", item)
+		}
+		statuses := util.AsStringSlice(item["output_statuses"])
+		switch item["id"] {
+		case "queued":
+			if len(statuses) != 2 || statuses[0] != TaskStatusError || statuses[1] != TaskStatusError {
+				t.Fatalf("restored queued output_statuses = %#v, want all error", statuses)
+			}
+		case "running":
+			if len(statuses) != 3 || statuses[0] != TaskStatusSuccess || statuses[1] != TaskStatusError || statuses[2] != TaskStatusError {
+				t.Fatalf("restored running output_statuses = %#v, want success then errors", statuses)
+			}
 		}
 	}
 }

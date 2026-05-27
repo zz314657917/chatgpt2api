@@ -21,12 +21,19 @@ import { getStoredAuthSession, type StoredAuthSession } from "@/store/auth";
 
 export type ImageConversationMode = "chat" | "generate" | "image" | "edit";
 export type StoredReferenceImageSource = "upload" | "conversation";
+export type StoredReferenceImageUploadStatus = "pending" | "uploading" | "uploaded" | "error";
 
 export type StoredReferenceImage = {
   name: string;
   type: string;
   dataUrl: string;
   source?: StoredReferenceImageSource;
+  clientReferenceId?: string;
+  uploadStatus?: StoredReferenceImageUploadStatus;
+  serverReferenceId?: string;
+  uploadError?: string;
+  originalSize?: number;
+  compressedSize?: number;
 };
 
 export type StoredImage = {
@@ -71,6 +78,7 @@ export type ImageTurn = {
   quality?: ImageQuality;
   outputFormat?: ImageOutputFormat;
   outputCompression?: number;
+  officialFallback?: boolean;
   visibility?: ImageVisibility;
   images: StoredImage[];
   createdAt: string;
@@ -222,11 +230,26 @@ function normalizeReferenceImage(image: StoredReferenceImage & Record<string, un
     image.source === "upload" || image.source === "conversation"
       ? image.source
       : undefined;
+  const uploadStatus =
+    image.uploadStatus === "pending" ||
+    image.uploadStatus === "uploading" ||
+    image.uploadStatus === "uploaded" ||
+    image.uploadStatus === "error"
+      ? image.uploadStatus
+      : undefined;
+  const originalSize = Number(image.originalSize);
+  const compressedSize = Number(image.compressedSize);
   return {
     name: image.name || "reference.png",
     type: image.type || "image/png",
     dataUrl: image.dataUrl,
     ...(source ? { source } : {}),
+    ...(typeof image.clientReferenceId === "string" && image.clientReferenceId ? { clientReferenceId: image.clientReferenceId } : {}),
+    ...(uploadStatus ? { uploadStatus: uploadStatus === "uploading" ? "pending" : uploadStatus } : {}),
+    ...(typeof image.serverReferenceId === "string" && image.serverReferenceId ? { serverReferenceId: image.serverReferenceId } : {}),
+    ...(typeof image.uploadError === "string" && image.uploadError ? { uploadError: image.uploadError } : {}),
+    ...(Number.isFinite(originalSize) && originalSize > 0 ? { originalSize } : {}),
+    ...(Number.isFinite(compressedSize) && compressedSize > 0 ? { compressedSize } : {}),
   };
 }
 
@@ -373,6 +396,7 @@ function normalizeTurn(turn: ImageTurn & Record<string, unknown>): ImageTurn {
       isImageOutputFormat(turn.outputFormat) && supportsImageOutputCompression(turn.outputFormat)
         ? normalizeOutputCompression(turn.outputCompression)
         : undefined,
+    officialFallback: model === DEFAULT_IMAGE_MODEL && turn.officialFallback === true,
     visibility,
     images,
     createdAt: String(turn.createdAt || new Date().toISOString()),

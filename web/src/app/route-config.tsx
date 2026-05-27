@@ -1,41 +1,43 @@
-import type { ReactNode } from "react";
+import { lazy, type ComponentType } from "react";
 
-import AccountsPage from "@/app/accounts/page";
-import LinuxDoCallbackPage from "@/app/auth/linuxdo/callback/page";
-import Sub2APILaunchPage from "@/app/auth/sub2api/launch/page";
-import CanvasPage from "@/app/canvas/page";
-import ImagePage from "@/app/image/page";
-import ImageManagerPage from "@/app/image-manager/page";
-import HomePage from "@/app/page";
-import LoginPage from "@/app/login/page";
-import LogsPage from "@/app/logs/page";
-import ProfilePage from "@/app/profile/page";
-import RBACPage from "@/app/rbac/page";
-import RegisterPage from "@/app/register/page";
-import SettingsPage from "@/app/settings/page";
-import UsersPage from "@/app/users/page";
+const routePageComponents = {
+  accounts: lazy(() => import("@/app/accounts/page")),
+  linuxDoCallback: lazy(() => import("@/app/auth/linuxdo/callback/page")),
+  sub2APILaunch: lazy(() => import("@/app/auth/sub2api/launch/page")),
+  canvas: lazy(() => import("@/app/canvas/page")),
+  image: lazy(() => import("@/app/image/page")),
+  imageManager: lazy(() => import("@/app/image-manager/page")),
+  home: lazy(() => import("@/app/page")),
+  login: lazy(() => import("@/app/login/page")),
+  logs: lazy(() => import("@/app/logs/page")),
+  profile: lazy(() => import("@/app/profile/page")),
+  rbac: lazy(() => import("@/app/rbac/page")),
+  register: lazy(() => import("@/app/register/page")),
+  settings: lazy(() => import("@/app/settings/page")),
+  users: lazy(() => import("@/app/users/page")),
+};
 
 export type AppRouteConfig = {
   path: string;
-  element: ReactNode;
+  Component: ComponentType;
   requiredPath?: string;
 };
 
 export const appRoutes: AppRouteConfig[] = [
-  { path: "/", element: <HomePage /> },
-  { path: "/login", element: <LoginPage /> },
-  { path: "/auth/linuxdo/callback", element: <LinuxDoCallbackPage /> },
-  { path: "/auth/sub2api/launch", element: <Sub2APILaunchPage /> },
-  { path: "/api/v1/auths/sub2api/launch", element: <Sub2APILaunchPage /> },
-  { path: "/accounts", element: <AccountsPage />, requiredPath: "/accounts" },
-  { path: "/register", element: <RegisterPage />, requiredPath: "/register" },
-  { path: "/image-manager", element: <ImageManagerPage />, requiredPath: "/image-manager" },
-  { path: "/users", element: <UsersPage />, requiredPath: "/users" },
-  { path: "/profile", element: <ProfilePage />, requiredPath: "/profile" },
-  { path: "/rbac", element: <RBACPage />, requiredPath: "/rbac" },
-  { path: "/logs", element: <LogsPage />, requiredPath: "/logs" },
-  { path: "/settings", element: <SettingsPage />, requiredPath: "/settings" },
-  { path: "/image", element: <ImagePage />, requiredPath: "/image" },
-  { path: "/canvas", element: <CanvasPage />, requiredPath: "/canvas" },
-  { path: "*", element: <HomePage /> },
+  { path: "/", Component: routePageComponents.home },
+  { path: "/login", Component: routePageComponents.login },
+  { path: "/auth/linuxdo/callback", Component: routePageComponents.linuxDoCallback },
+  { path: "/auth/sub2api/launch", Component: routePageComponents.sub2APILaunch },
+  { path: "/api/v1/auths/sub2api/launch", Component: routePageComponents.sub2APILaunch },
+  { path: "/accounts", Component: routePageComponents.accounts, requiredPath: "/accounts" },
+  { path: "/register", Component: routePageComponents.register, requiredPath: "/register" },
+  { path: "/image-manager", Component: routePageComponents.imageManager, requiredPath: "/image-manager" },
+  { path: "/users", Component: routePageComponents.users, requiredPath: "/users" },
+  { path: "/profile", Component: routePageComponents.profile, requiredPath: "/profile" },
+  { path: "/rbac", Component: routePageComponents.rbac, requiredPath: "/rbac" },
+  { path: "/logs", Component: routePageComponents.logs, requiredPath: "/logs" },
+  { path: "/settings", Component: routePageComponents.settings, requiredPath: "/settings" },
+  { path: "/image", Component: routePageComponents.image, requiredPath: "/image" },
+  { path: "/canvas", Component: routePageComponents.canvas, requiredPath: "/canvas" },
+  { path: "*", Component: routePageComponents.home },
 ];

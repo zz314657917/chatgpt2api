@@ -37,11 +37,12 @@ type ImageOutputOptions struct {
 }
 
 type ImageToolOptions struct {
-	Background     string
-	Moderation     string
-	Style          string
-	PartialImages  *int
-	InputImageMask string
+	Background       string
+	Moderation       string
+	Style            string
+	PartialImages    *int
+	InputImageMask   string
+	OfficialFallback *bool
 }
 
 type ImageTaskService struct {
@@ -317,6 +318,7 @@ func (s *ImageTaskService) CancelTask(identity Identity, clientTaskID string) (m
 		if task["data"] == nil {
 			task["data"] = []any{}
 		}
+		applyTerminalImageOutputStatuses(task, TaskStatusCancelled)
 		task["updated_at"] = now
 		cancel = s.cancels[key]
 		delete(s.cancels, key)
@@ -509,13 +511,16 @@ func (s *ImageTaskService) runTask(ctx context.Context, key, mode string, identi
 		if outputType != "" {
 			updates["output_type"] = outputType
 		}
+		if mode == "generate" || mode == "edit" {
+			updates["output_statuses"] = finalImageOutputStatuses(taskCount(mode, payload), nil, TaskStatusError)
+		}
 		s.updateActiveTask(key, updates)
 		s.settleTaskBilling(key)
 		return
 	}
 	updates := map[string]any{"status": TaskStatusSuccess, "data": data, "error": ""}
 	if mode == "generate" || mode == "edit" {
-		updates["output_statuses"] = finalImageOutputStatuses(taskCount(mode, payload), data, TaskStatusError)
+		updates["output_statuses"] = finalImageOutputStatuses(taskCount(mode, payload), data, TaskStatusSuccess)
 	}
 	if outputType != "" {
 		updates["output_type"] = outputType
@@ -852,7 +857,7 @@ func (s *ImageTaskService) loadLocked() map[string]map[string]any {
 		} else if task["mode"] == "chat" {
 			mode = "chat"
 		}
-		count := taskCount(mode, task)
+		count := storedImageOutputCount(task)
 		visibility, _ := NormalizeImageVisibility(util.Clean(task["visibility"]))
 		outputFormat := NormalizeImageOutputFormat(util.Clean(task["output_format"]))
 		normalized := map[string]any{"id": id, "owner_id": owner, "status": status, "mode": mode, "model": firstNonEmpty(util.Clean(task["model"]), util.ImageModelAuto), "size": util.Clean(task["size"]), "quality": util.Clean(task["quality"]), "output_format": outputFormat, "visibility": visibility, "count": count, "created_at": firstNonEmpty(util.Clean(task["created_at"]), util.NowLocal()), "updated_at": firstNonEmpty(util.Clean(task["updated_at"]), util.Clean(task["created_at"]), util.NowLocal())}
@@ -866,6 +871,9 @@ func (s *ImageTaskService) loadLocked() map[string]map[string]any {
 		}
 		if statuses := normalizedImageOutputStatuses(mode, count, task["output_statuses"]); len(statuses) > 0 {
 			normalized["output_statuses"] = statuses
+		}
+		if !isActiveTaskStatus(status) {
+			applyTerminalImageOutputStatuses(normalized, status)
 		}
 		if errText := util.Clean(task["error"]); errText != "" {
 			normalized["error"] = errText
@@ -909,6 +917,7 @@ func (s *ImageTaskService) recoverUnfinishedLocked() bool {
 		if task["status"] == TaskStatusQueued || task["status"] == TaskStatusRunning {
 			task["status"] = TaskStatusError
 			task["error"] = "服务已重启，未完成的任务已中断"
+			applyTerminalImageOutputStatuses(task, TaskStatusError)
 			task["updated_at"] = util.NowLocal()
 			changed = true
 		}
@@ -1017,7 +1026,14 @@ func taskCount(mode string, payload map[string]any) int {
 }
 
 func storedImageOutputCount(task map[string]any) int {
-	return imageTaskCount(task)
+	count := imageTaskCount(task)
+	if statuses := util.AsStringSlice(task["output_statuses"]); len(statuses) > count {
+		count = len(statuses)
+	}
+	if data := util.AsMapSlice(task["data"]); len(data) > count {
+		count = len(data)
+	}
+	return normalizedImageTaskCount(count)
 }
 
 func initialImageOutputStatuses(count int) []string {
@@ -1051,6 +1067,48 @@ func normalizedImageOutputStatuses(mode string, count int, value any) []string {
 		statuses[index] = status
 	}
 	return statuses
+}
+
+func applyTerminalImageOutputStatuses(task map[string]any, status string) bool {
+	mode := util.Clean(task["mode"])
+	if mode != "generate" && mode != "edit" {
+		return false
+	}
+	count := storedImageOutputCount(task)
+	statuses := finalImageOutputStatusesWithExisting(count, util.AsMapSlice(task["data"]), status, util.AsStringSlice(task["output_statuses"]))
+	if len(statuses) == 0 {
+		return false
+	}
+	if sameStringSlice(util.AsStringSlice(task["output_statuses"]), statuses) {
+		return false
+	}
+	task["output_statuses"] = statuses
+	return true
+}
+
+func finalImageOutputStatusesWithExisting(count int, data []map[string]any, status string, existing []string) []string {
+	statuses := finalImageOutputStatuses(count, data, status)
+	for index, item := range existing {
+		if index >= len(statuses) {
+			break
+		}
+		if item == TaskStatusSuccess {
+			statuses[index] = TaskStatusSuccess
+		}
+	}
+	return statuses
+}
+
+func sameStringSlice(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for index := range a {
+		if a[index] != b[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func hasImageTaskOutputData(item map[string]any) bool {
@@ -1182,6 +1240,9 @@ func mergeImageToolOptions(payload map[string]any, options ImageToolOptions) {
 	if options.PartialImages != nil && *options.PartialImages > 0 {
 		payload["partial_images"] = *options.PartialImages
 	}
+	if options.OfficialFallback != nil {
+		payload["official_fallback"] = *options.OfficialFallback
+	}
 }
 
 func mergePublicImageToolTaskFields(target, source map[string]any) {
@@ -1192,6 +1253,9 @@ func mergePublicImageToolTaskFields(target, source map[string]any) {
 	}
 	if value := util.ToInt(source["partial_images"], 0); value > 0 {
 		target["partial_images"] = value
+	}
+	if _, ok := source["official_fallback"]; ok {
+		target["official_fallback"] = util.ToBool(source["official_fallback"])
 	}
 }
 

@@ -5,7 +5,6 @@ import { ChevronDown, ChevronUp, LogOut, MoonStar, Sun, UserCircle2 } from "luci
 import { motion, useReducedMotion, type Transition } from "motion/react";
 import { Link, NavLink, useLocation, useNavigate } from "react-router-dom";
 
-import { AnnouncementNotifications } from "@/components/announcement-banner";
 import { ImageTaskQueue } from "@/components/image-task-queue";
 import webConfig from "@/constants/common-env";
 import {
@@ -16,12 +15,11 @@ import {
 } from "@/lib/session";
 import {
   canAccessPath,
-  hasAPIPermission,
   type StoredAuthSession,
 } from "@/store/auth";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { fetchAccounts, logout, type Account, type BillingState } from "@/lib/api";
+import { logout, type BillingState } from "@/lib/api";
 import { useAppMeta } from "@/lib/use-app-meta";
 import { cn } from "@/lib/utils";
 import {
@@ -35,15 +33,8 @@ const navItems = [
   { href: "/image", label: "创作台" },
   { href: "/canvas", label: "无限画布" },
   { href: "/image-manager", label: "图片库" },
-  { href: "/accounts", label: "号池管理" },
-  { href: "/register", label: "注册机" },
-  { href: "/users", label: "用户管理" },
-  { href: "/rbac", label: "角色权限" },
-  { href: "/logs", label: "日志管理" },
-  { href: "/settings", label: "设置" },
 ];
 const profileNavItem = { href: "/profile", label: "个人中心" };
-const QUOTA_REFRESH_EVENT = "chatgpt2api:quota-refresh";
 const PRIMARY_NAV_ID = "primary-navigation";
 const NAV_ACTIVE_LAYOUT_ID = "top-nav-active-pill";
 const navActiveTransition: Transition = {
@@ -55,11 +46,6 @@ const navActiveTransition: Transition = {
 const reducedNavActiveTransition: Transition = {
   duration: 0.01,
 };
-
-function formatAvailableQuota(accounts: Account[]) {
-  const availableAccounts = accounts.filter((account) => account.status !== "禁用");
-  return String(availableAccounts.reduce((sum, account) => sum + Math.max(0, account.quota), 0));
-}
 
 function formatBillingQuota(billing?: BillingState | null) {
   if (!billing) {
@@ -259,7 +245,6 @@ export function TopNav() {
   const pathname = location.pathname.replace(/\/+$/, "") || "/";
   const [session, setSession] = useState<StoredAuthSession | null | undefined>(() => getCachedAuthSession());
   const [theme, setTheme] = useState<ColorTheme>(() => getPreferredColorTheme());
-  const [availableQuota, setAvailableQuota] = useState("--");
   const [navCollapsed, setNavCollapsed] = useState(false);
 
   useEffect(() => {
@@ -297,44 +282,6 @@ export function TopNav() {
     };
   }, []);
 
-  useEffect(() => {
-    if (session?.role === "user") {
-      setAvailableQuota(sessionQuotaLabel(session));
-      return;
-    }
-    if (!hasAPIPermission(session, "GET", "/api/accounts")) {
-      setAvailableQuota("--");
-      return;
-    }
-
-    let active = true;
-    const loadQuota = async () => {
-      try {
-        const data = await fetchAccounts();
-        if (active) {
-          setAvailableQuota(formatAvailableQuota(data.items));
-        }
-      } catch {
-        if (active) {
-          setAvailableQuota((current) => (current === "加载中..." ? "--" : current));
-        }
-      }
-    };
-    const handleRefresh = () => {
-      void loadQuota();
-    };
-
-    setAvailableQuota("加载中...");
-    void loadQuota();
-    window.addEventListener("focus", handleRefresh);
-    window.addEventListener(QUOTA_REFRESH_EVENT, handleRefresh);
-    return () => {
-      active = false;
-      window.removeEventListener("focus", handleRefresh);
-      window.removeEventListener(QUOTA_REFRESH_EVENT, handleRefresh);
-    };
-  }, [session]);
-
   const handleLogout = async () => {
     try {
       await logout();
@@ -370,6 +317,7 @@ export function TopNav() {
   const roleLabel = session.role === "admin" ? "管理员" : session.roleName || (session.provider === "linuxdo" ? "Linuxdo 用户" : "普通用户");
   const canAccessImageTasks = canAccessPath(session, "/image");
   const navToggleLabel = navCollapsed ? "展开导航栏" : "收起导航栏";
+  const availableQuota = session.role === "user" ? sessionQuotaLabel(session) : "--";
 
   return (
     <header className="sticky top-2 z-40 rounded-[24px] border border-border bg-card/90 shadow-[0_0_22.576px_rgba(44,74,116,0.09)] backdrop-blur dark:border-border dark:bg-card/92">
@@ -389,7 +337,7 @@ export function TopNav() {
             onClick={() => setNavCollapsed((collapsed) => !collapsed)}
           >
             <img
-              src="/logo-mark.svg"
+              src="/logo.webp"
               alt=""
               aria-hidden="true"
               className="size-7 rounded-[10px] shadow-[0_4px_10px_rgba(184,90,127,0.16)]"
@@ -399,7 +347,6 @@ export function TopNav() {
           </Button>
           <div className="ml-auto flex shrink-0 items-center gap-1 lg:hidden">
             {canAccessImageTasks ? <ImageTaskQueue className="size-8 px-0" /> : null}
-            <AnnouncementNotifications target="image" className="size-8" />
             <ThemeToggleButton theme={theme} onToggle={handleThemeToggle} />
             <AccountMenu
               session={session}
@@ -424,7 +371,6 @@ export function TopNav() {
         </nav>
         <div className="hidden items-center justify-end gap-1.5 lg:flex">
           {canAccessImageTasks ? <ImageTaskQueue /> : null}
-          <AnnouncementNotifications target="image" className="size-8" />
           <ThemeToggleButton theme={theme} onToggle={handleThemeToggle} />
           <AccountMenu
             session={session}

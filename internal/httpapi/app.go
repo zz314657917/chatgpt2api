@@ -807,7 +807,18 @@ func (a *App) handleImages(w http.ResponseWriter, r *http.Request) {
 			util.WriteError(w, status, message)
 			return
 		}
-		payload := a.images.ListImages(a.resolveImageBaseURL(r), strings.TrimSpace(r.URL.Query().Get("start_date")), strings.TrimSpace(r.URL.Query().Get("end_date")), scope)
+		payload := a.images.ListImagesPage(a.resolveImageBaseURL(r), service.ImageListOptions{
+			StartDate:        strings.TrimSpace(r.URL.Query().Get("start_date")),
+			EndDate:          strings.TrimSpace(r.URL.Query().Get("end_date")),
+			PageSize:         util.ToInt(r.URL.Query().Get("page_size"), 0),
+			Cursor:           strings.TrimSpace(r.URL.Query().Get("cursor")),
+			Search:           strings.TrimSpace(r.URL.Query().Get("search")),
+			Visibility:       strings.TrimSpace(r.URL.Query().Get("visibility")),
+			Format:           strings.TrimSpace(r.URL.Query().Get("format")),
+			Orientation:      strings.TrimSpace(r.URL.Query().Get("orientation")),
+			ResolutionPreset: strings.TrimSpace(r.URL.Query().Get("resolution")),
+			AspectRatio:      strings.TrimSpace(r.URL.Query().Get("aspect_ratio")),
+		}, scope)
 		a.decorateImageList(payload)
 		util.WriteJSON(w, http.StatusOK, payload)
 	case http.MethodDelete:
@@ -825,6 +836,38 @@ func (a *App) handleImages(w http.ResponseWriter, r *http.Request) {
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
+}
+
+func (a *App) handleImageDetail(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	identity, ok := a.requireIdentity(w, r, "")
+	if !ok {
+		return
+	}
+	scope, status, message := imageListAccessScope(identity, r.URL.Query().Get("scope"))
+	if status != 0 {
+		util.WriteError(w, status, message)
+		return
+	}
+	value := firstNonEmpty(util.Clean(r.URL.Query().Get("path")), util.Clean(r.URL.Query().Get("url")))
+	if value == "" {
+		util.WriteError(w, http.StatusBadRequest, "path is required")
+		return
+	}
+	item, err := a.images.ImageDetail(a.resolveImageBaseURL(r), value, scope)
+	if err != nil {
+		status := http.StatusBadRequest
+		if err.Error() == "image not found" {
+			status = http.StatusNotFound
+		}
+		util.WriteError(w, status, err.Error())
+		return
+	}
+	a.decorateImageItem(item, a.imageOwnerDisplayNames())
+	util.WriteJSON(w, http.StatusOK, map[string]any{"item": item})
 }
 
 func (a *App) handleImageUploads(w http.ResponseWriter, r *http.Request) {
@@ -869,6 +912,59 @@ func (a *App) handleImageUploads(w http.ResponseWriter, r *http.Request) {
 		a.decorateImageItem(item, ownerNames)
 	}
 	util.WriteJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (a *App) handleCreationTaskReferenceImageUpload(r *http.Request, identity service.Identity) (map[string]any, error) {
+	if err := r.ParseMultipartForm(128 << 20); err != nil {
+		return nil, err
+	}
+	if r.MultipartForm == nil {
+		return nil, fmt.Errorf("image file is required")
+	}
+	clientReferenceID := strings.TrimSpace(firstForm(r.MultipartForm, "client_reference_id"))
+	if clientReferenceID == "" {
+		return nil, fmt.Errorf("client_reference_id is required")
+	}
+	var headers []*multipart.FileHeader
+	for _, field := range []string{"image", "image[]"} {
+		headers = append(headers, r.MultipartForm.File[field]...)
+	}
+	if len(headers) == 0 {
+		return nil, fmt.Errorf("image file is required")
+	}
+	image, err := readUpload(headers[0])
+	if err != nil {
+		return nil, err
+	}
+	if len(image.Data) == 0 {
+		return nil, fmt.Errorf("image file is empty")
+	}
+	ref, err := a.images.StoreTempReferenceImage(service.UploadedTempReferenceImage{
+		ClientReferenceID: clientReferenceID,
+		ConversationID:    firstForm(r.MultipartForm, "conversation_id"),
+		TurnID:            firstForm(r.MultipartForm, "turn_id"),
+		Filename:          image.Filename,
+		ContentType:       image.ContentType,
+		Data:              image.Data,
+	}, identityScope(identity))
+	if err != nil {
+		return nil, err
+	}
+	return tempReferenceImagePayload(ref), nil
+}
+
+func tempReferenceImagePayload(ref service.TempReferenceImage) map[string]any {
+	return map[string]any{
+		"id":                  ref.ID,
+		"client_reference_id": ref.ClientReferenceID,
+		"filename":            ref.Filename,
+		"content_type":        ref.ContentType,
+		"size":                ref.Size,
+		"width":               ref.Width,
+		"height":              ref.Height,
+		"created_at":          ref.CreatedAt,
+		"expires_at":          ref.ExpiresAt,
+	}
 }
 
 func (a *App) handleImageVisibility(w http.ResponseWriter, r *http.Request) {
@@ -1382,6 +1478,36 @@ func readJSONMap(r *http.Request) (map[string]any, error) {
 	return body, err
 }
 
+func (a *App) readImageEditTaskBody(r *http.Request, identity service.Identity) (map[string]any, []protocol.UploadedImage, error) {
+	contentType := strings.ToLower(r.Header.Get("Content-Type"))
+	if !strings.Contains(contentType, "application/json") {
+		return readMultipartImageBody(r)
+	}
+	body, err := readJSONMap(r)
+	if err != nil {
+		return nil, nil, fmt.Errorf("invalid json body")
+	}
+	refs := util.AsStringSlice(body["reference_image_ids"])
+	if len(refs) == 0 {
+		return nil, nil, fmt.Errorf("reference_image_ids is required")
+	}
+	managedImages, err := a.images.TempReferenceImageBytes(refs, identityScope(identity))
+	if err != nil {
+		return nil, nil, err
+	}
+	images := make([]protocol.UploadedImage, 0, len(managedImages))
+	for _, image := range managedImages {
+		images = append(images, protocol.UploadedImage{
+			Filename:    image.Filename,
+			ContentType: image.ContentType,
+			Data:        image.Data,
+		})
+	}
+	body["response_format"] = firstNonEmpty(util.Clean(body["response_format"]), "b64_json")
+	body["stream"] = util.ToBool(body["stream"])
+	return body, images, nil
+}
+
 func readMultipartImageBody(r *http.Request) (map[string]any, []protocol.UploadedImage, error) {
 	if err := r.ParseMultipartForm(128 << 20); err != nil {
 		return nil, nil, err
@@ -1398,6 +1524,7 @@ func readMultipartImageBody(r *http.Request) (map[string]any, []protocol.Uploade
 		"moderation":               firstForm(r.MultipartForm, "moderation"),
 		"style":                    firstForm(r.MultipartForm, "style"),
 		"partial_images":           firstForm(r.MultipartForm, "partial_images"),
+		"official_fallback":        firstForm(r.MultipartForm, "official_fallback"),
 		"input_image_mask":         firstForm(r.MultipartForm, "input_image_mask"),
 		"output_format":            firstForm(r.MultipartForm, "output_format"),
 		"output_compression":       firstForm(r.MultipartForm, "output_compression"),

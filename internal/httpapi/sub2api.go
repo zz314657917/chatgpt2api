@@ -128,6 +128,11 @@ func (a *App) callSub2APIImageEdits(ctx context.Context, identity service.Identi
 
 const sub2APIImageBatchLimit = 1
 
+const (
+	sub2APIImageTaskPollInitialDelay = 500 * time.Millisecond
+	sub2APIImageTaskPollInterval     = 3 * time.Second
+)
+
 func (a *App) callSub2APIImageBatches(ctx context.Context, identity service.Identity, payload map[string]any, call func(map[string]any) (map[string]any, error)) (map[string]any, error) {
 	requested := sub2APIImageRequestedCount(payload)
 	progress := sub2APIImageProgressCallback(payload)
@@ -300,6 +305,9 @@ func sub2APIImageJSONPayload(payload map[string]any) map[string]any {
 	if resolution := sub2APIImageResolution(payload); resolution != "" {
 		out["resolution"] = resolution
 	}
+	if _, ok := payload["official_fallback"]; ok {
+		out["official_fallback"] = util.ToBool(payload["official_fallback"])
+	}
 	for _, key := range []string{"background", "moderation", "style", "partial_images", "output_format", "output_compression", "input_image_mask"} {
 		if value := payload[key]; value != nil && util.Clean(value) != "" {
 			out[key] = value
@@ -414,10 +422,14 @@ func (a *App) postSub2APIMultipart(ctx context.Context, binding service.Sub2APIB
 	return a.doSub2APIRequest(ctx, binding, http.MethodPost, endpoint, contentType, body)
 }
 
+func (a *App) getSub2APIJSON(ctx context.Context, binding service.Sub2APIBinding, endpoint string) (map[string]any, error) {
+	return a.doSub2APIRequest(ctx, binding, http.MethodGet, endpoint, "", nil)
+}
+
 func (a *App) doSub2APIRequest(ctx context.Context, binding service.Sub2APIBinding, method, endpoint, contentType string, body io.Reader) (map[string]any, error) {
 	target := sub2APIEndpointURL(binding.GatewayBaseURL, endpoint)
 	if target == "" {
-		return nil, protocol.HTTPError{Status: http.StatusBadGateway, Message: "sub2api gateway_base_url is missing"}
+		return nil, protocol.HTTPError{Status: http.StatusBadGateway, Message: "upstream gateway_base_url is missing"}
 	}
 	req, err := http.NewRequestWithContext(ctx, method, target, body)
 	if err != nil {
@@ -471,7 +483,28 @@ func sub2APIEndpointURL(baseURL, endpoint string) string {
 }
 
 func (a *App) formatSub2APIImageResult(ctx context.Context, result map[string]any, identity service.Identity, payload map[string]any) (map[string]any, error) {
+	if taskID := sub2APIImageTaskID(result); taskID != "" {
+		binding, ok := a.sub2APIBindingForIdentity(identity)
+		if !ok {
+			return nil, &protocol.ImageGenerationError{Message: "图片上游返回异步任务，但当前用户没有可用网关绑定", StatusCode: http.StatusBadGateway, Type: "server_error", Code: "upstream_error"}
+		}
+		polled, err := a.pollSub2APIImageTask(ctx, binding, taskID)
+		if err != nil {
+			return nil, err
+		}
+		if result == nil {
+			result = map[string]any{}
+		}
+		result = util.CopyMap(result)
+		for key, value := range polled {
+			result[key] = value
+		}
+		result["task_id"] = taskID
+	}
 	items := util.AsMapSlice(result["data"])
+	if len(items) == 0 {
+		items = sub2APIImageTaskResultItems(result)
+	}
 	if len(items) == 0 && util.Clean(result["b64_json"]) != "" {
 		items = []map[string]any{result}
 	}
@@ -490,7 +523,7 @@ func (a *App) formatSub2APIImageResult(ctx context.Context, result map[string]an
 			})
 			continue
 		}
-		if imageURL := util.Clean(item["url"]); imageURL != "" {
+		if imageURL := sub2APIImageItemURL(item); imageURL != "" {
 			b64 := fetchSub2APIImageAsBase64(ctx, imageURL)
 			if b64 == "" {
 				continue
@@ -505,6 +538,134 @@ func (a *App) formatSub2APIImageResult(ctx context.Context, result map[string]an
 		Format:              service.NormalizeImageOutputFormat(util.Clean(payload["output_format"])),
 		TrustUpstreamFormat: true,
 	}), nil
+}
+
+func sub2APIImageTaskID(result map[string]any) string {
+	taskID := util.Clean(result["task_id"])
+	if taskID != "" {
+		return taskID
+	}
+	data := util.AsMapSlice(result["data"])
+	if len(data) == 1 {
+		return util.Clean(data[0]["task_id"])
+	}
+	return ""
+}
+
+func (a *App) pollSub2APIImageTask(ctx context.Context, binding service.Sub2APIBinding, taskID string) (map[string]any, error) {
+	if err := waitSub2APIImageTaskPoll(ctx, sub2APIImageTaskPollInitialDelay); err != nil {
+		return nil, err
+	}
+	for {
+		result, err := a.getSub2APIJSON(ctx, binding, "tasks/"+taskID)
+		if err != nil {
+			return nil, err
+		}
+		switch sub2APIImageTaskStatus(result) {
+		case "completed", "success", "succeeded":
+			if len(sub2APIImageTaskResultItems(result)) == 0 {
+				return nil, &protocol.ImageGenerationError{Message: "图片上游任务已完成但没有返回图片", StatusCode: http.StatusBadGateway, Type: "server_error", Code: "upstream_error"}
+			}
+			return result, nil
+		case "failed", "error", "cancelled", "canceled":
+			message := firstNonEmpty(sub2APIErrorMessageFromPayload(result), "图片上游任务失败")
+			return nil, &protocol.ImageGenerationError{Message: message, StatusCode: http.StatusBadGateway, Type: "server_error", Code: "upstream_error"}
+		}
+		if err := waitSub2APIImageTaskPoll(ctx, sub2APIImageTaskPollInterval); err != nil {
+			return nil, err
+		}
+	}
+}
+
+func waitSub2APIImageTaskPoll(ctx context.Context, delay time.Duration) error {
+	if delay <= 0 {
+		return ctx.Err()
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func sub2APIImageTaskStatus(result map[string]any) string {
+	status := strings.ToLower(strings.TrimSpace(firstNonEmpty(util.Clean(result["status"]), util.Clean(result["state"]))))
+	if status != "" {
+		return status
+	}
+	data := util.StringMap(result["data"])
+	return strings.ToLower(strings.TrimSpace(firstNonEmpty(util.Clean(data["status"]), util.Clean(data["state"]))))
+}
+
+func sub2APIImageTaskResultItems(result map[string]any) []map[string]any {
+	for _, container := range []map[string]any{
+		result,
+		util.StringMap(result["result"]),
+		util.StringMap(result["data"]),
+		util.StringMap(util.StringMap(result["data"])["result"]),
+		util.StringMap(util.StringMap(result["result"])["result"]),
+	} {
+		if len(container) == 0 {
+			continue
+		}
+		if items := util.AsMapSlice(container["images"]); len(items) > 0 {
+			return items
+		}
+		if items := util.AsMapSlice(container["data"]); len(items) > 0 {
+			return items
+		}
+		if b64 := util.Clean(container["b64_json"]); b64 != "" {
+			return []map[string]any{container}
+		}
+		if url := sub2APIImageItemURL(container); url != "" {
+			return []map[string]any{container}
+		}
+	}
+	if items := util.AsMapSlice(result["result"]); len(items) > 0 {
+		return items
+	}
+	return nil
+}
+
+func sub2APIImageItemURL(item map[string]any) string {
+	for _, key := range []string{"url", "image_url"} {
+		for _, url := range util.AsStringSlice(item[key]) {
+			if cleaned := util.Clean(url); cleaned != "" {
+				return cleaned
+			}
+		}
+		if url, ok := item[key].(string); ok {
+			if cleaned := util.Clean(url); cleaned != "" {
+				return cleaned
+			}
+		}
+	}
+	return ""
+}
+
+func sub2APIErrorMessageFromPayload(result map[string]any) string {
+	for _, key := range []string{"message", "error", "detail"} {
+		if nested := util.Clean(util.StringMap(result[key])["message"]); nested != "" {
+			return nested
+		}
+		if value := util.Clean(result[key]); value != "" {
+			return value
+		}
+	}
+	for _, container := range []map[string]any{util.StringMap(result["data"]), util.StringMap(result["result"])} {
+		for _, key := range []string{"message", "error", "detail"} {
+			if nested := util.Clean(util.StringMap(container[key])["message"]); nested != "" {
+				return nested
+			}
+			if value := util.Clean(container[key]); value != "" {
+				return value
+			}
+		}
+	}
+	return ""
 }
 
 func fetchSub2APIImageAsBase64(ctx context.Context, imageURL string) string {
@@ -531,11 +692,11 @@ func sub2APIErrorMessage(data []byte) string {
 	var payload map[string]any
 	if json.Unmarshal(data, &payload) == nil {
 		for _, key := range []string{"message", "error", "detail"} {
-			if value := util.Clean(payload[key]); value != "" {
-				return value
-			}
 			if nested := util.Clean(util.StringMap(payload[key])["message"]); nested != "" {
 				return nested
+			}
+			if value := util.Clean(payload[key]); value != "" {
+				return value
 			}
 		}
 	}
@@ -554,29 +715,58 @@ func sub2APIImageRequestErrorMessage(status int, upstreamMessage string) string 
 }
 
 func sub2APIRequestErrorMessage(endpoint string, status int, upstreamMessage string) string {
-	upstreamMessage = strings.TrimSpace(upstreamMessage)
+	upstreamMessage = sub2APIReadableErrorMessage(upstreamMessage)
 	normalized := strings.ToLower(upstreamMessage)
 	if status == http.StatusBadGateway || strings.Contains(normalized, "upstream service temporarily unavailable") || strings.Contains(normalized, "no available accounts") {
 		if upstreamMessage == "" {
 			upstreamMessage = "empty response"
 		}
 		if strings.Contains(endpoint, "chat/completions") {
-			return fmt.Sprintf("Sub2API 对话上游账号池暂不可用，请稍后重试或在 Sub2API 中检查对话账号/分组。原始错误：HTTP %d %s", status, upstreamMessage)
+			return fmt.Sprintf("对话上游账号池暂不可用：HTTP %d %s", status, upstreamMessage)
 		}
-		return fmt.Sprintf("Sub2API 图片上游账号池暂不可用，请稍后重试或在 Sub2API 中检查图片账号/分组。原始错误：HTTP %d %s", status, upstreamMessage)
+		return fmt.Sprintf("图片上游账号池暂不可用：HTTP %d %s", status, upstreamMessage)
 	}
 	if upstreamMessage == "" {
 		upstreamMessage = "empty response"
 	}
 	if strings.Contains(endpoint, "chat/completions") {
-		return fmt.Sprintf("Sub2API 对话请求失败：HTTP %d %s", status, upstreamMessage)
+		return fmt.Sprintf("对话请求失败：HTTP %d %s", status, upstreamMessage)
 	}
-	return fmt.Sprintf("Sub2API 图片请求失败：HTTP %d %s", status, upstreamMessage)
+	return fmt.Sprintf("图片请求失败：HTTP %d %s", status, upstreamMessage)
+}
+
+func sub2APIReadableErrorMessage(message string) string {
+	text := strings.TrimSpace(message)
+	if !strings.HasPrefix(text, "map[") {
+		return text
+	}
+	body := strings.TrimSuffix(strings.TrimPrefix(text, "map["), "]")
+	for _, key := range []string{"message", "error", "detail"} {
+		if value := sub2APIMapStringField(body, key); value != "" {
+			return value
+		}
+	}
+	return text
+}
+
+func sub2APIMapStringField(body string, key string) string {
+	start := strings.Index(body, key+":")
+	if start < 0 {
+		return ""
+	}
+	value := body[start+len(key)+1:]
+	end := len(value)
+	for _, nextKey := range []string{" message:", " error:", " detail:", " type:", " code:", " param:"} {
+		if index := strings.Index(value, nextKey); index >= 0 && index < end {
+			end = index
+		}
+	}
+	return strings.TrimSpace(value[:end])
 }
 
 func sub2APIInvalidResponseMessage(endpoint string) string {
 	if strings.Contains(endpoint, "chat/completions") {
-		return "sub2api chat response is invalid"
+		return "对话上游响应格式无效"
 	}
-	return "sub2api image response is invalid"
+	return "图片上游响应格式无效"
 }

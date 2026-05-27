@@ -6,8 +6,11 @@ import { useNavigate } from "react-router-dom";
 
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { SMART_CANVAS_QUEUE_CHANGED_EVENT, type SmartCanvasQueueChangedDetail } from "@/app/canvas/canvas-events";
+import { normalizeSmartCanvas, smartCanvasRuns } from "@/app/canvas/canvas-utils";
+import type { SmartCanvasDocument, SmartCanvasRunRecord } from "@/app/canvas/types";
 import { formatImageSizeDisplay, getImageSizeRequirementLabel, isHighResolutionImageSize } from "@/app/image/image-options";
-import { IMAGE_MODEL_ROUTE_DETAILS } from "@/lib/api";
+import { fetchCanvases, IMAGE_MODEL_ROUTE_DETAILS, type CanvasDocument, type CreationTask } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import {
   ACTIVE_IMAGE_CONVERSATION_STORAGE_KEY,
@@ -30,6 +33,7 @@ import {
 } from "@/store/image-turn-progress";
 
 type TaskQueueItem = {
+  source: "image";
   conversationId: string;
   conversationTitle: string;
   turn: ImageTurn;
@@ -41,10 +45,23 @@ type TaskQueueItem = {
   cancelledCount: number;
 };
 
-type RecentQueueCompletion = TaskQueueItem & {
+type CanvasQueueItem = {
+  source: "canvas";
+  canvasId: string;
+  canvasTitle: string;
+  run: SmartCanvasRunRecord;
+  totalCount: number;
+  completedCount: number;
+  failedCount: number;
+  cancelledCount: number;
+};
+
+type QueueItemModel = TaskQueueItem | CanvasQueueItem;
+
+type RecentQueueCompletion = QueueItemModel & {
   key: string;
   completedAt: number;
-  finalStatus: ImageTurnStatus;
+  finalStatus: ImageTurnStatus | CreationTask["status"];
 };
 
 function isTurnBusy(turn: ImageTurn) {
@@ -57,6 +74,14 @@ function isTurnBusy(turn: ImageTurn) {
 
 function isTerminalTurnStatus(status: ImageTurnStatus) {
   return status === "success" || status === "message" || status === "error" || status === "cancelled";
+}
+
+function isCanvasRunBusy(run: SmartCanvasRunRecord) {
+  return run.status === "queued" || run.status === "running";
+}
+
+function isTerminalCanvasRunStatus(status?: CreationTask["status"]) {
+  return status === "success" || status === "error" || status === "cancelled";
 }
 
 function formatElapsedClock(totalSeconds: number) {
@@ -115,11 +140,40 @@ function getStatusLabel(status: ImageTurnStatus) {
   return "失败";
 }
 
+function getCanvasStatusLabel(status?: CreationTask["status"]) {
+  if (status === "queued") {
+    return "排队中";
+  }
+  if (status === "running") {
+    return "处理中";
+  }
+  if (status === "success") {
+    return "已完成";
+  }
+  if (status === "cancelled") {
+    return "已终止";
+  }
+  if (status === "error") {
+    return "失败";
+  }
+  return "处理中";
+}
+
 function getStatusClass(status: ImageTurnStatus) {
   if (status === "queued") {
     return "bg-amber-50 text-amber-700 ring-amber-100 dark:bg-amber-950/30 dark:text-amber-300 dark:ring-amber-800";
   }
   if (status === "generating") {
+    return "bg-sky-50 text-[#1456f0] ring-sky-100 dark:bg-sky-950/30 dark:text-sky-300 dark:ring-sky-800";
+  }
+  return "bg-muted text-muted-foreground ring-border";
+}
+
+function getCanvasStatusClass(status?: CreationTask["status"]) {
+  if (status === "queued") {
+    return "bg-amber-50 text-amber-700 ring-amber-100 dark:bg-amber-950/30 dark:text-amber-300 dark:ring-amber-800";
+  }
+  if (status === "running") {
     return "bg-sky-50 text-[#1456f0] ring-sky-100 dark:bg-sky-950/30 dark:text-sky-300 dark:ring-sky-800";
   }
   return "bg-muted text-muted-foreground ring-border";
@@ -140,9 +194,15 @@ function getQueueLongTaskHint(turn: ImageTurn, elapsedSeconds: number) {
     return "";
   }
   if (isHighResolutionImageSize(turn.size)) {
-    return "高分辨率任务已提交给上游判断";
+    return "高分辨率目标已提交给上游判断";
   }
   return "";
+}
+
+function getImageModelRouteDetail(model?: string) {
+  return model && model in IMAGE_MODEL_ROUTE_DETAILS
+    ? IMAGE_MODEL_ROUTE_DETAILS[model as keyof typeof IMAGE_MODEL_ROUTE_DETAILS]
+    : undefined;
 }
 
 function getQueueLoadingDetail(item: TaskQueueItem, loadingPhase: ImageTurnLoadingPhase) {
@@ -164,7 +224,7 @@ function getQueueLoadingDetail(item: TaskQueueItem, loadingPhase: ImageTurnLoadi
   return "";
 }
 
-function getCompletionTone(status: ImageTurnStatus) {
+function getCompletionTone(status: RecentQueueCompletion["finalStatus"]) {
   if (status === "success" || status === "message") {
     return {
       iconClass: "bg-emerald-50 text-emerald-700 ring-emerald-100 dark:bg-emerald-950/30 dark:text-emerald-300 dark:ring-emerald-800",
@@ -189,6 +249,30 @@ function getCompletionTone(status: ImageTurnStatus) {
   };
 }
 
+function getQueueItemKey(item: QueueItemModel) {
+  return item.source === "image"
+    ? `image:${item.conversationId}:${item.turn.id}`
+    : `canvas:${item.canvasId}:${item.run.id}:${item.run.taskId || ""}`;
+}
+
+function getQueueItemCreatedAt(item: QueueItemModel) {
+  return item.source === "image" ? item.turn.createdAt : item.run.createdAt;
+}
+
+function isQueueItemBusy(item: QueueItemModel) {
+  return item.source === "image" ? isTurnBusy(item.turn) : isCanvasRunBusy(item.run);
+}
+
+function isQueueItemTerminal(item: QueueItemModel) {
+  return item.source === "image"
+    ? isTerminalTurnStatus(item.turn.status)
+    : isTerminalCanvasRunStatus(item.run.status);
+}
+
+function getQueueItemFinalStatus(item: QueueItemModel): RecentQueueCompletion["finalStatus"] {
+  return item.source === "image" ? item.turn.status : item.run.status;
+}
+
 function getQueueItem(conversation: ImageConversation, turn: ImageTurn): TaskQueueItem {
   const { queued: queuedCount, running: runningCount } = getImageTurnLoadingCounts(turn);
   const completedCount = turn.images.filter((image) => image.status === "success" || image.status === "message").length;
@@ -196,6 +280,7 @@ function getQueueItem(conversation: ImageConversation, turn: ImageTurn): TaskQue
   const cancelledCount = turn.images.filter((image) => image.status === "cancelled").length;
   const totalCount = Math.max(1, turn.mode === "chat" ? 1 : turn.count || turn.images.length || 1);
   return {
+    source: "image",
     conversationId: conversation.id,
     conversationTitle: conversation.title,
     turn,
@@ -205,6 +290,20 @@ function getQueueItem(conversation: ImageConversation, turn: ImageTurn): TaskQue
     completedCount,
     failedCount,
     cancelledCount,
+  };
+}
+
+function getCanvasQueueItem(canvas: SmartCanvasDocument, run: SmartCanvasRunRecord): CanvasQueueItem {
+  const totalCount = Math.max(1, run.images.length || 1);
+  return {
+    source: "canvas",
+    canvasId: canvas.id,
+    canvasTitle: canvas.name,
+    run,
+    totalCount,
+    completedCount: run.status === "success" ? totalCount : 0,
+    failedCount: run.status === "error" ? totalCount : 0,
+    cancelledCount: run.status === "cancelled" ? totalCount : 0,
   };
 }
 
@@ -222,10 +321,33 @@ function getTaskQueueItems(conversations: ImageConversation[]) {
   return items.sort((a, b) => a.turn.createdAt.localeCompare(b.turn.createdAt));
 }
 
+function getCanvasTaskQueueItems(canvases: SmartCanvasDocument[]) {
+  const items = canvases.flatMap((canvas) =>
+    smartCanvasRuns(canvas).flatMap((run) => {
+      if (!isCanvasRunBusy(run)) {
+        return [];
+      }
+
+      return [getCanvasQueueItem(canvas, run)];
+    }),
+  );
+
+  return items.sort((a, b) => a.run.createdAt.localeCompare(b.run.createdAt));
+}
+
 function findQueueItem(conversations: ImageConversation[], conversationId: string, turnId: string) {
   const conversation = conversations.find((item) => item.id === conversationId);
   const turn = conversation?.turns.find((item) => item.id === turnId);
   return conversation && turn ? getQueueItem(conversation, turn) : null;
+}
+
+function findCanvasQueueItem(canvases: SmartCanvasDocument[], canvasId: string, runId: string, taskId?: string) {
+  const canvas = canvases.find((item) => item.id === canvasId);
+  if (!canvas) {
+    return null;
+  }
+  const run = smartCanvasRuns(canvas).find((item) => item.id === runId && (!taskId || item.taskId === taskId));
+  return run ? getCanvasQueueItem(canvas, run) : null;
 }
 
 function useImageConversationsForQueue() {
@@ -264,7 +386,61 @@ function useImageConversationsForQueue() {
   return conversations;
 }
 
-function QueueItem({
+function mergeCanvasQueueSnapshot(canvases: SmartCanvasDocument[], canvas: SmartCanvasDocument) {
+  return canvases.some((item) => item.id === canvas.id)
+    ? canvases.map((item) => item.id === canvas.id ? canvas : item)
+    : [canvas, ...canvases];
+}
+
+function useCanvasesForQueue() {
+  const [canvases, setCanvases] = useState<SmartCanvasDocument[]>([]);
+
+  useEffect(() => {
+    let active = true;
+
+    const loadCanvases = async () => {
+      try {
+        const items = await fetchCanvases();
+        if (!active) {
+          return;
+        }
+        setCanvases(items.flatMap((item) => {
+          const canvas = normalizeSmartCanvas(item);
+          return canvas ? [canvas] : [];
+        }));
+      } catch {
+        if (active) {
+          setCanvases([]);
+        }
+      }
+    };
+
+    const handleRefresh = () => {
+      void loadCanvases();
+    };
+    const handleCanvasQueueChanged = (event: Event) => {
+      const canvas = normalizeSmartCanvas((event as CustomEvent<SmartCanvasQueueChangedDetail>).detail?.canvas as CanvasDocument | null | undefined);
+      if (!canvas) {
+        void loadCanvases();
+        return;
+      }
+      setCanvases((items) => mergeCanvasQueueSnapshot(items, canvas));
+    };
+
+    void loadCanvases();
+    window.addEventListener("focus", handleRefresh);
+    window.addEventListener(SMART_CANVAS_QUEUE_CHANGED_EVENT, handleCanvasQueueChanged);
+    return () => {
+      active = false;
+      window.removeEventListener("focus", handleRefresh);
+      window.removeEventListener(SMART_CANVAS_QUEUE_CHANGED_EVENT, handleCanvasQueueChanged);
+    };
+  }, []);
+
+  return canvases;
+}
+
+function ImageQueueItem({
   item,
   now,
   onOpenConversation,
@@ -286,7 +462,7 @@ function QueueItem({
   const isRunning = loadingPhase === "running";
   const elapsedSeconds = isRunning ? Math.max(0, Math.floor((now - imageTurnStartedAtTimestamp(item.turn.processingStartedAt, item.turn.createdAt)) / 1000)) : 0;
   const elapsed = isRunning ? formatElapsedClock(elapsedSeconds) : "";
-  const routeDetail = IMAGE_MODEL_ROUTE_DETAILS[item.turn.model];
+  const routeDetail = getImageModelRouteDetail(item.turn.model);
   const sizeLabel = getQueueSizeLabel(item.turn);
   const detailParts = [
     getModeLabel(item.turn.mode),
@@ -378,25 +554,130 @@ function QueueItem({
   );
 }
 
+function CanvasQueueItemCard({
+  item,
+  now,
+  onOpenCanvas,
+}: {
+  item: CanvasQueueItem;
+  now: number;
+  onOpenCanvas: (canvasId: string) => void;
+}) {
+  const isWaitingForQuota = item.run.status === "queued";
+  const isRunning = item.run.status === "running";
+  const progressPercent =
+    item.run.status === "success"
+      ? 100
+      : item.run.status === "error" || item.run.status === "cancelled"
+        ? 100
+        : isRunning
+          ? 8
+          : 0;
+  const elapsedSeconds = isRunning && item.run.createdAt
+    ? Math.max(0, Math.floor((now - new Date(item.run.createdAt).getTime()) / 1000))
+    : 0;
+  const elapsed = isRunning ? formatElapsedClock(elapsedSeconds) : "";
+  const routeDetail = getImageModelRouteDetail(item.run.model);
+  const detailParts = [
+    "画布",
+    item.run.mode === "edit" ? "图生图" : "文生图",
+    item.run.model,
+    routeDetail?.routeLabel || "",
+  ].filter(Boolean);
+  const progressMessage = isWaitingForQuota ? "等待创作并发额度" : "等待图片处理";
+  const progressDetail = isWaitingForQuota ? "画布任务排队中" : isRunning ? "画布任务处理中" : "";
+
+  return (
+    <button
+      type="button"
+      className="w-full rounded-2xl border border-[#f2f3f5] bg-white p-3 text-left shadow-[0_4px_6px_rgba(0,0,0,0.05)] transition hover:border-[#dbe7ff] hover:bg-[#f8fbff] dark:border-border dark:bg-card dark:hover:bg-accent/40"
+      onClick={() => onOpenCanvas(item.canvasId)}
+    >
+      <div className="flex items-start gap-3">
+        <span
+          className={cn(
+            "mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-full ring-1",
+            item.run.status === "queued"
+              ? "bg-amber-50 text-amber-700 ring-amber-100"
+              : "bg-sky-50 text-[#1456f0] ring-sky-100",
+          )}
+        >
+          {item.run.status === "queued" ? <Clock3 className="size-4" /> : <LoaderCircle className="size-4 animate-spin" />}
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 items-center justify-between gap-2">
+            <p className="truncate text-sm font-semibold text-[#222222] dark:text-foreground">
+              {item.canvasTitle || item.run.prompt || "未命名画布任务"}
+            </p>
+            <span className={cn("shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium ring-1", getCanvasStatusClass(item.run.status))}>
+              {getCanvasStatusLabel(item.run.status)}
+            </span>
+          </div>
+          <p className="mt-1 line-clamp-2 text-xs leading-5 text-[#45515e] dark:text-muted-foreground">
+            {item.run.prompt || "无提示词内容"}
+          </p>
+
+          <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px] text-[#45515e] dark:text-muted-foreground">
+            {detailParts.map((part, index) => (
+              <span key={`${part}-${index}`} className="rounded-full bg-[#f0f0f0] px-2 py-0.5 dark:bg-muted">
+                {part}
+              </span>
+            ))}
+            {item.run.taskId ? (
+              <span className="rounded-full bg-[#f0f0f0] px-2 py-0.5 font-mono tabular-nums dark:bg-muted">
+                {item.run.taskId.slice(0, 12)}
+              </span>
+            ) : null}
+          </div>
+
+          <div className="mt-3">
+            <div className="mb-1.5 flex items-center justify-between gap-2 text-[11px] text-[#45515e] dark:text-muted-foreground">
+              <span className="truncate font-medium text-[#222222] dark:text-foreground">{progressMessage}</span>
+              <span className="shrink-0 font-mono tabular-nums">{progressPercent}%</span>
+            </div>
+            <div className="h-1.5 overflow-hidden rounded-full bg-[#edf2f7] dark:bg-muted">
+              <div className="h-full rounded-full bg-[#1456f0] transition-[width] duration-300" style={{ width: `${progressPercent}%` }} />
+            </div>
+            <div className="mt-1.5 flex items-center justify-between gap-2 text-[11px] text-[#8e8e93] dark:text-muted-foreground">
+              <span className="truncate">{progressDetail || formatQueueTime(item.run.createdAt)}</span>
+              {elapsed ? <span className="shrink-0 font-mono tabular-nums">已运行 {elapsed}</span> : null}
+            </div>
+          </div>
+        </div>
+      </div>
+    </button>
+  );
+}
+
 function CompletionItem({
   item,
   onOpenConversation,
+  onOpenCanvas,
 }: {
   item: RecentQueueCompletion;
   onOpenConversation: (conversationId: string) => void;
+  onOpenCanvas: (canvasId: string) => void;
 }) {
   const tone = getCompletionTone(item.finalStatus);
   const settledCount = item.completedCount + item.failedCount + item.cancelledCount;
+  const title = item.source === "image"
+    ? item.conversationTitle || item.turn.prompt || "未命名任务"
+    : item.canvasTitle || item.run.prompt || "未命名画布任务";
+  const prompt = item.source === "image" ? item.turn.prompt : item.run.prompt;
+  const error = item.source === "image" ? item.turn.error : item.run.error;
+  const statusLabel = item.source === "image"
+    ? getStatusLabel(item.finalStatus as ImageTurnStatus)
+    : getCanvasStatusLabel(item.finalStatus as CreationTask["status"]);
   const resultText =
     item.finalStatus === "success" || item.finalStatus === "message"
       ? `${settledCount}/${item.totalCount} 已完成`
-      : item.turn.error || getStatusLabel(item.finalStatus);
+      : error || statusLabel;
 
   return (
     <button
       type="button"
       className="animate-in fade-in slide-in-from-top-1 zoom-in-95 w-full rounded-2xl border border-emerald-100 bg-white p-3 text-left shadow-[0_12px_24px_-18px_rgba(16,185,129,0.55)] duration-300 hover:border-emerald-200 hover:bg-emerald-50/45 dark:border-emerald-900/50 dark:bg-card dark:hover:bg-emerald-950/20"
-      onClick={() => onOpenConversation(item.conversationId)}
+      onClick={() => item.source === "image" ? onOpenConversation(item.conversationId) : onOpenCanvas(item.canvasId)}
     >
       <div className="flex items-start gap-3">
         <span className={cn("relative mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-full ring-1", tone.iconClass)}>
@@ -406,14 +687,14 @@ function CompletionItem({
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center justify-between gap-2">
             <p className="truncate text-sm font-semibold text-[#222222] dark:text-foreground">
-              {item.conversationTitle || item.turn.prompt || "未命名任务"}
+              {title}
             </p>
             <span className={cn("shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium ring-1", tone.badgeClass)}>
-              {getStatusLabel(item.finalStatus)}
+              {statusLabel}
             </span>
           </div>
           <p className="mt-1 line-clamp-2 text-xs leading-5 text-[#45515e] dark:text-muted-foreground">
-            {item.turn.prompt || "无提示词内容"}
+            {prompt || "无提示词内容"}
           </p>
           <div className="mt-3">
             <div className="mb-1.5 flex items-center justify-between gap-2 text-[11px] text-[#45515e] dark:text-muted-foreground">
@@ -433,21 +714,27 @@ function CompletionItem({
 export function ImageTaskQueue({ className }: { className?: string }) {
   const navigate = useNavigate();
   const conversations = useImageConversationsForQueue();
+  const canvases = useCanvasesForQueue();
   const progressByTurnKey = useSyncExternalStore(
     subscribeImageTurnProgress,
     getImageTurnProgressSnapshot,
     getImageTurnProgressSnapshot,
   );
-  const queueItems = useMemo(() => getTaskQueueItems(conversations), [conversations]);
+  const imageQueueItems = useMemo(() => getTaskQueueItems(conversations), [conversations]);
+  const canvasQueueItems = useMemo(() => getCanvasTaskQueueItems(canvases), [canvases]);
+  const queueItems = useMemo(
+    () => [...imageQueueItems, ...canvasQueueItems].sort((a, b) => getQueueItemCreatedAt(a).localeCompare(getQueueItemCreatedAt(b))),
+    [canvasQueueItems, imageQueueItems],
+  );
   const activeCount = queueItems.length;
   const [recentCompletions, setRecentCompletions] = useState<RecentQueueCompletion[]>([]);
   const [open, setOpen] = useState(false);
   const [now, setNow] = useState(Date.now());
-  const previousQueueItemsRef = useRef<Map<string, TaskQueueItem>>(new Map());
+  const previousQueueItemsRef = useRef<Map<string, QueueItemModel>>(new Map());
   const hasRecentCompletion = recentCompletions.length > 0;
 
   useEffect(() => {
-    const currentItems = new Map(queueItems.map((item) => [`${item.conversationId}:${item.turn.id}`, item]));
+    const currentItems = new Map(queueItems.map((item) => [getQueueItemKey(item), item]));
     const completedItems: RecentQueueCompletion[] = [];
 
     previousQueueItemsRef.current.forEach((previousItem, key) => {
@@ -455,8 +742,10 @@ export function ImageTaskQueue({ className }: { className?: string }) {
         return;
       }
 
-      const completedItem = findQueueItem(conversations, previousItem.conversationId, previousItem.turn.id);
-      if (!completedItem || isTurnBusy(completedItem.turn) || !isTerminalTurnStatus(completedItem.turn.status)) {
+      const completedItem = previousItem.source === "image"
+        ? findQueueItem(conversations, previousItem.conversationId, previousItem.turn.id)
+        : findCanvasQueueItem(canvases, previousItem.canvasId, previousItem.run.id, previousItem.run.taskId);
+      if (!completedItem || isQueueItemBusy(completedItem) || !isQueueItemTerminal(completedItem)) {
         return;
       }
 
@@ -464,7 +753,7 @@ export function ImageTaskQueue({ className }: { className?: string }) {
         ...completedItem,
         key,
         completedAt: Date.now(),
-        finalStatus: completedItem.turn.status,
+        finalStatus: getQueueItemFinalStatus(completedItem),
       });
     });
 
@@ -472,7 +761,7 @@ export function ImageTaskQueue({ className }: { className?: string }) {
     if (completedItems.length > 0) {
       setRecentCompletions((current) => [...completedItems, ...current].slice(0, 3));
     }
-  }, [conversations, queueItems]);
+  }, [canvases, conversations, queueItems]);
 
   useEffect(() => {
     if (recentCompletions.length === 0) {
@@ -511,6 +800,31 @@ export function ImageTaskQueue({ className }: { className?: string }) {
     );
     setOpen(false);
     navigate("/image");
+  };
+
+  const handleOpenCanvas = (_canvasId: string) => {
+    setOpen(false);
+    navigate("/canvas");
+  };
+  const renderQueueItem = (item: QueueItemModel) => {
+    if (item.source === "image") {
+      return (
+        <ImageQueueItem
+          key={getQueueItemKey(item)}
+          item={item}
+          now={now}
+          onOpenConversation={handleOpenConversation}
+        />
+      );
+    }
+    return (
+      <CanvasQueueItemCard
+        key={getQueueItemKey(item)}
+        item={item}
+        now={now}
+        onOpenCanvas={handleOpenCanvas}
+      />
+    );
   };
 
   return (
@@ -559,7 +873,7 @@ export function ImageTaskQueue({ className }: { className?: string }) {
               <div className="text-sm font-semibold text-[#222222] dark:text-foreground">任务处理队列</div>
               <div className="text-xs text-[#8e8e93] dark:text-muted-foreground">
                 {activeCount > 0
-                  ? `${activeCount} 个任务正在排队或处理`
+                  ? `${activeCount} 个创作台/画布任务正在排队或处理`
                   : hasRecentCompletion
                     ? "最近完成的任务"
                     : "暂无处理中任务"}
@@ -576,16 +890,10 @@ export function ImageTaskQueue({ className }: { className?: string }) {
                   key={`${item.key}:${item.completedAt}`}
                   item={item}
                   onOpenConversation={handleOpenConversation}
+                  onOpenCanvas={handleOpenCanvas}
                 />
               ))}
-              {queueItems.map((item) => (
-                <QueueItem
-                  key={`${item.conversationId}:${item.turn.id}`}
-                  item={item}
-                  now={now}
-                  onOpenConversation={handleOpenConversation}
-                />
-              ))}
+              {queueItems.map(renderQueueItem)}
             </div>
           </div>
         ) : (
@@ -595,7 +903,7 @@ export function ImageTaskQueue({ className }: { className?: string }) {
             </span>
             <div className="mt-3 text-sm font-semibold text-[#222222] dark:text-foreground">队列为空</div>
             <div className="mt-1 max-w-[260px] text-xs leading-5 text-[#8e8e93] dark:text-muted-foreground">
-              在创作台提交图片或对话任务后，这里会显示对应的处理详情和进度。
+              在创作台或画布提交图片任务后，这里会显示对应的处理详情和进度。
             </div>
             <Button
               type="button"

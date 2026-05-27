@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { Suspense, type ReactNode } from "react";
 import {
   Navigate,
   Route,
@@ -79,13 +79,22 @@ export function AnimatedRoutes() {
         className={isViewportWorkspacePage ? "min-h-0 min-w-0 flex-1 overflow-hidden" : "min-w-0"}
       >
         <Routes location={location}>
-          {appRoutes.map((route) => (
-            <Route
-              key={route.path}
-              path={route.path}
-              element={<PermissionRoute requiredPath={route.requiredPath}>{route.element}</PermissionRoute>}
-            />
-          ))}
+          {appRoutes.map((route) => {
+            const { Component } = route;
+            return (
+              <Route
+                key={route.path}
+                path={route.path}
+                element={
+                  <PermissionRoute requiredPath={route.requiredPath}>
+                    <Suspense fallback={null}>
+                      <Component />
+                    </Suspense>
+                  </PermissionRoute>
+                }
+              />
+            );
+          })}
         </Routes>
       </motion.div>
     </AnimatePresence>
