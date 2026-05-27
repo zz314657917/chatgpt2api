@@ -51,7 +51,6 @@ import {
   IMAGE_OUTPUT_FORMAT_OPTIONS,
   supportsImageOutputControls,
   supportsImageOutputCompression,
-  supportsOfficialFallback,
   supportsStructuredImageParameters,
   type ImageModel,
   type ImageOutputFormat,
@@ -72,7 +71,6 @@ type ImageComposerProps = {
   imageCustomHeight: string;
   imageOutputFormat: ImageOutputFormat;
   imageOutputCompression: string;
-  officialFallback: boolean;
   highResolutionHint?: ReactNode;
   billingBlocked: boolean;
   referenceImages: Array<{ name: string; dataUrl: string }>;
@@ -90,7 +88,6 @@ type ImageComposerProps = {
   onImageCustomHeightChange: (value: string) => void;
   onImageOutputFormatChange: (value: ImageOutputFormat) => void;
   onImageOutputCompressionChange: (value: string) => void;
-  onOfficialFallbackChange: (value: boolean) => void;
   onSubmit: () => void | Promise<void>;
   onOpenPromptMarket: () => void;
   onReferenceImageChange: (files: File[]) => void | Promise<void>;
@@ -295,7 +292,6 @@ export function ImageComposer({
   imageCustomHeight,
   imageOutputFormat,
   imageOutputCompression,
-  officialFallback,
   highResolutionHint,
   billingBlocked,
   referenceImages,
@@ -313,7 +309,6 @@ export function ImageComposer({
   onImageCustomHeightChange,
   onImageOutputFormatChange,
   onImageOutputCompressionChange,
-  onOfficialFallbackChange,
   onSubmit,
   onOpenPromptMarket,
   onReferenceImageChange,
@@ -350,7 +345,6 @@ export function ImageComposer({
   const compressionDisabled = !compressionSupported;
   const structuredImageParameters = supportsStructuredImageParameters(imageModel);
   const outputControlsSupported = supportsImageOutputControls(imageModel);
-  const officialFallbackSupported = supportsOfficialFallback(imageModel);
   const availableImageSizeModeOptions = structuredImageParameters
     ? IMAGE_SIZE_MODE_OPTIONS
     : IMAGE_SIZE_MODE_OPTIONS.filter((option) => option.value !== "custom");
@@ -1036,37 +1030,6 @@ export function ImageComposer({
                               ? "Codex 图片链路会下发目标尺寸；格式由后端保存结果时处理，压缩率仅适用于 JPEG。"
                               : "常规/官方图片线路只会把比例作为构图偏好，实际尺寸以上游返回为准；格式由后端保存结果时处理。"}
                           </p>
-                        ) : null}
-                        {composerMode === "image" && officialFallbackSupported ? (
-                          <div className="col-span-2 flex min-w-0 items-center justify-between gap-2 rounded-xl border border-[#e5e7eb] bg-white px-3 py-2 text-xs text-[#45515e] dark:border-border dark:bg-background/70 dark:text-muted-foreground sm:col-span-3">
-                            <span className="shrink-0 font-semibold">渠道</span>
-                            <div className="grid min-w-0 flex-1 grid-cols-2 rounded-lg bg-[#f3f4f6] p-0.5 dark:bg-muted">
-                              <button
-                                type="button"
-                                className={cn(
-                                  "min-w-0 rounded-md px-2 py-1 text-xs font-medium transition",
-                                  !officialFallback
-                                    ? "bg-white text-[#18181b] shadow-sm dark:bg-background dark:text-foreground"
-                                    : "text-[#686b73] hover:text-[#18181b] dark:text-muted-foreground dark:hover:text-foreground",
-                                )}
-                                onClick={() => onOfficialFallbackChange(false)}
-                              >
-                                普通
-                              </button>
-                              <button
-                                type="button"
-                                className={cn(
-                                  "min-w-0 rounded-md px-2 py-1 text-xs font-medium transition",
-                                  officialFallback
-                                    ? "bg-white text-[#1456f0] shadow-sm dark:bg-background dark:text-sky-300"
-                                    : "text-[#686b73] hover:text-[#18181b] dark:text-muted-foreground dark:hover:text-foreground",
-                                )}
-                                onClick={() => onOfficialFallbackChange(true)}
-                              >
-                                官方兜底
-                              </button>
-                            </div>
-                          </div>
                         ) : null}
                         {outputControlsSupported ? (
                         <>

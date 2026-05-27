@@ -73,7 +73,6 @@ import {
   isImageOutputFormat,
   supportsImageOutputCompression,
   supportsImageOutputControls,
-  supportsOfficialFallback,
   supportsStructuredImageParameters,
   uploadCreationTaskReferenceImage,
   updateManagedImageVisibility,
@@ -130,7 +129,6 @@ const IMAGE_CUSTOM_WIDTH_STORAGE_KEY = "chatgpt2api:image_last_custom_width";
 const IMAGE_CUSTOM_HEIGHT_STORAGE_KEY = "chatgpt2api:image_last_custom_height";
 const IMAGE_OUTPUT_FORMAT_STORAGE_KEY = "chatgpt2api:image_last_output_format";
 const IMAGE_OUTPUT_COMPRESSION_STORAGE_KEY = "chatgpt2api:image_last_output_compression";
-const IMAGE_OFFICIAL_FALLBACK_STORAGE_KEY = "chatgpt2api:image_last_official_fallback";
 const QUOTA_REFRESH_EVENT = "chatgpt2api:quota-refresh";
 const DEFAULT_IMAGE_OUTPUT_FORMAT: ImageOutputFormat = "png";
 const REFERENCE_IMAGE_MAX_SIDE = 2048;
@@ -156,7 +154,6 @@ type EditingTurnDraft = {
   customHeight: string;
   outputFormat: ImageOutputFormat;
   outputCompression: string;
-  officialFallback: boolean;
   visibility: ImageVisibility;
   referenceImages: StoredReferenceImage[];
 };
@@ -822,13 +819,6 @@ function getStoredImageOutputCompression(): string {
   return normalized === undefined ? "" : String(normalized);
 }
 
-function getStoredOfficialFallback() {
-  if (typeof window === "undefined") {
-    return false;
-  }
-  return window.localStorage.getItem(IMAGE_OFFICIAL_FALLBACK_STORAGE_KEY) === "true";
-}
-
 function serializeImageSizeSelection(selection: ImageSizeSelection): StoredImageSizeSelection {
   return {
     mode: selection.mode,
@@ -1224,7 +1214,6 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
   const [imageCustomHeight, setImageCustomHeight] = useState(() => getStoredImageSizeSelection().customHeight);
   const [imageOutputFormat, setImageOutputFormat] = useState<ImageOutputFormat>(getStoredImageOutputFormat);
   const [imageOutputCompression, setImageOutputCompression] = useState(getStoredImageOutputCompression);
-  const [officialFallback, setOfficialFallback] = useState(getStoredOfficialFallback);
   const [defaultImageVisibility, setDefaultImageVisibility] = useState<ImageVisibility>("private");
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [isPromptMarketOpen, setIsPromptMarketOpen] = useState(false);
@@ -1438,7 +1427,6 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         setImageCustomHeight(storedSelection.customHeight);
         setImageOutputFormat(getStoredImageOutputFormat());
         setImageOutputCompression(getStoredImageOutputCompression());
-        setOfficialFallback(getStoredOfficialFallback());
 
         const items = await listImageConversations();
         const normalizedItems = await recoverConversationHistory(items);
@@ -1609,12 +1597,6 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
   }, [composerMode, imageModel]);
 
   useEffect(() => {
-    if (composerMode !== "image" || !supportsOfficialFallback(imageModel)) {
-      setOfficialFallback(false);
-    }
-  }, [composerMode, imageModel]);
-
-  useEffect(() => {
     if (typeof window === "undefined") {
       return;
     }
@@ -1657,14 +1639,6 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     }
     window.localStorage.setItem(IMAGE_OUTPUT_COMPRESSION_STORAGE_KEY, String(normalizedCompression));
   }, [imageOutputCompression, imageOutputFormat]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-
-    window.localStorage.setItem(IMAGE_OFFICIAL_FALLBACK_STORAGE_KEY, officialFallback ? "true" : "false");
-  }, [officialFallback]);
 
   useEffect(() => {
     if (selectedConversationId && !conversations.some((conversation) => conversation.id === selectedConversationId)) {
@@ -2336,7 +2310,6 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         targetTurn.outputCompression === undefined || targetTurn.outputCompression === null
           ? ""
           : String(targetTurn.outputCompression),
-      officialFallback: targetTurn.model === DEFAULT_IMAGE_MODEL && targetTurn.officialFallback === true,
       visibility: targetTurn.visibility || "private",
       referenceImages: targetTurn.mode === "chat" ? [] : targetTurn.referenceImages,
     });
@@ -2515,9 +2488,6 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
           supportsStructuredImageParameters(activeTurn.model) && activeTurnSizeRequest.selection?.resolution !== "auto"
             ? activeTurnSizeRequest.selection?.resolution
             : undefined;
-        const taskToolOptions = activeTurn.model === DEFAULT_IMAGE_MODEL && activeTurn.officialFallback
-          ? { officialFallback: true }
-          : undefined;
         const fallbackReferenceImage = activeTurn.mode === "chat" ? undefined : getFallbackReferenceImage(snapshot, activeTurn.id);
         const pendingTaskGroups = activeTurn.images.reduce<Array<{ taskId: string; count: number }>>(
           (groups, image, imageIndex) => {
@@ -2562,7 +2532,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
               taskImageResolution,
               taskOutputFormat,
               taskOutputCompression,
-              taskToolOptions,
+              undefined,
               conversationId,
               fallbackReferenceImage,
             );
@@ -2579,7 +2549,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
             taskImageResolution,
             taskOutputFormat,
             taskOutputCompression,
-            taskToolOptions,
+            undefined,
             conversationId,
             fallbackReferenceImage,
           );
@@ -3043,7 +3013,6 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         draftOutputFormat === undefined
           ? undefined
           : imageOutputCompressionForModel(draft.model, draftOutputFormat, draft.outputCompression);
-      const draftOfficialFallback = draft.model === DEFAULT_IMAGE_MODEL && draft.officialFallback;
       if (mode !== "chat" && supportsStructuredImageParameters(draft.model) && isHighResolutionImageSize(draftImageSize)) {
         const sizeLabel = formatImageSizeDisplay(draftImageSize);
         if (regenerate) {
@@ -3076,7 +3045,6 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
               quality: undefined,
               outputFormat: draftOutputFormat,
               outputCompression: draftOutputCompression,
-              officialFallback: mode === "chat" ? undefined : draftOfficialFallback,
               visibility: mode === "chat" ? "private" : draft.visibility,
             };
             if (!regenerate) {
@@ -3187,8 +3155,6 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         effectiveOutputFormat === undefined
           ? undefined
           : imageOutputCompressionForModel(effectiveModel, effectiveOutputFormat, imageOutputCompression);
-      const effectiveOfficialFallback =
-        effectiveImageMode !== "chat" && supportsOfficialFallback(effectiveModel) && officialFallback;
       const isHighResolutionRequest =
         effectiveImageMode !== "chat" &&
         supportsStructuredImageParameters(effectiveModel) &&
@@ -3215,7 +3181,6 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         quality: undefined,
         outputFormat: effectiveOutputFormat,
         outputCompression: effectiveImageMode === "chat" ? undefined : effectiveOutputCompression,
-        officialFallback: effectiveOfficialFallback,
         visibility: effectiveImageMode === "chat" ? "private" : defaultImageVisibility,
         images: Array.from({ length: requestedCount }, (_, index): StoredImage => {
           const imageId = `${turnId}-${index}`;
@@ -3434,9 +3399,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                         value={editingTurnDraft.model}
                         onValueChange={(value) =>
                           setEditingTurnDraft((current) =>
-                            current && isImageModel(value)
-                              ? { ...current, model: value, officialFallback: supportsOfficialFallback(value) ? current.officialFallback : false }
-                              : current,
+                            current && isImageModel(value) ? { ...current, model: value } : current,
                           )
                         }
                       >
@@ -3605,45 +3568,6 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                         ) : null}
                         {editingDraftOutputControls ? (
                           <>
-                            {supportsOfficialFallback(editingTurnDraft.model) ? (
-                              <div className="flex items-center justify-between gap-3 rounded-2xl border border-stone-200 bg-white px-3 py-2 text-sm font-medium text-stone-700 sm:col-span-2 lg:col-span-4">
-                                <span className="shrink-0">渠道</span>
-                                <div className="grid min-w-0 flex-1 grid-cols-2 rounded-xl bg-stone-100 p-1 text-xs">
-                                  <button
-                                    type="button"
-                                    className={cn(
-                                      "rounded-lg px-2 py-1 font-medium transition",
-                                      !editingTurnDraft.officialFallback
-                                        ? "bg-white text-stone-950 shadow-sm"
-                                        : "text-stone-500 hover:text-stone-900",
-                                    )}
-                                    onClick={() =>
-                                      setEditingTurnDraft((current) =>
-                                        current ? { ...current, officialFallback: false } : current,
-                                      )
-                                    }
-                                  >
-                                    普通
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className={cn(
-                                      "rounded-lg px-2 py-1 font-medium transition",
-                                      editingTurnDraft.officialFallback
-                                        ? "bg-white text-sky-700 shadow-sm"
-                                        : "text-stone-500 hover:text-stone-900",
-                                    )}
-                                    onClick={() =>
-                                      setEditingTurnDraft((current) =>
-                                        current ? { ...current, officialFallback: true } : current,
-                                      )
-                                    }
-                                  >
-                                    官方兜底
-                                  </button>
-                                </div>
-                              </div>
-                            ) : null}
                             <label className="flex flex-col gap-2 text-sm font-medium text-stone-700">
                               格式
                               <Select
@@ -3822,7 +3746,6 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                 imageCustomHeight={imageCustomHeight}
                 imageOutputFormat={imageOutputFormat}
                 imageOutputCompression={imageOutputCompression}
-                officialFallback={officialFallback}
                 highResolutionHint={highResolutionHint}
                 billingBlocked={billingBlocked}
                 referenceImages={referenceImages}
@@ -3840,7 +3763,6 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                 onImageCustomHeightChange={setImageCustomHeight}
                 onImageOutputFormatChange={setImageOutputFormat}
                 onImageOutputCompressionChange={setImageOutputCompression}
-                onOfficialFallbackChange={setOfficialFallback}
                 onSubmit={handleSubmit}
                 onOpenPromptMarket={() => setIsPromptMarketOpen(true)}
                 onReferenceImageChange={handleReferenceImageChange}
