@@ -81,10 +81,6 @@ export function usesCodexImageRoute(model: ImageModel) {
   return model === CODEX_IMAGE_MODEL;
 }
 
-export function supportsOfficialFallback(model: ImageModel | string) {
-  return model === "gpt-image-2";
-}
-
 export function supportsStructuredImageParameters(model: ImageModel) {
   return usesCodexImageRoute(model);
 }
@@ -1100,7 +1096,6 @@ export async function createImageGenerationTask(
     moderation?: string;
     style?: string;
     partialImages?: number;
-    officialFallback?: boolean;
   },
   frontendConversationId?: string,
   fallbackReferenceImage?: FallbackReferenceImage,
@@ -1120,7 +1115,6 @@ export async function createImageGenerationTask(
       ...(toolOptions?.moderation ? { moderation: toolOptions.moderation } : {}),
       ...(toolOptions?.style ? { style: toolOptions.style } : {}),
       ...(typeof toolOptions?.partialImages === "number" ? { partial_images: toolOptions.partialImages } : {}),
-      ...(toolOptions?.officialFallback ? { official_fallback: true } : {}),
       ...(messages?.length ? { messages } : {}),
       ...(frontendConversationId ? { frontend_conversation_id: frontendConversationId } : {}),
       ...(fallbackReferenceImage ? { fallback_reference_image: fallbackReferenceImage } : {}),
@@ -1149,7 +1143,6 @@ export async function createImageEditTask(
     style?: string;
     partialImages?: number;
     inputImageMask?: string;
-    officialFallback?: boolean;
   },
   frontendConversationId?: string,
   fallbackReferenceImage?: FallbackReferenceImage,
@@ -1191,9 +1184,6 @@ export async function createImageEditTask(
   }
   if (typeof toolOptions?.partialImages === "number") {
     formData.append("partial_images", String(toolOptions.partialImages));
-  }
-  if (toolOptions?.officialFallback) {
-    formData.append("official_fallback", "true");
   }
   if (toolOptions?.inputImageMask) {
     formData.append("input_image_mask", toolOptions.inputImageMask);
@@ -1256,7 +1246,6 @@ export async function createImageEditTaskFromReferenceIds(
     style?: string;
     partialImages?: number;
     inputImageMask?: string;
-    officialFallback?: boolean;
   },
   frontendConversationId?: string,
   fallbackReferenceImage?: FallbackReferenceImage,
@@ -1277,7 +1266,6 @@ export async function createImageEditTaskFromReferenceIds(
       ...(toolOptions?.moderation ? { moderation: toolOptions.moderation } : {}),
       ...(toolOptions?.style ? { style: toolOptions.style } : {}),
       ...(typeof toolOptions?.partialImages === "number" ? { partial_images: toolOptions.partialImages } : {}),
-      ...(toolOptions?.officialFallback ? { official_fallback: true } : {}),
       ...(toolOptions?.inputImageMask ? { input_image_mask: toolOptions.inputImageMask } : {}),
       ...(messages?.length ? { messages } : {}),
       ...(frontendConversationId ? { frontend_conversation_id: frontendConversationId } : {}),
