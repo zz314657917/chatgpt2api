@@ -1,6 +1,44 @@
 # Project Timeline
 
+## 2026-05-27 04:52 +08:00 - Canvas 登录链路与图片编辑器布局归档
+
+- 当前阶段：`/canvas` Sprint 3 后续打磨中，8081 本地 Docker 预览已恢复 healthy。
+- 本段重点：修复 Sub2API launch/redeem 容器网络配置；调整图片编辑器为顶部模式切换、左侧当前工具参数；拆分过大的图片编辑器文件。
+- 已完成：`.env` 中 `CHATGPT2API_SUB2API_REDEEM_URL` 和 `CHATGPT2API_SUB2API_GATEWAY_BASE_URL` 从容器内不可用的 `127.0.0.1:8080` 改为 `host.docker.internal:8080`；`SmartCanvasImageEditor` 拆出 config、types、utils、fields、tool-panel；8081 容器热替换 Linux embed 二进制。
+- 关键决策：`裁剪/扩图/遮罩/画笔/宫格切分` 作为编辑模式放顶部，左侧只承载当前模式参数和子工具；`细节增强`、`图片编辑` 当前与节点内能力重复，后续更适合作为节点内或右键快捷动作，真正接专用模型后再提升入口。
+- 验证记录：`cd web && npm.cmd run build` PASS；`cd web && npm.cmd run lint` PASS；`git diff --check` PASS；`http://127.0.0.1:8081/health` 返回 200；容器内访问 `http://host.docker.internal:8080/health` 返回 ok。
+- 遗留问题：图片编辑器新布局建议真实登录态下再手动打开图片编辑确认；Docker 镜像构建仍受 DockerHub 拉取 `docker/dockerfile:1.7` 超时影响，本轮采用 Linux 二进制热替换。
+- 下一步：收敛 `细节增强/图片编辑/角度控制` 的入口层级，优先把重复快捷功能下沉到节点内或右键菜单；继续评估错误详情、图库筛选和专用模型适配。
+
+## 2026-05-27 02:18 +08:00 - Canvas Sprint 2 三工具迁移关闭
+
+- 当前阶段：`docs/workflow/status.md` 已更新为 `canvas-sprint-002` done，Sprint 2 关闭。
+- 本段重点：把 Infinite Canvas 参考中的 `细节增强`、`图片编辑`、`角度控制` 迁移到 `/canvas` 左侧工具栏，继续复用现有 `creation-tasks/image-edits` 和图片库链路，不新增后端接口。
+- 已完成：三工具单图选中启用校验、tooltip 禁用原因、细节增强默认 prompt、角度控制三滑杆弹窗、image edit task 提交、结果节点轮询回填、来源节点连线、图片编辑器产物相邻节点和来源连线。
+- 多智能体结果：并行 worker 产出 `canvas-history.ts`、`canvas-error-details.ts`、`canvas-asset-filters.ts` 三个未接入 UI 的 Sprint 3 候选模块；主控 Codex 已关闭这些 sub-agent。
+- 验证记录：`cd web && npm.cmd run build`、`cd web && npm.cmd run lint`、`go test ./...`、`git diff --check` 均通过；build 仅有既有 npm config 与 Vite chunk size 警告。
+- 遗留问题：本轮自动化浏览器点选验收受登录态限制，真实登录环境仍建议手动打开 `/canvas` 点击三工具确认；`细节增强` 和 `角度控制` 仍是 prompt 化 image edit，不是专用模型。
+- 下一步：进入 Sprint 3 Planner，优先从撤销/重做、错误详情、图库筛选或专用模型适配中选一个 contract。
+
+## 2026-05-26 22:40 +08:00 - Canvas Sprint 1 验收关闭
+
+- 当前阶段：`docs/workflow/status.md` 已从 `build` 推进到 `done`，`canvas-sprint-001` 关闭。
+- 本段重点：完成 `/canvas` Sprint 1 的 P/G/E 验收闭环，核心范围是图片引用去重、图片库输入、连线输入、生成状态、Output 回填和基础画布交互稳定性。
+- 已完成：命令验证通过；8081 Docker 已更新到嵌入式前端资源；用户在真实 Chrome 登录态下手测通过并反馈“测试没问题”。
+- 关键决策：in-app browser 因登录态被重定向到 `/login` 的限制不再阻塞 Sprint 1，真实用户环境验收作为浏览器 gate 补充证据。
+- 验证记录：`cd web && npm.cmd run lint`、`cd web && npm.cmd run build`、`go test ./...`、`git diff --check` 均通过；`/health` 返回 200。
+- 下一步：进入 Sprint 2 Planner，优先讨论运行体验增强、错误详情、误删恢复/撤销或图片编辑增强，不直接跳过 contract。
+
 ## 2026-05-25 06:05 +08:00 - Canvas 工作台合并与图片策略收窄归档
+
+## 2026-05-27 03:45 +08:00 - Canvas Sprint 3 左侧列表、LLM 节点与时间轴接入
+
+- 当前阶段：`/canvas` P/G/E Sprint 3 已完成并记录为 PASS。
+- 本段重点：收敛画布 UI 重复入口，左侧改为可收缩画布列表，顶部和右键菜单统一创建节点，右侧图片库只保留素材；新增 LLM 节点和撤销/重做时间轴。
+- 已完成：`SmartCanvasLeftRail` 支持画布切换、新建、刷新、重命名、二次确认删除和折叠状态持久化；`SmartCanvasAssetSidebar` 移除画布列表；`llm` 节点接入类型、normalize、UI、连线和 `createChatCompletionTask` 运行链路；API生成读取上游 LLM 输出；`canvas-history.ts` 接入 controller、顶部按钮、快捷键和最近操作面板。
+- 关键决策：LLM 节点首版只做单次文本处理，不做多轮聊天；时间轴首版只做当前浏览器会话内存历史，不做服务端版本历史。
+- 验证记录：`cd web && npm.cmd run build` PASS；`cd web && npm.cmd run lint` PASS；`go test ./...` PASS。
+- 遗留问题：仍建议用真实登录态浏览器验证 LLM 节点实际任务提交、撤销/重做操作手感和左侧折叠体验；历史采用整份画布快照，超大画布后续可优化为差量。
 
 - 当前阶段：`codex/chatgpt2api-canvas` 已整理、提交、fast-forward 合并到 `main`，并推送到 `origin/main`。
 - 本段重点：新增无限画布工作台，覆盖 canvas 存储、运行、节点执行、权限、路由、前端画布页和 API 客户端；同时把本地图片关键词策略从多类业务拦截收窄为仅拦截成人私密/色情与暴力血腥，解决 Minecraft 提示中“古修士破碎法器”误命中证件规则的问题。

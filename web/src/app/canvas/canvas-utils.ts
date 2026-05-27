@@ -8,13 +8,14 @@ import type {
   CreationTaskData,
   ManagedImage,
 } from "@/lib/api";
-import { getManagedImageThumbnailUrlFromPath, getManagedImageUrlFromPath } from "@/lib/image-path";
+import { getManagedImagePathFromUrl, getManagedImageThumbnailUrlFromPath, getManagedImageUrlFromPath } from "@/lib/image-path";
 
 import {
   SMART_CANVAS_KIND,
   SMART_CANVAS_SCHEMA_VERSION,
   type SmartCanvasComposer,
   type SmartCanvasDocument,
+  type SmartCanvasHistoryEntry,
   type SmartCanvasItem,
   type SmartCanvasItemData,
   type SmartCanvasModelCatalog,
@@ -51,7 +52,7 @@ export function normalizeSmartCanvas(input?: CanvasDocument | null): SmartCanvas
   }
   const nodes = Array.isArray(input.nodes)
     ? input.nodes.flatMap((node) => {
-        if (node.type !== "image" && node.type !== "prompt" && node.type !== "image_generation" && node.type !== "result") {
+        if (node.type !== "image" && node.type !== "prompt" && node.type !== "llm" && node.type !== "image_generation" && node.type !== "result") {
           return [];
         }
         return [{
@@ -117,6 +118,8 @@ export function smartItemTitle(type: SmartCanvasItem["type"]) {
       return "图片";
     case "prompt":
       return "Prompt";
+    case "llm":
+      return "AI 提示词";
     case "image_generation":
       return "API生成";
     case "result":
@@ -159,6 +162,22 @@ export function createPromptNode(
       visibility: composer?.visibility || DEFAULT_COMPOSER.visibility,
       input_images: dedupeCanvasImageRefs([...(composer?.images || []), ...(composer?.mentionImages || [])]),
       mention_images: dedupeCanvasImageRefs(composer?.mentionImages || []),
+      created_at: new Date().toISOString(),
+    },
+  };
+}
+
+export function createLlmNode(position: { x: number; y: number }): SmartCanvasItem {
+  return {
+    id: createItemId("llm"),
+    type: "llm",
+    name: "AI 提示词",
+    position,
+    data: {
+      prompt: "",
+      model: "auto",
+      output: { text: "" },
+      status: undefined,
       created_at: new Date().toISOString(),
     },
   };
@@ -235,6 +254,19 @@ export function createSmartEdge(source: string, target: string): CanvasEdge {
   };
 }
 
+export function createHistoryEntry(label: string, snapshot: SmartCanvasDocument): SmartCanvasHistoryEntry {
+  const id = typeof crypto !== "undefined" && "randomUUID" in crypto
+    ? `history-${crypto.randomUUID()}`
+    : `history-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const normalizedSnapshot = normalizeSmartCanvas(snapshot) || createEmptySmartCanvas(snapshot.name || "未命名画布");
+  return {
+    id,
+    label,
+    createdAt: new Date().toISOString(),
+    snapshot: normalizedSnapshot,
+  };
+}
+
 export function updateResultItemFromTask(item: SmartCanvasItem, task: CreationTask): SmartCanvasItem {
   const output = creationTaskToOutput(task);
   return {
@@ -253,7 +285,7 @@ export function updateResultItemFromTask(item: SmartCanvasItem, task: CreationTa
 
 export function managedImagesToRefs(items: ManagedImage[]): CanvasImageRef[] {
   return dedupeCanvasImageRefs(items.map((item) => ({
-    url: item.url,
+    url: item.preview_url || item.url,
     local_url: item.url,
     path: item.path,
     name: item.name,
@@ -267,11 +299,15 @@ export function canvasImagesFromItem(item?: SmartCanvasItem | null): CanvasImage
   }
   const images = Array.isArray(item.data.images) ? item.data.images : [];
   const inputImages = Array.isArray(item.data.input_images) ? item.data.input_images : [];
+  const sourceImages = Array.isArray(item.data.source_images) ? item.data.source_images : [];
   const outputImages = item.data.output?.images || [];
-  return dedupeCanvasImageRefs([...images, ...inputImages, ...outputImages]);
+  return dedupeCanvasImageRefs([...images, ...inputImages, ...sourceImages, ...outputImages]);
 }
 
 export function canvasPromptFromItem(item?: SmartCanvasItem | null) {
+  if (item?.type === "llm") {
+    return item.data?.output?.text || item.data?.prompt || item.data?.text || "";
+  }
   return item?.data?.prompt || item?.data?.text || "";
 }
 
@@ -299,8 +335,36 @@ export function outgoingItems(canvas: SmartCanvasDocument | null, sourceId: stri
     .filter((node): node is SmartCanvasItem => Boolean(node && (!allowed || allowed.has(node.type))));
 }
 
+function sourcePathFromThumbnailUrl(value: string) {
+  const text = cleanImageText(value);
+  if (!text) {
+    return "";
+  }
+  try {
+    const base = typeof window === "undefined" ? "http://localhost" : window.location.href;
+    const url = new URL(text, base);
+    const prefix = "/image-thumbnails/";
+    if (!url.pathname.startsWith(prefix)) {
+      return "";
+    }
+    const encoded = url.pathname.slice(prefix.length).replace(/\.jpg$/i, "");
+    return decodeURIComponent(encoded);
+  } catch {
+    return "";
+  }
+}
+
 export function canvasImageKey(ref: CanvasImageRef) {
-  return cleanImageText(ref.path) || cleanImageText(ref.local_url) || cleanImageText(ref.url) || cleanImageText(ref.thumbnail_url) || cleanImageText(ref.name);
+  return (
+    cleanImageText(ref.path) ||
+    getManagedImagePathFromUrl(cleanImageText(ref.local_url)) ||
+    getManagedImagePathFromUrl(cleanImageText(ref.url)) ||
+    sourcePathFromThumbnailUrl(cleanImageText(ref.thumbnail_url)) ||
+    cleanImageText(ref.local_url) ||
+    cleanImageText(ref.url) ||
+    cleanImageText(ref.thumbnail_url) ||
+    cleanImageText(ref.name)
+  );
 }
 
 export function dedupeCanvasImageRefs(refs: CanvasImageRef[]) {
@@ -310,7 +374,10 @@ export function dedupeCanvasImageRefs(refs: CanvasImageRef[]) {
     const clean: CanvasImageRef = {
       url: cleanImageText(ref.url),
       local_url: cleanImageText(ref.local_url),
-      path: cleanImageText(ref.path),
+      path: cleanImageText(ref.path) ||
+        getManagedImagePathFromUrl(cleanImageText(ref.local_url)) ||
+        getManagedImagePathFromUrl(cleanImageText(ref.url)) ||
+        sourcePathFromThumbnailUrl(cleanImageText(ref.thumbnail_url)),
       name: cleanImageText(ref.name),
       thumbnail_url: cleanImageText(ref.thumbnail_url),
     };
@@ -401,11 +468,15 @@ export function imageFilesFromList(files: FileList | File[] | null | undefined) 
 }
 
 export function normalizeModelCatalog(models: CanvasModelOption[]): SmartCanvasModelCatalog {
+  const text = models.filter((model) => model.kind === "text" || model.kind === "both");
   const image = models.filter((model) => model.kind === "image" || model.kind === "both");
   const withAuto = image.some((model) => model.id === "auto")
     ? image
     : [{ id: "auto", name: "auto", kind: "image" as const }, ...image];
-  return { all: models, image: withAuto };
+  const textWithAuto = text.some((model) => model.id === "auto")
+    ? text
+    : [{ id: "auto", name: "auto", kind: "text" as const }, ...text];
+  return { all: models, text: textWithAuto, image: withAuto };
 }
 
 export function smartCanvasRuns(canvas: SmartCanvasDocument | null): SmartCanvasRunRecord[] {
@@ -415,7 +486,8 @@ export function smartCanvasRuns(canvas: SmartCanvasDocument | null): SmartCanvas
   return canvas.nodes
     .filter((node) => (node.type === "result" || node.type === "image_generation") && node.data?.task_id)
     .map((node) => {
-      const mode: SmartCanvasRunRecord["mode"] = (node.data?.input_images?.length || 0) > 0 ? "edit" : "generate";
+      const incomingImages = incomingItems(canvas, node.id).flatMap((input) => canvasImagesFromItem(input));
+      const mode: SmartCanvasRunRecord["mode"] = (node.data?.input_images?.length || incomingImages.length || 0) > 0 ? "edit" : "generate";
       return {
         id: node.id,
         prompt: node.data?.prompt || "",
@@ -497,11 +569,14 @@ function sanitizeSmartItemData(data?: SmartCanvasItemData): SmartCanvasItemData 
     n: Number.isFinite(Number(data.n)) ? Math.max(1, Math.min(4, Number(data.n))) : 1,
     visibility: data.visibility === "public" ? "public" : "private",
     images: dedupeCanvasImageRefs(Array.isArray(data.images) ? data.images : []),
+    source_images: dedupeCanvasImageRefs(Array.isArray(data.source_images) ? data.source_images : []),
     input_images: dedupeCanvasImageRefs(Array.isArray(data.input_images) ? data.input_images : []),
-      mention_images: dedupeCanvasImageRefs(Array.isArray(data.mention_images) ? data.mention_images : []),
-      width: Number.isFinite(Number(data.width)) ? Math.max(180, Math.min(720, Number(data.width))) : undefined,
-      height: Number.isFinite(Number(data.height)) ? Math.max(180, Math.min(720, Number(data.height))) : undefined,
-      output: normalizeOutput(data.output),
+    mention_images: dedupeCanvasImageRefs(Array.isArray(data.mention_images) ? data.mention_images : []),
+    tool_type: data.tool_type,
+    tool_parameters: data.tool_parameters && typeof data.tool_parameters === "object" ? data.tool_parameters : undefined,
+    width: Number.isFinite(Number(data.width)) ? Math.max(180, Math.min(720, Number(data.width))) : undefined,
+    height: Number.isFinite(Number(data.height)) ? Math.max(180, Math.min(720, Number(data.height))) : undefined,
+    output: normalizeOutput(data.output),
     status: data.status,
     error: typeof data.error === "string" ? data.error : "",
     task_id: typeof data.task_id === "string" ? data.task_id : "",

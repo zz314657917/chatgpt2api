@@ -13,10 +13,21 @@ export const SMART_CANVAS_KIND = "smart";
 export const SMART_CANVAS_SCHEMA_VERSION = 2;
 export const SMART_CANVAS_AUTOSAVE_DELAY_MS = 5000;
 
-export type SmartCanvasItemType = "image" | "prompt" | "image_generation" | "result";
+export type SmartCanvasItemType = "image" | "prompt" | "llm" | "image_generation" | "result";
 export type SmartCanvasSaveState = "saved" | "dirty" | "saving" | "error";
 export type SmartCanvasTool = "select" | "pan";
 export type SmartCanvasPortKind = "in" | "out";
+export type SmartCanvasImageToolType = "detail_enhance" | "image_edit" | "angle_control";
+
+export type SmartCanvasAngleControlValues = {
+  horizontal: number;
+  vertical: number;
+  zoom: number;
+};
+
+export type SmartCanvasImageToolParameters = Partial<SmartCanvasAngleControlValues> & {
+  [key: string]: unknown;
+};
 
 export type SmartCanvasViewport = {
   x: number;
@@ -32,8 +43,11 @@ export type SmartCanvasItemData = {
   n?: number;
   visibility?: ImageVisibility;
   images?: CanvasImageRef[];
+  source_images?: CanvasImageRef[];
   input_images?: CanvasImageRef[];
   mention_images?: CanvasImageRef[];
+  tool_type?: SmartCanvasImageToolType;
+  tool_parameters?: SmartCanvasImageToolParameters;
   width?: number;
   height?: number;
   output?: CanvasNodeOutput;
@@ -77,7 +91,7 @@ export type SmartCanvasComposer = {
 export type SmartCanvasDragState =
   | { kind: "none" }
   | { kind: "pan"; pointerId: number; startClientX: number; startClientY: number; startViewport: SmartCanvasViewport }
-  | { kind: "item"; pointerId: number; itemId: string; startClientX: number; startClientY: number; startPosition: { x: number; y: number } }
+  | { kind: "item"; pointerId: number; itemId: string; itemIds: string[]; startClientX: number; startClientY: number; startPositions: Record<string, { x: number; y: number }> }
   | { kind: "resize"; pointerId: number; itemId: string; startClientX: number; startClientY: number; startSize: { w: number; h: number } };
 
 export type SmartCanvasConnectState =
@@ -101,5 +115,13 @@ export type SmartCanvasRunRecord = {
 
 export type SmartCanvasModelCatalog = {
   all: CanvasModelOption[];
+  text: CanvasModelOption[];
   image: CanvasModelOption[];
+};
+
+export type SmartCanvasHistoryEntry = {
+  id: string;
+  label: string;
+  createdAt: string;
+  snapshot: SmartCanvasDocument;
 };

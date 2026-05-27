@@ -83,6 +83,7 @@ func (a *App) routes() []appRoute {
 		exact(http.MethodGet, "/api/admin/permissions", a.handlePermissionCatalog),
 		exact("", "/api/images/visibility", a.handleImageVisibility),
 		exact(http.MethodPost, "/api/images/uploads", a.handleImageUploads),
+		exact(http.MethodGet, "/api/images/detail", a.handleImageDetail),
 		exact("", "/api/images", a.handleImages),
 		exact("", "/api/images/storage-governance", a.handleImageStorageGovernance),
 		exact("", "/api/logs/governance", a.handleLogGovernance),

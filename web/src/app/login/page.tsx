@@ -88,7 +88,7 @@ export default function LoginPage() {
           <div className="flex flex-col gap-9 transition-[gap] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none">
             <div className="flex items-center gap-3">
               <img
-                src="/logo-mark.svg"
+                src="/logo.webp"
                 alt=""
                 aria-hidden="true"
                 className="size-11 rounded-[16px] shadow-[0_12px_16px_-4px_rgba(36,36,36,0.12)]"

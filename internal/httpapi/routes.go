@@ -1513,6 +1513,15 @@ func (a *App) handleCreationTasks(w http.ResponseWriter, r *http.Request) {
 		util.WriteJSON(w, http.StatusOK, task)
 		return
 	}
+	if r.URL.Path == "/api/creation-tasks/reference-images" && r.Method == http.MethodPost {
+		item, err := a.handleCreationTaskReferenceImageUpload(r, identity)
+		if err != nil {
+			util.WriteError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		util.WriteJSON(w, http.StatusOK, map[string]any{"item": item})
+		return
+	}
 	if r.URL.Path == "/api/creation-tasks/image-generations" && r.Method == http.MethodPost {
 		body, _ := readJSONMap(r)
 		task, err := a.tasks.SubmitGenerationWithOptions(r.Context(), identity, util.Clean(body["client_task_id"]), util.Clean(body["prompt"]), firstNonEmpty(util.Clean(body["model"]), util.ImageModelAuto), util.Clean(body["size"]), util.Clean(body["quality"]), a.resolveImageBaseURL(r), util.ToInt(body["n"], 1), body["messages"], imageTaskRequestMetadata(body), imageOutputOptionsFromBody(body), imageToolOptionsFromBody(body), util.Clean(body["visibility"]))
@@ -1534,7 +1543,7 @@ func (a *App) handleCreationTasks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.URL.Path == "/api/creation-tasks/image-edits" && r.Method == http.MethodPost {
-		body, images, err := readMultipartImageBody(r)
+		body, images, err := a.readImageEditTaskBody(r, identity)
 		if err != nil {
 			util.WriteError(w, http.StatusBadRequest, err.Error())
 			return
@@ -1594,6 +1603,10 @@ func imageToolOptionsFromBody(body map[string]any) service.ImageToolOptions {
 	}
 	if partialImages := util.ToInt(body["partial_images"], 0); partialImages > 0 {
 		options.PartialImages = &partialImages
+	}
+	if _, ok := body["official_fallback"]; ok {
+		officialFallback := util.ToBool(body["official_fallback"])
+		options.OfficialFallback = &officialFallback
 	}
 	return options
 }

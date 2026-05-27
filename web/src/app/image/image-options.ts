@@ -18,7 +18,7 @@ export type ImageAspectRatio = (typeof IMAGE_ASPECT_RATIO_OPTIONS)[number]["valu
 
 export const IMAGE_SIZE_MODE_OPTIONS = [
   { value: "auto", label: "Auto" },
-  { value: "ratio", label: "按比例" },
+  { value: "ratio", label: "画幅偏好" },
   { value: "custom", label: "手动宽高" },
 ] as const;
 
@@ -26,7 +26,7 @@ export type ImageSizeMode = (typeof IMAGE_SIZE_MODE_OPTIONS)[number]["value"];
 
 export const IMAGE_RESOLUTION_OPTIONS = [
   { value: "auto", label: "Auto", description: "不指定固定像素，交给图片工具决定" },
-  { value: "1080p", label: "1080P", description: "正方形为 1088×1088，宽高按所选比例计算" },
+  { value: "1080p", label: "1080P", description: "结构化目标尺寸，正方形约 1088×1088" },
   { value: "2k", label: "2K", description: "2K Square 为 2048×2048，上游会按账号能力判断" },
   { value: "4k", label: "4K", description: "按链路像素上限收敛，上游会按账号能力判断" },
 ] as const;
@@ -235,7 +235,7 @@ export function getImageSizeRequirementLabel(size: string) {
   if (!size || size === "auto") {
     return "Auto";
   }
-  return isHighResolutionImageSize(size) ? "高分辨率" : "常规分辨率";
+  return isHighResolutionImageSize(size) ? "高分辨率目标" : "常规目标";
 }
 
 export function isImageAspectRatio(value: unknown): value is ImageAspectRatio {

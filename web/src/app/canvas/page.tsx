@@ -2,26 +2,19 @@
 
 import { LoaderCircle } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-
-import {
+  SmartCanvasAngleControlDialog,
   SmartCanvasAssetSidebar,
   SmartCanvasBoard,
-  SmartCanvasInspector,
   SmartCanvasLeftRail,
+  SmartCanvasOperationHistoryPanel,
+  SmartCanvasPickerDialog,
+  SmartCanvasRunHistoryPanel,
   SmartCanvasShell,
   SmartCanvasTopBar,
 } from "./canvas-node";
 import { SmartCanvasImageEditor } from "./canvas-image-editor";
-import { canvasImagesFromItem } from "./canvas-utils";
+import { smartCanvasRuns } from "./canvas-utils";
 import { useSmartCanvasController } from "./use-smart-canvas-controller";
 
 export default function CanvasPage() {
@@ -38,31 +31,48 @@ export default function CanvasPage() {
   return (
     <div className="h-full min-h-0 overflow-hidden">
       <SmartCanvasShell>
-        <SmartCanvasLeftRail onAddNode={canvas.addNodeAt} />
+        <SmartCanvasLeftRail
+          canvases={canvas.canvases}
+          currentCanvasId={canvas.canvas?.id || ""}
+          collapsed={canvas.leftRailCollapsed}
+          loading={canvas.loading}
+          onCollapsedChange={canvas.setLeftRailCollapsed}
+          onSelectCanvas={(id) => void canvas.selectCanvas(id)}
+          onCreateCanvas={() => void canvas.createNewCanvas()}
+          onRefresh={() => void canvas.reloadCanvases()}
+          onDeleteCanvas={(id) => void canvas.deleteCanvasById(id)}
+          onRenameCanvas={(id, name) => void canvas.renameCanvasById(id, name)}
+        />
         <div className="relative min-w-0 flex-1">
           <SmartCanvasTopBar
-            canvas={canvas.canvas}
+            canvasName={canvas.canvas?.name || "未命名画布"}
             saveState={canvas.saveState}
             saving={canvas.saving}
             running={canvas.running}
-            onBack={() => {
-              void canvas.flushSave().finally(() => window.history.back());
-            }}
+            runCount={smartCanvasRuns(canvas.canvas).slice(0, 30).length}
+            operationCount={canvas.historyEntries.slice(0, 30).length}
+            canUndo={canvas.canUndo}
+            canRedo={canvas.canRedo}
             onSave={() => void canvas.saveNow()}
             onAddNode={canvas.addNodeAt}
             onUploadClick={canvas.openUploadDialog}
-            onDeleteCanvas={() => canvas.setDeleteConfirm(true)}
+            onRunHistoryToggle={() => canvas.setRunHistoryOpen(!canvas.runHistoryOpen)}
+            onOperationHistoryToggle={() => canvas.setOperationHistoryOpen(!canvas.operationHistoryOpen)}
+            onUndo={canvas.undoCanvas}
+            onRedo={canvas.redoCanvas}
           />
 
           <SmartCanvasBoard
             canvas={canvas.canvas}
             viewport={canvas.viewport}
             selectedItemId={canvas.selectedItemId}
+            selectedItemIds={canvas.selectedItemIds}
             tool={canvas.tool}
             connectState={canvas.connectState}
             draggingImages={canvas.draggingImages}
             boardRef={canvas.boardRef}
-            models={canvas.models.image}
+            imageModels={canvas.models.image}
+            textModels={canvas.models.text}
             running={canvas.running}
             mentionOpen={canvas.mentionOpen}
             mentionItems={canvas.mentionItems}
@@ -73,43 +83,63 @@ export default function CanvasPage() {
             onDrop={canvas.handleBoardDrop}
             onDragOver={canvas.handleBoardDragOver}
             onDragLeave={canvas.stopDraggingImages}
+            onContextMenu={(event) => {
+              const target = event.target;
+              if (target instanceof HTMLElement && !target.closest("[data-canvas-node-id], [data-node-interactive='true'], button, input, textarea, select")) {
+                event.preventDefault();
+              }
+            }}
             onItemPointerDown={canvas.handleItemPointerDown}
             onResizeItemPointerDown={canvas.handleResizeItemPointerDown}
-            onSelectItem={canvas.setSelectedItemId}
+            onSelectItem={canvas.selectItem}
             onOpenImage={canvas.openImage}
+            onDeleteImage={canvas.deleteImageFromItem}
+            onOpenImageEditorForItem={canvas.openImageEditorForItem}
+            onRunDetailEnhanceForItem={canvas.runDetailEnhanceForItem}
+            onOpenAngleControlForItem={canvas.openAngleControlForItem}
             onZoomIn={() => canvas.zoomBy(1.12)}
             onZoomOut={() => canvas.zoomBy(0.88)}
             onFit={canvas.fitContent}
+            onViewportChange={canvas.updateViewport}
             onUpdateItemData={canvas.updateItemData}
             onRunGenerator={canvas.runGeneratorNode}
+            onRunLlm={canvas.runLlmNode}
             onDeleteItem={canvas.deleteItem}
             onStartConnect={canvas.startConnect}
             onFinishConnect={canvas.finishConnect}
             onDeleteEdge={canvas.deleteEdge}
             onMentionToggle={canvas.toggleMention}
             onAddMentionToPrompt={canvas.addMentionImageToPrompt}
+            onCreateNodeAt={canvas.addNodeAt}
+            onUploadAt={canvas.openUploadDialogAt}
           />
 
           <SmartCanvasAssetSidebar
-            canvases={canvas.canvases}
-            currentCanvasId={canvas.canvas?.id || ""}
             assets={canvas.assets}
             loadingAssets={canvas.loadingAssets}
-            onSelectCanvas={(id) => void canvas.selectCanvas(id)}
-            onCreateCanvas={() => void canvas.createNewCanvas()}
+            loadingMoreAssets={canvas.loadingMoreAssets}
+            hasMoreAssets={canvas.hasMoreAssets}
             onRefreshAssets={() => void canvas.loadAssets()}
+            onLoadMoreAssets={() => void canvas.loadMoreAssets()}
             onAddAssetToCanvas={canvas.addAssetToCanvas}
             onAddAssetToComposer={canvas.addAssetToComposer}
           />
 
-          <SmartCanvasInspector
+          <SmartCanvasRunHistoryPanel
             canvas={canvas.canvas}
-            selectedItem={canvas.selectedItem}
-            saveState={canvas.saveState}
-            onNameChange={canvas.renameCanvas}
-            onDeleteSelected={canvas.deleteSelected}
-            onAddSelectedImagesToComposer={() => canvas.addImagesToComposer(canvasImagesFromItem(canvas.selectedItem))}
-            onOpenImage={canvas.openImage}
+            open={canvas.runHistoryOpen}
+            onOpenChange={canvas.setRunHistoryOpen}
+            onBackToRun={canvas.focusItem}
+          />
+
+          <SmartCanvasOperationHistoryPanel
+            entries={canvas.historyEntries}
+            open={canvas.operationHistoryOpen}
+            onOpenChange={canvas.setOperationHistoryOpen}
+            onRestore={(entry) => {
+              canvas.restoreHistoryEntry(entry);
+              canvas.setOperationHistoryOpen(false);
+            }}
           />
         </div>
       </SmartCanvasShell>
@@ -134,18 +164,33 @@ export default function CanvasPage() {
         }}
       />
 
-      <Dialog open={canvas.deleteConfirm} onOpenChange={canvas.setDeleteConfirm}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>删除画布</DialogTitle>
-            <DialogDescription>删除后无法恢复，画布里的图片本体仍保留在图片库。</DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => canvas.setDeleteConfirm(false)}>取消</Button>
-            <Button type="button" variant="destructive" onClick={() => void canvas.deleteCurrentCanvas()}>删除</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <SmartCanvasAngleControlDialog
+        open={canvas.angleControlOpen}
+        image={canvas.angleControlImage}
+        values={canvas.angleControlValues}
+        running={canvas.running}
+        onOpenChange={(open) => {
+          canvas.setAngleControlOpen(open);
+          if (!open) {
+            canvas.setAngleControlImage(null);
+          }
+        }}
+        onValuesChange={canvas.setAngleControlValues}
+        onSubmit={canvas.runAngleControlSelected}
+      />
+
+      <SmartCanvasPickerDialog
+        open={canvas.canvasPickerOpen}
+        canvases={canvas.canvases}
+        currentCanvasId={canvas.canvas?.id || ""}
+        loading={canvas.loading}
+        onOpenChange={canvas.setCanvasPickerOpen}
+        onSelectCanvas={(id) => void canvas.selectCanvas(id)}
+        onCreateCanvas={() => void canvas.createNewCanvas()}
+        onRefresh={() => void canvas.reloadCanvases()}
+        onDeleteCanvas={(id) => void canvas.deleteCanvasById(id)}
+        onRenameCanvas={(id, name) => void canvas.renameCanvasById(id, name)}
+      />
     </div>
   );
 }

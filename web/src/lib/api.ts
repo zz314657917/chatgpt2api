@@ -38,8 +38,6 @@ const CHAT_MODEL_VALUES = new Set<ImageModel>([
 export const IMAGE_TASK_MODEL_OPTIONS = IMAGE_MODEL_OPTIONS.filter((option) => IMAGE_TASK_MODEL_VALUES.has(option.value));
 export const IMAGE_CREATION_MODEL_OPTIONS = IMAGE_TASK_MODEL_OPTIONS;
 export const CHAT_MODEL_OPTIONS = IMAGE_MODEL_OPTIONS.filter((option) => CHAT_MODEL_VALUES.has(option.value));
-const IMAGE_PRICE_1K_USD = 0.006;
-const OFFICIAL_IMAGE_PRICE_1K_USD = 0.0462;
 
 export const IMAGE_MODEL_ROUTE_DETAILS: Partial<Record<
   ImageModel,
@@ -51,11 +49,11 @@ export const IMAGE_MODEL_ROUTE_DETAILS: Partial<Record<
 >> = {
   "gpt-image-2": {
     routeLabel: "常规",
-    description: "常规图片线路，按当前分辨率档位估算成本。",
+    description: "常规图片线路，比例只作为构图偏好，实际像素以上游返回为准。",
   },
   "gpt-image-2-official": {
     routeLabel: "官方",
-    description: "官方图片线路，价格明显高于常规线路，仅在确有需要时选择。",
+    description: "官方图片线路，画幅只作偏好，不保证固定像素。",
   },
 };
 
@@ -83,8 +81,12 @@ export function usesCodexImageRoute(model: ImageModel) {
   return model === CODEX_IMAGE_MODEL;
 }
 
+export function supportsOfficialFallback(model: ImageModel | string) {
+  return model === "gpt-image-2";
+}
+
 export function supportsStructuredImageParameters(model: ImageModel) {
-  return usesCodexImageRoute(model) || model === "gpt-image-2" || model === OFFICIAL_IMAGE_MODEL;
+  return usesCodexImageRoute(model);
 }
 
 export function supportsImageOutputControls(model: ImageModel) {
@@ -93,30 +95,6 @@ export function supportsImageOutputControls(model: ImageModel) {
 
 export function supportsImageQuality(_model: ImageModel) {
   return false;
-}
-
-export type ImageCostResolution = "1k" | "2k" | "4k";
-
-export const IMAGE_MODEL_PRICE_USD: Partial<Record<ImageModel, Record<ImageCostResolution, number>>> = {
-  "gpt-image-2": { "1k": IMAGE_PRICE_1K_USD, "2k": IMAGE_PRICE_1K_USD, "4k": IMAGE_PRICE_1K_USD },
-  "gpt-image-2-official": { "1k": OFFICIAL_IMAGE_PRICE_1K_USD, "2k": OFFICIAL_IMAGE_PRICE_1K_USD, "4k": OFFICIAL_IMAGE_PRICE_1K_USD },
-};
-
-export function estimateImageCostUSD(model: ImageModel, count: number, resolution: string) {
-  const prices = IMAGE_MODEL_PRICE_USD[model];
-  if (!prices) {
-    return null;
-  }
-  const normalizedResolution = resolution === "2k" || resolution === "4k" ? resolution : "1k";
-  const normalizedCount = Math.max(1, Math.floor(Number(count) || 1));
-  return prices[normalizedResolution] * normalizedCount;
-}
-
-export function formatImageCostUSD(value: number | null) {
-  if (value === null || !Number.isFinite(value)) {
-    return "";
-  }
-  return `$${value.toFixed(4)}`;
 }
 
 export type ImageQuality = "low" | "medium" | "high";
@@ -301,6 +279,7 @@ export type ManagedImage = {
   size: number;
   url: string;
   thumbnail_url?: string;
+  preview_url?: string;
   width?: number;
   height?: number;
   resolution?: string;
@@ -328,6 +307,30 @@ export type ManagedImage = {
   megapixels?: number;
   created_at: string;
   published_at?: string;
+};
+
+export type ManagedImageListScope = "mine" | "public" | "all";
+
+export type ManagedImageListFilters = {
+  start_date?: string;
+  end_date?: string;
+  scope?: ManagedImageListScope;
+  page_size?: number;
+  cursor?: string;
+  search?: string;
+  visibility?: "all" | ImageVisibility;
+  format?: string;
+  orientation?: string;
+  resolution?: string;
+  aspect_ratio?: string;
+};
+
+export type ManagedImageListResult = {
+  items: ManagedImage[];
+  groups: Array<{ date: string; items: ManagedImage[] }>;
+  next_cursor: string;
+  has_more: boolean;
+  page_size: number;
 };
 
 export type SystemLog = {
@@ -469,12 +472,24 @@ export type CreationTask = {
   visibility?: ImageVisibility;
 };
 
+export type CreationTaskReferenceImage = {
+  id: string;
+  client_reference_id: string;
+  filename: string;
+  content_type: string;
+  size: number;
+  width?: number;
+  height?: number;
+  created_at?: string;
+  expires_at?: string;
+};
+
 export type CreationTaskMessage = {
   role: "system" | "user" | "assistant" | "tool";
   content: string;
 };
 
-export type CanvasNodeType = "text" | "image" | "prompt" | "image_generation" | "image_edit" | "result";
+export type CanvasNodeType = "text" | "image" | "prompt" | "llm" | "image_generation" | "image_edit" | "result";
 export type CanvasRunStatus = "queued" | "running" | "success" | "error" | "cancelled" | "blocked";
 
 export type CanvasImageRef = {
@@ -1085,6 +1100,7 @@ export async function createImageGenerationTask(
     moderation?: string;
     style?: string;
     partialImages?: number;
+    officialFallback?: boolean;
   },
   frontendConversationId?: string,
   fallbackReferenceImage?: FallbackReferenceImage,
@@ -1104,6 +1120,7 @@ export async function createImageGenerationTask(
       ...(toolOptions?.moderation ? { moderation: toolOptions.moderation } : {}),
       ...(toolOptions?.style ? { style: toolOptions.style } : {}),
       ...(typeof toolOptions?.partialImages === "number" ? { partial_images: toolOptions.partialImages } : {}),
+      ...(toolOptions?.officialFallback ? { official_fallback: true } : {}),
       ...(messages?.length ? { messages } : {}),
       ...(frontendConversationId ? { frontend_conversation_id: frontendConversationId } : {}),
       ...(fallbackReferenceImage ? { fallback_reference_image: fallbackReferenceImage } : {}),
@@ -1132,6 +1149,7 @@ export async function createImageEditTask(
     style?: string;
     partialImages?: number;
     inputImageMask?: string;
+    officialFallback?: boolean;
   },
   frontendConversationId?: string,
   fallbackReferenceImage?: FallbackReferenceImage,
@@ -1174,6 +1192,9 @@ export async function createImageEditTask(
   if (typeof toolOptions?.partialImages === "number") {
     formData.append("partial_images", String(toolOptions.partialImages));
   }
+  if (toolOptions?.officialFallback) {
+    formData.append("official_fallback", "true");
+  }
   if (toolOptions?.inputImageMask) {
     formData.append("input_image_mask", toolOptions.inputImageMask);
   }
@@ -1192,6 +1213,78 @@ export async function createImageEditTask(
   return httpRequest<CreationTask>("/api/creation-tasks/image-edits", {
     method: "POST",
     body: formData,
+  });
+}
+
+export async function uploadCreationTaskReferenceImage(
+  file: File,
+  clientReferenceId: string,
+  options: { conversationId?: string; turnId?: string } = {},
+) {
+  const formData = new FormData();
+  formData.append("image", file);
+  formData.append("client_reference_id", clientReferenceId);
+  if (options.conversationId) {
+    formData.append("conversation_id", options.conversationId);
+  }
+  if (options.turnId) {
+    formData.append("turn_id", options.turnId);
+  }
+  const data = await httpRequest<{ item: CreationTaskReferenceImage }>("/api/creation-tasks/reference-images", {
+    method: "POST",
+    body: formData,
+  });
+  return data.item;
+}
+
+export async function createImageEditTaskFromReferenceIds(
+  clientTaskId: string,
+  referenceImageIds: string[],
+  prompt: string,
+  model?: string,
+  size?: string,
+  quality?: ImageQuality,
+  count = 1,
+  messages?: CreationTaskMessage[],
+  visibility: ImageVisibility = "private",
+  imageResolution?: string,
+  outputFormat?: ImageOutputFormat,
+  outputCompression?: number,
+  toolOptions?: {
+    background?: string;
+    moderation?: string;
+    style?: string;
+    partialImages?: number;
+    inputImageMask?: string;
+    officialFallback?: boolean;
+  },
+  frontendConversationId?: string,
+  fallbackReferenceImage?: FallbackReferenceImage,
+) {
+  return httpRequest<CreationTask>("/api/creation-tasks/image-edits", {
+    method: "POST",
+    body: {
+      client_task_id: clientTaskId,
+      reference_image_ids: referenceImageIds,
+      prompt,
+      ...(model ? { model } : {}),
+      ...(size ? { size } : {}),
+      ...(imageResolution ? { image_resolution: imageResolution } : {}),
+      ...(quality ? { quality } : {}),
+      ...(outputFormat ? { output_format: outputFormat } : {}),
+      ...(typeof outputCompression === "number" ? { output_compression: outputCompression } : {}),
+      ...(toolOptions?.background ? { background: toolOptions.background } : {}),
+      ...(toolOptions?.moderation ? { moderation: toolOptions.moderation } : {}),
+      ...(toolOptions?.style ? { style: toolOptions.style } : {}),
+      ...(typeof toolOptions?.partialImages === "number" ? { partial_images: toolOptions.partialImages } : {}),
+      ...(toolOptions?.officialFallback ? { official_fallback: true } : {}),
+      ...(toolOptions?.inputImageMask ? { input_image_mask: toolOptions.inputImageMask } : {}),
+      ...(messages?.length ? { messages } : {}),
+      ...(frontendConversationId ? { frontend_conversation_id: frontendConversationId } : {}),
+      ...(fallbackReferenceImage ? { fallback_reference_image: fallbackReferenceImage } : {}),
+      visibility,
+      n: count,
+    },
   });
 }
 
@@ -1384,21 +1477,47 @@ export async function updateLoginPageImageSettings(
 }
 
 export async function fetchManagedImages(
-  filters: { start_date?: string; end_date?: string; scope?: "mine" | "public" | "all" },
+  filters: ManagedImageListFilters,
   options: { signal?: AbortSignal } = {},
-) {
+): Promise<ManagedImageListResult> {
   const params = new URLSearchParams();
-  if (filters.scope) params.set("scope", filters.scope);
-  if (filters.start_date) params.set("start_date", filters.start_date);
-  if (filters.end_date) params.set("end_date", filters.end_date);
-  const data = await httpRequest<{ items?: ManagedImage[] | null; groups?: Array<{ date: string; items: ManagedImage[] }> | null }>(
+  for (const [key, value] of Object.entries(filters)) {
+    if (value === undefined || value === null || value === "" || value === "all") {
+      continue;
+    }
+    params.set(key, String(value));
+  }
+  const data = await httpRequest<{
+    items?: ManagedImage[] | null;
+    groups?: Array<{ date: string; items: ManagedImage[] }> | null;
+    next_cursor?: string | null;
+    has_more?: boolean | null;
+    page_size?: number | null;
+  }>(
     `/api/images${params.toString() ? `?${params.toString()}` : ""}`,
     { signal: options.signal },
   );
   return {
     items: Array.isArray(data.items) ? data.items : [],
     groups: Array.isArray(data.groups) ? data.groups : [],
+    next_cursor: typeof data.next_cursor === "string" ? data.next_cursor : "",
+    has_more: data.has_more === true,
+    page_size: Number(data.page_size ?? filters.page_size ?? 50) || 50,
   };
+}
+
+export async function fetchManagedImageDetail(
+  path: string,
+  filters: { scope?: ManagedImageListScope } = {},
+  options: { signal?: AbortSignal } = {},
+) {
+  const params = new URLSearchParams({ path });
+  if (filters.scope) params.set("scope", filters.scope);
+  const data = await httpRequest<{ item: ManagedImage }>(
+    `/api/images/detail?${params.toString()}`,
+    { signal: options.signal },
+  );
+  return data.item;
 }
 
 export async function uploadManagedImages(files: File[], visibility: ImageVisibility = "private") {

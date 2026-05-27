@@ -58,14 +58,12 @@ import {
   cancelCreationTask,
   CHAT_MODEL_OPTIONS,
   createChatCompletionTask,
-  createImageEditTask,
+  createImageEditTaskFromReferenceIds,
   createImageGenerationTask,
   DEFAULT_CHAT_MODEL,
   DEFAULT_IMAGE_MODEL,
-  estimateImageCostUSD,
   fetchCreationTasks,
   fetchProfile,
-  formatImageCostUSD,
   IMAGE_CREATION_MODEL_OPTIONS,
   IMAGE_MODEL_ROUTE_DETAILS,
   IMAGE_OUTPUT_FORMAT_OPTIONS,
@@ -75,7 +73,9 @@ import {
   isImageOutputFormat,
   supportsImageOutputCompression,
   supportsImageOutputControls,
+  supportsOfficialFallback,
   supportsStructuredImageParameters,
+  uploadCreationTaskReferenceImage,
   updateManagedImageVisibility,
   type ImageModel,
   type ImageOutputFormat,
@@ -130,8 +130,11 @@ const IMAGE_CUSTOM_WIDTH_STORAGE_KEY = "chatgpt2api:image_last_custom_width";
 const IMAGE_CUSTOM_HEIGHT_STORAGE_KEY = "chatgpt2api:image_last_custom_height";
 const IMAGE_OUTPUT_FORMAT_STORAGE_KEY = "chatgpt2api:image_last_output_format";
 const IMAGE_OUTPUT_COMPRESSION_STORAGE_KEY = "chatgpt2api:image_last_output_compression";
+const IMAGE_OFFICIAL_FALLBACK_STORAGE_KEY = "chatgpt2api:image_last_official_fallback";
 const QUOTA_REFRESH_EVENT = "chatgpt2api:quota-refresh";
 const DEFAULT_IMAGE_OUTPUT_FORMAT: ImageOutputFormat = "png";
+const REFERENCE_IMAGE_MAX_SIDE = 2048;
+const REFERENCE_IMAGE_JPEG_QUALITY = 0.86;
 const activeConversationQueueIds = new Set<string>();
 const EMPTY_IMAGE_ASPECT_RATIO_SELECT_VALUE = "__empty_aspect_ratio__";
 const MISSING_RECOVERABLE_TASK_ID_ERROR = "页面刷新或任务中断，未找到可恢复的任务 ID";
@@ -153,6 +156,7 @@ type EditingTurnDraft = {
   customHeight: string;
   outputFormat: ImageOutputFormat;
   outputCompression: string;
+  officialFallback: boolean;
   visibility: ImageVisibility;
   referenceImages: StoredReferenceImage[];
 };
@@ -207,6 +211,77 @@ function readFileAsDataUrl(file: File) {
   });
 }
 
+function blobToFile(blob: Blob, name: string) {
+  return new File([blob], name, { type: blob.type || "image/png", lastModified: Date.now() });
+}
+
+function canvasToBlob(canvas: HTMLCanvasElement, type: string, quality?: number) {
+  return new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (!blob) {
+        reject(new Error("压缩参考图失败"));
+        return;
+      }
+      resolve(blob);
+    }, type, quality);
+  });
+}
+
+async function compressReferenceImage(file: File) {
+  const originalSize = file.size;
+  if (typeof createImageBitmap !== "function") {
+    return { file, originalSize, compressedSize: file.size };
+  }
+  let bitmap: ImageBitmap;
+  try {
+    bitmap = await createImageBitmap(file);
+  } catch {
+    return { file, originalSize, compressedSize: file.size };
+  }
+  try {
+    const width = bitmap.width;
+    const height = bitmap.height;
+    const scale = Math.min(1, REFERENCE_IMAGE_MAX_SIDE / Math.max(width, height));
+    const targetWidth = Math.max(1, Math.round(width * scale));
+    const targetHeight = Math.max(1, Math.round(height * scale));
+    const shouldKeepPNG = file.type === "image/png";
+    const outputType = shouldKeepPNG ? "image/png" : "image/jpeg";
+    const canvas = document.createElement("canvas");
+    canvas.width = targetWidth;
+    canvas.height = targetHeight;
+    const context = canvas.getContext("2d");
+    if (!context) {
+      return { file, originalSize, compressedSize: file.size };
+    }
+    context.drawImage(bitmap, 0, 0, targetWidth, targetHeight);
+    const blob = await canvasToBlob(canvas, outputType, outputType === "image/jpeg" ? REFERENCE_IMAGE_JPEG_QUALITY : undefined);
+    if (blob.size >= file.size) {
+      return { file, originalSize, compressedSize: file.size };
+    }
+    const nextName = outputType === "image/jpeg"
+      ? `${file.name.replace(/\.[^.]+$/, "") || "reference"}.jpg`
+      : file.name;
+    const compressed = blobToFile(blob, nextName);
+    return { file: compressed, originalSize, compressedSize: compressed.size };
+  } finally {
+    bitmap.close();
+  }
+}
+
+async function buildStoredReferenceImageFromFile(file: File): Promise<StoredReferenceImage> {
+  const compressed = await compressReferenceImage(file);
+  return {
+    name: compressed.file.name || file.name || "reference.png",
+    type: compressed.file.type || file.type || "image/png",
+    dataUrl: await readFileAsDataUrl(compressed.file),
+    source: "upload",
+    clientReferenceId: createId(),
+    uploadStatus: "pending",
+    originalSize: compressed.originalSize,
+    compressedSize: compressed.compressedSize,
+  };
+}
+
 function dataUrlToFile(dataUrl: string, fileName: string, mimeType?: string) {
   const [header, content] = dataUrl.split(",", 2);
   const matchedMimeType = header.match(/data:(.*?);base64/)?.[1];
@@ -216,6 +291,14 @@ function dataUrlToFile(dataUrl: string, fileName: string, mimeType?: string) {
     bytes[index] = binary.charCodeAt(index);
   }
   return new File([bytes], fileName, { type: mimeType || matchedMimeType || "image/png" });
+}
+
+function referenceImageClientId(conversationId: string, turnId: string, image: StoredReferenceImage, index: number) {
+  return image.clientReferenceId || `${conversationId}:${turnId}:${index}:${image.name || "reference"}`;
+}
+
+function referenceImageUploadFile(image: StoredReferenceImage, turnId: string, index: number) {
+  return dataUrlToFile(image.dataUrl, image.name || `${turnId}-${index + 1}.png`, image.type);
 }
 
 function imageFileExtensionForOutputFormat(format?: ImageOutputFormat) {
@@ -236,7 +319,9 @@ function buildReferenceImageFromResult(image: StoredImage, fileName: string): St
     name: fileName,
     type: mimeType,
     dataUrl: `data:${mimeType};base64,${image.b64_json}`,
-  };
+    clientReferenceId: createId(),
+    uploadStatus: "pending",
+  } satisfies StoredReferenceImage;
 }
 
 async function fetchImageAsFile(url: string, fileName: string) {
@@ -278,6 +363,10 @@ async function buildReferenceImageFromUrl(
     type: file.type || "image/png",
     dataUrl: await readFileAsDataUrl(file),
     source: "upload",
+    clientReferenceId: createId(),
+    uploadStatus: "pending",
+    originalSize: file.size,
+    compressedSize: file.size,
   };
 }
 
@@ -297,7 +386,10 @@ function reusableOutputCompressionValue(value: unknown, outputFormat: ImageOutpu
   return String(Math.min(100, Math.max(0, Math.round(compression))));
 }
 
-async function buildReferenceImageFromStoredImage(image: StoredImage, fileName: string) {
+async function buildReferenceImageFromStoredImage(
+  image: StoredImage,
+  fileName: string,
+): Promise<{ referenceImage: StoredReferenceImage; file: File } | null> {
   const direct = buildReferenceImageFromResult(image, fileName);
   if (direct) {
     return {
@@ -323,12 +415,17 @@ async function buildReferenceImageFromStoredImage(image: StoredImage, fileName: 
   if (!file) {
     throw lastError instanceof Error ? lastError : new Error("读取图片失败");
   }
+  const referenceImage: StoredReferenceImage = {
+    name: file.name,
+    type: file.type || "image/png",
+    dataUrl: await readFileAsDataUrl(file),
+    clientReferenceId: createId(),
+    uploadStatus: "pending",
+    originalSize: file.size,
+    compressedSize: file.size,
+  };
   return {
-    referenceImage: {
-      name: file.name,
-      type: file.type || "image/png",
-      dataUrl: await readFileAsDataUrl(file),
-    },
+    referenceImage,
     file,
   };
 }
@@ -725,6 +822,13 @@ function getStoredImageOutputCompression(): string {
   return normalized === undefined ? "" : String(normalized);
 }
 
+function getStoredOfficialFallback() {
+  if (typeof window === "undefined") {
+    return false;
+  }
+  return window.localStorage.getItem(IMAGE_OFFICIAL_FALLBACK_STORAGE_KEY) === "true";
+}
+
 function serializeImageSizeSelection(selection: ImageSizeSelection): StoredImageSizeSelection {
   return {
     mode: selection.mode,
@@ -800,23 +904,6 @@ function formatCreationTaskErrorMessage(message: string) {
 
 function formatCreationTaskError(error: unknown, fallback = "生成图片失败") {
   return formatCreationTaskErrorMessage(error instanceof Error ? error.message : String(error || fallback));
-}
-
-function formatBillingSummary(session: NonNullable<ReturnType<typeof useAuthGuard>["session"]>) {
-  if (session.provider === "sub2api") {
-    return "统一账户扣费";
-  }
-  const billing = session.billing;
-  if (!billing) {
-    return "本地额度 --";
-  }
-  if (billing.unlimited) {
-    return "本地额度无限";
-  }
-  if (billing.type === "subscription") {
-    return `订阅剩余 ${billing.available}`;
-  }
-  return `余额 ${billing.available}`;
 }
 
 function hasEnoughBilling(session: NonNullable<ReturnType<typeof useAuthGuard>["session"]>, estimated: number) {
@@ -1137,6 +1224,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
   const [imageCustomHeight, setImageCustomHeight] = useState(() => getStoredImageSizeSelection().customHeight);
   const [imageOutputFormat, setImageOutputFormat] = useState<ImageOutputFormat>(getStoredImageOutputFormat);
   const [imageOutputCompression, setImageOutputCompression] = useState(getStoredImageOutputCompression);
+  const [officialFallback, setOfficialFallback] = useState(getStoredOfficialFallback);
   const [defaultImageVisibility, setDefaultImageVisibility] = useState<ImageVisibility>("private");
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [isPromptMarketOpen, setIsPromptMarketOpen] = useState(false);
@@ -1224,16 +1312,16 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         ? "比例需要填写为宽:高"
         : editingDraftEffectiveSizeSelection.resolution === "auto"
           ? editingDraftImageSize
-            ? `将按 ${editingDraftImageSize} 比例下发`
+            ? `${editingDraftImageSize} 构图偏好，实际像素以上游返回为准`
             : "Auto 比例将交给模型决定"
           : editingDraftImageSize
-            ? `将下发计算后的 ${formatImageSizeDisplay(editingDraftImageSize)}，${getImageSizeRequirementLabel(editingDraftImageSize)}`
+            ? `目标尺寸 ${formatImageSizeDisplay(editingDraftImageSize)}，${getImageSizeRequirementLabel(editingDraftImageSize)}`
             : "比例需要填写为宽:高"
       : editingDraftEffectiveSizeSelection?.mode === "custom"
         ? editingDraftImageSize
           ? `已按链路限制校准为 ${formatImageSizeDisplay(editingDraftImageSize)}，${getImageSizeRequirementLabel(editingDraftImageSize)}`
           : "宽高需要填写正整数"
-        : "不会强制指定尺寸";
+        : "不指定画幅或尺寸";
   const editingDraftSizeIsHighResolution = Boolean(
     editingDraftStructuredParameters && editingDraftImageSize && isHighResolutionImageSize(editingDraftImageSize),
   );
@@ -1250,21 +1338,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
       }, 0),
     [conversations],
   );
-  const billingSummary = formatBillingSummary(session);
   const estimatedBillingUnits = composerMode === "chat" ? 1 : parsedCount;
-  const estimatedImageCost = useMemo(() => {
-    if (composerMode === "chat") {
-      return null;
-    }
-    const estimateResolution =
-      imageSizeMode === "ratio" && imageResolution !== "auto"
-        ? imageResolution
-        : imageSizeMode === "custom"
-          ? "custom"
-          : "1k";
-    return estimateImageCostUSD(imageModel, parsedCount, estimateResolution);
-  }, [composerMode, imageModel, imageResolution, imageSizeMode, parsedCount]);
-  const estimatedImageCostLabel = formatImageCostUSD(estimatedImageCost);
   const billingBlocked = !hasEnoughBilling(session, estimatedBillingUnits);
   const deleteConfirmTitle = deleteConfirm?.type === "all" ? "清空历史记录" : deleteConfirm?.type === "one" ? "删除对话" : "";
   const deleteConfirmDescription =
@@ -1364,6 +1438,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         setImageCustomHeight(storedSelection.customHeight);
         setImageOutputFormat(getStoredImageOutputFormat());
         setImageOutputCompression(getStoredImageOutputCompression());
+        setOfficialFallback(getStoredOfficialFallback());
 
         const items = await listImageConversations();
         const normalizedItems = await recoverConversationHistory(items);
@@ -1534,6 +1609,12 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
   }, [composerMode, imageModel]);
 
   useEffect(() => {
+    if (composerMode !== "image" || !supportsOfficialFallback(imageModel)) {
+      setOfficialFallback(false);
+    }
+  }, [composerMode, imageModel]);
+
+  useEffect(() => {
     if (typeof window === "undefined") {
       return;
     }
@@ -1576,6 +1657,14 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     }
     window.localStorage.setItem(IMAGE_OUTPUT_COMPRESSION_STORAGE_KEY, String(normalizedCompression));
   }, [imageOutputCompression, imageOutputFormat]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    window.localStorage.setItem(IMAGE_OFFICIAL_FALLBACK_STORAGE_KEY, officialFallback ? "true" : "false");
+  }, [officialFallback]);
 
   useEffect(() => {
     if (selectedConversationId && !conversations.some((conversation) => conversation.id === selectedConversationId)) {
@@ -1624,6 +1713,142 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
   const clearTurnProgress = useCallback((conversationId: string, turnId: string) => {
     clearImageTurnProgress(conversationId, turnId);
   }, []);
+
+  const resetReferenceUploads = useCallback((images: StoredReferenceImage[]) =>
+    images.map((image) => ({
+      ...image,
+      uploadStatus: image.serverReferenceId ? "uploaded" as const : "pending" as const,
+      uploadError: undefined,
+    })), []);
+
+  const updateTurnReferenceImages = useCallback(
+    async (
+      conversationId: string,
+      turnId: string,
+      updater: (images: StoredReferenceImage[]) => StoredReferenceImage[],
+      fallbackConversation: ImageConversation,
+    ) => {
+      await updateConversation(conversationId, (current) => {
+        const conversation = current ?? fallbackConversation;
+        return {
+          ...conversation,
+          turns: conversation.turns.map((turn) =>
+            turn.id === turnId
+              ? {
+                  ...turn,
+                  referenceImages: updater(turn.referenceImages),
+                }
+              : turn,
+          ),
+        };
+      });
+    },
+    [updateConversation],
+  );
+
+  const ensureReferenceUploads = useCallback(
+    async (conversationId: string, snapshot: ImageConversation, turn: ImageTurn) => {
+      const referenceImages = turn.referenceImages;
+      if (referenceImages.length === 0) {
+        throw new Error("未找到可用的参考图");
+      }
+      const uploadedIds = referenceImages
+        .map((image) => image.serverReferenceId)
+        .filter((id): id is string => Boolean(id));
+      if (uploadedIds.length === referenceImages.length) {
+        return uploadedIds;
+      }
+
+      await updateTurnReferenceImages(
+        conversationId,
+        turn.id,
+        (images) =>
+          images.map((image, index) => ({
+            ...image,
+            clientReferenceId: referenceImageClientId(conversationId, turn.id, image, index),
+            uploadStatus: image.serverReferenceId ? "uploaded" : "pending",
+            uploadError: undefined,
+          })),
+        snapshot,
+      );
+
+      const nextIds: string[] = [];
+      for (let index = 0; index < referenceImages.length; index += 1) {
+        const image = referenceImages[index];
+        if (image.serverReferenceId) {
+          nextIds.push(image.serverReferenceId);
+          continue;
+        }
+        const clientReferenceId = referenceImageClientId(conversationId, turn.id, image, index);
+        updateTurnProgress(conversationId, turn.id, {
+          message: "正在上传参考图",
+          detail: `正在上传第 ${index + 1} / ${referenceImages.length} 张参考图`,
+        });
+        await updateTurnReferenceImages(
+          conversationId,
+          turn.id,
+          (images) =>
+            images.map((item, itemIndex) =>
+              itemIndex === index
+                ? {
+                    ...item,
+                    clientReferenceId,
+                    uploadStatus: "uploading",
+                    uploadError: undefined,
+                  }
+                : item,
+            ),
+          snapshot,
+        );
+        try {
+          const file = referenceImageUploadFile(image, turn.id, index);
+          const item = await uploadCreationTaskReferenceImage(file, clientReferenceId, {
+            conversationId,
+            turnId: turn.id,
+          });
+          nextIds.push(item.id);
+          await updateTurnReferenceImages(
+            conversationId,
+            turn.id,
+            (images) =>
+              images.map((current, itemIndex) =>
+                itemIndex === index
+                  ? {
+                      ...current,
+                      clientReferenceId,
+                      serverReferenceId: item.id,
+                      uploadStatus: "uploaded",
+                      uploadError: undefined,
+                    }
+                  : current,
+              ),
+            snapshot,
+          );
+        } catch (error) {
+          const message = formatCreationTaskError(error, "参考图上传失败");
+          await updateTurnReferenceImages(
+            conversationId,
+            turn.id,
+            (images) =>
+              images.map((current, itemIndex) =>
+                itemIndex === index
+                  ? {
+                      ...current,
+                      clientReferenceId,
+                      uploadStatus: "error",
+                      uploadError: message,
+                    }
+                  : current,
+              ),
+            snapshot,
+          );
+          throw new Error(message);
+        }
+      }
+      return nextIds;
+    },
+    [updateTurnProgress, updateTurnReferenceImages],
+  );
 
   const clearComposerInputs = useCallback(() => {
     promptApplyRequestIdRef.current += 1;
@@ -1813,21 +2038,23 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     }
     promptApplyRequestIdRef.current += 1;
 
+    const toastId = files.length > 1 ? toast.loading(`正在压缩 ${files.length} 张参考图`) : null;
     try {
       const previews = await Promise.all(
-        files.map(async (file) => ({
-          name: file.name,
-          type: file.type || "image/png",
-          dataUrl: await readFileAsDataUrl(file),
-          source: "upload" as const,
-        })),
+        files.map(buildStoredReferenceImageFromFile),
       );
 
-        setReferenceImages((prev) => [...prev, ...previews]);
+      setReferenceImages((prev) => [...prev, ...previews]);
+      if (toastId) {
+        toast.dismiss(toastId);
+      }
       if (fileInputRef.current) {
         fileInputRef.current.value = "";
       }
     } catch (error) {
+      if (toastId) {
+        toast.dismiss(toastId);
+      }
       const message = error instanceof Error ? error.message : "读取参考图失败";
       toast.error(message);
     }
@@ -1866,6 +2093,10 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
       ...images.map((image) => ({
         ...image,
         source: "conversation" as const,
+        clientReferenceId: createId(),
+        uploadStatus: "pending" as const,
+        serverReferenceId: undefined,
+        uploadError: undefined,
       })),
     ]);
     if (options.clearPrompt !== false) {
@@ -2105,6 +2336,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         targetTurn.outputCompression === undefined || targetTurn.outputCompression === null
           ? ""
           : String(targetTurn.outputCompression),
+      officialFallback: targetTurn.model === DEFAULT_IMAGE_MODEL && targetTurn.officialFallback === true,
       visibility: targetTurn.visibility || "private",
       referenceImages: targetTurn.mode === "chat" ? [] : targetTurn.referenceImages,
     });
@@ -2114,14 +2346,10 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     if (files.length === 0) {
       return;
     }
+    const toastId = files.length > 1 ? toast.loading(`正在压缩 ${files.length} 张参考图`) : null;
     try {
       const previews = await Promise.all(
-        files.map(async (file) => ({
-          name: file.name,
-          type: file.type || "image/png",
-          dataUrl: await readFileAsDataUrl(file),
-          source: "upload" as const,
-        })),
+        files.map(buildStoredReferenceImageFromFile),
       );
       setEditingTurnDraft((current) =>
         current
@@ -2129,12 +2357,18 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
               ...current,
               referenceImages: [...current.referenceImages, ...previews],
             }
-          : current,
+              : current,
       );
+      if (toastId) {
+        toast.dismiss(toastId);
+      }
       if (editFileInputRef.current) {
         editFileInputRef.current.value = "";
       }
     } catch (error) {
+      if (toastId) {
+        toast.dismiss(toastId);
+      }
       const message = error instanceof Error ? error.message : "读取参考图失败";
       toast.error(message);
     }
@@ -2258,12 +2492,9 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                 ? "正在读取参考图并准备上传"
                 : "正在创建图片生成任务",
         });
-        const referenceFiles = activeTurn.referenceImages.map((image, index) =>
-          dataUrlToFile(image.dataUrl, image.name || `${activeTurn.id}-${index + 1}.png`, image.type),
-        );
-        if (usesReferenceImages(activeTurn.mode) && referenceFiles.length === 0) {
-          throw new Error("未找到可用的参考图");
-        }
+        const referenceImageIds = usesReferenceImages(activeTurn.mode)
+          ? await ensureReferenceUploads(conversationId, snapshot, activeTurn)
+          : [];
         const taskMessages = buildCreationTaskMessages(snapshot, activeTurn.id);
         const activeTurnSizeRequest =
           activeTurn.mode === "chat"
@@ -2284,6 +2515,9 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
           supportsStructuredImageParameters(activeTurn.model) && activeTurnSizeRequest.selection?.resolution !== "auto"
             ? activeTurnSizeRequest.selection?.resolution
             : undefined;
+        const taskToolOptions = activeTurn.model === DEFAULT_IMAGE_MODEL && activeTurn.officialFallback
+          ? { officialFallback: true }
+          : undefined;
         const fallbackReferenceImage = activeTurn.mode === "chat" ? undefined : getFallbackReferenceImage(snapshot, activeTurn.id);
         const pendingTaskGroups = activeTurn.images.reduce<Array<{ taskId: string; count: number }>>(
           (groups, image, imageIndex) => {
@@ -2315,9 +2549,9 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
             return createChatCompletionTask(group.taskId, activeTurn.prompt, activeTurn.model, taskMessages);
           }
           if (usesReferenceImages(activeTurn.mode)) {
-            return createImageEditTask(
+            return createImageEditTaskFromReferenceIds(
               group.taskId,
-              referenceFiles,
+              referenceImageIds,
               activeTurn.prompt,
               activeTurn.model,
               activeTurnSizeRequest.size,
@@ -2328,7 +2562,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
               taskImageResolution,
               taskOutputFormat,
               taskOutputCompression,
-              undefined,
+              taskToolOptions,
               conversationId,
               fallbackReferenceImage,
             );
@@ -2345,7 +2579,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
             taskImageResolution,
             taskOutputFormat,
             taskOutputCompression,
-            undefined,
+            taskToolOptions,
             conversationId,
             fallbackReferenceImage,
           );
@@ -2460,7 +2694,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         }
       }
     },
-    [clearTurnProgress, session.key, session.role, updateConversation, updateTurnProgress],
+    [clearTurnProgress, ensureReferenceUploads, session.key, session.role, updateConversation, updateTurnProgress],
   );
   useEffect(() => {
     for (const conversation of conversations) {
@@ -2719,6 +2953,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
             return {
               ...turn,
               count: imageCount,
+              referenceImages: resetReferenceUploads(turn.referenceImages),
               status: "queued",
               error: undefined,
               processingStartedAt: undefined,
@@ -2739,7 +2974,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
       void runConversationQueue(conversationId);
       toast.success("已加入重新生成队列");
     },
-    [runConversationQueue, updateConversation],
+    [resetReferenceUploads, runConversationQueue, updateConversation],
   );
 
   const handleSaveEditingTurn = useCallback(
@@ -2808,6 +3043,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         draftOutputFormat === undefined
           ? undefined
           : imageOutputCompressionForModel(draft.model, draftOutputFormat, draft.outputCompression);
+      const draftOfficialFallback = draft.model === DEFAULT_IMAGE_MODEL && draft.officialFallback;
       if (mode !== "chat" && supportsStructuredImageParameters(draft.model) && isHighResolutionImageSize(draftImageSize)) {
         const sizeLabel = formatImageSizeDisplay(draftImageSize);
         if (regenerate) {
@@ -2833,13 +3069,14 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
               prompt,
               model: draft.model,
               mode,
-              referenceImages,
+              referenceImages: resetReferenceUploads(referenceImages),
               count: imageCount,
               size: draftImageSize,
               sizeSelection: mode === "chat" ? undefined : draftStoredSizeSelection,
               quality: undefined,
               outputFormat: draftOutputFormat,
               outputCompression: draftOutputCompression,
+              officialFallback: mode === "chat" ? undefined : draftOfficialFallback,
               visibility: mode === "chat" ? "private" : draft.visibility,
             };
             if (!regenerate) {
@@ -2876,7 +3113,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         toast.success("已保存编辑设置");
       }
     },
-    [editingTurnDraft, runConversationQueue, updateConversation],
+    [editingTurnDraft, resetReferenceUploads, runConversationQueue, updateConversation],
   );
 
   const handleSubmit = async () => {
@@ -2950,6 +3187,8 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         effectiveOutputFormat === undefined
           ? undefined
           : imageOutputCompressionForModel(effectiveModel, effectiveOutputFormat, imageOutputCompression);
+      const effectiveOfficialFallback =
+        effectiveImageMode !== "chat" && supportsOfficialFallback(effectiveModel) && officialFallback;
       const isHighResolutionRequest =
         effectiveImageMode !== "chat" &&
         supportsStructuredImageParameters(effectiveModel) &&
@@ -2976,6 +3215,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         quality: undefined,
         outputFormat: effectiveOutputFormat,
         outputCompression: effectiveImageMode === "chat" ? undefined : effectiveOutputCompression,
+        officialFallback: effectiveOfficialFallback,
         visibility: effectiveImageMode === "chat" ? "private" : defaultImageVisibility,
         images: Array.from({ length: requestedCount }, (_, index): StoredImage => {
           const imageId = `${turnId}-${index}`;
@@ -3194,7 +3434,9 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                         value={editingTurnDraft.model}
                         onValueChange={(value) =>
                           setEditingTurnDraft((current) =>
-                            current && isImageModel(value) ? { ...current, model: value } : current,
+                            current && isImageModel(value)
+                              ? { ...current, model: value, officialFallback: supportsOfficialFallback(value) ? current.officialFallback : false }
+                              : current,
                           )
                         }
                       >
@@ -3215,10 +3457,12 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                     {editingTurnDraft.mode !== "chat" && editingDraftEffectiveSizeSelection ? (
                       <>
                         <div className="rounded-2xl border border-sky-100 bg-sky-50 px-3 py-2 text-xs leading-5 text-sky-900 sm:col-span-2 lg:col-span-4">
-                          图片任务会下发分辨率档位；格式由后端保存结果时处理，压缩率仅适用于 JPEG。
+                          {editingDraftStructuredParameters
+                            ? "Codex 图片链路会下发目标尺寸；格式由后端保存结果时处理，压缩率仅适用于 JPEG。"
+                            : "常规/官方图片线路只会把比例作为构图偏好，实际尺寸以上游返回为准；格式由后端保存结果时处理。"}
                         </div>
                         <label className="flex flex-col gap-2 text-sm font-medium text-stone-700">
-                          尺寸
+                          画幅
                           <Select
                             value={editingDraftEffectiveSizeSelection.mode}
                             onValueChange={(value) =>
@@ -3361,6 +3605,45 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                         ) : null}
                         {editingDraftOutputControls ? (
                           <>
+                            {supportsOfficialFallback(editingTurnDraft.model) ? (
+                              <div className="flex items-center justify-between gap-3 rounded-2xl border border-stone-200 bg-white px-3 py-2 text-sm font-medium text-stone-700 sm:col-span-2 lg:col-span-4">
+                                <span className="shrink-0">渠道</span>
+                                <div className="grid min-w-0 flex-1 grid-cols-2 rounded-xl bg-stone-100 p-1 text-xs">
+                                  <button
+                                    type="button"
+                                    className={cn(
+                                      "rounded-lg px-2 py-1 font-medium transition",
+                                      !editingTurnDraft.officialFallback
+                                        ? "bg-white text-stone-950 shadow-sm"
+                                        : "text-stone-500 hover:text-stone-900",
+                                    )}
+                                    onClick={() =>
+                                      setEditingTurnDraft((current) =>
+                                        current ? { ...current, officialFallback: false } : current,
+                                      )
+                                    }
+                                  >
+                                    普通
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className={cn(
+                                      "rounded-lg px-2 py-1 font-medium transition",
+                                      editingTurnDraft.officialFallback
+                                        ? "bg-white text-sky-700 shadow-sm"
+                                        : "text-stone-500 hover:text-stone-900",
+                                    )}
+                                    onClick={() =>
+                                      setEditingTurnDraft((current) =>
+                                        current ? { ...current, officialFallback: true } : current,
+                                      )
+                                    }
+                                  >
+                                    官方兜底
+                                  </button>
+                                </div>
+                              </div>
+                            ) : null}
                             <label className="flex flex-col gap-2 text-sm font-medium text-stone-700">
                               格式
                               <Select
@@ -3416,7 +3699,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                             <div className="rounded-2xl border border-stone-200 bg-stone-50 px-3 py-2 text-sm sm:col-span-2 lg:col-span-4">
                               <div className="flex min-w-0 items-center justify-between gap-3">
                                 <span className="shrink-0 font-medium text-stone-600">
-                                  计算后分辨率
+                                  {editingDraftStructuredParameters ? "目标尺寸" : "画幅偏好"}
                                 </span>
                                 <span className={cn(
                                   "min-w-0 truncate text-right font-mono font-semibold",
@@ -3429,7 +3712,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                                 <span className="min-w-0 truncate">{editingDraftSizePreviewDetail}</span>
                                 {editingDraftSizeIsHighResolution ? (
                                   <span className="shrink-0 rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700 ring-1 ring-amber-100">
-                                    高分辨率
+                                    高分辨率目标
                                   </span>
                                 ) : null}
                               </div>
@@ -3539,10 +3822,8 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                 imageCustomHeight={imageCustomHeight}
                 imageOutputFormat={imageOutputFormat}
                 imageOutputCompression={imageOutputCompression}
+                officialFallback={officialFallback}
                 highResolutionHint={highResolutionHint}
-                billingSummary={billingSummary}
-                estimatedBillingUnits={estimatedBillingUnits}
-                estimatedImageCostLabel={estimatedImageCostLabel}
                 billingBlocked={billingBlocked}
                 referenceImages={referenceImages}
                 textareaRef={textareaRef}
@@ -3559,6 +3840,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                 onImageCustomHeightChange={setImageCustomHeight}
                 onImageOutputFormatChange={setImageOutputFormat}
                 onImageOutputCompressionChange={setImageOutputCompression}
+                onOfficialFallbackChange={setOfficialFallback}
                 onSubmit={handleSubmit}
                 onOpenPromptMarket={() => setIsPromptMarketOpen(true)}
                 onReferenceImageChange={handleReferenceImageChange}

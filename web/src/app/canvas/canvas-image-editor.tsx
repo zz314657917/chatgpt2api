@@ -9,21 +9,7 @@ import {
   type PointerEvent as ReactPointerEvent,
   type WheelEvent as ReactWheelEvent,
 } from "react";
-import {
-  Brush,
-  Circle,
-  Crop,
-  Eraser,
-  Grid3X3,
-  ListOrdered,
-  LoaderCircle,
-  Maximize2,
-  Paintbrush,
-  RectangleHorizontal,
-  RotateCcw,
-  Undo2,
-  X,
-} from "lucide-react";
+import { LoaderCircle, RotateCcw, X } from "lucide-react";
 
 import { AuthenticatedImage } from "@/components/authenticated-image";
 import { Button } from "@/components/ui/button";
@@ -32,25 +18,21 @@ import type { CanvasImageRef } from "@/lib/api";
 import { fetchAuthenticatedImageBlob } from "@/lib/authenticated-image";
 import { cn } from "@/lib/utils";
 
+import { DEFAULT_CROP, DEFAULT_OUTPAINT, MASK_BRUSH_ALPHA, MIN_CROP_SIZE, cropAspectOptions, editModes } from "./canvas-image-editor-config";
+import { SmartCanvasImageEditorToolPanel } from "./canvas-image-editor-tool-panel";
+import type {
+  BrushTool,
+  CropAspect,
+  GridLine,
+  GridOrientation,
+  ImageEditMode,
+  MaskTool,
+  OutpaintBackground,
+  OutpaintBox,
+  SmartCanvasCropBox,
+} from "./canvas-image-editor-types";
+import { baseFileName, canvasToFile, circledNumber, clamp, sortedUniquePositions } from "./canvas-image-editor-utils";
 import { canvasImageLabel, canvasImageSource } from "./canvas-utils";
-
-type ImageEditMode = "crop" | "outpaint" | "mask" | "brush" | "grid";
-type BrushTool = "free" | "rect" | "ellipse" | "label";
-type GridOrientation = "h" | "v";
-
-export type SmartCanvasCropBox = {
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-};
-
-type OutpaintBox = {
-  left: number;
-  top: number;
-  right: number;
-  bottom: number;
-};
 
 type CropDragState =
   | {
@@ -73,11 +55,6 @@ type DrawState =
   | { kind: "draw"; pointerId: number; x: number; y: number; startX: number; startY: number; snapshot?: ImageData }
   | { kind: "grid"; pointerId: number; index: number };
 
-type GridLine = {
-  type: GridOrientation;
-  pos: number;
-};
-
 type SmartCanvasImageEditorProps = {
   image: CanvasImageRef | null;
   open: boolean;
@@ -85,97 +62,12 @@ type SmartCanvasImageEditorProps = {
   onApplyEdit: (image: CanvasImageRef, files: File[]) => Promise<void>;
 };
 
-const DEFAULT_CROP: SmartCanvasCropBox = { x: 10, y: 10, w: 80, h: 80 };
-const DEFAULT_OUTPAINT: OutpaintBox = { left: 15, top: 15, right: 15, bottom: 15 };
-const MIN_CROP_SIZE = 8;
-const MASK_BRUSH_ALPHA = 115;
-
-const editModes: Array<{
-  value: ImageEditMode;
-  label: string;
-  icon: typeof Crop;
-  title: string;
-  description: string;
-  action: string;
-}> = [
-  {
-    value: "crop",
-    label: "裁剪",
-    icon: Crop,
-    title: "裁剪图片",
-    description: "拖动裁剪框移动，拖右下角调整大小",
-    action: "应用裁剪",
-  },
-  {
-    value: "outpaint",
-    label: "扩图",
-    icon: Maximize2,
-    title: "扩图",
-    description: "拖动四周或右下角扩展画布",
-    action: "应用扩图",
-  },
-  {
-    value: "mask",
-    label: "遮罩",
-    icon: Brush,
-    title: "遮罩编辑",
-    description: "白色区域会生成遮罩图",
-    action: "应用遮罩",
-  },
-  {
-    value: "brush",
-    label: "画笔",
-    icon: Paintbrush,
-    title: "画笔",
-    description: "在图片上添加自由画笔、形状或数字标记",
-    action: "应用画笔",
-  },
-  {
-    value: "grid",
-    label: "宫格切分",
-    icon: Grid3X3,
-    title: "宫格切分",
-    description: "按行列或自定义切线拆分图片",
-    action: "应用切分",
-  },
-];
-
-function clamp(value: number, min: number, max: number) {
-  return Math.min(max, Math.max(min, value));
-}
-
-function baseFileName(image: CanvasImageRef | null, fallback = "canvas-image") {
-  return (image?.name || fallback).replace(/\.[^.]+$/, "");
-}
-
-function canvasToFile(canvas: HTMLCanvasElement, name: string) {
-  return new Promise<File>((resolve, reject) => {
-    canvas.toBlob((blob) => {
-      if (!blob) {
-        reject(new Error("生成图片失败"));
-        return;
-      }
-      resolve(new File([blob], name, { type: "image/png" }));
-    }, "image/png");
-  });
-}
-
-function circledNumber(index: number) {
-  return index >= 1 && index <= 20 ? String.fromCharCode(0x2460 + index - 1) : String(index);
-}
-
-function sortedUniquePositions(lines: GridLine[], type: GridOrientation) {
-  return Array.from(new Set(
-    lines
-      .filter((line) => line.type === type)
-      .map((line) => clamp(line.pos, 0.001, 0.999).toFixed(4)),
-  )).map(Number).sort((a, b) => a - b);
-}
-
 export function SmartCanvasImageEditor({ image, open, onOpenChange, onApplyEdit }: SmartCanvasImageEditorProps) {
-  const [mode, setMode] = useState<ImageEditMode>("crop");
+  const [mode, setMode] = useState<ImageEditMode>("preview");
   const [cropBox, setCropBox] = useState<SmartCanvasCropBox>(DEFAULT_CROP);
+  const [cropAspect, setCropAspect] = useState<CropAspect>("free");
   const [outpaintBox, setOutpaintBox] = useState<OutpaintBox>(DEFAULT_OUTPAINT);
+  const [outpaintBackground, setOutpaintBackground] = useState<OutpaintBackground>("white");
   const [zoom, setZoom] = useState(1);
   const [applying, setApplying] = useState(false);
   const [bitmap, setBitmap] = useState<ImageBitmap | null>(null);
@@ -183,6 +75,7 @@ export function SmartCanvasImageEditor({ image, open, onOpenChange, onApplyEdit 
   const [brushSize, setBrushSize] = useState(28);
   const [brushColor, setBrushColor] = useState("#ff2d55");
   const [brushTool, setBrushTool] = useState<BrushTool>("free");
+  const [maskTool, setMaskTool] = useState<MaskTool>("paint");
   const [labelCounter, setLabelCounter] = useState(1);
   const [gridRows, setGridRows] = useState(2);
   const [gridCols, setGridCols] = useState(2);
@@ -198,6 +91,7 @@ export function SmartCanvasImageEditor({ image, open, onOpenChange, onApplyEdit 
   const src = image ? canvasImageSource(image) : "";
   const modeMeta = useMemo(() => editModes.find((item) => item.value === mode) || editModes[0], [mode]);
   const ActionIcon = modeMeta.icon;
+  const isPreviewMode = mode === "preview";
   const canDraw = mode === "mask" || mode === "brush" || mode === "grid";
 
   const displaySize = useMemo(() => {
@@ -236,6 +130,18 @@ export function SmartCanvasImageEditor({ image, open, onOpenChange, onApplyEdit 
     };
   }, [bitmap, outpaintBox]);
 
+  const cropNatural = useMemo(() => {
+    if (!bitmap) {
+      return { width: 0, height: 0, x: 0, y: 0 };
+    }
+    return {
+      x: Math.round(bitmap.width * cropBox.x / 100),
+      y: Math.round(bitmap.height * cropBox.y / 100),
+      width: Math.max(1, Math.round(bitmap.width * cropBox.w / 100)),
+      height: Math.max(1, Math.round(bitmap.height * cropBox.h / 100)),
+    };
+  }, [bitmap, cropBox]);
+
   const gridSplitCount = useMemo(() => {
     if (gridCustom) {
       return (sortedUniquePositions(gridLines, "h").length + 1) * (sortedUniquePositions(gridLines, "v").length + 1);
@@ -258,15 +164,18 @@ export function SmartCanvasImageEditor({ image, open, onOpenChange, onApplyEdit 
       drawStateRef.current = { kind: "none" };
       return;
     }
-    setMode("crop");
+    setMode("preview");
     setCropBox(DEFAULT_CROP);
+    setCropAspect("free");
     setOutpaintBox(DEFAULT_OUTPAINT);
+    setOutpaintBackground("white");
     setZoom(1);
     setApplying(false);
     setBitmapError("");
     setBrushSize(28);
     setBrushColor("#ff2d55");
     setBrushTool("free");
+    setMaskTool("paint");
     setLabelCounter(1);
     setGridRows(2);
     setGridCols(2);
@@ -376,8 +285,8 @@ export function SmartCanvasImageEditor({ image, open, onOpenChange, onApplyEdit 
     context.lineWidth = mode === "mask" ? brushSize : brushSize;
     context.strokeStyle = mode === "mask" ? `rgba(255,255,255,${MASK_BRUSH_ALPHA / 255})` : brushColor;
     context.fillStyle = mode === "mask" ? `rgba(255,255,255,${MASK_BRUSH_ALPHA / 255})` : brushColor;
-    context.globalCompositeOperation = "source-over";
-  }, [brushColor, brushSize, mode]);
+    context.globalCompositeOperation = mode === "mask" && maskTool === "erase" ? "destination-out" : "source-over";
+  }, [brushColor, brushSize, maskTool, mode]);
 
   const drawFreePoint = useCallback((point: { x: number; y: number }) => {
     const state = drawStateRef.current;
@@ -613,6 +522,13 @@ export function SmartCanvasImageEditor({ image, open, onOpenChange, onApplyEdit 
     }
     if (drag.mode === "crop-resize") {
       const nextW = clamp(drag.startCrop.w + dx, MIN_CROP_SIZE, 100 - drag.startCrop.x);
+      const aspect = cropAspectOptions.find((item) => item.value === cropAspect)?.ratio;
+      if (aspect && bitmap) {
+        const naturalWidth = bitmap.width * nextW / 100;
+        const naturalHeightPct = naturalWidth / aspect / bitmap.height * 100;
+        setCropBox({ ...drag.startCrop, w: nextW, h: clamp(naturalHeightPct, MIN_CROP_SIZE, 100 - drag.startCrop.y) });
+        return;
+      }
       const nextH = clamp(drag.startCrop.h + dy, MIN_CROP_SIZE, 100 - drag.startCrop.y);
       setCropBox({ ...drag.startCrop, w: nextW, h: nextH });
       return;
@@ -640,7 +556,7 @@ export function SmartCanvasImageEditor({ image, open, onOpenChange, onApplyEdit 
         bottom: clamp(start.bottom + dy * scaleY, 0, 200),
       };
     });
-  }, [displaySize.height, displaySize.width]);
+  }, [bitmap, cropAspect, displaySize.height, displaySize.width]);
 
   useEffect(() => {
     const handleMove = (event: PointerEvent) => {
@@ -710,6 +626,71 @@ export function SmartCanvasImageEditor({ image, open, onOpenChange, onApplyEdit 
 
   const closeEditor = useCallback(() => onOpenChange(false), [onOpenChange]);
 
+  const updateCropPercent = useCallback((patch: Partial<SmartCanvasCropBox>) => {
+    setCropBox((current) => {
+      const next = { ...current, ...patch };
+      next.x = clamp(next.x, 0, 100 - MIN_CROP_SIZE);
+      next.y = clamp(next.y, 0, 100 - MIN_CROP_SIZE);
+      next.w = clamp(next.w, MIN_CROP_SIZE, 100 - next.x);
+      next.h = clamp(next.h, MIN_CROP_SIZE, 100 - next.y);
+      return next;
+    });
+  }, []);
+
+  const setCropPixelSize = useCallback((axis: "width" | "height", value: number) => {
+    if (!bitmap) {
+      return;
+    }
+    const safeValue = Math.max(1, Number.isFinite(value) ? value : 1);
+    setCropBox((current) => {
+      const patch = axis === "width"
+        ? { w: safeValue / bitmap.width * 100 }
+        : { h: safeValue / bitmap.height * 100 };
+      const next = { ...current, ...patch };
+      next.w = clamp(next.w, MIN_CROP_SIZE, 100 - next.x);
+      next.h = clamp(next.h, MIN_CROP_SIZE, 100 - next.y);
+      return next;
+    });
+  }, [bitmap]);
+
+  const applyCropAspect = useCallback((value: CropAspect) => {
+    setCropAspect(value);
+    const ratio = cropAspectOptions.find((item) => item.value === value)?.ratio;
+    if (!ratio || !bitmap) {
+      return;
+    }
+    setCropBox((current) => {
+      const currentWidth = bitmap.width * current.w / 100;
+      const nextHeightPct = currentWidth / ratio / bitmap.height * 100;
+      if (nextHeightPct <= 100 - current.y) {
+        return { ...current, h: clamp(nextHeightPct, MIN_CROP_SIZE, 100 - current.y) };
+      }
+      const currentHeight = bitmap.height * current.h / 100;
+      const nextWidthPct = currentHeight * ratio / bitmap.width * 100;
+      return { ...current, w: clamp(nextWidthPct, MIN_CROP_SIZE, 100 - current.x) };
+    });
+  }, [bitmap]);
+
+  const centerCropBox = useCallback(() => {
+    setCropBox((current) => ({
+      ...current,
+      x: clamp((100 - current.w) / 2, 0, 100 - current.w),
+      y: clamp((100 - current.h) / 2, 0, 100 - current.h),
+    }));
+  }, []);
+
+  const updateOutpaintSide = useCallback((side: keyof OutpaintBox, value: number) => {
+    setOutpaintBox((current) => ({
+      ...current,
+      [side]: clamp(Number.isFinite(value) ? value : 0, 0, 200),
+    }));
+  }, []);
+
+  const applyOutpaintPreset = useCallback((value: number) => {
+    const safeValue = clamp(value, 0, 200);
+    setOutpaintBox({ left: safeValue, top: safeValue, right: safeValue, bottom: safeValue });
+  }, []);
+
   const makeCropFile = useCallback(async () => {
     if (!bitmap) {
       throw new Error("图片尚未加载完成");
@@ -746,11 +727,13 @@ export function SmartCanvasImageEditor({ image, open, onOpenChange, onApplyEdit 
     if (!context) {
       throw new Error("浏览器不支持图片扩图");
     }
-    context.fillStyle = "#ffffff";
-    context.fillRect(0, 0, canvas.width, canvas.height);
+    if (outpaintBackground !== "transparent") {
+      context.fillStyle = outpaintBackground === "black" ? "#020617" : "#ffffff";
+      context.fillRect(0, 0, canvas.width, canvas.height);
+    }
     context.drawImage(bitmap, outpaintNatural.left, outpaintNatural.top);
     return canvasToFile(canvas, `${baseFileName(image)}-outpaint.png`);
-  }, [bitmap, image, outpaintNatural.height, outpaintNatural.left, outpaintNatural.top, outpaintNatural.width]);
+  }, [bitmap, image, outpaintBackground, outpaintNatural.height, outpaintNatural.left, outpaintNatural.top, outpaintNatural.width]);
 
   const makeMaskFile = useCallback(async () => {
     const source = drawCanvasRef.current;
@@ -851,10 +834,12 @@ export function SmartCanvasImageEditor({ image, open, onOpenChange, onApplyEdit 
         throw new Error("浏览器不支持宫格切分");
       }
       context.drawImage(bitmap, rect.x, rect.y, rect.w, rect.h, 0, 0, rect.w, rect.h);
-      files.push(await canvasToFile(canvas, `${baseFileName(image)}-r${rect.row + 1}-c${rect.col + 1}.png`));
+      const index = rect.row * Math.max(1, gridCols) + rect.col + 1;
+      const suffix = rects.length === 9 ? String(index).padStart(2, "0") : `r${rect.row + 1}-c${rect.col + 1}`;
+      files.push(await canvasToFile(canvas, `${baseFileName(image)}-${suffix}.png`));
     }
     return files;
-  }, [bitmap, gridRects, image]);
+  }, [bitmap, gridCols, gridRects, image]);
 
   const applyEdit = useCallback(async () => {
     if (!image || applying) {
@@ -918,7 +903,7 @@ export function SmartCanvasImageEditor({ image, open, onOpenChange, onApplyEdit 
         className="flex h-[min(92dvh,980px)] w-[min(96vw,1480px)] max-w-none grid-cols-none flex-col gap-3 rounded-[22px] border border-slate-200 bg-card p-3 text-card-foreground shadow-[0_32px_120px_rgba(15,23,42,0.28)] dark:border-slate-700 dark:bg-[#111827] dark:text-slate-100"
         onOpenAutoFocus={(event) => event.preventDefault()}
       >
-        <div className="grid min-h-12 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-3 px-1">
+        <div className="flex min-h-12 items-center justify-between gap-3 px-1">
           <div className="min-w-0">
             <DialogTitle className="text-sm font-black leading-tight text-foreground dark:text-slate-100">
               {modeMeta.title}
@@ -940,6 +925,7 @@ export function SmartCanvasImageEditor({ image, open, onOpenChange, onApplyEdit 
                     "flex h-8 items-center gap-1.5 rounded-xl px-3 text-xs font-black text-muted-foreground transition hover:bg-background hover:text-foreground dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-100",
                     active && "bg-background text-foreground shadow-sm dark:bg-slate-200 dark:text-slate-950 dark:hover:bg-slate-200 dark:hover:text-slate-950",
                   )}
+                  title={item.title}
                   onClick={() => setMode(item.value)}
                 >
                   <Icon className="size-3.5" />
@@ -949,217 +935,173 @@ export function SmartCanvasImageEditor({ image, open, onOpenChange, onApplyEdit 
             })}
           </div>
 
-          <div className="flex justify-end">
-            <button
-              type="button"
-              className="flex size-9 items-center justify-center rounded-full border border-border bg-background text-muted-foreground transition hover:bg-accent hover:text-foreground dark:border-slate-700 dark:bg-slate-950 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white"
-              onClick={closeEditor}
-              aria-label="关闭"
-            >
-              <X className="size-4" />
-            </button>
-          </div>
+          <button
+            type="button"
+            className="flex size-9 shrink-0 items-center justify-center rounded-full border border-border bg-background text-muted-foreground transition hover:bg-accent hover:text-foreground dark:border-slate-700 dark:bg-slate-950 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white"
+            onClick={closeEditor}
+            aria-label="关闭"
+          >
+            <X className="size-4" />
+          </button>
         </div>
 
-        {mode === "mask" ? (
-          <div className="flex h-12 items-center gap-3 rounded-2xl border border-border bg-muted/55 px-3 dark:border-slate-700 dark:bg-slate-950/45">
-            <label className="flex items-center gap-2 text-xs font-bold text-muted-foreground dark:text-slate-400">
-              笔刷
-              <input type="range" min={4} max={160} value={brushSize} onChange={(event) => setBrushSize(Number(event.target.value))} />
-            </label>
-            <Button type="button" size="sm" variant="outline" className="h-8 rounded-full text-xs" onClick={undoDraw} disabled={drawHistory.length === 0}>
-              <Undo2 className="size-3.5" />
-              撤销
-            </Button>
-            <Button type="button" size="sm" variant="outline" className="h-8 rounded-full text-xs" onClick={clearDrawCanvas}>
-              <Eraser className="size-3.5" />
-              清空
-            </Button>
-            <span className="text-xs font-semibold text-muted-foreground dark:text-slate-500">白色区域为要编辑的遮罩</span>
-          </div>
-        ) : null}
-
-        {mode === "brush" ? (
-          <div className="flex h-12 items-center gap-2 rounded-2xl border border-border bg-muted/55 px-3 dark:border-slate-700 dark:bg-slate-950/45">
-            {[
-              { value: "free", icon: Paintbrush, label: "自由画笔" },
-              { value: "rect", icon: RectangleHorizontal, label: "矩形" },
-              { value: "ellipse", icon: Circle, label: "椭圆" },
-              { value: "label", icon: ListOrdered, label: "数字标签" },
-            ].map((item) => {
-              const Icon = item.icon;
-              return (
-                <Button
-                  key={item.value}
-                  type="button"
-                  size="sm"
-                  variant={brushTool === item.value ? "default" : "outline"}
-                  className="h-8 rounded-full px-3 text-xs"
-                  onClick={() => setBrushTool(item.value as BrushTool)}
-                  title={item.label}
-                >
-                  <Icon className="size-3.5" />
-                </Button>
-              );
-            })}
-            <label className="flex items-center gap-2 text-xs font-bold text-muted-foreground dark:text-slate-400">
-              颜色
-              <input className="h-7 w-9 rounded-md border border-border bg-background p-0" type="color" value={brushColor} onChange={(event) => setBrushColor(event.target.value)} />
-            </label>
-            <label className="flex items-center gap-2 text-xs font-bold text-muted-foreground dark:text-slate-400">
-              笔刷
-              <input type="range" min={2} max={80} value={brushSize} onChange={(event) => setBrushSize(Number(event.target.value))} />
-            </label>
-            <Button type="button" size="sm" variant="outline" className="h-8 rounded-full text-xs" onClick={undoDraw} disabled={drawHistory.length === 0}>
-              <Undo2 className="size-3.5" />
-            </Button>
-            <Button type="button" size="sm" variant="outline" className="h-8 rounded-full text-xs" onClick={clearDrawCanvas}>
-              <Eraser className="size-3.5" />
-            </Button>
-          </div>
-        ) : null}
-
-        {mode === "grid" ? (
-          <div className="flex h-12 items-center gap-2 rounded-2xl border border-border bg-muted/55 px-3 dark:border-slate-700 dark:bg-slate-950/45">
-            <Button type="button" size="sm" variant={gridCustom ? "default" : "outline"} className="h-8 rounded-full text-xs" onClick={() => setGridCustom((value) => !value)}>
-              自定义
-            </Button>
-            {gridCustom ? (
-              <>
-                <Button type="button" size="sm" variant={gridOrientation === "h" ? "default" : "outline"} className="h-8 rounded-full text-xs" onClick={() => setGridOrientation("h")}>水平</Button>
-                <Button type="button" size="sm" variant={gridOrientation === "v" ? "default" : "outline"} className="h-8 rounded-full text-xs" onClick={() => setGridOrientation("v")}>垂直</Button>
-                <Button type="button" size="sm" variant="outline" className="h-8 rounded-full text-xs" onClick={() => setGridLines([])}>
-                  <Eraser className="size-3.5" />
-                  清线
-                </Button>
-              </>
-            ) : (
-              <>
-                <label className="flex items-center gap-2 text-xs font-bold text-muted-foreground dark:text-slate-400">
-                  行
-                  <input className="h-8 w-16 rounded-lg border border-border bg-background px-2 text-xs" type="number" min={1} max={12} value={gridRows} onChange={(event) => setGridRows(clamp(Number(event.target.value) || 1, 1, 12))} />
-                </label>
-                <label className="flex items-center gap-2 text-xs font-bold text-muted-foreground dark:text-slate-400">
-                  列
-                  <input className="h-8 w-16 rounded-lg border border-border bg-background px-2 text-xs" type="number" min={1} max={12} value={gridCols} onChange={(event) => setGridCols(clamp(Number(event.target.value) || 1, 1, 12))} />
-                </label>
-                {[["1×2", 1, 2], ["2×1", 2, 1], ["2×2", 2, 2], ["3×3", 3, 3]].map(([label, rows, cols]) => (
-                  <Button key={String(label)} type="button" size="sm" variant="outline" className="h-8 rounded-full text-xs" onClick={() => {
-                    setGridRows(Number(rows));
-                    setGridCols(Number(cols));
-                  }}>
-                    {label}
-                  </Button>
-                ))}
-              </>
-            )}
-            <label className="ml-auto flex items-center gap-2 text-xs font-bold text-muted-foreground dark:text-slate-400">
-              间隔 {gridGap}px
-              <input type="range" min={0} max={80} value={gridGap} onChange={(event) => setGridGap(Number(event.target.value))} />
-            </label>
-            <span className="rounded-full bg-primary px-2.5 py-1 text-xs font-black text-primary-foreground">{gridSplitCount} 张</span>
-          </div>
-        ) : null}
-
-        <div
-          className="relative flex min-h-0 flex-1 items-center justify-center overflow-auto rounded-[20px] border border-border bg-[#08111f] p-4 dark:border-slate-700 dark:bg-[#070d1a]"
-          onWheel={handleWheel}
-        >
-          {src ? (
-            <div
-              ref={imageFrameRef}
-              className={cn("relative inline-block max-h-full max-w-full select-none rounded-2xl bg-slate-950/45 leading-none", mode === "outpaint" && "bg-white")}
-              style={{
-                width: mode === "outpaint" ? outpaintDisplay.width : displaySize.width,
-                height: mode === "outpaint" ? outpaintDisplay.height : displaySize.height,
-                transform: `scale(${zoom})`,
-                transformOrigin: "center",
+        <div className="flex min-h-0 flex-1 gap-3">
+          {isPreviewMode ? null : (
+            <SmartCanvasImageEditorToolPanel
+              mode={mode}
+              cropAspect={cropAspect}
+              onCropAspectChange={applyCropAspect}
+              cropBox={cropBox}
+              cropNatural={cropNatural}
+              bitmapSize={{ width: bitmap?.width || 1, height: bitmap?.height || 1 }}
+              onUpdateCropPercent={updateCropPercent}
+              onSetCropPixelSize={setCropPixelSize}
+              onCenterCropBox={centerCropBox}
+              onResetCrop={() => {
+                setCropAspect("free");
+                setCropBox(DEFAULT_CROP);
               }}
-            >
-              {mode === "outpaint" ? (
-                <div className="absolute inset-0 rounded-2xl bg-white shadow-[0_0_0_1px_rgba(15,23,42,0.24)]" />
-              ) : null}
-              <AuthenticatedImage
-                src={src}
-                alt={image ? canvasImageLabel(image, 0) : "图片"}
-                draggable={false}
-                className="absolute rounded-2xl object-contain"
+              outpaintBox={outpaintBox}
+              outpaintNatural={outpaintNatural}
+              outpaintBackground={outpaintBackground}
+              onUpdateOutpaintSide={updateOutpaintSide}
+              onApplyOutpaintPreset={applyOutpaintPreset}
+              onOutpaintBackgroundChange={setOutpaintBackground}
+              maskTool={maskTool}
+              onMaskToolChange={setMaskTool}
+              brushTool={brushTool}
+              onBrushToolChange={setBrushTool}
+              brushSize={brushSize}
+              onBrushSizeChange={setBrushSize}
+              brushColor={brushColor}
+              onBrushColorChange={setBrushColor}
+              drawHistoryLength={drawHistory.length}
+              onUndoDraw={undoDraw}
+              onClearDrawCanvas={clearDrawCanvas}
+              gridRows={gridRows}
+              onGridRowsChange={setGridRows}
+              gridCols={gridCols}
+              onGridColsChange={setGridCols}
+              gridGap={gridGap}
+              onGridGapChange={setGridGap}
+              gridCustom={gridCustom}
+              onGridCustomChange={setGridCustom}
+              gridOrientation={gridOrientation}
+              onGridOrientationChange={setGridOrientation}
+              onGridLinesChange={setGridLines}
+              gridSplitCount={gridSplitCount}
+            />
+          )}
+          <div
+            className="relative flex min-w-0 flex-1 items-center justify-center overflow-auto rounded-[20px] border border-border bg-[#08111f] p-4 dark:border-slate-700 dark:bg-[#070d1a]"
+            onWheel={handleWheel}
+          >
+            {src ? (
+              <div
+                ref={imageFrameRef}
+                className={cn(
+                  "relative inline-block max-h-full max-w-full select-none rounded-2xl bg-slate-950/45 leading-none",
+                  mode === "outpaint" && outpaintBackground === "white" && "bg-white",
+                  mode === "outpaint" && outpaintBackground === "black" && "bg-slate-950",
+                  mode === "outpaint" && outpaintBackground === "transparent" && "bg-[linear-gradient(45deg,#cbd5e1_25%,transparent_25%),linear-gradient(-45deg,#cbd5e1_25%,transparent_25%),linear-gradient(45deg,transparent_75%,#cbd5e1_75%),linear-gradient(-45deg,transparent_75%,#cbd5e1_75%)] bg-[length:22px_22px] bg-[position:0_0,0_11px,11px_-11px,-11px_0] bg-white",
+                )}
                 style={{
-                  left: mode === "outpaint" ? outpaintDisplay.left : 0,
-                  top: mode === "outpaint" ? outpaintDisplay.top : 0,
-                  width: displaySize.width,
-                  height: displaySize.height,
+                  width: mode === "outpaint" ? outpaintDisplay.width : displaySize.width,
+                  height: mode === "outpaint" ? outpaintDisplay.height : displaySize.height,
+                  transform: `scale(${zoom})`,
+                  transformOrigin: "center",
                 }}
-                placeholderClassName="min-h-[360px] min-w-[420px] rounded-2xl bg-slate-900 text-slate-500"
-              />
-              {canDraw ? (
-                <canvas
-                  ref={drawCanvasRef}
-                  className={cn(
-                    "absolute z-20",
-                    mode === "grid" && gridCustom ? "cursor-crosshair" : "",
-                    mode === "mask" || mode === "brush" ? "cursor-crosshair" : "",
-                  )}
+              >
+                {mode === "outpaint" ? (
+                  <div className={cn(
+                    "absolute inset-0 rounded-2xl shadow-[0_0_0_1px_rgba(15,23,42,0.24)]",
+                    outpaintBackground === "white" && "bg-white",
+                    outpaintBackground === "black" && "bg-slate-950",
+                    outpaintBackground === "transparent" && "bg-transparent",
+                  )} />
+                ) : null}
+                <AuthenticatedImage
+                  src={src}
+                  alt={image ? canvasImageLabel(image, 0) : "图片"}
+                  draggable={false}
+                  className="absolute rounded-2xl object-contain"
                   style={{
-                    left: 0,
-                    top: 0,
+                    left: mode === "outpaint" ? outpaintDisplay.left : 0,
+                    top: mode === "outpaint" ? outpaintDisplay.top : 0,
                     width: displaySize.width,
                     height: displaySize.height,
                   }}
-                  onPointerDown={beginDraw}
-                  onPointerMove={moveDraw}
-                  onPointerUp={endDraw}
-                  onPointerCancel={endDraw}
+                  placeholderClassName="min-h-[360px] min-w-[420px] rounded-2xl bg-slate-900 text-slate-500"
                 />
-              ) : null}
-              {drawGridOverlay()}
-              {mode === "crop" ? (
-                <div
-                  className="absolute rounded-[10px] border-2 border-white/95 shadow-[0_0_0_9999px_rgba(2,6,23,0.52),0_16px_36px_rgba(2,6,23,0.28)]"
-                  style={{
-                    left: `${cropBox.x}%`,
-                    top: `${cropBox.y}%`,
-                    width: `${cropBox.w}%`,
-                    height: `${cropBox.h}%`,
-                  }}
-                  onPointerDown={(event) => startCropDrag(event, "crop-move")}
-                >
-                  <button
-                    type="button"
-                    className="absolute -right-2 -bottom-2 size-5 rounded-full border-2 border-slate-950 bg-white shadow-lg"
-                    onPointerDown={(event) => startCropDrag(event, "crop-resize")}
-                    aria-label="调整裁剪框大小"
+                {canDraw ? (
+                  <canvas
+                    ref={drawCanvasRef}
+                    className={cn(
+                      "absolute z-20",
+                      mode === "grid" && gridCustom ? "cursor-crosshair" : "",
+                      mode === "mask" || mode === "brush" ? "cursor-crosshair" : "",
+                    )}
+                    style={{
+                      left: 0,
+                      top: 0,
+                      width: displaySize.width,
+                      height: displaySize.height,
+                    }}
+                    onPointerDown={beginDraw}
+                    onPointerMove={moveDraw}
+                    onPointerUp={endDraw}
+                    onPointerCancel={endDraw}
                   />
-                </div>
-              ) : null}
-              {mode === "outpaint" ? (
-                <div className="absolute inset-0 z-30 rounded-2xl border-2 border-white/95 shadow-[0_0_0_1px_rgba(15,23,42,0.28),0_16px_36px_rgba(15,23,42,0.18)]">
-                  <span className="absolute left-3 top-3 rounded-full bg-slate-950/75 px-3 py-1 text-xs font-black text-white">
-                    {outpaintNatural.width} × {outpaintNatural.height}
-                  </span>
-                  {[
-                    ["outpaint-top", "left-1/2 top-0 h-3 w-16 -translate-x-1/2 -translate-y-1/2 cursor-ns-resize"],
-                    ["outpaint-bottom", "bottom-0 left-1/2 h-3 w-16 -translate-x-1/2 translate-y-1/2 cursor-ns-resize"],
-                    ["outpaint-left", "left-0 top-1/2 h-16 w-3 -translate-x-1/2 -translate-y-1/2 cursor-ew-resize"],
-                    ["outpaint-right", "right-0 top-1/2 h-16 w-3 -translate-y-1/2 translate-x-1/2 cursor-ew-resize"],
-                    ["outpaint-corner", "bottom-0 right-0 size-5 translate-x-1/2 translate-y-1/2 cursor-nwse-resize rounded-full"],
-                  ].map(([handle, className]) => (
+                ) : null}
+                {drawGridOverlay()}
+                {mode === "crop" ? (
+                  <div
+                    className="absolute rounded-[10px] border-2 border-white/95 shadow-[0_0_0_9999px_rgba(2,6,23,0.52),0_16px_36px_rgba(2,6,23,0.28)]"
+                    style={{
+                      left: `${cropBox.x}%`,
+                      top: `${cropBox.y}%`,
+                      width: `${cropBox.w}%`,
+                      height: `${cropBox.h}%`,
+                    }}
+                    onPointerDown={(event) => startCropDrag(event, "crop-move")}
+                  >
                     <button
-                      key={handle}
                       type="button"
-                      className={cn("absolute rounded-full border-2 border-slate-950 bg-white shadow-lg", className)}
-                      onPointerDown={(event) => startOutpaintDrag(event, handle as CropDragState["mode"])}
-                      aria-label="调整扩图区域"
+                      className="absolute -right-2 -bottom-2 size-5 rounded-full border-2 border-slate-950 bg-white shadow-lg"
+                      onPointerDown={(event) => startCropDrag(event, "crop-resize")}
+                      aria-label="调整裁剪框大小"
                     />
-                  ))}
-                </div>
-              ) : null}
-            </div>
-          ) : (
-            <div className="rounded-2xl border border-dashed border-slate-700 px-8 py-10 text-sm font-semibold text-slate-500">
-              {bitmapError || "图片加载失败"}
-            </div>
-          )}
+                  </div>
+                ) : null}
+                {mode === "outpaint" ? (
+                  <div className="absolute inset-0 z-30 rounded-2xl border-2 border-white/95 shadow-[0_0_0_1px_rgba(15,23,42,0.28),0_16px_36px_rgba(15,23,42,0.18)]">
+                    <span className="absolute left-3 top-3 rounded-full bg-slate-950/75 px-3 py-1 text-xs font-black text-white">
+                      {outpaintNatural.width} × {outpaintNatural.height}
+                    </span>
+                    {[
+                      ["outpaint-top", "left-1/2 top-0 h-3 w-16 -translate-x-1/2 -translate-y-1/2 cursor-ns-resize"],
+                      ["outpaint-bottom", "bottom-0 left-1/2 h-3 w-16 -translate-x-1/2 translate-y-1/2 cursor-ns-resize"],
+                      ["outpaint-left", "left-0 top-1/2 h-16 w-3 -translate-x-1/2 -translate-y-1/2 cursor-ew-resize"],
+                      ["outpaint-right", "right-0 top-1/2 h-16 w-3 -translate-y-1/2 translate-x-1/2 cursor-ew-resize"],
+                      ["outpaint-corner", "bottom-0 right-0 size-5 translate-x-1/2 translate-y-1/2 cursor-nwse-resize rounded-full"],
+                    ].map(([handle, className]) => (
+                      <button
+                        key={handle}
+                        type="button"
+                        className={cn("absolute rounded-full border-2 border-slate-950 bg-white shadow-lg", className)}
+                        onPointerDown={(event) => startOutpaintDrag(event, handle as CropDragState["mode"])}
+                        aria-label="调整扩图区域"
+                      />
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            ) : (
+              <div className="rounded-2xl border border-dashed border-slate-700 px-8 py-10 text-sm font-semibold text-slate-500">
+                {bitmapError || "图片加载失败"}
+              </div>
+            )}
+          </div>
         </div>
 
         <div className="flex items-center gap-2 px-1">
@@ -1194,11 +1136,19 @@ export function SmartCanvasImageEditor({ image, open, onOpenChange, onApplyEdit 
           <Button
             type="button"
             className="h-9 rounded-full px-5 text-xs font-black"
-            onClick={() => void applyEdit()}
+            onClick={() => {
+              if (isPreviewMode) {
+                if (src) {
+                  window.open(src, "_blank", "noopener,noreferrer");
+                }
+                return;
+              }
+              void applyEdit();
+            }}
             disabled={!src || !bitmap || applying}
           >
             {applying ? <LoaderCircle className="size-4 animate-spin" /> : <ActionIcon className="size-4" />}
-            {modeMeta.action}
+            {isPreviewMode ? "打开原图" : modeMeta.action}
           </Button>
         </div>
       </DialogContent>

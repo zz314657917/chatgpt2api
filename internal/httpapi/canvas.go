@@ -532,7 +532,7 @@ func canvasModelKind(id string) string {
 	switch id {
 	case util.ImageModelAuto:
 		return "both"
-	case util.ImageModelGPT, util.ImageModelCodex:
+	case util.ImageModelGPT, util.ImageModelGPTOfficial, util.ImageModelCodex:
 		return "image"
 	default:
 		return "text"

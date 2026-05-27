@@ -51,6 +51,7 @@ import {
   IMAGE_OUTPUT_FORMAT_OPTIONS,
   supportsImageOutputControls,
   supportsImageOutputCompression,
+  supportsOfficialFallback,
   supportsStructuredImageParameters,
   type ImageModel,
   type ImageOutputFormat,
@@ -71,10 +72,8 @@ type ImageComposerProps = {
   imageCustomHeight: string;
   imageOutputFormat: ImageOutputFormat;
   imageOutputCompression: string;
+  officialFallback: boolean;
   highResolutionHint?: ReactNode;
-  billingSummary: string;
-  estimatedBillingUnits: number;
-  estimatedImageCostLabel?: string;
   billingBlocked: boolean;
   referenceImages: Array<{ name: string; dataUrl: string }>;
   textareaRef: RefObject<HTMLTextAreaElement | null>;
@@ -91,6 +90,7 @@ type ImageComposerProps = {
   onImageCustomHeightChange: (value: string) => void;
   onImageOutputFormatChange: (value: ImageOutputFormat) => void;
   onImageOutputCompressionChange: (value: string) => void;
+  onOfficialFallbackChange: (value: boolean) => void;
   onSubmit: () => void | Promise<void>;
   onOpenPromptMarket: () => void;
   onReferenceImageChange: (files: File[]) => void | Promise<void>;
@@ -247,16 +247,18 @@ function ImageSizePreviewPanel({
   label,
   detail,
   highResolution,
+  structured,
 }: {
   label: string;
   detail: string;
   highResolution: boolean;
+  structured: boolean;
 }) {
   return (
     <div className="col-span-2 rounded-xl border border-[#e5e7eb] bg-[#f8fafc] px-3 py-1 dark:border-border dark:bg-background/50 sm:col-span-3">
       <div className="flex min-w-0 items-center justify-between gap-3">
         <span className="shrink-0 text-[11px] font-medium text-[#45515e] dark:text-muted-foreground">
-          计算后分辨率
+          {structured ? "目标尺寸" : "画幅偏好"}
         </span>
         <span
           className={cn(
@@ -271,7 +273,7 @@ function ImageSizePreviewPanel({
         <span className="min-w-0 truncate">{detail}</span>
         {highResolution ? (
           <span className="shrink-0 rounded-full bg-amber-50 px-2 py-0.5 font-medium text-amber-700 ring-1 ring-amber-100 dark:bg-amber-950/30 dark:text-amber-300 dark:ring-amber-800">
-            高分辨率
+            高分辨率目标
           </span>
         ) : null}
       </div>
@@ -293,10 +295,8 @@ export function ImageComposer({
   imageCustomHeight,
   imageOutputFormat,
   imageOutputCompression,
+  officialFallback,
   highResolutionHint,
-  billingSummary,
-  estimatedBillingUnits,
-  estimatedImageCostLabel,
   billingBlocked,
   referenceImages,
   textareaRef,
@@ -313,6 +313,7 @@ export function ImageComposer({
   onImageCustomHeightChange,
   onImageOutputFormatChange,
   onImageOutputCompressionChange,
+  onOfficialFallbackChange,
   onSubmit,
   onOpenPromptMarket,
   onReferenceImageChange,
@@ -349,15 +350,16 @@ export function ImageComposer({
   const compressionDisabled = !compressionSupported;
   const structuredImageParameters = supportsStructuredImageParameters(imageModel);
   const outputControlsSupported = supportsImageOutputControls(imageModel);
+  const officialFallbackSupported = supportsOfficialFallback(imageModel);
   const availableImageSizeModeOptions = structuredImageParameters
     ? IMAGE_SIZE_MODE_OPTIONS
     : IMAGE_SIZE_MODE_OPTIONS.filter((option) => option.value !== "custom");
   const effectiveImageSizeMode = structuredImageParameters || imageSizeMode !== "custom" ? imageSizeMode : "auto";
   const effectiveImageResolution = structuredImageParameters ? imageResolution : "auto";
   const submitLabel = composerMode === "chat" ? "发送对话" : referenceImages.length > 0 ? "编辑图片" : "生成图片";
-  const estimateLabel = estimatedImageCostLabel
-    ? `预计消耗 ${estimatedBillingUnits} 图片单位，约 ${estimatedImageCostLabel}`
-    : `预计消耗 ${estimatedBillingUnits} 图片单位`;
+  const submitTitle = billingBlocked
+    ? "用户余额或配额不足"
+    : submitLabel;
   const computedImageSize = useMemo(
     () =>
       buildImageSize({
@@ -389,10 +391,10 @@ export function ImageComposer({
         ? "比例需要填写为宽:高"
         : effectiveImageResolution === "auto"
           ? activeImageAspectRatio
-            ? `将按 ${activeImageAspectRatio} 比例下发`
+            ? `${activeImageAspectRatio} 构图偏好，实际像素以上游返回为准`
             : "Auto 比例将交给模型决定"
           : computedImageSize
-            ? `将下发计算后的 ${formatImageSizeDisplay(computedImageSize)}，${sizeRequirementLabel}`
+            ? `目标尺寸 ${formatImageSizeDisplay(computedImageSize)}，${sizeRequirementLabel}`
             : "比例需要填写为宽:高"
       : effectiveImageSizeMode === "custom"
         ? computedImageSize
@@ -400,7 +402,7 @@ export function ImageComposer({
             ? `已按链路限制校准为 ${formatImageSizeDisplay(computedImageSize)}，${sizeRequirementLabel}`
             : "当前链路不支持手动宽高"
           : "宽高需要填写正整数"
-        : "不会强制指定尺寸";
+        : "不指定画幅或尺寸";
 
   useEffect(() => {
     if (composerMode === "chat") {
@@ -884,7 +886,7 @@ export function ImageComposer({
                         </div>
                         <div className={imageSettingsFieldClass}>
                           <span className="shrink-0 font-medium text-[#45515e] dark:text-muted-foreground">
-                            尺寸
+                            画幅
                           </span>
                           <span className={cn(
                             "min-w-0 truncate text-right text-xs font-semibold dark:text-foreground",
@@ -1011,6 +1013,7 @@ export function ImageComposer({
                               label={sizePreviewLabel}
                               detail={sizePreviewDetail}
                               highResolution={sizeIsHighResolution}
+                              structured={structuredImageParameters}
                             />
                           </>
                         ) : null}
@@ -1019,6 +1022,7 @@ export function ImageComposer({
                             label={sizePreviewLabel}
                             detail={sizePreviewDetail}
                             highResolution={sizeIsHighResolution}
+                            structured={structuredImageParameters}
                           />
                         ) : null}
                         {structuredImageParameters && effectiveImageSizeMode !== "auto" && sizeIsHighResolution && highResolutionHint ? (
@@ -1028,8 +1032,41 @@ export function ImageComposer({
                         ) : null}
                         {composerMode === "image" ? (
                           <p className="col-span-2 rounded-xl border border-sky-100 bg-sky-50 px-3 py-1.5 text-[11px] leading-5 text-sky-900 dark:border-sky-900/60 dark:bg-sky-950/30 dark:text-sky-100 sm:col-span-3">
-                            图片任务会下发分辨率档位；格式由后端保存结果时处理，压缩率仅适用于 JPEG。
+                            {structuredImageParameters
+                              ? "Codex 图片链路会下发目标尺寸；格式由后端保存结果时处理，压缩率仅适用于 JPEG。"
+                              : "常规/官方图片线路只会把比例作为构图偏好，实际尺寸以上游返回为准；格式由后端保存结果时处理。"}
                           </p>
+                        ) : null}
+                        {composerMode === "image" && officialFallbackSupported ? (
+                          <div className="col-span-2 flex min-w-0 items-center justify-between gap-2 rounded-xl border border-[#e5e7eb] bg-white px-3 py-2 text-xs text-[#45515e] dark:border-border dark:bg-background/70 dark:text-muted-foreground sm:col-span-3">
+                            <span className="shrink-0 font-semibold">渠道</span>
+                            <div className="grid min-w-0 flex-1 grid-cols-2 rounded-lg bg-[#f3f4f6] p-0.5 dark:bg-muted">
+                              <button
+                                type="button"
+                                className={cn(
+                                  "min-w-0 rounded-md px-2 py-1 text-xs font-medium transition",
+                                  !officialFallback
+                                    ? "bg-white text-[#18181b] shadow-sm dark:bg-background dark:text-foreground"
+                                    : "text-[#686b73] hover:text-[#18181b] dark:text-muted-foreground dark:hover:text-foreground",
+                                )}
+                                onClick={() => onOfficialFallbackChange(false)}
+                              >
+                                普通
+                              </button>
+                              <button
+                                type="button"
+                                className={cn(
+                                  "min-w-0 rounded-md px-2 py-1 text-xs font-medium transition",
+                                  officialFallback
+                                    ? "bg-white text-[#1456f0] shadow-sm dark:bg-background dark:text-sky-300"
+                                    : "text-[#686b73] hover:text-[#18181b] dark:text-muted-foreground dark:hover:text-foreground",
+                                )}
+                                onClick={() => onOfficialFallbackChange(true)}
+                              >
+                                官方兜底
+                              </button>
+                            </div>
+                          </div>
                         ) : null}
                         {outputControlsSupported ? (
                         <>
@@ -1095,7 +1132,7 @@ export function ImageComposer({
                         </label>
                         <p className="col-span-2 px-1 text-[11px] leading-5 text-[#8e8e93] dark:text-muted-foreground sm:col-span-3">
                           {compressionDisabled
-                            ? "PNG 和 WebP 不接收压缩率。结果卡会显示实际保存后的格式、尺寸和文件大小。"
+                            ? "PNG 和 WebP 不接收压缩率。结果卡会显示实际保存后的格式、像素和文件大小。"
                             : "JPEG 压缩率由后端保存结果时应用；实际上游返回格式不受此项控制。"}
                         </p>
                         </>
@@ -1124,18 +1161,11 @@ export function ImageComposer({
                   disabled={!prompt.trim() || billingBlocked}
                   className="inline-flex size-11 shrink-0 items-center justify-center rounded-full bg-[#181e25] text-white shadow-[0_4px_10px_rgba(24,30,37,0.12)] transition hover:bg-[#2a323d] disabled:cursor-not-allowed disabled:bg-[#e1e2e4] disabled:text-[#73777f] dark:bg-foreground dark:text-background dark:hover:bg-foreground/90 dark:disabled:bg-muted dark:disabled:text-muted-foreground sm:size-10"
                   aria-label={submitLabel}
-                  title={billingBlocked ? "用户余额或配额不足" : `${submitLabel}，${estimateLabel}`}
+                  title={submitTitle}
                 >
                   <ArrowUp className="size-5 sm:size-4" />
                 </button>
               </div>
-            </div>
-            <div className={cn(
-              "mt-1 flex flex-wrap items-center justify-between gap-2 px-2 text-[11px] leading-5",
-              billingBlocked ? "text-rose-600 dark:text-rose-400" : "text-[#8e8e93] dark:text-muted-foreground",
-            )}>
-              <span>{billingSummary}</span>
-              <span>{estimateLabel}</span>
             </div>
           </div>
         </div>

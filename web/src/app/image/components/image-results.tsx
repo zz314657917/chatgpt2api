@@ -159,7 +159,7 @@ function getRequestedSizeLabel(turn: ImageTurn) {
   }
   const size = turn.size.includes("x") ? formatImageSizeDisplay(turn.size) : turn.size;
   const requirement = getImageSizeRequirementLabel(turn.size);
-  return requirement === "Auto" ? size : `请求 ${size} / ${requirement}`;
+  return requirement === "Auto" ? `画幅 ${size}` : `目标 ${size} / ${requirement}`;
 }
 
 function getLongTaskHint(turn: ImageTurn, elapsedSeconds: number) {
@@ -168,7 +168,7 @@ function getLongTaskHint(turn: ImageTurn, elapsedSeconds: number) {
     return "";
   }
   if (isHighResolutionImageSize(turn.size)) {
-    return "高分辨率任务已提交给上游判断";
+    return "高分辨率目标已提交给上游判断";
   }
   return "";
 }

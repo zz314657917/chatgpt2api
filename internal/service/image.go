@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/md5"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -27,18 +28,27 @@ import (
 
 	"chatgpt2api/internal/imagestore"
 	"chatgpt2api/internal/storage"
+	"chatgpt2api/internal/util"
 )
 
 const (
-	ThumbnailSize         = 480
-	thumbnailQuality      = 72
-	thumbnailCacheVersion = 3
-	thumbnailExtension    = ".jpg"
-	imageReferencePrefix  = "references"
-	imageReferenceMarker  = ".refs/"
+	ThumbnailSize            = 480
+	thumbnailQuality         = 72
+	thumbnailCacheVersion    = 3
+	thumbnailExtension       = ".jpg"
+	imageReferencePrefix     = "references"
+	imageReferenceMarker     = ".refs/"
+	tempImageReferencePrefix = "temp-references"
 
 	ImageVisibilityPrivate = "private"
 	ImageVisibilityPublic  = "public"
+
+	imageIndexDocumentName         = "image_index.json"
+	tempImageReferenceDocumentName = "temp_image_references.json"
+	imageIndexVersion              = 1
+	defaultImagePageSize           = 50
+	maxImagePageSize               = 100
+	tempImageReferenceRetention    = 48 * time.Hour
 )
 
 type ImageConfig interface {
@@ -109,6 +119,31 @@ type UploadedManagedImage struct {
 	Filename    string
 	ContentType string
 	Data        []byte
+}
+
+type UploadedTempReferenceImage struct {
+	ClientReferenceID string
+	ConversationID    string
+	TurnID            string
+	Filename          string
+	ContentType       string
+	Data              []byte
+}
+
+type TempReferenceImage struct {
+	ID                string
+	OwnerID           string
+	ClientReferenceID string
+	ConversationID    string
+	TurnID            string
+	Filename          string
+	ContentType       string
+	Path              string
+	Size              int64
+	Width             int
+	Height            int
+	CreatedAt         string
+	ExpiresAt         string
 }
 
 type ImageStorageCleanupOptions struct {
@@ -183,11 +218,27 @@ type ImageVisibilityUpdateOptions struct {
 	ShareReferences   bool
 }
 
+type ImageListOptions struct {
+	StartDate        string
+	EndDate          string
+	PageSize         int
+	Cursor           string
+	Search           string
+	Visibility       string
+	Format           string
+	Orientation      string
+	ResolutionPreset string
+	AspectRatio      string
+}
+
 type ImageService struct {
 	config        ImageConfig
 	store         storage.JSONDocumentBackend
 	thumbnailMu   sync.Mutex
 	thumbnailJobs map[string]*thumbnailJob
+	indexMu       sync.RWMutex
+	indexLoaded   bool
+	imageIndex    map[string]imageIndexEntry
 }
 
 type imageFileRef struct {
@@ -215,6 +266,38 @@ type imageStorageRemovalStats struct {
 	thumbnails     int
 	metadataFiles  int
 	referenceFiles int
+}
+
+type imageIndexDocument struct {
+	Version   int               `json:"version"`
+	UpdatedAt string            `json:"updated_at"`
+	Items     []imageIndexEntry `json:"items"`
+}
+
+type imageIndexEntry struct {
+	Path              string `json:"path"`
+	Name              string `json:"name"`
+	Date              string `json:"date"`
+	Size              int64  `json:"size"`
+	CreatedAt         string `json:"created_at"`
+	CreatedUnixNano   int64  `json:"created_unix_nano"`
+	ModifiedUnixNano  int64  `json:"modified_unix_nano"`
+	OwnerID           string `json:"owner_id,omitempty"`
+	OwnerName         string `json:"owner_name,omitempty"`
+	Visibility        string `json:"visibility"`
+	PublishedAt       string `json:"published_at,omitempty"`
+	PublishedUnixNano int64  `json:"published_unix_nano,omitempty"`
+	StorageBackend    string `json:"storage_backend,omitempty"`
+	ObjectKey         string `json:"object_key,omitempty"`
+	ObjectURL         string `json:"object_url,omitempty"`
+	OutputFormat      string `json:"output_format,omitempty"`
+	Width             int    `json:"width,omitempty"`
+	Height            int    `json:"height,omitempty"`
+}
+
+type imageListCursor struct {
+	SortUnixNano int64  `json:"sort_unix_nano"`
+	Path         string `json:"path"`
 }
 
 func NewImageService(config ImageConfig, backend ...storage.Backend) *ImageService {
@@ -300,6 +383,9 @@ func (s *ImageService) CleanupStorage(options ImageStorageCleanupOptions) (Image
 		result.addRemovalStats(stats)
 		result.PreservedPublicImages += preserved
 	}
+	if result.DeletedImages > 0 {
+		s.resetImageIndex()
+	}
 	summary := s.StorageGovernance()
 	result.RemainingBytes = summary.TotalBytes
 	result.OverLimitBytes = summary.OverLimitBytes
@@ -315,56 +401,51 @@ func (r *ImageStorageCleanupResult) addRemovalStats(stats imageStorageRemovalSta
 }
 
 func (s *ImageService) ListImages(baseURL, startDate, endDate string, scope ImageAccessScope) map[string]any {
+	return s.ListImagesPage(baseURL, ImageListOptions{StartDate: startDate, EndDate: endDate}, scope)
+}
+
+func (s *ImageService) ListImagesPage(baseURL string, options ImageListOptions, scope ImageAccessScope) map[string]any {
 	_, _ = s.CleanupStorage(ImageStorageCleanupOptions{
 		RetentionDays:    s.config.ImageRetentionDays(),
 		MaxBytes:         s.config.ImageStorageLimitBytes(),
 		MaxImagesPerUser: s.config.ImageMaxSavedPerUser(),
 	})
-	root := s.config.ImagesDir()
-	items := make([]map[string]any, 0)
-	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
-			return nil
+	pageSize := normalizedImagePageSize(options.PageSize)
+	cursor, hasCursor := decodeImageListCursor(options.Cursor)
+	entries := s.imageIndexEntries()
+	sort.Slice(entries, func(i, j int) bool {
+		left := imageIndexSortUnixNano(entries[i], scope)
+		right := imageIndexSortUnixNano(entries[j], scope)
+		if left != right {
+			return left > right
 		}
-		rel, err := filepath.Rel(root, path)
-		if err != nil {
-			return nil
+		return strings.Compare(entries[i].Path, entries[j].Path) > 0
+	})
+	items := make([]map[string]any, 0, pageSize)
+	nextCursor := ""
+	lastCursor := imageListCursor{}
+	hasMore := false
+	for _, entry := range entries {
+		if !imageIndexEntryMatchesScope(entry, scope) || !imageIndexEntryMatchesOptions(entry, options) {
+			continue
 		}
-		rel = filepath.ToSlash(rel)
-		info, err := d.Info()
-		if err != nil {
-			return nil
-		}
-		day := imageDay(rel, info.ModTime())
-		if startDate != "" && day < startDate {
-			return nil
-		}
-		if endDate != "" && day > endDate {
-			return nil
-		}
-		meta := s.imageMetadata(rel)
-		ownerID := meta.OwnerID
-		if scope.Public {
-			if meta.Visibility != ImageVisibilityPublic {
-				return nil
+		sortValue := imageIndexSortUnixNano(entry, scope)
+		if hasCursor {
+			if sortValue > cursor.SortUnixNano {
+				continue
 			}
-		} else if !scope.All && (scope.OwnerID == "" || ownerID != scope.OwnerID) {
-			return nil
+			if sortValue == cursor.SortUnixNano && entry.Path >= cursor.Path {
+				continue
+			}
 		}
-		ref := imageFileRef{rel: rel, path: path, info: info}
-		item := s.managedImageItem(baseURL, ref, info, scope)
-		items = append(items, item)
-		return nil
-	})
-	sort.Slice(items, func(i, j int) bool {
-		left := toString(items[i]["created_at"])
-		right := toString(items[j]["created_at"])
-		if scope.Public {
-			left = firstNonEmptyString(toString(items[i]["published_at"]), left)
-			right = firstNonEmptyString(toString(items[j]["published_at"]), right)
+		if len(items) >= pageSize {
+			hasMore = true
+			nextCursor = encodeImageListCursor(lastCursor)
+			break
 		}
-		return strings.Compare(left, right) > 0
-	})
+		items = append(items, s.managedImageSummaryItem(baseURL, entry))
+		lastCursor = imageListCursor{SortUnixNano: sortValue, Path: entry.Path}
+	}
 	groupMap := map[string][]map[string]any{}
 	var order []string
 	for _, item := range items {
@@ -378,7 +459,319 @@ func (s *ImageService) ListImages(baseURL, startDate, endDate string, scope Imag
 	for _, day := range order {
 		groups = append(groups, map[string]any{"date": day, "items": groupMap[day]})
 	}
-	return map[string]any{"items": items, "groups": groups}
+	return map[string]any{
+		"items":       items,
+		"groups":      groups,
+		"next_cursor": nextCursor,
+		"has_more":    hasMore,
+		"page_size":   pageSize,
+	}
+}
+
+func (s *ImageService) ImageDetail(baseURL, value string, scope ImageAccessScope) (map[string]any, error) {
+	rel, err := imageRelativePathFromValue(value)
+	if err != nil {
+		return nil, err
+	}
+	imageRoot, err := filepath.Abs(s.config.ImagesDir())
+	if err != nil {
+		return nil, err
+	}
+	ref, err := s.imageFileRef(imageRoot, rel)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, errors.New("image not found")
+		}
+		return nil, err
+	}
+	meta := s.imageMetadata(ref.rel)
+	if !imageMetadataAllowsAccess(meta, scope) {
+		return nil, errors.New("image not found")
+	}
+	item := s.managedImageItem(baseURL, ref, ref.info, scope)
+	s.refreshImageIndexEntry(ref.rel)
+	return item, nil
+}
+
+func (s *ImageService) managedImageSummaryItem(baseURL string, entry imageIndexEntry) map[string]any {
+	item := map[string]any{
+		"name":        entry.Name,
+		"path":        entry.Path,
+		"date":        entry.Date,
+		"size":        entry.Size,
+		"url":         firstNonEmptyString(entry.ObjectURL, publicAssetURL(baseURL, "images", entry.Path)),
+		"preview_url": firstNonEmptyString(entry.ObjectURL, publicAssetURL(baseURL, "images", entry.Path)),
+		"created_at":  unixNanoTimeString(entry.CreatedUnixNano),
+		"visibility":  entry.Visibility,
+	}
+	if entry.OwnerID != "" {
+		item["owner_id"] = entry.OwnerID
+	}
+	if entry.OwnerName != "" {
+		item["owner_name"] = entry.OwnerName
+	}
+	if entry.PublishedAt != "" {
+		item["published_at"] = entry.PublishedAt
+	}
+	if entry.StorageBackend != "" {
+		item["storage_backend"] = entry.StorageBackend
+	}
+	if entry.ObjectKey != "" {
+		item["object_key"] = entry.ObjectKey
+	}
+	if entry.ObjectURL != "" {
+		item["object_url"] = entry.ObjectURL
+	}
+	if entry.OutputFormat != "" {
+		item["output_format"] = entry.OutputFormat
+	}
+	if entry.Width > 0 && entry.Height > 0 {
+		setImageItemDimensions(item, entry.Width, entry.Height)
+	}
+	thumbPath := s.thumbnailPath(entry.Path)
+	thumbRel := thumbnailRelativePath(s.config.ImageThumbnailsDir(), thumbPath)
+	if thumbRel != "" {
+		item["thumbnail_url"] = thumbnailURL(baseURL, thumbRel, time.Unix(0, entry.ModifiedUnixNano))
+	} else {
+		item["thumbnail_url"] = ""
+	}
+	return item
+}
+
+func (s *ImageService) imageIndexEntries() []imageIndexEntry {
+	if s == nil || s.config == nil {
+		return nil
+	}
+	if err := s.ensureImageIndexLoaded(); err != nil {
+		return nil
+	}
+	s.indexMu.RLock()
+	defer s.indexMu.RUnlock()
+	entries := make([]imageIndexEntry, 0, len(s.imageIndex))
+	for _, entry := range s.imageIndex {
+		entries = append(entries, entry)
+	}
+	return entries
+}
+
+func (s *ImageService) resetImageIndex() {
+	s.indexMu.Lock()
+	s.indexLoaded = false
+	s.imageIndex = nil
+	s.indexMu.Unlock()
+}
+
+func (s *ImageService) ensureImageIndexLoaded() error {
+	s.indexMu.RLock()
+	loaded := s.indexLoaded
+	s.indexMu.RUnlock()
+	if loaded {
+		return nil
+	}
+	s.indexMu.Lock()
+	defer s.indexMu.Unlock()
+	if s.indexLoaded {
+		return nil
+	}
+	entries, err := s.loadImageIndex()
+	if err != nil {
+		entries = nil
+	}
+	if len(entries) == 0 {
+		entries, err = s.rebuildImageIndexLocked()
+		if err != nil {
+			return err
+		}
+	}
+	s.imageIndex = make(map[string]imageIndexEntry, len(entries))
+	for _, entry := range entries {
+		if entry.Path == "" {
+			continue
+		}
+		s.imageIndex[entry.Path] = entry
+	}
+	s.indexLoaded = true
+	return nil
+}
+
+func (s *ImageService) loadImageIndex() ([]imageIndexEntry, error) {
+	if s.store != nil {
+		value, err := s.store.LoadJSONDocument(imageIndexDocumentName)
+		if err != nil || value == nil {
+			return nil, err
+		}
+		return imageIndexEntriesFromValue(value)
+	}
+	path := s.imageIndexPath()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var doc imageIndexDocument
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return nil, err
+	}
+	if doc.Version != imageIndexVersion {
+		return nil, errors.New("unsupported image index version")
+	}
+	return doc.Items, nil
+}
+
+func imageIndexEntriesFromValue(value any) ([]imageIndexEntry, error) {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return nil, err
+	}
+	var doc imageIndexDocument
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return nil, err
+	}
+	if doc.Version != imageIndexVersion {
+		return nil, errors.New("unsupported image index version")
+	}
+	return doc.Items, nil
+}
+
+func (s *ImageService) rebuildImageIndexLocked() ([]imageIndexEntry, error) {
+	root, err := filepath.Abs(s.config.ImagesDir())
+	if err != nil {
+		return nil, err
+	}
+	entries := make([]imageIndexEntry, 0)
+	walkErr := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return nil
+		}
+		rel = filepath.ToSlash(rel)
+		ref, err := s.imageFileRef(root, rel)
+		if err != nil {
+			return nil
+		}
+		entries = append(entries, s.imageIndexEntryFromRef(ref))
+		return nil
+	})
+	if walkErr != nil {
+		return nil, walkErr
+	}
+	return entries, s.saveImageIndexEntriesLocked(entries)
+}
+
+func (s *ImageService) saveImageIndexEntriesLocked(entries []imageIndexEntry) error {
+	doc := imageIndexDocument{
+		Version:   imageIndexVersion,
+		UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+		Items:     entries,
+	}
+	if s.store != nil {
+		return s.store.SaveJSONDocument(imageIndexDocumentName, doc)
+	}
+	path := s.imageIndexPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return writeJSONFile(path, doc)
+}
+
+func (s *ImageService) imageIndexPath() string {
+	return filepath.Join(s.config.ImageMetadataDir(), imageIndexDocumentName)
+}
+
+func (s *ImageService) refreshImageIndexEntry(rel string) {
+	ref, err := s.imageFileRef(s.config.ImagesDir(), rel)
+	if err != nil {
+		return
+	}
+	s.upsertImageIndexEntry(ref)
+}
+
+func (s *ImageService) upsertImageIndexEntry(ref imageFileRef) {
+	if s == nil || s.config == nil || ref.rel == "" {
+		return
+	}
+	_ = s.ensureImageIndexLoaded()
+	entry := s.imageIndexEntryFromRef(ref)
+	s.indexMu.Lock()
+	if s.imageIndex == nil {
+		s.imageIndex = map[string]imageIndexEntry{}
+	}
+	s.imageIndex[entry.Path] = entry
+	s.indexLoaded = true
+	entries := make([]imageIndexEntry, 0, len(s.imageIndex))
+	for _, item := range s.imageIndex {
+		entries = append(entries, item)
+	}
+	err := s.saveImageIndexEntriesLocked(entries)
+	s.indexMu.Unlock()
+	_ = err
+}
+
+func (s *ImageService) removeImageIndexEntries(paths []string) {
+	if len(paths) == 0 || s == nil || s.config == nil {
+		return
+	}
+	_ = s.ensureImageIndexLoaded()
+	s.indexMu.Lock()
+	if s.imageIndex == nil {
+		s.imageIndex = map[string]imageIndexEntry{}
+	}
+	for _, rel := range paths {
+		delete(s.imageIndex, rel)
+	}
+	s.indexLoaded = true
+	entries := make([]imageIndexEntry, 0, len(s.imageIndex))
+	for _, item := range s.imageIndex {
+		entries = append(entries, item)
+	}
+	err := s.saveImageIndexEntriesLocked(entries)
+	s.indexMu.Unlock()
+	_ = err
+}
+
+func (s *ImageService) imageIndexEntryFromRef(ref imageFileRef) imageIndexEntry {
+	meta := s.imageMetadata(ref.rel)
+	width, height, _ := imageFileDimensions(ref.path)
+	created := ref.info.ModTime()
+	publishedUnixNano := int64(0)
+	if meta.PublishedAt != "" {
+		if published, err := time.Parse(time.RFC3339Nano, meta.PublishedAt); err == nil {
+			publishedUnixNano = published.UnixNano()
+		}
+	}
+	visibility := meta.Visibility
+	if visibility == "" {
+		visibility = ImageVisibilityPrivate
+	}
+	outputFormat := meta.OutputFormat
+	if outputFormat == "" {
+		outputFormat = strings.TrimPrefix(strings.ToLower(filepath.Ext(ref.path)), ".")
+		if outputFormat == "jpg" {
+			outputFormat = "jpeg"
+		}
+	}
+	return imageIndexEntry{
+		Path:              ref.rel,
+		Name:              filepath.Base(ref.path),
+		Date:              imageDay(ref.rel, created),
+		Size:              ref.info.Size(),
+		CreatedAt:         created.Format("2006-01-02 15:04:05"),
+		CreatedUnixNano:   created.UnixNano(),
+		ModifiedUnixNano:  created.UnixNano(),
+		OwnerID:           meta.OwnerID,
+		OwnerName:         meta.OwnerName,
+		Visibility:        visibility,
+		PublishedAt:       meta.PublishedAt,
+		PublishedUnixNano: publishedUnixNano,
+		StorageBackend:    meta.StorageBackend,
+		ObjectKey:         meta.ObjectKey,
+		ObjectURL:         meta.ObjectURL,
+		OutputFormat:      outputFormat,
+		Width:             width,
+		Height:            height,
+	}
 }
 
 func (s *ImageService) managedImageItem(baseURL string, ref imageFileRef, info os.FileInfo, scope ImageAccessScope) map[string]any {
@@ -410,6 +803,183 @@ func (s *ImageService) managedImageItem(baseURL string, ref imageFileRef, info o
 		}
 	}
 	return item
+}
+
+func normalizedImagePageSize(value int) int {
+	if value <= 0 {
+		return defaultImagePageSize
+	}
+	if value > maxImagePageSize {
+		return maxImagePageSize
+	}
+	return value
+}
+
+func imageIndexSortUnixNano(entry imageIndexEntry, scope ImageAccessScope) int64 {
+	if scope.Public && entry.PublishedUnixNano > 0 {
+		return entry.PublishedUnixNano
+	}
+	if entry.CreatedUnixNano > 0 {
+		return entry.CreatedUnixNano
+	}
+	return entry.ModifiedUnixNano
+}
+
+func imageIndexEntryMatchesScope(entry imageIndexEntry, scope ImageAccessScope) bool {
+	if scope.Public {
+		return entry.Visibility == ImageVisibilityPublic
+	}
+	if scope.All {
+		return true
+	}
+	return scope.OwnerID != "" && entry.OwnerID == scope.OwnerID
+}
+
+func imageIndexEntryMatchesOptions(entry imageIndexEntry, options ImageListOptions) bool {
+	startDate := strings.TrimSpace(options.StartDate)
+	endDate := strings.TrimSpace(options.EndDate)
+	if startDate != "" && entry.Date < startDate {
+		return false
+	}
+	if endDate != "" && entry.Date > endDate {
+		return false
+	}
+	if visibility := strings.TrimSpace(options.Visibility); visibility != "" && visibility != "all" && entry.Visibility != visibility {
+		return false
+	}
+	if format := strings.TrimSpace(strings.ToLower(options.Format)); format != "" && format != "all" && imageIndexFormat(entry) != format {
+		return false
+	}
+	if orientation := strings.TrimSpace(strings.ToLower(options.Orientation)); orientation != "" && orientation != "all" && imageIndexOrientation(entry) != orientation {
+		return false
+	}
+	if preset := NormalizeImageResolutionPreset(options.ResolutionPreset); preset != "" && imageIndexResolutionFilter(entry) != preset {
+		return false
+	}
+	if ratio := strings.TrimSpace(strings.ToLower(options.AspectRatio)); ratio != "" && ratio != "all" && imageIndexAspectRatioFilter(entry) != ratio {
+		return false
+	}
+	keyword := strings.ToLower(strings.TrimSpace(options.Search))
+	if keyword != "" && !imageIndexEntryContainsKeyword(entry, keyword) {
+		return false
+	}
+	return true
+}
+
+func imageIndexEntryContainsKeyword(entry imageIndexEntry, keyword string) bool {
+	values := []string{
+		entry.Name,
+		entry.Path,
+		entry.Date,
+		entry.CreatedAt,
+		entry.OwnerID,
+		entry.OwnerName,
+		entry.Visibility,
+		entry.OutputFormat,
+		entry.StorageBackend,
+		entry.ObjectKey,
+		entry.ObjectURL,
+	}
+	if entry.Width > 0 && entry.Height > 0 {
+		values = append(values, strconv.Itoa(entry.Width)+"x"+strconv.Itoa(entry.Height), simplifiedAspectRatio(entry.Width, entry.Height))
+	}
+	for _, value := range values {
+		if strings.Contains(strings.ToLower(value), keyword) {
+			return true
+		}
+	}
+	return false
+}
+
+func imageIndexFormat(entry imageIndexEntry) string {
+	format := strings.ToLower(strings.TrimSpace(entry.OutputFormat))
+	switch format {
+	case "jpeg":
+		return "jpg"
+	case "png", "jpg", "webp", "gif":
+		return format
+	}
+	ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(entry.Name)), ".")
+	switch ext {
+	case "jpeg":
+		return "jpg"
+	case "png", "jpg", "webp", "gif":
+		return ext
+	default:
+		return "other"
+	}
+}
+
+func imageIndexOrientation(entry imageIndexEntry) string {
+	if entry.Width <= 0 || entry.Height <= 0 {
+		return "unknown"
+	}
+	return imageOrientation(entry.Width, entry.Height)
+}
+
+func imageIndexResolutionFilter(entry imageIndexEntry) string {
+	if entry.Width <= 0 || entry.Height <= 0 {
+		return "unknown"
+	}
+	longSide := entry.Width
+	shortSide := entry.Height
+	if shortSide > longSide {
+		longSide, shortSide = shortSide, longSide
+	}
+	if longSide >= 3200 || shortSide >= 2400 {
+		return "4k"
+	}
+	if longSide >= 1600 || shortSide >= 1400 {
+		return "2k"
+	}
+	return "1080p"
+}
+
+func imageIndexAspectRatioFilter(entry imageIndexEntry) string {
+	if entry.Width <= 0 || entry.Height <= 0 {
+		return "unknown"
+	}
+	ratio := simplifiedAspectRatio(entry.Width, entry.Height)
+	switch ratio {
+	case "1:1", "4:3", "3:4", "16:9", "9:16":
+		return ratio
+	default:
+		return "other"
+	}
+}
+
+func unixNanoTimeString(value int64) string {
+	if value <= 0 {
+		return ""
+	}
+	return time.Unix(0, value).Format("2006-01-02 15:04:05")
+}
+
+func encodeImageListCursor(cursor imageListCursor) string {
+	if cursor.SortUnixNano <= 0 || cursor.Path == "" {
+		return ""
+	}
+	data, err := json.Marshal(cursor)
+	if err != nil {
+		return ""
+	}
+	return base64.RawURLEncoding.EncodeToString(data)
+}
+
+func decodeImageListCursor(value string) (imageListCursor, bool) {
+	text := strings.TrimSpace(value)
+	if text == "" {
+		return imageListCursor{}, false
+	}
+	data, err := base64.RawURLEncoding.DecodeString(text)
+	if err != nil {
+		return imageListCursor{}, false
+	}
+	var cursor imageListCursor
+	if json.Unmarshal(data, &cursor) != nil || cursor.SortUnixNano <= 0 || strings.TrimSpace(cursor.Path) == "" {
+		return imageListCursor{}, false
+	}
+	return cursor, true
 }
 
 func (s *ImageService) StoreUploadedImage(baseURL string, upload UploadedManagedImage, ownerID, ownerName, visibility string) (map[string]any, error) {
@@ -451,7 +1021,170 @@ func (s *ImageService) StoreUploadedImage(baseURL string, upload UploadedManaged
 	if err != nil {
 		return nil, err
 	}
+	ref.info = info
+	s.upsertImageIndexEntry(ref)
 	return s.managedImageItem(baseURL, ref, info, ImageAccessScope{OwnerID: strings.TrimSpace(ownerID)}), nil
+}
+
+func (s *ImageService) StoreTempReferenceImage(upload UploadedTempReferenceImage, ownerID string) (TempReferenceImage, error) {
+	if s == nil || s.config == nil {
+		return TempReferenceImage{}, errors.New("image service is not initialized")
+	}
+	ownerID = strings.TrimSpace(ownerID)
+	if ownerID == "" {
+		return TempReferenceImage{}, errors.New("owner_id is required")
+	}
+	clientReferenceID := strings.TrimSpace(upload.ClientReferenceID)
+	if clientReferenceID == "" {
+		return TempReferenceImage{}, errors.New("client_reference_id is required")
+	}
+	if len(upload.Data) == 0 {
+		return TempReferenceImage{}, errors.New("image file is empty")
+	}
+	_ = s.CleanupTempReferenceImages()
+	if existing, ok := s.tempReferenceByClientID(ownerID, clientReferenceID); ok {
+		return existing, nil
+	}
+	config, _, err := image.DecodeConfig(bytes.NewReader(upload.Data))
+	if err != nil {
+		return TempReferenceImage{}, errors.New("unsupported image file")
+	}
+	contentType := uploadedImageContentType(upload.Data, upload.ContentType)
+	ext := uploadedImageExtension(upload.Filename, contentType)
+	now := time.Now().UTC()
+	sum := md5.Sum(upload.Data)
+	id := "ref_" + util.SHA1Short(ownerID+":"+clientReferenceID, 24)
+	filename := fmt.Sprintf("%d_%s%s", now.UnixNano(), hex.EncodeToString(sum[:])[:16], ext)
+	rel := filepath.ToSlash(filepath.Join(now.Format("2006"), now.Format("01"), now.Format("02"), filename))
+	root, err := filepath.Abs(s.tempReferencesDir())
+	if err != nil {
+		return TempReferenceImage{}, err
+	}
+	target := filepath.Join(root, filepath.FromSlash(rel))
+	if !pathInsideRoot(root, target) {
+		return TempReferenceImage{}, errors.New("invalid image path")
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return TempReferenceImage{}, err
+	}
+	if err := os.WriteFile(target, upload.Data, 0o644); err != nil {
+		return TempReferenceImage{}, err
+	}
+	ref := TempReferenceImage{
+		ID:                id,
+		OwnerID:           ownerID,
+		ClientReferenceID: clientReferenceID,
+		ConversationID:    strings.TrimSpace(upload.ConversationID),
+		TurnID:            strings.TrimSpace(upload.TurnID),
+		Filename:          firstNonEmptyString(strings.TrimSpace(upload.Filename), "reference"+ext),
+		ContentType:       contentType,
+		Path:              rel,
+		Size:              int64(len(upload.Data)),
+		Width:             config.Width,
+		Height:            config.Height,
+		CreatedAt:         now.Format(time.RFC3339Nano),
+		ExpiresAt:         now.Add(tempImageReferenceRetention).Format(time.RFC3339Nano),
+	}
+	if err := s.saveTempReferenceImage(ref); err != nil {
+		_ = os.Remove(target)
+		return TempReferenceImage{}, err
+	}
+	return ref, nil
+}
+
+func (s *ImageService) TempReferenceImageBytes(ids []string, ownerID string) ([]UploadedManagedImage, error) {
+	ownerID = strings.TrimSpace(ownerID)
+	if ownerID == "" {
+		return nil, errors.New("owner_id is required")
+	}
+	if len(ids) == 0 {
+		return nil, errors.New("reference_image_ids is required")
+	}
+	_ = s.CleanupTempReferenceImages()
+	items := s.loadTempReferenceImages()
+	byID := make(map[string]TempReferenceImage, len(items))
+	for _, item := range items {
+		byID[item.ID] = item
+	}
+	root, err := filepath.Abs(s.tempReferencesDir())
+	if err != nil {
+		return nil, err
+	}
+	out := make([]UploadedManagedImage, 0, len(ids))
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		item, ok := byID[id]
+		if !ok {
+			return nil, errors.New("reference image not found")
+		}
+		if item.OwnerID != ownerID {
+			return nil, errors.New("permission denied")
+		}
+		path := filepath.Join(root, filepath.FromSlash(item.Path))
+		if !pathInsideRoot(root, path) {
+			return nil, errors.New("invalid image path")
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return nil, errors.New("reference image not found")
+			}
+			return nil, err
+		}
+		if _, _, err := image.DecodeConfig(bytes.NewReader(data)); err != nil {
+			return nil, errors.New("unsupported image file")
+		}
+		contentType := item.ContentType
+		if !strings.HasPrefix(strings.ToLower(contentType), "image/") {
+			contentType = http.DetectContentType(data)
+		}
+		out = append(out, UploadedManagedImage{
+			Filename:    firstNonEmptyString(item.Filename, "reference.png"),
+			ContentType: contentType,
+			Data:        data,
+		})
+	}
+	if len(out) == 0 {
+		return nil, errors.New("reference_image_ids is required")
+	}
+	return out, nil
+}
+
+func (s *ImageService) CleanupTempReferenceImages() error {
+	if s == nil || s.config == nil {
+		return nil
+	}
+	now := time.Now().UTC()
+	items := s.loadTempReferenceImages()
+	next := make([]TempReferenceImage, 0, len(items))
+	root, err := filepath.Abs(s.tempReferencesDir())
+	if err != nil {
+		return err
+	}
+	changed := false
+	for _, item := range items {
+		expiresAt, err := time.Parse(time.RFC3339Nano, item.ExpiresAt)
+		expired := err != nil || !expiresAt.After(now)
+		if expired {
+			changed = true
+			if item.Path != "" {
+				path := filepath.Join(root, filepath.FromSlash(item.Path))
+				if pathInsideRoot(root, path) {
+					_ = os.Remove(path)
+					removeEmptyParentDirs(root, filepath.Dir(path))
+				}
+			}
+			continue
+		}
+		next = append(next, item)
+	}
+	if changed {
+		return s.saveTempReferenceImages(next)
+	}
+	return nil
 }
 
 func (s *ImageService) UpdateImageVisibility(value, visibility string, scope ImageAccessScope, optionValues ...ImageVisibilityUpdateOptions) (map[string]any, error) {
@@ -491,6 +1224,7 @@ func (s *ImageService) UpdateImageVisibility(value, visibility string, scope Ima
 	}); err != nil {
 		return nil, err
 	}
+	s.upsertImageIndexEntry(ref)
 	nextMeta := s.imageMetadata(ref.rel)
 	item := map[string]any{
 		"name":       filepath.Base(ref.path),
@@ -649,6 +1383,7 @@ func (s *ImageService) DeleteImages(paths []string, scope ImageAccessScope) (map
 		}
 		removedPaths = append(removedPaths, rel)
 	}
+	s.removeImageIndexEntries(removedPaths)
 	return map[string]any{"deleted": deleted, "missing": missing, "paths": removedPaths}, nil
 }
 
@@ -658,7 +1393,9 @@ func (s *ImageService) RecordImageOwners(values []string, ownerID string) {
 		return
 	}
 	for _, ref := range s.imageFileRefs(values) {
-		_ = s.writeImageMetadataForRef(ref, ownerID, "", "")
+		if s.writeImageMetadataForRef(ref, ownerID, "", "") == nil {
+			s.upsertImageIndexEntry(ref)
+		}
 	}
 }
 
@@ -676,7 +1413,9 @@ func (s *ImageService) RecordGeneratedImages(values []string, ownerID, ownerName
 	for _, ref := range s.imageFileRefs(values) {
 		s.ensureThumbnailForRef(ref)
 		if ownerID != "" && ownerID != "anonymous" {
-			_ = s.writeImageMetadataForRef(ref, ownerID, ownerName, visibility, metadata)
+			if s.writeImageMetadataForRef(ref, ownerID, ownerName, visibility, metadata) == nil {
+				s.upsertImageIndexEntry(ref)
+			}
 		}
 	}
 }
@@ -1161,6 +1900,116 @@ func (s *ImageService) removeImageOwner(rel string) error {
 
 func (s *ImageService) imageReferencesDir() string {
 	return filepath.Join(s.config.ImageMetadataDir(), imageReferencePrefix)
+}
+
+func (s *ImageService) tempReferencesDir() string {
+	return filepath.Join(s.config.ImageMetadataDir(), tempImageReferencePrefix)
+}
+
+func (s *ImageService) tempReferenceDocumentPath() string {
+	return filepath.Join(s.config.ImageMetadataDir(), tempImageReferenceDocumentName)
+}
+
+func (s *ImageService) loadTempReferenceImages() []TempReferenceImage {
+	var value any
+	if s.store != nil {
+		value = loadStoredJSON(s.store, tempImageReferenceDocumentName)
+	} else {
+		data, err := os.ReadFile(s.tempReferenceDocumentPath())
+		if err == nil {
+			_ = json.Unmarshal(data, &value)
+		}
+	}
+	raw := util.AsMapSlice(value)
+	if len(raw) == 0 {
+		raw = util.AsMapSlice(util.StringMap(value)["items"])
+	}
+	items := make([]TempReferenceImage, 0, len(raw))
+	for _, item := range raw {
+		ref := TempReferenceImage{
+			ID:                strings.TrimSpace(util.Clean(item["id"])),
+			OwnerID:           strings.TrimSpace(util.Clean(item["owner_id"])),
+			ClientReferenceID: strings.TrimSpace(util.Clean(item["client_reference_id"])),
+			ConversationID:    strings.TrimSpace(util.Clean(item["conversation_id"])),
+			TurnID:            strings.TrimSpace(util.Clean(item["turn_id"])),
+			Filename:          strings.TrimSpace(util.Clean(item["filename"])),
+			ContentType:       strings.TrimSpace(util.Clean(item["content_type"])),
+			Path:              strings.TrimSpace(util.Clean(item["path"])),
+			Size:              int64(util.ToInt(item["size"], 0)),
+			Width:             util.ToInt(item["width"], 0),
+			Height:            util.ToInt(item["height"], 0),
+			CreatedAt:         strings.TrimSpace(util.Clean(item["created_at"])),
+			ExpiresAt:         strings.TrimSpace(util.Clean(item["expires_at"])),
+		}
+		if ref.ID == "" || ref.OwnerID == "" || ref.Path == "" {
+			continue
+		}
+		items = append(items, ref)
+	}
+	return items
+}
+
+func (s *ImageService) saveTempReferenceImage(ref TempReferenceImage) error {
+	items := s.loadTempReferenceImages()
+	replaced := false
+	for index, item := range items {
+		if item.ID == ref.ID {
+			items[index] = ref
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		items = append(items, ref)
+	}
+	return s.saveTempReferenceImages(items)
+}
+
+func (s *ImageService) saveTempReferenceImages(items []TempReferenceImage) error {
+	out := make([]map[string]any, 0, len(items))
+	for _, item := range items {
+		if item.ID == "" || item.OwnerID == "" || item.Path == "" {
+			continue
+		}
+		out = append(out, map[string]any{
+			"id":                  item.ID,
+			"owner_id":            item.OwnerID,
+			"client_reference_id": item.ClientReferenceID,
+			"conversation_id":     item.ConversationID,
+			"turn_id":             item.TurnID,
+			"filename":            item.Filename,
+			"content_type":        item.ContentType,
+			"path":                item.Path,
+			"size":                item.Size,
+			"width":               item.Width,
+			"height":              item.Height,
+			"created_at":          item.CreatedAt,
+			"expires_at":          item.ExpiresAt,
+		})
+	}
+	doc := map[string]any{"items": out}
+	if s.store != nil {
+		return saveStoredJSON(s.store, tempImageReferenceDocumentName, doc)
+	}
+	if err := os.MkdirAll(filepath.Dir(s.tempReferenceDocumentPath()), 0o755); err != nil {
+		return err
+	}
+	return writeJSONFile(s.tempReferenceDocumentPath(), doc)
+}
+
+func (s *ImageService) tempReferenceByClientID(ownerID, clientReferenceID string) (TempReferenceImage, bool) {
+	clientReferenceID = strings.TrimSpace(clientReferenceID)
+	if clientReferenceID == "" {
+		return TempReferenceImage{}, false
+	}
+	key := util.SHA1Short(ownerID+":"+clientReferenceID, 24)
+	items := s.loadTempReferenceImages()
+	for _, item := range items {
+		if item.OwnerID == ownerID && (item.ClientReferenceID == clientReferenceID || item.ID == "ref_"+key) {
+			return item, true
+		}
+	}
+	return TempReferenceImage{}, false
 }
 
 func (s *ImageService) writeImageReferencesForRef(ref imageFileRef, refs []GeneratedImageReference) []imageReferenceMetadata {

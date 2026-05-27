@@ -151,9 +151,6 @@ export function hasAPIPermission(session: StoredAuthSession | null | undefined, 
 }
 
 export function getDefaultRouteForSession(session: StoredAuthSession) {
-  if (session.role === "admin") {
-    return "/accounts";
-  }
   for (const path of ["/image", "/canvas", "/image-manager", "/settings", ...session.menuPaths, "/profile"]) {
     if (canAccessPath(session, path)) {
       return path;
