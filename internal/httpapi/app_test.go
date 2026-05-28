@@ -2717,8 +2717,23 @@ func TestImageManagementIsScopedByOwner(t *testing.T) {
 		t.Fatalf("admin public gallery json: %v", err)
 	}
 	items = logItems(list)
+	if len(items) != 0 {
+		t.Fatalf("admin public gallery should only include public images, got %#v", list)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/images?scope=all", nil)
+	req.Header.Set("Authorization", adminAuthHeader(t, app))
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("admin all gallery status = %d body = %s", res.Code, res.Body.String())
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &list); err != nil {
+		t.Fatalf("admin all gallery json: %v", err)
+	}
+	items = logItems(list)
 	if len(items) != 3 {
-		t.Fatalf("admin public gallery should see all images, got %#v", list)
+		t.Fatalf("admin all gallery should see all images, got %#v", list)
 	}
 	seenPaths := make(map[string]bool, len(items))
 	for _, item := range items {
@@ -3063,6 +3078,10 @@ func TestManagedImagesEndpointPaginatesAndKeepsListLightweight(t *testing.T) {
 	}
 	if firstItems[0]["prompt"] != nil || firstItems[0]["reference_image_urls"] != nil {
 		t.Fatalf("list item exposed heavy metadata = %#v", firstItems[0])
+	}
+	previewURL, _ := firstItems[0]["preview_url"].(string)
+	if !strings.Contains(previewURL, "/image-thumbnails/") {
+		t.Fatalf("preview_url = %q, want lightweight preview route", previewURL)
 	}
 	cursor, _ := first["next_cursor"].(string)
 	if cursor == "" || first["has_more"] != true {

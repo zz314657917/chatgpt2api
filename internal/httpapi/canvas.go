@@ -320,7 +320,7 @@ func (a *App) canvasUploadedImages(identity service.Identity, node service.Canva
 	scope := imageAccessScope(identity)
 	images := make([]protocol.UploadedImage, 0, len(refs))
 	for index, ref := range refs {
-		value := firstNonEmpty(ref.LocalURL, ref.URL, ref.Path)
+		value := firstNonEmpty(ref.Path, ref.LocalURL, ref.URL)
 		if value == "" {
 			continue
 		}

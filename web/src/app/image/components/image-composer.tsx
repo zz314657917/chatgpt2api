@@ -72,6 +72,7 @@ type ImageComposerProps = {
   imageOutputFormat: ImageOutputFormat;
   imageOutputCompression: string;
   highResolutionHint?: ReactNode;
+  estimatedImagePriceLabel?: string;
   billingBlocked: boolean;
   referenceImages: Array<{ name: string; dataUrl: string }>;
   textareaRef: RefObject<HTMLTextAreaElement | null>;
@@ -293,6 +294,7 @@ export function ImageComposer({
   imageOutputFormat,
   imageOutputCompression,
   highResolutionHint,
+  estimatedImagePriceLabel,
   billingBlocked,
   referenceImages,
   textareaRef,
@@ -351,9 +353,10 @@ export function ImageComposer({
   const effectiveImageSizeMode = structuredImageParameters || imageSizeMode !== "custom" ? imageSizeMode : "auto";
   const effectiveImageResolution = structuredImageParameters ? imageResolution : "auto";
   const submitLabel = composerMode === "chat" ? "发送对话" : referenceImages.length > 0 ? "编辑图片" : "生成图片";
+  const estimateLabel = estimatedImagePriceLabel ? `预估价格 ${estimatedImagePriceLabel}，仅供参考` : "";
   const submitTitle = billingBlocked
     ? "用户余额或配额不足"
-    : submitLabel;
+    : [submitLabel, estimateLabel || null].filter(Boolean).join("，");
   const computedImageSize = useMemo(
     () =>
       buildImageSize({
@@ -1130,6 +1133,11 @@ export function ImageComposer({
                 </button>
               </div>
             </div>
+            {estimateLabel ? (
+              <div className="mt-1 flex justify-end px-2 text-[11px] leading-5 text-[#8e8e93] dark:text-muted-foreground">
+                <span title="按当前图片模型配置预估，实际扣费以账单为准。">{estimateLabel}</span>
+              </div>
+            ) : null}
           </div>
         </div>
       </div>

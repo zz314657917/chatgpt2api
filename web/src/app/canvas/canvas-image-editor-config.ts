@@ -1,4 +1,4 @@
-import { Brush, Crop, Eye, Grid3X3, Maximize2, Paintbrush, type LucideIcon } from "lucide-react";
+import { Brush, Crop, Cuboid, Eye, Grid3X3, Maximize2, Paintbrush, type LucideIcon } from "lucide-react";
 
 import type { CropAspect, ImageEditMode, OutpaintBackground, OutpaintBox, SmartCanvasCropBox } from "./canvas-image-editor-types";
 
@@ -77,5 +77,13 @@ export const editModes: Array<{
     title: "宫格切分",
     description: "按行列或自定义切线拆分图片",
     action: "应用切分",
+  },
+  {
+    value: "angle",
+    label: "角度控制",
+    icon: Cuboid,
+    title: "Angle Control",
+    description: "调整相机视角并直接预览生成结果",
+    action: "生成视角",
   },
 ];

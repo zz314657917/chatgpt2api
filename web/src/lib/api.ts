@@ -38,6 +38,45 @@ const CHAT_MODEL_VALUES = new Set<ImageModel>([
 export const IMAGE_TASK_MODEL_OPTIONS = IMAGE_MODEL_OPTIONS.filter((option) => IMAGE_TASK_MODEL_VALUES.has(option.value));
 export const IMAGE_CREATION_MODEL_OPTIONS = IMAGE_TASK_MODEL_OPTIONS;
 export const CHAT_MODEL_OPTIONS = IMAGE_MODEL_OPTIONS.filter((option) => CHAT_MODEL_VALUES.has(option.value));
+const IMAGE_PRICE_ESTIMATE_MULTIPLIER = 1.2;
+const GPT_IMAGE_2_BASE_PRICE_USD = {
+  default: 0.006,
+  "1K": 0.006,
+  "2K": 0.012,
+  "4K": 0.018,
+} as const;
+
+const GPT_IMAGE_2_OFFICIAL_BASE_PRICE_USD: Record<string, number> = {
+  default: 0.16872,
+  "1024x1024@auto": 0.00488,
+  "1024x1024@low": 0.00488,
+  "1024x1024@medium": 0.04232,
+  "1024x1024@high": 0.16872,
+  "1024x1536@auto": 0.00392,
+  "1024x1536@low": 0.00392,
+  "1024x1536@medium": 0.03304,
+  "1024x1536@high": 0.13184,
+  "1536x1024@auto": 0.00392,
+  "1536x1024@low": 0.00392,
+  "1536x1024@medium": 0.03304,
+  "1536x1024@high": 0.13184,
+  "1536x864@auto": 0.00304,
+  "1536x864@low": 0.00304,
+  "1536x864@medium": 0.026,
+  "1536x864@high": 0.1036,
+  "864x1536@auto": 0.00304,
+  "864x1536@low": 0.00304,
+  "864x1536@medium": 0.026,
+  "864x1536@high": 0.1036,
+  "2048x2048@auto": 0.00968,
+  "2048x2048@low": 0.00968,
+  "2048x2048@medium": 0.08576,
+  "2048x2048@high": 0.34264,
+  "2880x2880@auto": 0.01592,
+  "2880x2880@low": 0.01592,
+  "2880x2880@medium": 0.1424,
+  "2880x2880@high": 0.56936,
+};
 
 export const IMAGE_MODEL_ROUTE_DETAILS: Partial<Record<
   ImageModel,
@@ -91,6 +130,32 @@ export function supportsImageOutputControls(model: ImageModel) {
 
 export function supportsImageQuality(_model: ImageModel) {
   return false;
+}
+
+export function estimateImageDisplayPriceUSD(model: ImageModel, count: number, sizeOrResolution: string, quality = "auto") {
+  const normalizedCount = Math.max(1, Math.floor(Number(count) || 1));
+  let basePrice: number | null = null;
+  if (model === "gpt-image-2") {
+    const normalizedResolution =
+      sizeOrResolution === "2K" || sizeOrResolution === "4K" || sizeOrResolution === "1K" ? sizeOrResolution : "default";
+    basePrice = GPT_IMAGE_2_BASE_PRICE_USD[normalizedResolution];
+  } else if (model === "gpt-image-2-official") {
+    const normalizedSize = sizeOrResolution.trim();
+    const normalizedQuality = quality === "low" || quality === "medium" || quality === "high" ? quality : "auto";
+    basePrice =
+      GPT_IMAGE_2_OFFICIAL_BASE_PRICE_USD[`${normalizedSize}@${normalizedQuality}`] ??
+      GPT_IMAGE_2_OFFICIAL_BASE_PRICE_USD[`${normalizedSize}@auto`] ??
+      GPT_IMAGE_2_OFFICIAL_BASE_PRICE_USD.default;
+  }
+
+  return basePrice === null ? null : basePrice * IMAGE_PRICE_ESTIMATE_MULTIPLIER * normalizedCount;
+}
+
+export function formatImageDisplayPriceUSD(value: number | null) {
+  if (value === null || !Number.isFinite(value)) {
+    return "";
+  }
+  return `$${value.toFixed(4)}`;
 }
 
 export type ImageQuality = "low" | "medium" | "high";

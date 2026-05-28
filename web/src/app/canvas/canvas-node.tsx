@@ -12,7 +12,6 @@ import {
   CircleAlert,
   CircleDot,
   Clock3,
-  Cuboid,
   FileText,
   Grid2X2,
   History,
@@ -42,7 +41,7 @@ import {
 import { AuthenticatedImage } from "@/components/authenticated-image";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
@@ -65,7 +64,6 @@ import {
 } from "./canvas-utils";
 import type {
   SmartCanvasConnectState,
-  SmartCanvasAngleControlValues,
   SmartCanvasDocument,
   SmartCanvasHistoryEntry,
   SmartCanvasItem,
@@ -674,172 +672,6 @@ export function SmartCanvasPickerDialog({
   );
 }
 
-export function SmartCanvasAngleControlDialog({
-  open,
-  image,
-  values,
-  running,
-  onOpenChange,
-  onValuesChange,
-  onSubmit,
-}: {
-  open: boolean;
-  image: CanvasImageRef | null;
-  values: SmartCanvasAngleControlValues;
-  running: boolean;
-  onOpenChange: (open: boolean) => void;
-  onValuesChange: (values: SmartCanvasAngleControlValues) => void;
-  onSubmit: (values: SmartCanvasAngleControlValues) => void;
-}) {
-  const updateValue = (key: keyof SmartCanvasAngleControlValues, value: number) => {
-    onValuesChange({ ...values, [key]: value });
-  };
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="w-[min(94vw,1180px)] max-w-none rounded-[28px] border border-border bg-[#f8fafc] p-0 text-foreground shadow-[0_34px_120px_rgba(15,23,42,0.30)] dark:border-zinc-800 dark:bg-[#0d1118] dark:text-zinc-100">
-        <div className="grid min-h-[680px] grid-rows-[auto,1fr,auto] overflow-hidden rounded-[28px]">
-          <DialogHeader className="border-b border-border px-7 py-6 dark:border-zinc-800">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <DialogTitle className="text-3xl font-black uppercase tracking-tight text-foreground dark:text-white">
-                  Angle Control
-                </DialogTitle>
-                <DialogDescription className="mt-1 text-xs font-black uppercase tracking-[0.28em] text-sky-700 dark:text-sky-200">
-                  相机与视角控制
-                </DialogDescription>
-              </div>
-              <div className="rounded-full border border-border px-3 py-1 text-xs font-black text-muted-foreground dark:border-zinc-700 dark:text-zinc-400">角度控制</div>
-            </div>
-          </DialogHeader>
-
-          <div className="grid min-h-0 grid-cols-[1fr,1fr] gap-8 px-7 py-7">
-            <section className="min-w-0">
-              <div className="mb-4 text-[11px] font-black uppercase tracking-[0.28em] text-sky-700 dark:text-sky-200">01. 输入图片</div>
-              <div className="flex h-[440px] items-center justify-center overflow-hidden rounded-3xl border border-border bg-black/5 dark:border-zinc-800 dark:bg-black/35">
-                {image ? (
-                  <AuthenticatedImage
-                    src={canvasImagePreviewSource(image)}
-                    alt={canvasImageLabel(image, 0)}
-                    className="h-full w-full object-contain"
-                    placeholderClassName="h-full w-full bg-muted dark:bg-zinc-900"
-                  />
-                ) : (
-                  <div className={cn("rounded-2xl border p-6 text-sm font-semibold", canvasDashedClass)}>没有可用图片</div>
-                )}
-              </div>
-            </section>
-
-            <section className="min-w-0">
-              <div className="mb-4 text-[11px] font-black uppercase tracking-[0.28em] text-sky-700 dark:text-sky-200">02. 相机控制</div>
-              <div className="grid h-[440px] grid-cols-[1fr,260px] overflow-hidden rounded-3xl border border-border bg-background dark:border-zinc-800 dark:bg-[#151515]">
-                <div className="relative flex items-center justify-center overflow-hidden bg-[linear-gradient(rgba(255,255,255,.06)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,.06)_1px,transparent_1px)] bg-[size:34px_34px] dark:bg-[linear-gradient(rgba(255,255,255,.08)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,.08)_1px,transparent_1px)]">
-                  <div
-                    className="h-40 w-64 rounded-xl border border-sky-300/40 bg-slate-900 shadow-[0_28px_80px_rgba(14,165,233,0.20)]"
-                    style={{
-                      transform: `perspective(760px) rotateY(${Math.round(values.horizontal - 180) / 4}deg) rotateX(${-Math.round(values.vertical) / 3}deg) scale(${1 + Number(values.zoom || 0) / 28})`,
-                    }}
-                  >
-                    {image ? (
-                      <AuthenticatedImage
-                        src={canvasImagePreviewSource(image)}
-                        alt={canvasImageLabel(image, 0)}
-                        className="h-full w-full rounded-xl object-cover opacity-80"
-                        placeholderClassName="h-full w-full rounded-xl bg-zinc-900"
-                      />
-                    ) : null}
-                  </div>
-                </div>
-                <div className="space-y-5 border-l border-border bg-muted/35 p-5 dark:border-zinc-800 dark:bg-[#111827]/45">
-                  <AngleControlField
-                    label="旋转"
-                    value={values.horizontal}
-                    min={0}
-                    max={360}
-                    step={1}
-                    suffix="deg"
-                    onChange={(value) => updateValue("horizontal", value)}
-                  />
-                  <AngleControlField
-                    label="俯仰"
-                    value={values.vertical}
-                    min={-30}
-                    max={90}
-                    step={1}
-                    suffix="deg"
-                    onChange={(value) => updateValue("vertical", value)}
-                  />
-                  <AngleControlField
-                    label="距离"
-                    value={values.zoom}
-                    min={0}
-                    max={10}
-                    step={1}
-                    suffix="/10"
-                    onChange={(value) => updateValue("zoom", value)}
-                  />
-                </div>
-              </div>
-            </section>
-          </div>
-
-          <DialogFooter className="border-t border-border px-7 py-5 dark:border-zinc-800">
-            <Button type="button" variant="outline" className={cn("rounded-xl", canvasGhostButtonClass)} onClick={() => onOpenChange(false)}>
-              取消
-            </Button>
-            <Button type="button" className="rounded-xl font-bold" disabled={running || !image} onClick={() => onSubmit(values)}>
-              {running ? <LoaderCircle className="size-4 animate-spin" /> : <Cuboid className="size-4" />}
-              生成视角
-            </Button>
-          </DialogFooter>
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-function AngleControlField({
-  label,
-  value,
-  min,
-  max,
-  step,
-  suffix,
-  onChange,
-}: {
-  label: string;
-  value: number;
-  min: number;
-  max: number;
-  step: number;
-  suffix: string;
-  onChange: (value: number) => void;
-}) {
-  return (
-    <label className="block">
-      <div className="mb-2 flex items-center justify-between gap-3">
-        <span className="text-sm font-bold text-foreground dark:text-zinc-200">{label}</span>
-        <span className="rounded-lg bg-background px-2 py-1 text-xs font-black text-foreground dark:bg-[#0d1118] dark:text-white">
-          {Math.round(value)} {suffix}
-        </span>
-      </div>
-      <input
-        type="range"
-        min={min}
-        max={max}
-        step={step}
-        value={value}
-        className="h-2 w-full accent-sky-500"
-        onChange={(event) => onChange(Number(event.target.value))}
-      />
-      <div className={cn("mt-1 flex justify-between text-[11px] font-semibold", canvasSubtleTextClass)}>
-        <span>{min}</span>
-        <span>{max}</span>
-      </div>
-    </label>
-  );
-}
-
 type SmartCanvasBoardProps = {
   canvas: SmartCanvasDocument | null;
   viewport: SmartCanvasViewport;
@@ -867,9 +699,6 @@ type SmartCanvasBoardProps = {
   onSelectItem: (id: string, multi?: boolean) => void;
   onOpenImage: (image: CanvasImageRef) => void;
   onDeleteImage: (nodeId: string, image: CanvasImageRef) => void;
-  onOpenImageEditorForItem: (id: string) => void;
-  onRunDetailEnhanceForItem: (id: string) => void;
-  onOpenAngleControlForItem: (id: string) => void;
   onZoomIn: () => void;
   onZoomOut: () => void;
   onFit: () => void;
@@ -914,9 +743,6 @@ export function SmartCanvasBoard({
   onSelectItem,
   onOpenImage,
   onDeleteImage,
-  onOpenImageEditorForItem,
-  onRunDetailEnhanceForItem,
-  onOpenAngleControlForItem,
   onZoomIn,
   onZoomOut,
   onFit,
@@ -1036,9 +862,6 @@ export function SmartCanvasBoard({
               onSelect={(multi) => onSelectItem(item.id, multi)}
               onOpenImage={onOpenImage}
               onDeleteImage={(image) => onDeleteImage(item.id, image)}
-              onOpenImageEditor={() => onOpenImageEditorForItem(item.id)}
-              onRunDetailEnhance={() => onRunDetailEnhanceForItem(item.id)}
-              onOpenAngleControl={() => onOpenAngleControlForItem(item.id)}
               onUpdateData={(patch) => onUpdateItemData(item.id, patch)}
               onRunGenerator={() => onRunGenerator(item.id)}
               onRunLlm={() => onRunLlm(item.id)}
@@ -1398,9 +1221,6 @@ type SmartCanvasNodeProps = {
   onSelect: (multi?: boolean) => void;
   onOpenImage: (image: CanvasImageRef) => void;
   onDeleteImage: (image: CanvasImageRef) => void;
-  onOpenImageEditor: () => void;
-  onRunDetailEnhance: () => void;
-  onOpenAngleControl: () => void;
   onUpdateData: (patch: Partial<SmartCanvasItem["data"]>) => void;
   onRunGenerator: () => void;
   onRunLlm: () => void;
@@ -1426,9 +1246,6 @@ export const SmartCanvasNode = memo(function SmartCanvasNode({
   onSelect,
   onOpenImage,
   onDeleteImage,
-  onOpenImageEditor,
-  onRunDetailEnhance,
-  onOpenAngleControl,
   onUpdateData,
   onRunGenerator,
   onRunLlm,
@@ -1502,10 +1319,7 @@ export const SmartCanvasNode = memo(function SmartCanvasNode({
             item={item}
             onOpenImage={onOpenImage}
             onDeleteImage={onDeleteImage}
-            onOpenImageEditor={onOpenImageEditor}
-            onRunDetailEnhance={onRunDetailEnhance}
-            onOpenAngleControl={onOpenAngleControl}
-            height={Math.max(100, minHeight - 126)}
+            height={Math.max(100, minHeight - 88)}
           />
           <ResizeHandle onPointerDown={onResizePointerDown} />
         </>
@@ -1574,27 +1388,16 @@ function ImageNodeBody({
   item,
   onOpenImage,
   onDeleteImage,
-  onOpenImageEditor,
-  onRunDetailEnhance,
-  onOpenAngleControl,
   height,
 }: {
   item: SmartCanvasItem;
   onOpenImage: (image: CanvasImageRef) => void;
   onDeleteImage: (image: CanvasImageRef) => void;
-  onOpenImageEditor: () => void;
-  onRunDetailEnhance: () => void;
-  onOpenAngleControl: () => void;
   height: number;
 }) {
   const images = item.data?.images || [];
-  const imageToolDisabledReason = images.length === 0
-    ? "当前节点没有可编辑图片"
-    : images.length > 1
-      ? "当前节点包含多张图片，请先拆分或保留单张图片"
-      : "";
   return (
-    <div className="space-y-3 p-3">
+    <div className="space-y-3 p-3 pb-4">
       {images.length > 0 ? (
         <div style={{ height }}>
           <CanvasImageStrip images={images} limit={4} onOpen={onOpenImage} onDelete={onDeleteImage} className="h-full grid-cols-2" large />
@@ -1608,53 +1411,7 @@ function ImageNodeBody({
       <div className={cn("min-w-0 truncate pr-8 text-xs", canvasLabelClass)} title={images[0]?.name || item.name || `${images.length} 张图片`}>
         {images[0]?.name || item.name || `${images.length} 张图片`}
       </div>
-      <div className="grid grid-cols-2 gap-1" data-node-interactive="true" onPointerDown={stopNodeInteraction}>
-        <ImageToolActionButton
-          icon={<ImageIcon className="size-3.5" />}
-          label="编辑"
-          title={imageToolDisabledReason || "裁剪、扩图、遮罩、画笔、宫格切分"}
-          disabled={Boolean(imageToolDisabledReason)}
-          onClick={onOpenImageEditor}
-        />
-        <ImageToolActionButton
-          icon={<Cuboid className="size-3.5" />}
-          label="角度"
-          title={imageToolDisabledReason || "角度控制"}
-          disabled={Boolean(imageToolDisabledReason)}
-          onClick={onOpenAngleControl}
-        />
-      </div>
     </div>
-  );
-}
-
-function ImageToolActionButton({
-  icon,
-  label,
-  title,
-  disabled,
-  onClick,
-}: {
-  icon: ReactNode;
-  label: string;
-  title: string;
-  disabled: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      className="inline-flex h-8 items-center justify-center gap-1 rounded-lg bg-muted/70 px-2 text-[11px] font-black text-foreground transition hover:bg-sky-500/12 hover:text-sky-700 disabled:cursor-not-allowed disabled:opacity-45 dark:bg-slate-950/55 dark:text-slate-200 dark:hover:bg-sky-400/10 dark:hover:text-sky-200"
-      title={title}
-      disabled={disabled}
-      onClick={(event) => {
-        event.stopPropagation();
-        onClick();
-      }}
-    >
-      {icon}
-      {label}
-    </button>
   );
 }
 
@@ -2368,7 +2125,7 @@ function AssetTile({
     <div className="group overflow-hidden rounded-xl border border-border bg-background dark:border-slate-800 dark:bg-slate-950" draggable onDragStart={onDragStart} onDragEnd={onDragEnd}>
       <button type="button" className="block w-full" onClick={onAddToComposer} title="加入输入">
         <AuthenticatedImage
-          src={asset.thumbnail_url || asset.url}
+          src={asset.thumbnail_url || asset.preview_url || asset.url}
           alt={asset.name}
           loading="lazy"
           decoding="async"

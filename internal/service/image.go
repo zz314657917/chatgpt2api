@@ -405,11 +405,6 @@ func (s *ImageService) ListImages(baseURL, startDate, endDate string, scope Imag
 }
 
 func (s *ImageService) ListImagesPage(baseURL string, options ImageListOptions, scope ImageAccessScope) map[string]any {
-	_, _ = s.CleanupStorage(ImageStorageCleanupOptions{
-		RetentionDays:    s.config.ImageRetentionDays(),
-		MaxBytes:         s.config.ImageStorageLimitBytes(),
-		MaxImagesPerUser: s.config.ImageMaxSavedPerUser(),
-	})
 	pageSize := normalizedImagePageSize(options.PageSize)
 	cursor, hasCursor := decodeImageListCursor(options.Cursor)
 	entries := s.imageIndexEntries()
@@ -494,13 +489,19 @@ func (s *ImageService) ImageDetail(baseURL, value string, scope ImageAccessScope
 }
 
 func (s *ImageService) managedImageSummaryItem(baseURL string, entry imageIndexEntry) map[string]any {
+	thumbURL := ""
+	thumbPath := s.thumbnailPath(entry.Path)
+	thumbRel := thumbnailRelativePath(s.config.ImageThumbnailsDir(), thumbPath)
+	if thumbRel != "" {
+		thumbURL = thumbnailURL(baseURL, thumbRel, time.Unix(0, entry.ModifiedUnixNano))
+	}
 	item := map[string]any{
 		"name":        entry.Name,
 		"path":        entry.Path,
 		"date":        entry.Date,
 		"size":        entry.Size,
 		"url":         firstNonEmptyString(entry.ObjectURL, publicAssetURL(baseURL, "images", entry.Path)),
-		"preview_url": firstNonEmptyString(entry.ObjectURL, publicAssetURL(baseURL, "images", entry.Path)),
+		"preview_url": thumbURL,
 		"created_at":  unixNanoTimeString(entry.CreatedUnixNano),
 		"visibility":  entry.Visibility,
 	}
@@ -528,13 +529,7 @@ func (s *ImageService) managedImageSummaryItem(baseURL string, entry imageIndexE
 	if entry.Width > 0 && entry.Height > 0 {
 		setImageItemDimensions(item, entry.Width, entry.Height)
 	}
-	thumbPath := s.thumbnailPath(entry.Path)
-	thumbRel := thumbnailRelativePath(s.config.ImageThumbnailsDir(), thumbPath)
-	if thumbRel != "" {
-		item["thumbnail_url"] = thumbnailURL(baseURL, thumbRel, time.Unix(0, entry.ModifiedUnixNano))
-	} else {
-		item["thumbnail_url"] = ""
-	}
+	item["thumbnail_url"] = thumbURL
 	return item
 }
 

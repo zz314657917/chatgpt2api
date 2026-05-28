@@ -2,8 +2,8 @@
 
 import { forwardRef, useCallback, useEffect, useMemo, useRef, useState, type HTMLAttributes } from "react";
 import { Check, Copy, Download, Eye, Globe2, ImageIcon, LoaderCircle, Lock, MoreHorizontal, RefreshCw, Search, SlidersHorizontal, Sparkles, Trash2, X } from "lucide-react";
-import { useNavigate } from "react-router-dom";
 import { VirtuosoGrid } from "react-virtuoso";
+import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 
 import { writeSimilarImageIntent } from "@/app/image/similar-image-intent";
@@ -56,6 +56,10 @@ function getManagedImageFormatLabel(item: ManagedImage) {
   const normalized = (item.name || item.url).split("?")[0]?.match(/\.([a-z0-9]+)$/i)?.[1] || "image";
   const format = normalized.toLowerCase() === "jpeg" ? "jpg" : normalized.toLowerCase();
   return `IMAGE ${format.toUpperCase()}`;
+}
+
+function managedImageListPreviewSource(item: ManagedImage) {
+  return item.preview_url || item.thumbnail_url || item.url;
 }
 
 function managedImageKey(item: ManagedImage) {
@@ -291,44 +295,10 @@ function blurFocusedElementInContainer(container: HTMLElement) {
   }
 }
 
-const IMAGE_MASONRY_BREAKPOINTS = [
-  { minWidth: 1800, columns: 6 },
-  { minWidth: 1536, columns: 5 },
-  { minWidth: 1280, columns: 4 },
-  { minWidth: 1024, columns: 3 },
-  { minWidth: 640, columns: 2 },
-] as const;
 const IMAGE_MANAGER_PAGE_SIZE = 50;
 const AUTO_REFRESH_INTERVAL_OPTIONS = [5, 10, 15, 30] as const;
 
 type ImageAutoRefreshInterval = (typeof AUTO_REFRESH_INTERVAL_OPTIONS)[number];
-
-function getImageMasonryColumnCount() {
-  if (typeof window === "undefined") {
-    return 1;
-  }
-
-  return IMAGE_MASONRY_BREAKPOINTS.find(({ minWidth }) =>
-    window.matchMedia(`(min-width: ${minWidth}px)`).matches,
-  )?.columns ?? 1;
-}
-
-function useImageMasonryColumnCount() {
-  const [columnCount, setColumnCount] = useState(getImageMasonryColumnCount);
-
-  useEffect(() => {
-    const updateColumnCount = () => setColumnCount(getImageMasonryColumnCount());
-    const mediaQueries = IMAGE_MASONRY_BREAKPOINTS.map(({ minWidth }) =>
-      window.matchMedia(`(min-width: ${minWidth}px)`),
-    );
-
-    updateColumnCount();
-    mediaQueries.forEach((query) => query.addEventListener("change", updateColumnCount));
-    return () => mediaQueries.forEach((query) => query.removeEventListener("change", updateColumnCount));
-  }, []);
-
-  return columnCount;
-}
 
 function ImageManagerContent({
   cacheScope,
@@ -392,6 +362,7 @@ function ImageManagerContent({
   const [nextCursor, setNextCursor] = useState(() => initialCache?.nextCursor ?? "");
   const [hasMoreItems, setHasMoreItems] = useState(() => initialCache?.hasMore ?? false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [detailItemsByPath, setDetailItemsByPath] = useState<Record<string, ManagedImage>>({});
   const hasLocalFilters =
     searchKeyword.trim() !== "" ||
     visibilityFilter !== "all" ||
@@ -411,13 +382,19 @@ function ImageManagerContent({
   const activeFilterCount = activeFilterLabels.length;
   const lightboxImages = useMemo(
     () =>
-      items.map((item) => ({
-        id: item.name,
-        src: item.preview_url || item.url,
-        sizeLabel: formatImageFileSize(item.size),
-        dimensions: getManagedImageResolutionSummary(item) || undefined,
-      })),
-    [items],
+      items.map((item) => {
+        const detail = detailItemsByPath[item.path];
+        const image = detail || item;
+        return {
+          id: item.path || item.name,
+          src: detail?.url || managedImageListPreviewSource(item),
+          fileName: image.name,
+          outputFormat: image.output_format,
+          sizeLabel: formatImageFileSize(image.size),
+          dimensions: getManagedImageResolutionSummary(image) || undefined,
+        };
+      }),
+    [detailItemsByPath, items],
   );
   const selectedItems = useMemo(
     () => items.filter((item) => selectedImageIds[managedImageKey(item)]),
@@ -434,36 +411,6 @@ function ImageManagerContent({
   const selectedCount = selectedItems.length;
   const allSelected = items.length > 0 && selectedCount === items.length;
   const isMutatingImages = downloadingKey !== null || isDeleting || visibilityMutatingPath !== null;
-  const imageColumnCount = useImageMasonryColumnCount();
-  const virtualGridComponents = useMemo(
-    () => ({
-      List: forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivElement>>(function ImageManagerGridList(props, ref) {
-        return (
-          <div
-            {...props}
-            ref={ref}
-            className={cn(props.className, "grid gap-3 sm:gap-4")}
-            style={{
-              ...props.style,
-              gridTemplateColumns: `repeat(${imageColumnCount}, minmax(0, 1fr))`,
-            }}
-          />
-        );
-      }),
-      Footer: () =>
-        hasMoreItems || isLoadingMore ? (
-          <div className="col-span-full flex min-h-16 items-center justify-center py-4 text-sm text-muted-foreground">
-            <div className="inline-flex items-center gap-2 rounded-full border border-border bg-background px-4 py-2 shadow-sm">
-              <LoaderCircle className={`size-4 text-[#1456f0] ${isLoadingMore ? "animate-spin" : ""}`} />
-              {isLoadingMore ? "加载中..." : `下滑加载更多（已加载 ${items.length} 张）`}
-            </div>
-          </div>
-        ) : items.length > IMAGE_MANAGER_PAGE_SIZE ? (
-          <div className="col-span-full flex justify-center py-4 text-xs text-muted-foreground">已显示全部图片</div>
-        ) : null,
-    }),
-    [hasMoreItems, imageColumnCount, isLoadingMore, items.length],
-  );
   const showImageLoadingState = isLoading && items.length === 0;
   const showImageErrorState = !isLoading && loadError !== "" && items.length === 0;
   const showImageEmptyState = !isLoading && loadError === "" && items.length === 0;
@@ -480,6 +427,34 @@ function ImageManagerContent({
     resolution: resolutionFilter,
     aspect_ratio: aspectRatioFilter,
   }), [aspectRatioFilter, endDate, formatFilter, galleryView, orientationFilter, resolutionFilter, searchKeyword, startDate, visibilityFilter]);
+
+  const loadManagedImageDetail = useCallback(async (item: ManagedImage) => {
+    const cached = detailItemsByPath[item.path];
+    if (cached) {
+      return cached;
+    }
+    const detail = await fetchManagedImageDetail(item.path, { scope: galleryView });
+    setDetailItemsByPath((current) => ({ ...current, [item.path]: detail }));
+    return detail;
+  }, [detailItemsByPath, galleryView]);
+
+  const openImagePreview = useCallback((item: ManagedImage, index: number) => {
+    setLightboxIndex(index);
+    setLightboxOpen(true);
+    void loadManagedImageDetail(item).catch((error) => {
+      toast.error(error instanceof Error ? error.message : "读取图片详情失败");
+    });
+  }, [loadManagedImageDetail]);
+
+  const copyManagedImageURL = useCallback(async (item: ManagedImage) => {
+    try {
+      const detail = await loadManagedImageDetail(item);
+      await navigator.clipboard.writeText(detail.url);
+      toast.success("图片地址已复制");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "复制图片地址失败");
+    }
+  }, [loadManagedImageDetail]);
 
   const loadImages = useCallback(async ({ force = false }: { force?: boolean } = {}) => {
     const cached = getImageManagerCache(currentCacheKey);
@@ -687,6 +662,35 @@ function ImageManagerContent({
     setAutoRefreshMenuScope(null);
   };
 
+  const imageGridComponents = useMemo(
+    () => ({
+      List: forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivElement>>(function ImageManagerGridList(props, ref) {
+        return (
+          <div
+            {...props}
+            ref={ref}
+            className={cn(
+              props.className,
+              "grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 min-[1800px]:grid-cols-6",
+            )}
+          />
+        );
+      }),
+      Footer: () =>
+        hasMoreItems || isLoadingMore ? (
+          <div className="col-span-full flex min-h-16 items-center justify-center py-4 text-sm text-muted-foreground">
+            <div className="inline-flex items-center gap-2 rounded-full border border-border bg-background px-4 py-2 shadow-sm">
+              <LoaderCircle className={cn("size-4 text-[#1456f0]", isLoadingMore && "animate-spin")} />
+              {isLoadingMore ? "加载中..." : `下滑加载更多（已加载 ${items.length} 张）`}
+            </div>
+          </div>
+        ) : items.length > IMAGE_MANAGER_PAGE_SIZE ? (
+          <div className="col-span-full flex justify-center py-4 text-xs text-muted-foreground">已显示全部图片</div>
+        ) : null,
+    }),
+    [hasMoreItems, isLoadingMore, items.length],
+  );
+
   const clearLoadedItemsForQueryChange = useCallback(() => {
     setItems([]);
     setNextCursor("");
@@ -721,11 +725,14 @@ function ImageManagerContent({
     try {
       for (let index = 0; index < downloadItems.length; index += 1) {
         const item = downloadItems[index];
-        await downloadManagedImage(item, items.indexOf(item));
+        const detail = await loadManagedImageDetail(item);
+        await downloadManagedImage(detail, items.indexOf(item));
         if (index < downloadItems.length - 1) {
           await sleep(120);
         }
       }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "下载图片失败");
     } finally {
       setDownloadingKey(null);
     }
@@ -738,7 +745,7 @@ function ImageManagerContent({
     }
     let detail = item;
     try {
-      detail = await fetchManagedImageDetail(item.path, { scope: galleryView });
+      detail = await loadManagedImageDetail(item);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "读取图片详情失败");
       return;
@@ -1171,7 +1178,7 @@ function ImageManagerContent({
   );
 
   return (
-    <section className="flex h-full min-h-0 flex-col gap-5 overflow-y-auto pb-20 sm:pb-24">
+    <section className="flex h-full min-h-0 flex-col gap-5 pb-20 sm:pb-24">
       <PageHeader eyebrow="Images" title="图片库" />
 
       <div className="grid min-w-0 gap-4 lg:grid-cols-[300px_minmax(0,1fr)] xl:grid-cols-[320px_minmax(0,1fr)]">
@@ -1459,15 +1466,17 @@ function ImageManagerContent({
         ) : null}
 
         {items.length > 0 ? (
-          <VirtuosoGrid
-            useWindowScroll
-            data={items}
-            overscan={800}
-            endReached={() => void loadMoreImages()}
-            itemClassName="min-w-0"
-            style={{ overflow: "visible" }}
-            components={virtualGridComponents}
-            itemContent={(index, item) => {
+          <div className="h-[calc(100dvh-14rem)] min-h-[360px] sm:min-h-[520px]">
+            <VirtuosoGrid
+              data={items}
+              components={imageGridComponents}
+              computeItemKey={(_, item) => managedImageKey(item)}
+              itemClassName="min-w-0"
+              overscan={800}
+              increaseViewportBy={{ top: 400, bottom: 800 }}
+              style={{ height: "100%" }}
+              endReached={() => void loadMoreImages()}
+              itemContent={(index, item) => {
                 const imageKey = managedImageKey(item);
                 const selected = Boolean(selectedImageIds[imageKey]);
                 const focused = focusedImagePath === imageKey;
@@ -1479,9 +1488,13 @@ function ImageManagerContent({
                 const ownerLabel = imageOwnerLabel(item);
                 const canUpdateVisibility = galleryView === "mine";
                 const showVisibilityStatus = canUpdateVisibility || (isAdmin && galleryView === "public");
+                const imageAspectRatio = item.width && item.height ? `${item.width} / ${item.height}` : "1 / 1";
                 return (
                   <figure
-                    className={`group relative w-full overflow-hidden rounded-[22px] bg-background shadow-[0_0_15px_rgba(44,30,116,0.16)] ${selected ? "ring-2 ring-[#1456f0]/80 ring-offset-2" : ""}`}
+                    className={cn(
+                      "group relative overflow-hidden rounded-[22px] bg-background shadow-[0_0_15px_rgba(44,30,116,0.16)]",
+                      selected && "ring-2 ring-[#1456f0]/80 ring-offset-2",
+                    )}
                     style={{
                       contentVisibility: "auto",
                       containIntrinsicSize: item.width && item.height ? `${Math.min(360, item.width)}px ${Math.min(480, item.height)}px` : "320px 320px",
@@ -1505,18 +1518,19 @@ function ImageManagerContent({
                         }
                       }}
                       className="block w-full cursor-pointer overflow-hidden text-left"
+                      style={{ aspectRatio: imageAspectRatio }}
                       onFocus={() => setFocusedImagePath(imageKey)}
                       aria-label={selected ? "取消选择图片" : "选择图片"}
                     >
                       <AuthenticatedImage
-                        src={item.thumbnail_url || item.url}
+                        src={managedImageListPreviewSource(item)}
                         alt={item.name}
                         width={item.width || undefined}
                         height={item.height || undefined}
                         loading="lazy"
                         decoding="async"
-                        sizes="(min-width: 1280px) 25vw, (min-width: 1024px) 33vw, (min-width: 640px) 50vw, 100vw"
-                        className="block h-auto w-full transition duration-200 group-hover:brightness-95"
+                        sizes="(min-width: 1800px) 16vw, (min-width: 1536px) 20vw, (min-width: 1280px) 25vw, (min-width: 1024px) 33vw, (min-width: 640px) 50vw, 100vw"
+                        className="block h-full w-full object-cover transition duration-200 group-hover:brightness-95"
                       />
                     </button>
                     <button
@@ -1550,15 +1564,13 @@ function ImageManagerContent({
                         type="button"
                         onClick={(event) => {
                           event.currentTarget.blur();
-                          setLightboxIndex(index);
-                          setLightboxOpen(true);
+                          openImagePreview(item, index);
                         }}
-                        className="inline-flex h-7 items-center gap-1 rounded-full bg-white/95 px-2 text-[11px] font-medium text-stone-800 shadow-sm transition hover:bg-white hover:text-stone-950"
-                        aria-label="View Original"
-                        title="View Original"
+                        className="inline-flex size-7 items-center justify-center rounded-full bg-white/95 text-stone-800 shadow-sm transition hover:bg-white hover:text-stone-950"
+                        aria-label="预览原图"
+                        title="预览原图"
                       >
-                        <Eye className="size-3" />
-                        View Original
+                        <Eye className="size-3.5" />
                       </button>
                       {galleryView === "public" && canGenerateSimilar ? (
                         <button
@@ -1579,8 +1591,7 @@ function ImageManagerContent({
                           type="button"
                           onClick={(event) => {
                             event.currentTarget.blur();
-                            void navigator.clipboard.writeText(item.url);
-                            toast.success("图片地址已复制");
+                            void copyManagedImageURL(item);
                           }}
                           className="inline-flex size-7 items-center justify-center rounded-full bg-white/95 text-stone-800 shadow-sm transition hover:bg-white hover:text-stone-950"
                           aria-label="复制图片地址"
@@ -1663,8 +1674,9 @@ function ImageManagerContent({
                     </div>
                   </figure>
                 );
-            }}
-          />
+              }}
+            />
+          </div>
         ) : null}
 
         {showImageEmptyState ? (
