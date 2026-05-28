@@ -65,7 +65,7 @@ export function AnimatedRoutes() {
   const location = useLocation();
   const prefersReducedMotion = useReducedMotion();
   const pathname = location.pathname.replace(/\/+$/, "") || "/";
-  const isViewportWorkspacePage = pathname === "/canvas" || pathname === "/image" || pathname === "/image-manager";
+  const isViewportWorkspacePage = pathname === "/canvas" || pathname === "/image" || pathname === "/image-manager" || pathname === "/social";
 
   return (
     <AnimatePresence mode="wait" initial={false}>

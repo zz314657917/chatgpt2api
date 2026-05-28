@@ -14,6 +14,7 @@ import {
 import { toast } from "sonner";
 
 import {
+  cancelCreationTask,
   createChatCompletionTask,
   createCanvas,
   createImageEditTask,
@@ -29,18 +30,26 @@ import {
   type CanvasImageRef,
   type CreationTask,
   type ImageVisibility,
-  type ManagedImage,
+  type ManagedImageSummary,
 } from "@/lib/api";
 import { fetchAuthenticatedImageBlob } from "@/lib/authenticated-image";
 import { useAuthGuard } from "@/lib/use-auth-guard";
 
+import {
+  SMART_CANVAS_ONBOARDING_STORAGE_KEY,
+  canvasFlowTemplateById,
+  type SmartCanvasFlowTemplateId,
+  type SmartCanvasHelpTopic,
+} from "./canvas-help";
 import { dispatchSmartCanvasQueueChanged } from "./canvas-events";
 import {
   DEFAULT_SMART_VIEWPORT,
+  blankSmartCanvasItemIds,
   canvasImageKey,
   canvasImageSource,
   clampZoom,
   createEmptySmartCanvas,
+  createGroupNode,
   createItemId,
   createGeneratorNode,
   createHistoryEntry,
@@ -51,7 +60,10 @@ import {
   createPromptNode,
   createSmartEdge,
   creationTaskToOutput,
+  canConnectSmartCanvasNodes,
   dedupeCanvasImageRefs,
+  expandedCanvasImagesFromItem,
+  expandedCanvasPromptFromItem,
   imageFilesFromList,
   incomingItems,
   isActiveTask,
@@ -83,6 +95,8 @@ import {
   type SmartCanvasItem,
   type SmartCanvasImageToolParameters,
   type SmartCanvasImageToolType,
+  type SmartCanvasItemType,
+  type SmartCanvasPortMenuRequest,
   type SmartCanvasSaveState,
   type SmartCanvasTool,
   type SmartCanvasViewport,
@@ -126,6 +140,18 @@ function imageToolImagesFromItem(item: SmartCanvasItem | null) {
   return [];
 }
 
+function isGroupableItem(item?: SmartCanvasItem | null) {
+  return item?.type === "image" || item?.type === "prompt" || item?.type === "llm" || item?.type === "result";
+}
+
+function itemOutputImages(canvas: SmartCanvasDocument, item: SmartCanvasItem) {
+  return expandedCanvasImagesFromItem(canvas, item);
+}
+
+function itemPromptText(canvas: SmartCanvasDocument, item: SmartCanvasItem) {
+  return expandedCanvasPromptFromItem(canvas, item);
+}
+
 function imageToolUnavailableReason(item: SmartCanvasItem | null) {
   if (!item) {
     return "请选择一个只包含 1 张图片的节点";
@@ -141,48 +167,20 @@ function imageToolUnavailableReason(item: SmartCanvasItem | null) {
 }
 
 function buildAngleControlPrompt(values: SmartCanvasAngleControlValues) {
+  const horizontal = Math.round(values.horizontal);
+  const horizontalDirection = horizontal === 0 ? "保持当前水平角度" : `将相机向${horizontal > 0 ? "右" : "左"}旋转 ${Math.abs(horizontal)} 度`;
   return [
     "请基于输入图片生成同一主体的新视角版本，保持主体身份、材质、服饰、颜色关系和画面风格一致。",
-    `目标水平角为 ${Math.round(values.horizontal)} 度。`,
+    `${horizontalDirection}。`,
     `目标垂直角为 ${Math.round(values.vertical)} 度。`,
     `镜头缩放强度为 ${Math.round(values.zoom)} / 10。`,
     "只改变观察角度和镜头距离，不要新增无关元素，不要改变主体结构。",
   ].join("\n");
 }
 
-function canConnectNodes(source: SmartCanvasItem, target: SmartCanvasItem) {
-  if (target.type === "llm") {
-    return source.type === "image" || source.type === "prompt" || source.type === "result";
-  }
-  if (target.type === "loop") {
-    return source.type === "image" || source.type === "prompt" || source.type === "llm" || source.type === "result";
-  }
-  if (target.type === "image_generation") {
-    return source.type === "image" || source.type === "prompt" || source.type === "llm" || source.type === "loop" || source.type === "result";
-  }
-  if (target.type === "result") {
-    return source.type === "image_generation" || source.type === "llm" || source.type === "loop" || source.type === "image" || source.type === "result";
-  }
-  if (target.type === "image") {
-    return source.type === "image" || source.type === "result";
-  }
-  return false;
-}
-
 function generatorInputImages(canvas: SmartCanvasDocument, generator: SmartCanvasItem) {
   const upstream = incomingItems(canvas, generator.id);
-  const upstreamImages = upstream.flatMap((item) => {
-    if (item.type === "prompt") {
-      return item.data?.input_images || [];
-    }
-    if (item.type === "loop") {
-      return item.data?.output?.images || item.data?.images || [];
-    }
-    if (item.type === "result") {
-      return item.data?.output?.images || item.data?.images || [];
-    }
-    return item.data?.images || [];
-  });
+  const upstreamImages = upstream.flatMap((item) => itemOutputImages(canvas, item));
   const upstreamKeys = new Set(dedupeCanvasImageRefs(upstreamImages).map(canvasImageKey));
   return dedupeCanvasImageRefs([
     ...(generator.data?.input_images || []).filter((image) => !upstreamKeys.has(canvasImageKey(image))),
@@ -191,58 +189,150 @@ function generatorInputImages(canvas: SmartCanvasDocument, generator: SmartCanva
 }
 
 function generatorDirectInputImages(canvas: SmartCanvasDocument, generator: SmartCanvasItem) {
-  const upstreamImages = incomingItems(canvas, generator.id).flatMap((item) => {
-    if (item.type === "prompt") {
-      return item.data?.input_images || [];
-    }
-    if (item.type === "result") {
-      return item.data?.output?.images || item.data?.images || [];
-    }
-    return item.data?.images || [];
-  });
+  const upstreamImages = incomingItems(canvas, generator.id).flatMap((item) => itemOutputImages(canvas, item));
   const upstreamKeys = new Set(dedupeCanvasImageRefs(upstreamImages).map(canvasImageKey));
   return dedupeCanvasImageRefs((generator.data?.input_images || []).filter((image) => !upstreamKeys.has(canvasImageKey(image))));
+}
+
+function nodeInputImagesForCanvas(canvas: SmartCanvasDocument, item: SmartCanvasItem) {
+  return itemOutputImages(canvas, item);
 }
 
 function generatorPromptText(canvas: SmartCanvasDocument, generator: SmartCanvasItem) {
   const upstream = incomingItems(canvas, generator.id);
   return [
     ...upstream
-      .filter((item) => item.type === "prompt" || item.type === "llm")
-      .map((item) => item.type === "llm" ? item.data?.output?.text || item.data?.prompt || "" : item.data?.prompt || ""),
+      .filter((item) => item.type === "prompt" || item.type === "llm" || item.type === "loop" || item.type === "group")
+      .map((item) => itemPromptText(canvas, item)),
     generator.data?.prompt || "",
   ].map((value) => value.trim()).filter(Boolean).join("\n\n");
+}
+
+function loopInputText(canvas: SmartCanvasDocument, node: SmartCanvasItem) {
+  return [
+    ...incomingItems(canvas, node.id).map((item) => itemPromptText(canvas, item)),
+    node.data?.prompt || "",
+  ].map((value) => String(value || "").trim()).filter(Boolean).join("\n\n");
+}
+
+function loopInputImages(canvas: SmartCanvasDocument, node: SmartCanvasItem) {
+  return dedupeCanvasImageRefs(incomingItems(canvas, node.id).flatMap((item) => nodeInputImagesForCanvas(canvas, item)));
+}
+
+function hasLoopOutput(item?: SmartCanvasItem | null) {
+  return item?.data?.output?.raw?.mode === "loop";
+}
+
+function isLoopDrivenGenerator(canvas: SmartCanvasDocument | null | undefined, generatorId: string) {
+  if (!canvas) {
+    return false;
+  }
+  return canvas.edges.some((edge) => edge.target === generatorId && canvas.nodes.some((item) => item.id === edge.source && item.type === "loop"));
+}
+
+function mergeLoopSlotStatuses(
+  current: CreationTask["output_statuses"],
+  startIndex: number,
+  count: number,
+  statuses: CreationTask["output_statuses"] = [],
+  fallback: CreationTask["status"],
+) {
+  const next = [...(current || [])];
+  const normalizedCount = Math.max(1, count);
+  for (let offset = 0; offset < normalizedCount; offset += 1) {
+    const index = startIndex + offset;
+    if (index >= next.length) {
+      break;
+    }
+    next[index] = statuses[offset] || fallback;
+  }
+  return next;
 }
 
 function llmInputText(canvas: SmartCanvasDocument, node: SmartCanvasItem) {
   const upstream = incomingItems(canvas, node.id);
   return [
-    ...upstream.map((item) => {
-      if (item.type === "llm") {
-        return item.data?.output?.text || item.data?.prompt || "";
-      }
-      if (item.type === "result") {
-        return item.data?.output?.text || item.data?.prompt || "";
-      }
-      return item.data?.prompt || item.data?.text || "";
-    }),
+    ...upstream.map((item) => itemPromptText(canvas, item)),
     node.data?.prompt || "",
   ].map((value) => String(value || "").trim()).filter(Boolean).join("\n\n");
 }
 
 function llmInputImages(canvas: SmartCanvasDocument, node: SmartCanvasItem) {
-  return dedupeCanvasImageRefs(incomingItems(canvas, node.id).flatMap((item) => {
-    if (item.type === "prompt") {
-      return item.data?.input_images || [];
-    }
-    if (item.type === "result") {
-      return item.data?.output?.images || item.data?.images || [];
-    }
-    if (item.type === "loop") {
-      return item.data?.output?.images || item.data?.images || [];
-    }
-    return item.data?.images || [];
-  }));
+  return dedupeCanvasImageRefs(incomingItems(canvas, node.id).flatMap((item) => nodeInputImagesForCanvas(canvas, item)));
+}
+
+function buildLlmPromptInstruction(inputText: string, imageCount: number) {
+  const source = inputText.trim() || (imageCount > 0 ? "请根据输入图片提炼适合图像生成模型使用的提示词。" : "");
+  return [
+    "你是图像生成工作流里的提示词处理节点。",
+    "你的输出会直接传给下游 API 生成节点，不是给用户阅读的说明。",
+    "只输出最终可用的图像生成 prompt 本体。",
+    "不要寒暄，不要解释，不要写 Markdown，不要加标题，不要使用“提示词：”“可以”“下面是”等前缀。",
+    "不要输出多个方案，除非输入明确要求多条。",
+    "优先保留用户意图、主体、风格、构图、材质、光照、镜头、背景和约束。",
+    "如果有参考图，结合参考图提炼主体、风格和视觉细节，但不要描述“图片中/参考图中”这类元信息。",
+    "输入：",
+    source,
+  ].filter(Boolean).join("\n");
+}
+
+function cleanLlmPromptOutput(value: string) {
+  let text = String(value || "").trim();
+  text = text.replace(/^```(?:[\w-]+)?\s*/i, "").replace(/\s*```$/i, "").trim();
+  text = text.replace(/^\s*(?:#+\s*)?(?:最终)?(?:图像生成|生图|SDXL|Midjourney|MJ)?\s*提示词\s*[:：-]\s*/i, "").trim();
+  text = text.replace(/^\s*(?:可以，?|好的，?|下面是(?:一段|适合)?.*?[:：])\s*/i, "").trim();
+  text = text.replace(/^\*\*[^*\n]*(?:提示词|Prompt)[^*\n]*\*\*\s*[:：]?\s*/i, "").trim();
+  text = text.replace(/^[-*]\s+/, "").trim();
+  return text;
+}
+
+function createCanvasNode(type: SmartCanvasItem["type"], position: { x: number; y: number }) {
+  if (type === "prompt") {
+    return createPromptNode(position);
+  }
+  if (type === "llm") {
+    return createLlmNode(position);
+  }
+  if (type === "loop") {
+    return createLoopNode(position);
+  }
+  if (type === "group") {
+    return createGroupNode(position);
+  }
+  if (type === "image_generation") {
+    return createGeneratorNode(position);
+  }
+  if (type === "result") {
+    return createOutputNode(position);
+  }
+  return createImageItem([], position);
+}
+
+function seedTemplateNodeData(item: SmartCanvasItem, templateId: SmartCanvasFlowTemplateId): SmartCanvasItem {
+  if (item.type === "prompt") {
+    const prompt = templateId === "basic-text"
+      ? "生成一张未来感产品海报，干净背景，精致光影，高级商业摄影风格。"
+      : templateId === "loop-repeat"
+        ? "生成不同颜色方案的产品包装，保持构图一致。"
+        : templateId === "loop-images"
+          ? "基于每张参考图生成同风格的新版本。"
+          : "根据参考图和要求生成高质量图片。";
+    return { ...item, data: { ...item.data, prompt } };
+  }
+  if (item.type === "image_generation") {
+    return { ...item, data: { ...item.data, prompt: "" } };
+  }
+  if (item.type === "loop") {
+    return {
+      ...item,
+      data: {
+        ...item.data,
+        loop_mode: templateId === "loop-images" ? "images" : "repeat",
+        loop_count: templateId === "loop-repeat" ? 3 : item.data?.loop_count || 3,
+      },
+    };
+  }
+  return item;
 }
 
 function smartCanvasesFromList(items: CanvasDocument[]) {
@@ -272,10 +362,192 @@ function canvasItemCenterOffset(type: SmartCanvasItem["type"]) {
   if (type === "loop") {
     return { x: -170, y: -150 };
   }
+  if (type === "group") {
+    return { x: -170, y: -120 };
+  }
   if (type === "prompt") {
     return { x: -150, y: -100 };
   }
   return { x: -130, y: -120 };
+}
+
+function nodeSizeForType(type: SmartCanvasItem["type"]) {
+  if (type === "image") {
+    return { w: 270, h: 260 };
+  }
+  if (type === "prompt") {
+    return { w: 310, h: 210 };
+  }
+  if (type === "llm") {
+    return { w: 380, h: 420 };
+  }
+  if (type === "loop") {
+    return { w: 340, h: 280 };
+  }
+  if (type === "group") {
+    return { w: 340, h: 230 };
+  }
+  if (type === "image_generation") {
+    return { w: 390, h: 330 };
+  }
+  return { w: 440, h: 245 };
+}
+
+type CanvasNodeRect = {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+};
+
+function canvasItemRect(item: SmartCanvasItem): CanvasNodeRect {
+  const size = nodeSizeForType(item.type);
+  return {
+    x: Number(item.position?.x || 0),
+    y: Number(item.position?.y || 0),
+    w: Number(item.data?.width || size.w),
+    h: Number(item.data?.height || size.h),
+  };
+}
+
+function rectIntersectionArea(a: CanvasNodeRect, b: CanvasNodeRect) {
+  const w = Math.max(0, Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x));
+  const h = Math.max(0, Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y));
+  return w * h;
+}
+
+function groupPositionForItems(canvas: SmartCanvasDocument, itemIds: string[]) {
+  const selected = canvas.nodes.filter((item) => itemIds.includes(item.id));
+  if (selected.length === 0) {
+    return { x: 240, y: 180 };
+  }
+  const rects = selected.map(canvasItemRect);
+  const minX = Math.min(...rects.map((rect) => rect.x));
+  const minY = Math.min(...rects.map((rect) => rect.y));
+  return { x: minX - 28, y: minY - 66 };
+}
+
+function pruneGroupReferences(item: SmartCanvasItem, removedIds: Set<string>) {
+  if (item.type !== "group") {
+    return item;
+  }
+  return {
+    ...item,
+    data: {
+      ...item.data,
+      group_item_ids: (item.data?.group_item_ids || []).filter((itemId) => !removedIds.has(itemId)),
+    },
+  };
+}
+
+function handoffMemberEdgesToGroup(canvas: SmartCanvasDocument, group: SmartCanvasItem) {
+  if (group.type !== "group") {
+    return canvas.edges;
+  }
+  const memberIds = new Set(group.data?.group_item_ids || []);
+  if (memberIds.size === 0) {
+    return canvas.edges;
+  }
+  const targetIds = new Set<string>();
+  for (const edge of canvas.edges) {
+    if (!memberIds.has(edge.source)) {
+      continue;
+    }
+    const target = canvas.nodes.find((item) => item.id === edge.target);
+    if (target && canConnectSmartCanvasNodes(group, target)) {
+      targetIds.add(edge.target);
+    }
+  }
+  const nextEdges = canvas.edges.filter((edge) => !(memberIds.has(edge.source) && targetIds.has(edge.target)));
+  for (const targetId of targetIds) {
+    if (!nextEdges.some((edge) => edge.source === group.id && edge.target === targetId)) {
+      nextEdges.push(createSmartEdge(group.id, targetId));
+    }
+  }
+  return nextEdges;
+}
+
+function withGroupMember(item: SmartCanvasItem, memberId: string) {
+  if (item.type !== "group" || item.id === memberId) {
+    return item;
+  }
+  const ids = item.data?.group_item_ids || [];
+  if (ids.includes(memberId)) {
+    return item;
+  }
+  return {
+    ...item,
+    data: {
+      ...item.data,
+      group_item_ids: [...ids, memberId],
+      updated_at: new Date().toISOString(),
+    },
+  };
+}
+
+function bestContainingGroupForItem(canvas: SmartCanvasDocument, item: SmartCanvasItem) {
+  const itemRect = canvasItemRect(item);
+  const itemArea = Math.max(1, itemRect.w * itemRect.h);
+  let best: { id: string; score: number } | null = null;
+  for (const group of canvas.nodes) {
+    if (group.type !== "group" || group.id === item.id) {
+      continue;
+    }
+    const area = rectIntersectionArea(itemRect, canvasItemRect(group));
+    if (area <= 0) {
+      continue;
+    }
+    const score = area / itemArea;
+    if (score >= 0.35 && (!best || score > best.score)) {
+      best = { id: group.id, score };
+    }
+  }
+  return best?.id || "";
+}
+
+function syncMovedItemsIntoGroups(canvas: SmartCanvasDocument, itemIds: string[]) {
+  const candidates = new Set(itemIds);
+  if (candidates.size === 0) {
+    return canvas;
+  }
+  const targetGroupByItem = new Map<string, string>();
+  for (const item of canvas.nodes) {
+    if (!candidates.has(item.id) || !isGroupableItem(item)) {
+      continue;
+    }
+    const groupId = bestContainingGroupForItem(canvas, item);
+    if (groupId) {
+      targetGroupByItem.set(item.id, groupId);
+    }
+  }
+
+  let changed = false;
+  const nextNodes = canvas.nodes.map((item) => {
+    if (item.type !== "group") {
+      return item;
+    }
+    const existing = item.data?.group_item_ids || [];
+    const nextIds = existing.filter((memberId) => !candidates.has(memberId));
+    for (const [memberId, groupId] of targetGroupByItem) {
+      if (groupId === item.id && !nextIds.includes(memberId)) {
+        nextIds.push(memberId);
+      }
+    }
+    if (nextIds.length === existing.length && nextIds.every((id, index) => id === existing[index])) {
+      return item;
+    }
+    changed = true;
+    return {
+      ...item,
+      data: {
+        ...item.data,
+        group_item_ids: nextIds,
+        updated_at: new Date().toISOString(),
+      },
+    };
+  });
+
+  return changed ? { ...canvas, nodes: nextNodes } : canvas;
 }
 
 function getCanvasNodeIdAtPoint(point: { x: number; y: number }, port?: "in" | "out") {
@@ -323,7 +595,7 @@ export function useSmartCanvasController() {
   const [canvases, setCanvases] = useState<SmartCanvasDocument[]>([]);
   const [canvas, setCanvas] = useState<SmartCanvasDocument | null>(null);
   const [models, setModels] = useState(() => normalizeModelCatalog([]));
-  const [assets, setAssets] = useState<ManagedImage[]>([]);
+  const [assets, setAssets] = useState<ManagedImageSummary[]>([]);
   const [assetNextCursor, setAssetNextCursor] = useState("");
   const [hasMoreAssets, setHasMoreAssets] = useState(false);
   const [selectedItemId, setSelectedItemId] = useState("");
@@ -356,6 +628,10 @@ export function useSmartCanvasController() {
   const [historyEntries, setHistoryEntries] = useState<SmartCanvasHistoryEntry[]>([]);
   const [runHistoryOpen, setRunHistoryOpen] = useState(false);
   const [operationHistoryOpen, setOperationHistoryOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
+  const [helpTopic, setHelpTopic] = useState<SmartCanvasHelpTopic>({ kind: "flow", id: "basic-text" });
+  const [onboardingOpen, setOnboardingOpen] = useState(false);
+  const [portMenuRequest, setPortMenuRequest] = useState<SmartCanvasPortMenuRequest | null>(null);
   const boardRef = useRef<HTMLDivElement | null>(null);
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
   const uploadTargetPointRef = useRef<{ x: number; y: number } | null>(null);
@@ -367,6 +643,7 @@ export function useSmartCanvasController() {
   const savePromiseRef = useRef<Promise<SmartCanvasDocument | null> | null>(null);
   const dirtyVersionRef = useRef(0);
   const pollingTasksRef = useRef(new Set<string>());
+  const loopStopRequestsRef = useRef(new Set<string>());
   const dragStateRef = useRef<SmartCanvasDragState>({ kind: "none" });
   const connectStateRef = useRef<SmartCanvasConnectState>({ kind: "none" });
   const applyingHistoryRef = useRef(false);
@@ -378,6 +655,7 @@ export function useSmartCanvasController() {
     () => canvas?.nodes.find((item) => item.id === selectedItemId) || null,
     [canvas, selectedItemId],
   );
+  const blankNodeCount = useMemo(() => blankSmartCanvasItemIds(canvas).length, [canvas]);
   const selectedImageToolDisabledReason = useMemo(() => imageToolUnavailableReason(selectedItem), [selectedItem]);
   const mentionItems = useMemo(() => mentionCandidateImages(canvas, assets), [assets, canvas]);
   const angleControlPrompt = useMemo(() => buildAngleControlPrompt(angleControlValues), [angleControlValues]);
@@ -406,6 +684,15 @@ export function useSmartCanvasController() {
   useEffect(() => {
     window.localStorage.setItem("smart-canvas-left-rail-collapsed", leftRailCollapsed ? "1" : "0");
   }, [leftRailCollapsed]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || isCheckingAuth || loading) {
+      return;
+    }
+    if (window.localStorage.getItem(SMART_CANVAS_ONBOARDING_STORAGE_KEY) !== "1") {
+      setOnboardingOpen(true);
+    }
+  }, [isCheckingAuth, loading]);
 
   const setActiveDragState = useCallback((next: SmartCanvasDragState) => {
     dragStateRef.current = next;
@@ -696,25 +983,156 @@ export function useSmartCanvasController() {
     const world = rect
       ? screenToWorld(point || { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }, rect, viewportRef.current)
       : { x: 240, y: 180 };
+    const current = canvasRef.current;
+    const selectedIds = selectedItemIds.length > 1
+      ? selectedItemIds.filter((id) => current?.nodes.some((node) => node.id === id && isGroupableItem(node)))
+      : [];
     const offset = canvasItemCenterOffset(type);
     const existingCount = canvasRef.current?.nodes.length || 0;
     const stagger = (existingCount % 8) * 28;
-    const position = { x: world.x + offset.x + stagger, y: world.y + offset.y + stagger };
-    const item = type === "prompt"
-      ? createPromptNode(position)
-      : type === "llm"
-        ? createLlmNode(position)
-        : type === "loop"
-          ? createLoopNode(position)
-          : type === "image_generation"
-            ? createGeneratorNode(position)
-            : type === "result"
-              ? createOutputNode(position)
-              : createImageItem([], position);
-    updateCanvas((current) => ({ ...current, nodes: [...current.nodes, item] }), true, `新增 ${type === "llm" ? "AI 提示词" : item.name || "节点"}`);
+    const fallbackPosition = { x: world.x + offset.x + stagger, y: world.y + offset.y + stagger };
+    const position = type === "group" && selectedIds.length > 0 && current
+      ? groupPositionForItems(current, selectedIds)
+      : fallbackPosition;
+    const item = type === "group"
+      ? createGroupNode(position, selectedIds)
+      : createCanvasNode(type, position);
+    updateCanvas((current) => {
+      const next = { ...current, nodes: [...current.nodes, item] };
+      return item.type === "group" ? { ...next, edges: handoffMemberEdgesToGroup(next, item) } : next;
+    }, true, type === "group" && selectedIds.length > 0 ? "创建组" : `新增 ${type === "llm" ? "AI 提示词" : item.name || "节点"}`);
+    selectSingleItem(item.id);
+    return item;
+  }, [selectSingleItem, selectedItemIds, updateCanvas]);
+
+  const openCanvasHelp = useCallback((topic?: SmartCanvasHelpTopic) => {
+    if (topic) {
+      setHelpTopic(topic);
+    }
+    setHelpOpen(true);
+  }, []);
+
+  const openNodeHelp = useCallback((nodeType: SmartCanvasItemType) => {
+    openCanvasHelp({ kind: "node", id: nodeType });
+  }, [openCanvasHelp]);
+
+  const dismissOnboarding = useCallback(() => {
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(SMART_CANVAS_ONBOARDING_STORAGE_KEY, "1");
+    }
+    setOnboardingOpen(false);
+  }, []);
+
+  const insertFlowTemplate = useCallback((templateId: SmartCanvasFlowTemplateId) => {
+    const template = canvasFlowTemplateById(templateId);
+    const rect = boardRef.current?.getBoundingClientRect();
+    const world = rect
+      ? screenToWorld({ x: rect.left + Math.min(360, rect.width * 0.34), y: rect.top + Math.min(300, rect.height * 0.42) }, rect, viewportRef.current)
+      : { x: 220, y: 180 };
+    const existingCount = canvasRef.current?.nodes.length || 0;
+    const stagger = (existingCount % 6) * 36;
+    const base = { x: world.x + stagger, y: world.y + stagger };
+    const columnGap = 430;
+    const rowGap = 250;
+    const rowCounts = new Map<number, number>();
+    const nodes = template.nodes.map((type, index) => {
+      const edgeTargets = new Set(template.edges.map((edge) => edge[1]));
+      const column = edgeTargets.has(index) ? Math.max(1, Math.min(3, template.edges.find((edge) => edge[1] === index)?.[1] || index)) : 0;
+      const normalizedColumn = type === "image_generation" ? 2 : type === "result" ? 3 : type === "loop" || type === "llm" || type === "group" ? 1 : 0;
+      const row = rowCounts.get(normalizedColumn) || 0;
+      rowCounts.set(normalizedColumn, row + 1);
+      const position = {
+        x: base.x + normalizedColumn * columnGap,
+        y: base.y + row * rowGap,
+      };
+      void column;
+      return seedTemplateNodeData(createCanvasNode(type, position), templateId);
+    });
+    const edges = template.edges.map(([sourceIndex, targetIndex]) => createSmartEdge(nodes[sourceIndex].id, nodes[targetIndex].id));
+    updateCanvas((current) => ({
+      ...current,
+      nodes: [...current.nodes, ...nodes],
+      edges: [...current.edges, ...edges],
+    }), true, `插入${template.title}`);
+    selectSingleItem(nodes[0]?.id || "");
+    toast.success(`已插入${template.title}`);
+    return nodes;
+  }, [selectSingleItem, updateCanvas]);
+
+  const addNodeFromPort = useCallback((sourceId: string, type: SmartCanvasItem["type"], point?: { x: number; y: number }) => {
+    const rect = boardRef.current?.getBoundingClientRect();
+    const current = canvasRef.current;
+    const source = current?.nodes.find((node) => node.id === sourceId);
+    if (!source) {
+      return null;
+    }
+    const sourceSize = nodeSizeForType(source.type);
+    const nextSize = nodeSizeForType(type);
+    const anchorWorld = rect && point
+      ? screenToWorld(point, rect, viewportRef.current)
+      : {
+          x: Number(source.position?.x || 0) + sourceSize.w + 170,
+          y: Number(source.position?.y || 0) + sourceSize.h / 2,
+        };
+    const position = {
+      x: anchorWorld.x + 150,
+      y: anchorWorld.y - nextSize.h / 2,
+    };
+    const item = type === "group" && isGroupableItem(source)
+      ? createGroupNode(position, [source.id])
+      : createCanvasNode(type, position);
+    if (!canConnectSmartCanvasNodes(source, item)) {
+      toast.error("这两个节点不能直接连接");
+      return null;
+    }
+    updateCanvas((doc) => ({
+      ...doc,
+      nodes: [...doc.nodes, item],
+      edges: doc.edges.some((edge) => edge.source === source.id && edge.target === item.id)
+        ? doc.edges
+        : [...doc.edges, createSmartEdge(source.id, item.id)],
+    }), true, `新增并连接 ${type === "llm" ? "AI 提示词" : item.name || "节点"}`);
     selectSingleItem(item.id);
     return item;
   }, [selectSingleItem, updateCanvas]);
+
+  const createNodeHelpTemplate = useCallback((nodeId: string) => {
+    const current = canvasRef.current;
+    const node = current?.nodes.find((item) => item.id === nodeId);
+    if (!node) {
+      return;
+    }
+    if (node.type !== "llm") {
+      addNodeFromPort(node.id, node.type === "image_generation" ? "result" : "image_generation");
+      return;
+    }
+    const baseX = Number(node.position?.x || 0);
+    const baseY = Number(node.position?.y || 0);
+    const prompt = createPromptNode({
+      x: baseX - 360,
+      y: baseY - 32,
+    });
+    const image = createImageItem([], {
+      x: baseX - 330,
+      y: baseY + 210,
+    });
+    const generator = createGeneratorNode({
+      x: baseX + 430,
+      y: baseY,
+    });
+    updateCanvas((doc) => ({
+      ...doc,
+      nodes: [...doc.nodes, prompt, image, generator],
+      edges: [
+        ...doc.edges,
+        createSmartEdge(prompt.id, node.id),
+        createSmartEdge(image.id, node.id),
+        createSmartEdge(node.id, generator.id),
+      ],
+    }), true, "创建 AI 提示词模板链路");
+    setSelectedItemIds([prompt.id, image.id, generator.id]);
+    setSelectedItemId(generator.id);
+  }, [addNodeFromPort, updateCanvas]);
 
   const updateItemData = useCallback((id: string, patch: Partial<SmartCanvasItem["data"]>) => {
     updateCanvas((current) => ({
@@ -741,7 +1159,7 @@ export function useSmartCanvasController() {
       if (!sourceNode || !targetNode) {
         return current;
       }
-      if (!canConnectNodes(sourceNode, targetNode)) {
+      if (!canConnectSmartCanvasNodes(sourceNode, targetNode)) {
         toast.error("这两个节点不能直接连接");
         return current;
       }
@@ -749,16 +1167,85 @@ export function useSmartCanvasController() {
         return current;
       }
       changed = true;
-      return { ...current, edges: [...current.edges, createSmartEdge(source, target)] };
+      return {
+        ...current,
+        nodes: current.nodes.map((item) => item.id === target ? withGroupMember(item, source) : item),
+        edges: [...current.edges, createSmartEdge(source, target)],
+      };
     }, true, "新增连线");
     return changed;
   }, [updateCanvas]);
 
+  const connectLlmImagesToGenerator = useCallback((generatorId: string) => {
+    const current = canvasRef.current;
+    const generator = current?.nodes.find((item) => item.id === generatorId);
+    if (!current || !generator || generator.type !== "image_generation") {
+      return;
+    }
+    const llmNodes = incomingItems(current, generator.id, ["llm"]);
+    const imageNodeIds = new Set<string>();
+    for (const llmNode of llmNodes) {
+      for (const source of incomingItems(current, llmNode.id, ["image"])) {
+        if ((source.data?.images || []).length > 0) {
+          imageNodeIds.add(source.id);
+        }
+      }
+    }
+    const missingIds = Array.from(imageNodeIds).filter((sourceId) => !current.edges.some((edge) => edge.source === sourceId && edge.target === generator.id));
+    if (missingIds.length === 0) {
+      toast.info("没有需要补充连接的图片节点");
+      return;
+    }
+    updateCanvas((doc) => ({
+      ...doc,
+      edges: [
+        ...doc.edges,
+        ...missingIds.map((sourceId) => createSmartEdge(sourceId, generator.id)),
+      ],
+    }), true, "连接 AI 提示词参考图");
+    toast.success(`已连接 ${missingIds.length} 个图片节点到 API生成`);
+  }, [updateCanvas]);
+
+  const connectLlmImagesToLoop = useCallback((loopId: string) => {
+    const current = canvasRef.current;
+    const loop = current?.nodes.find((item) => item.id === loopId);
+    if (!current || !loop || loop.type !== "loop") {
+      return;
+    }
+    const llmNodes = incomingItems(current, loop.id, ["llm"]);
+    const imageNodeIds = new Set<string>();
+    for (const llmNode of llmNodes) {
+      for (const source of incomingItems(current, llmNode.id, ["image"])) {
+        if ((source.data?.images || []).length > 0) {
+          imageNodeIds.add(source.id);
+        }
+      }
+    }
+    const missingIds = Array.from(imageNodeIds).filter((sourceId) => !current.edges.some((edge) => edge.source === sourceId && edge.target === loop.id));
+    if (missingIds.length === 0) {
+      toast.info("没有需要补充连接的图片节点");
+      return;
+    }
+    updateCanvas((doc) => ({
+      ...doc,
+      edges: [
+        ...doc.edges,
+        ...missingIds.map((sourceId) => createSmartEdge(sourceId, loop.id)),
+      ],
+    }), true, "连接 AI 提示词参考图");
+    toast.success(`已连接 ${missingIds.length} 个图片节点到循环`);
+  }, [updateCanvas]);
+
   const deleteEdge = useCallback((edgeId: string) => {
-    updateCanvas((current) => ({
-      ...current,
-      edges: current.edges.filter((edge) => edge.id !== edgeId),
-    }), true, "删除连线");
+    updateCanvas((current) => {
+      const edge = current.edges.find((item) => item.id === edgeId);
+      const removed = edge ? new Set([edge.source]) : new Set<string>();
+      return {
+        ...current,
+        nodes: edge ? current.nodes.map((item) => item.id === edge.target ? pruneGroupReferences(item, removed) : item) : current.nodes,
+        edges: current.edges.filter((item) => item.id !== edgeId),
+      };
+    }, true, "删除连线");
   }, [updateCanvas]);
 
   const bindWindowPointerSession = useCallback((pointerId: number) => {
@@ -828,16 +1315,33 @@ export function useSmartCanvasController() {
       }
       const activeDrag = dragStateRef.current;
       const activeConnect = connectStateRef.current;
+      const commitMovedItem = (drag: Extract<SmartCanvasDragState, { kind: "item" }>) => {
+        updateCanvas(
+          (current) => syncMovedItemsIntoGroups(current, drag.groupCandidateIds),
+          true,
+          "移动节点",
+        );
+      };
       if (activeDrag.kind === "item" || activeDrag.kind === "resize") {
-        updateCanvas((current) => current, true, activeDrag.kind === "item" ? "移动节点" : "缩放节点");
+        if (activeDrag.kind === "item") {
+          commitMovedItem(activeDrag);
+        } else {
+          updateCanvas((current) => current, true, "缩放节点");
+        }
       }
       if (activeDrag.kind === "pan") {
-        updateCanvas((current) => ({ ...current, viewport: viewportRef.current }), true, "移动画布");
+        updateCanvas((current) => ({ ...current, viewport: viewportRef.current }), true);
       }
       if (activeConnect.kind === "link") {
         const targetId = getCanvasNodeIdAtPoint({ x: event.clientX, y: event.clientY }, "in");
         if (targetId) {
           appendEdge(activeConnect.sourceId, targetId);
+        } else {
+          setPortMenuRequest({
+            id: Date.now(),
+            sourceId: activeConnect.sourceId,
+            screen: { x: event.clientX, y: event.clientY },
+          });
         }
         setActiveConnectState({ kind: "none" });
       }
@@ -1078,7 +1582,7 @@ export function useSmartCanvasController() {
 
   const addManagedImagePayload = useCallback((payload: string, point?: { x: number; y: number }, targetNodeId?: string) => {
     try {
-      const item = JSON.parse(payload) as ManagedImage;
+      const item = JSON.parse(payload) as ManagedImageSummary;
       const refs = managedImagesToRefs([item]);
       const target = targetNodeId ? canvasRef.current?.nodes.find((node) => node.id === targetNodeId) : null;
       if (target?.type === "image_generation" && addImagesNearGenerator(refs, target, point)) {
@@ -1199,9 +1703,17 @@ export function useSmartCanvasController() {
       return;
     }
     const nextSelection = currentSelection.includes(item.id) ? currentSelection : [item.id];
+    const groupMembers = item.type === "group" ? item.data?.group_item_ids || [] : [];
     const activeSelection = nextSelection.length > 0 ? nextSelection : [item.id];
+    const movingIds = Array.from(new Set([...activeSelection, ...groupMembers]));
+    const groupCandidateIds = item.type === "group"
+      ? []
+      : activeSelection.filter((id) => {
+          const targetItem = canvasRef.current?.nodes.find((node) => node.id === id);
+          return isGroupableItem(targetItem);
+        });
     const startPositions = Object.fromEntries(
-      activeSelection.map((id) => {
+      movingIds.map((id) => {
         const targetItem = canvasRef.current?.nodes.find((node) => node.id === id) || item;
         return [id, { x: Number(targetItem.position?.x || 0), y: Number(targetItem.position?.y || 0) }];
       }),
@@ -1213,7 +1725,8 @@ export function useSmartCanvasController() {
       kind: "item",
       pointerId: event.pointerId,
       itemId: item.id,
-      itemIds: activeSelection,
+      itemIds: movingIds,
+      groupCandidateIds,
       startClientX: event.clientX,
       startClientY: event.clientY,
       startPositions,
@@ -1235,8 +1748,8 @@ export function useSmartCanvasController() {
       startClientX: event.clientX,
       startClientY: event.clientY,
       startSize: {
-        w: Number(item.data?.width || 270),
-        h: Number(item.data?.height || 260),
+        w: Number(item.data?.width || nodeSizeForType(item.type).w),
+        h: Number(item.data?.height || nodeSizeForType(item.type).h),
       },
     });
     bindWindowPointerSession(event.pointerId);
@@ -1299,10 +1812,18 @@ export function useSmartCanvasController() {
 
   const handlePointerUp = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
     if ((dragState.kind === "item" || dragState.kind === "resize") && dragState.pointerId === event.pointerId) {
-      updateCanvas((current) => current, true, dragState.kind === "item" ? "移动节点" : "缩放节点");
+      if (dragState.kind === "item") {
+        updateCanvas(
+          (current) => syncMovedItemsIntoGroups(current, dragState.groupCandidateIds),
+          true,
+          "移动节点",
+        );
+      } else {
+        updateCanvas((current) => current, true, "缩放节点");
+      }
     }
     if (dragState.kind === "pan" && dragState.pointerId === event.pointerId) {
-      updateCanvas((current) => ({ ...current, viewport: viewportRef.current }), true, "移动画布");
+      updateCanvas((current) => ({ ...current, viewport: viewportRef.current }), true);
     }
     if (connectState.kind === "link" && connectState.pointerId === event.pointerId) {
       const targetId = getCanvasNodeIdAtPoint({ x: event.clientX, y: event.clientY }, "in");
@@ -1333,7 +1854,7 @@ export function useSmartCanvasController() {
   const updateViewport = useCallback((next: SmartCanvasViewport, commit = false, label = "移动画布") => {
     setViewport(next);
     viewportRef.current = next;
-    updateCanvas((current) => ({ ...current, viewport: next }), commit, label);
+    updateCanvas((current) => ({ ...current, viewport: next }), commit, commit ? undefined : label);
     if (!commit) {
       markDirty();
     }
@@ -1347,7 +1868,7 @@ export function useSmartCanvasController() {
     const next = zoomViewportAt(viewportRef.current, rect, { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }, viewportRef.current.zoom * factor);
     setViewport(next);
     viewportRef.current = next;
-    updateCanvas((current) => ({ ...current, viewport: next }), true, "缩放画布");
+    updateCanvas((current) => ({ ...current, viewport: next }), true);
   }, [updateCanvas]);
 
   const fitContent = useCallback(() => {
@@ -1373,7 +1894,7 @@ export function useSmartCanvasController() {
     };
     setViewport(next);
     viewportRef.current = next;
-    updateCanvas((doc) => ({ ...doc, viewport: next }), true, "适配画布");
+    updateCanvas((doc) => ({ ...doc, viewport: next }), true);
   }, [updateCanvas]);
 
   const focusItem = useCallback((itemId: string) => {
@@ -1553,6 +2074,9 @@ export function useSmartCanvasController() {
           continue;
         }
         const output = creationTaskToOutput(task);
+        if (output.text) {
+          output.text = cleanLlmPromptOutput(output.text);
+        }
         active = isActiveTask(task.status);
         updateCanvas((current) => ({
           ...current,
@@ -1668,31 +2192,38 @@ export function useSmartCanvasController() {
   const runAngleControlForImageEditor = useCallback((values: SmartCanvasAngleControlValues) => {
     if (!imageEditorImage) {
       toast.info("请先打开一张图片");
-      return;
+      return Promise.resolve("");
     }
     const normalized = {
-      horizontal: Math.max(0, Math.min(360, Number(values.horizontal) || 0)),
-      vertical: Math.max(-30, Math.min(90, Number(values.vertical) || 0)),
+      horizontal: Math.max(-180, Math.min(180, Number(values.horizontal) || 0)),
+      vertical: Math.max(-90, Math.min(90, Number(values.vertical) || 0)),
       zoom: Math.max(0, Math.min(10, Number(values.zoom) || 0)),
     };
     setAngleControlValues(normalized);
-    void (async () => {
+    return (async () => {
       const prompt = buildAngleControlPrompt(normalized);
       const sourceItem = imageEditorSourceItemId
         ? canvasRef.current?.nodes.find((item) => item.id === imageEditorSourceItemId) || null
         : findItemContainingImage(imageEditorImage);
       if (!sourceItem) {
         toast.info("无法定位这张图片所在节点");
-        return;
+        return "";
       }
       const outputId = await runImageEditTool({ item: sourceItem, image: imageEditorImage }, "angle_control", prompt, normalized);
       if (outputId) {
         setAngleControlResultItemId(outputId);
       }
+      return outputId;
     })();
   }, [findItemContainingImage, imageEditorImage, imageEditorSourceItemId, runImageEditTool]);
 
   const pollTaskIntoGenerator = useCallback(async (taskId: string, generatorId: string, outputIds: string[]) => {
+    const currentCanvas = canvasRef.current;
+    const generatorNode = currentCanvas?.nodes.find((item) => item.id === generatorId);
+    const hasLoopOutputNode = currentCanvas?.nodes.some((item) => outputIds.includes(item.id) && hasLoopOutput(item));
+    if (isLoopDrivenGenerator(currentCanvas, generatorId) || hasLoopOutput(generatorNode) || hasLoopOutputNode) {
+      return;
+    }
     if (pollingTasksRef.current.has(taskId)) {
       return;
     }
@@ -1708,10 +2239,14 @@ export function useSmartCanvasController() {
         }
         const output = creationTaskToOutput(task);
         active = isActiveTask(task.status);
+        const taskStartedAt = task.created_at || task.updated_at;
         updateCanvas((current) => ({
           ...current,
           nodes: current.nodes.map((item) => {
             if (item.id === generatorId) {
+              if (hasLoopOutput(item)) {
+                return item;
+              }
               return {
                 ...item,
                 data: {
@@ -1720,11 +2255,15 @@ export function useSmartCanvasController() {
                   status: task.status,
                   error: task.error,
                   task_id: task.id,
+                  started_at: item.data?.started_at || taskStartedAt,
                   updated_at: task.updated_at,
                 },
               };
             }
             if (outputIds.includes(item.id)) {
+              if (hasLoopOutput(item)) {
+                return item;
+              }
               return {
                 ...item,
                 name: task.status === "success" ? "Output" : "生成中",
@@ -1736,6 +2275,7 @@ export function useSmartCanvasController() {
                   status: task.status,
                   error: task.error,
                   task_id: task.id,
+                  started_at: item.data?.started_at || taskStartedAt,
                   updated_at: task.updated_at,
                 },
               };
@@ -1750,7 +2290,9 @@ export function useSmartCanvasController() {
       updateCanvas((current) => ({
         ...current,
         nodes: current.nodes.map((item) => item.id === generatorId || outputIds.includes(item.id)
-          ? { ...item, data: { ...item.data, status: "error", error: message, task_id: taskId } }
+          ? hasLoopOutput(item)
+            ? item
+            : { ...item, data: { ...item.data, status: "error", error: message, task_id: taskId, updated_at: new Date().toISOString() } }
           : item),
       }), true, "API 生成失败");
       toast.error(message);
@@ -1849,15 +2391,24 @@ export function useSmartCanvasController() {
           reader.readAsDataURL(file);
         }),
       })));
-      const prompt = inputText || "请分析输入图片，并输出适合后续生图使用的中文提示词。";
+      const prompt = buildLlmPromptInstruction(inputText, inputImages.length);
       const task = await createChatCompletionTask(
         uniqueTaskId("smart-canvas-llm"),
         prompt,
         node.data?.model || "auto",
-        [{ role: "user", content: prompt }],
+        [
+          {
+            role: "system",
+            content: "你只输出可直接传给图像生成模型的最终 prompt。不要解释，不要 Markdown，不要标题。",
+          },
+          { role: "user", content: prompt },
+        ],
         referenceImages.length > 0 ? referenceImages : undefined,
       );
       const output = creationTaskToOutput(task);
+      if (output.text) {
+        output.text = cleanLlmPromptOutput(output.text);
+      }
       updateCanvas((doc) => ({
         ...doc,
         nodes: doc.nodes.map((item) => item.id === node.id
@@ -1889,10 +2440,276 @@ export function useSmartCanvasController() {
     }
   }, [imageRefsToFiles, pollTaskIntoLlmNode, updateCanvas]);
 
+  const runLoopNode = useCallback(async (loopId: string, generatorId?: string) => {
+    const current = canvasRef.current;
+    const loop = current?.nodes.find((item) => item.id === loopId);
+    const generator = generatorId
+      ? current?.nodes.find((item) => item.id === generatorId)
+      : current?.edges
+        .filter((edge) => edge.source === loopId)
+        .map((edge) => current.nodes.find((item) => item.id === edge.target))
+        .find((item) => item?.type === "image_generation");
+    if (!current || !loop || loop.type !== "loop" || !generator || generator.type !== "image_generation") {
+      toast.error("请把循环节点连接到 API生成 节点");
+      return;
+    }
+    if (isActiveTask(loop.data?.status) || isActiveTask(generator.data?.status)) {
+      toast.info("当前循环正在运行中");
+      return;
+    }
+    loopStopRequestsRef.current.delete(loop.id);
+
+    const loopMode = loop.data?.loop_mode === "images" ? "images" : "repeat";
+    const loopCount = Math.max(1, Math.min(10, Number(loop.data?.loop_count || 3)));
+    const sourcePrompt = loopInputText(current, loop);
+    const submittedPrompt = [sourcePrompt, generator.data?.prompt || ""]
+      .map((value) => String(value || "").trim())
+      .filter(Boolean)
+      .join("\n\n");
+    if (!submittedPrompt) {
+      toast.error("请给循环节点连接 Prompt/LLM，或在 API生成节点里补充提示词");
+      return;
+    }
+    const sourceImages = loopInputImages(current, loop);
+    if (loopMode === "images" && sourceImages.length === 0) {
+      toast.error("逐图循环需要连接至少 1 张图片");
+      return;
+    }
+    const iterations = loopMode === "images" ? sourceImages.slice(0, 10).map((image) => [image]) : [sourceImages];
+    const total = loopMode === "images" ? iterations.length : loopCount;
+    const startedAt = new Date().toISOString();
+    let outputIds = current.edges
+      .filter((edge) => edge.source === generator.id)
+      .map((edge) => current.nodes.find((item) => item.id === edge.target))
+      .filter((item): item is SmartCanvasItem => item?.type === "result")
+      .map((item) => item.id);
+    const outputNode = outputIds.length === 0
+      ? createOutputNode({
+          x: Number(generator.position?.x || 0) + 430,
+          y: Number(generator.position?.y || 0),
+        })
+      : null;
+    if (outputNode) {
+      outputIds = [outputNode.id];
+    }
+
+    const slotStatuses: CreationTask["output_statuses"] = Array.from({ length: total }, () => "queued" as const);
+    const updateLoopProgress = (
+      completed: number,
+      failed: number,
+      currentIndex: number,
+      status: CreationTask["status"],
+      outputImages: CanvasImageRef[],
+      outputText: string,
+      error = "",
+      taskIds: string[] = [],
+      outputStatuses: CreationTask["output_statuses"] = [],
+    ) => {
+      const runningSlot = status === "running" ? Math.max(0, Math.min(total - 1, currentIndex)) : -1;
+      const output = {
+        task_id: taskIds[taskIds.length - 1] || "",
+        images: dedupeCanvasImageRefs(outputImages),
+        text: outputText,
+        raw: {
+          mode: "loop",
+          task_ids: taskIds,
+          completed,
+          failed,
+          total,
+          current: currentIndex,
+          running_slot: runningSlot,
+          slots: Array.from({ length: total }, (_, slotIndex) => ({
+            index: slotIndex,
+            status: outputStatuses[slotIndex] || (slotIndex < completed
+                ? "success"
+                : status === "success"
+                  ? "error"
+                : slotIndex === runningSlot
+                  ? "running"
+                : status === "error" && slotIndex >= completed
+                  ? "error"
+                : status === "cancelled" && slotIndex >= completed
+                    ? "cancelled"
+                    : "queued"),
+          })),
+        },
+      };
+      updateCanvas((doc) => {
+        let nodes = doc.nodes.map((item) => {
+          if (item.id === loop.id) {
+            return {
+              ...item,
+              data: {
+                ...item.data,
+                status,
+                error,
+                output,
+                loop_progress: { total, completed, failed, current: currentIndex },
+                stop_requested: false,
+                started_at: startedAt,
+                updated_at: new Date().toISOString(),
+              },
+            };
+          }
+          if (item.id === generator.id || outputIds.includes(item.id)) {
+            const isGenerator = item.id === generator.id;
+            return {
+              ...item,
+              data: {
+                ...item.data,
+                ...(isGenerator ? {} : { prompt: submittedPrompt }),
+                model: generator.data?.model || "auto",
+                input_images: loopMode === "images" ? [] : sourceImages,
+                output,
+                status,
+                error,
+                task_id: output.task_id,
+                stop_requested: false,
+                started_at: startedAt,
+                updated_at: new Date().toISOString(),
+              },
+            };
+          }
+          return item;
+        });
+        let edges = doc.edges;
+        if (outputNode && !nodes.some((item) => item.id === outputNode.id)) {
+          nodes = [...nodes, {
+            ...outputNode,
+            data: {
+              ...outputNode.data,
+              prompt: submittedPrompt,
+              model: generator.data?.model || "auto",
+              output,
+              status,
+              error,
+              task_id: output.task_id,
+              stop_requested: false,
+              started_at: startedAt,
+              created_at: startedAt,
+              updated_at: new Date().toISOString(),
+            },
+          }];
+          edges = edges.some((edge) => edge.source === generator.id && edge.target === outputNode.id)
+            ? edges
+            : [...edges, createSmartEdge(generator.id, outputNode.id)];
+        }
+        return { ...doc, nodes, edges };
+      }, status !== "running", status === "running" ? undefined : "完成循环");
+    };
+
+    setRunning(true);
+    const taskIds: string[] = [];
+    const outputImages: CanvasImageRef[] = [];
+    const outputTexts: string[] = [];
+    let completed = 0;
+    let failed = 0;
+    let lastError = "";
+    try {
+      updateLoopProgress(0, 0, 0, "running", [], "", "", []);
+      for (let index = 0; index < iterations.length; index += 1) {
+        if (loopStopRequestsRef.current.has(loop.id)) {
+          lastError = "循环已中断";
+          updateLoopProgress(completed, failed, index, "cancelled", outputImages, outputTexts.join("\n\n"), lastError, taskIds);
+          toast.info("已中断循环");
+          return;
+        }
+        const iterationImages = iterations[index];
+        const slotStart = loopMode === "repeat" ? completed + failed : index;
+        try {
+          let task: CreationTask;
+          const taskCount = loopMode === "repeat" ? loopCount : 1;
+          if (iterationImages.length > 0) {
+            const files = await imageRefsToFiles(iterationImages);
+            if (files.length === 0) {
+              throw new Error("没有可读取的输入图片");
+            }
+            task = await createImageEditTask(uniqueTaskId("smart-canvas-loop"), files, submittedPrompt, generator.data?.model || "auto", generator.data?.size || "1024x1024", undefined, taskCount, undefined, generator.data?.visibility || "private");
+          } else {
+            task = await createImageGenerationTask(uniqueTaskId("smart-canvas-loop"), submittedPrompt, generator.data?.model || "auto", generator.data?.size || "1024x1024", undefined, taskCount, undefined, generator.data?.visibility || "private");
+          }
+          taskIds.push(task.id);
+          for (let offset = 0; offset < taskCount && slotStart + offset < slotStatuses.length; offset += 1) {
+            slotStatuses[slotStart + offset] = offset === 0 ? "running" : "queued";
+          }
+          while (isActiveTask(task.status)) {
+            if (loopStopRequestsRef.current.has(loop.id)) {
+              task = await cancelCreationTask(task.id);
+              break;
+            }
+            const activeOutput = creationTaskToOutput(task);
+            const activeImages = dedupeCanvasImageRefs([...outputImages, ...(activeOutput.images || [])]);
+            const activeSlots = mergeLoopSlotStatuses(slotStatuses, slotStart, taskCount, task.output_statuses, "running");
+            const activeCompleted = activeSlots.filter((item) => item === "success").length;
+            const activeFailed = activeSlots.filter((item) => item === "error" || item === "cancelled").length;
+            updateLoopProgress(activeCompleted, activeFailed, Math.min(total - 1, slotStart + activeCompleted + activeFailed), "running", activeImages, outputTexts.join("\n\n"), "", taskIds, activeSlots);
+            await new Promise((resolve) => window.setTimeout(resolve, 2000));
+            const result = await fetchCreationTasks([task.id]);
+            task = result.items[0] || task;
+          }
+          const output = creationTaskToOutput(task);
+          const outputImageCount = output.images?.length || 0;
+          const mergedImages = dedupeCanvasImageRefs([...outputImages, ...(output.images || [])]);
+          outputImages.splice(0, outputImages.length, ...mergedImages);
+          if (output.text) {
+            outputTexts.push(output.text);
+          }
+          if (task.status === "success") {
+            mergeLoopSlotStatuses(slotStatuses, slotStart, taskCount, task.output_statuses, "success").forEach((item, itemIndex) => {
+              slotStatuses[itemIndex] = item;
+            });
+          } else if (task.status === "cancelled") {
+            lastError = "循环已中断";
+            mergeLoopSlotStatuses(slotStatuses, slotStart, taskCount, task.output_statuses, "cancelled").forEach((item, itemIndex) => {
+              slotStatuses[itemIndex] = item;
+            });
+            completed = slotStatuses.filter((item) => item === "success").length;
+            failed = slotStatuses.filter((item) => item === "error" || item === "cancelled").length;
+            const currentIndex = loopMode === "repeat" ? completed + failed : index + 1;
+            updateLoopProgress(completed, failed, currentIndex, "cancelled", outputImages, outputTexts.join("\n\n"), lastError, taskIds, slotStatuses);
+            toast.info("已中断循环");
+            return;
+          } else {
+            const fallback = outputImageCount > 0 ? "success" : "error";
+            mergeLoopSlotStatuses(slotStatuses, slotStart, taskCount, task.output_statuses, fallback).forEach((item, itemIndex) => {
+              slotStatuses[itemIndex] = item;
+            });
+            lastError = task.error || "循环子任务失败";
+          }
+          completed = slotStatuses.filter((item) => item === "success").length;
+          failed = slotStatuses.filter((item) => item === "error" || item === "cancelled").length;
+          const currentIndex = loopMode === "repeat" ? completed + failed : index + 1;
+          updateLoopProgress(completed, failed, currentIndex, "running", outputImages, outputTexts.join("\n\n"), lastError, taskIds, slotStatuses);
+        } catch (error) {
+          mergeLoopSlotStatuses(slotStatuses, slotStart, loopMode === "repeat" ? loopCount : 1, [], "error").forEach((item, itemIndex) => {
+            slotStatuses[itemIndex] = item;
+          });
+          completed = slotStatuses.filter((item) => item === "success").length;
+          failed = slotStatuses.filter((item) => item === "error" || item === "cancelled").length;
+          lastError = error instanceof Error ? error.message : "循环子任务失败";
+          const currentIndex = loopMode === "repeat" ? completed + failed : index + 1;
+          updateLoopProgress(completed, failed, currentIndex, "running", outputImages, outputTexts.join("\n\n"), lastError, taskIds, slotStatuses);
+        }
+      }
+      const finalStatus: CreationTask["status"] = failed > 0 ? "error" : completed > 0 ? "success" : "error";
+      updateLoopProgress(completed, failed, total, finalStatus, outputImages, outputTexts.join("\n\n"), failed > 0 ? `循环完成，${failed} 轮失败` : "", taskIds, slotStatuses);
+      selectSingleItem(outputIds[0] || generator.id);
+      void loadAssets();
+    } finally {
+      loopStopRequestsRef.current.delete(loop.id);
+      setRunning(false);
+    }
+  }, [imageRefsToFiles, loadAssets, selectSingleItem, updateCanvas]);
+
   const runGeneratorNode = useCallback(async (generatorId: string) => {
     const current = canvasRef.current;
     const generator = current?.nodes.find((item) => item.id === generatorId);
     if (!current || !generator || generator.type !== "image_generation") {
+      return;
+    }
+    const loopNode = incomingItems(current, generator.id).find((item) => item.type === "loop");
+    if (loopNode) {
+      await runLoopNode(loopNode.id, generator.id);
       return;
     }
     if (isActiveTask(generator.data?.status)) {
@@ -1906,6 +2723,7 @@ export function useSmartCanvasController() {
     }
     const inputRefs = generatorInputImages(current, generator);
     const migrated = migrateGeneratorDirectInputsToImageNodes(current, generator);
+    const startedAt = new Date().toISOString();
     setRunning(true);
     try {
       updateCanvas((doc) => {
@@ -1920,7 +2738,8 @@ export function useSmartCanvasController() {
               status: "running",
               error: "",
               output: { images: [] },
-              updated_at: new Date().toISOString(),
+              started_at: startedAt,
+              updated_at: startedAt,
             },
           } : item),
         };
@@ -1951,6 +2770,7 @@ export function useSmartCanvasController() {
             status: task.status,
             error: task.error,
             task_id: task.id,
+            started_at: item.id === generator.id ? item.data?.started_at || startedAt || task.created_at : startedAt,
             updated_at: task.updated_at,
           },
         } : item);
@@ -1975,6 +2795,7 @@ export function useSmartCanvasController() {
             status: task.status,
             error: task.error,
             task_id: task.id,
+            started_at: startedAt,
             updated_at: task.updated_at,
           },
         } : item);
@@ -1994,7 +2815,52 @@ export function useSmartCanvasController() {
     } finally {
       setRunning(false);
     }
-  }, [imageRefsToFiles, migrateGeneratorDirectInputsToImageNodes, pollTaskIntoGenerator, selectSingleItem, updateCanvas]);
+  }, [imageRefsToFiles, migrateGeneratorDirectInputsToImageNodes, pollTaskIntoGenerator, runLoopNode, selectSingleItem, updateCanvas]);
+
+  const stopLoopNode = useCallback(async (loopId: string) => {
+    const current = canvasRef.current;
+    const loop = current?.nodes.find((item) => item.id === loopId);
+    if (!current || !loop || loop.type !== "loop") {
+      return;
+    }
+    loopStopRequestsRef.current.add(loopId);
+    const connectedGeneratorIds = current.edges
+      .filter((edge) => edge.source === loopId)
+      .map((edge) => current.nodes.find((item) => item.id === edge.target))
+      .filter((item): item is SmartCanvasItem => item?.type === "image_generation")
+      .map((item) => item.id);
+    const outputIds = current.edges
+      .filter((edge) => connectedGeneratorIds.includes(edge.source))
+      .map((edge) => current.nodes.find((item) => item.id === edge.target))
+      .filter((item): item is SmartCanvasItem => item?.type === "result")
+      .map((item) => item.id);
+    const taskIds = new Set<string>();
+    if (loop.data?.task_id) {
+      taskIds.add(loop.data.task_id);
+    }
+    for (const item of current.nodes) {
+      if ((item.id === loopId || connectedGeneratorIds.includes(item.id) || outputIds.includes(item.id)) && item.data?.task_id) {
+        taskIds.add(item.data.task_id);
+      }
+    }
+    updateCanvas((doc) => ({
+      ...doc,
+      nodes: doc.nodes.map((item) => item.id === loopId || connectedGeneratorIds.includes(item.id) || outputIds.includes(item.id)
+        ? {
+            ...item,
+            data: {
+              ...item.data,
+              status: "cancelled",
+              error: "循环已中断",
+              stop_requested: true,
+              updated_at: new Date().toISOString(),
+            },
+          }
+        : item),
+    }), true, "中断循环");
+    await Promise.allSettled(Array.from(taskIds).map((taskId) => cancelCreationTask(taskId)));
+    toast.info("已请求中断循环");
+  }, [updateCanvas]);
 
   useEffect(() => {
     const current = canvasRef.current;
@@ -2002,7 +2868,7 @@ export function useSmartCanvasController() {
       return;
     }
     current.nodes
-      .filter((item) => item.type === "image_generation" && item.data?.task_id && isActiveTask(item.data.status))
+      .filter((item) => item.type === "image_generation" && item.data?.task_id && isActiveTask(item.data.status) && !hasLoopOutput(item) && !isLoopDrivenGenerator(current, item.id))
       .forEach((item) => {
         const outputIds = current.edges
           .filter((edge) => edge.source === item.id)
@@ -2098,7 +2964,9 @@ export function useSmartCanvasController() {
     }
     updateCanvas((current) => ({
       ...current,
-      nodes: current.nodes.filter((item) => item.id !== id),
+      nodes: current.nodes
+        .filter((item) => item.id !== id)
+        .map((item) => pruneGroupReferences(item, new Set([id]))),
       edges: current.edges.filter((edge) => edge.source !== id && edge.target !== id),
     }), true, "删除节点");
     const remainingSelection = selectedItemIds.filter((itemId) => itemId !== id);
@@ -2142,11 +3010,35 @@ export function useSmartCanvasController() {
     const deleteIds = new Set(ids);
     updateCanvas((current) => ({
       ...current,
-      nodes: current.nodes.filter((item) => !deleteIds.has(item.id)),
+      nodes: current.nodes
+        .filter((item) => !deleteIds.has(item.id))
+        .map((item) => pruneGroupReferences(item, deleteIds)),
       edges: current.edges.filter((edge) => !deleteIds.has(edge.source) && !deleteIds.has(edge.target)),
     }), true, ids.length > 1 ? "删除多个节点" : "删除节点");
     selectSingleItem("");
   }, [selectSingleItem, selectedItemId, selectedItemIds, updateCanvas]);
+
+  const cleanupBlankNodes = useCallback(() => {
+    const current = canvasRef.current;
+    if (!current) {
+      return;
+    }
+    const blankIds = new Set(blankSmartCanvasItemIds(current));
+    if (blankIds.size === 0) {
+      toast.info("没有可清理的空白节点");
+      return;
+    }
+    updateCanvas((current) => ({
+      ...current,
+      nodes: current.nodes
+        .filter((item) => !blankIds.has(item.id))
+        .map((item) => pruneGroupReferences(item, blankIds)),
+      edges: current.edges.filter((edge) => !blankIds.has(edge.source) && !blankIds.has(edge.target)),
+    }), true, `清理 ${blankIds.size} 个空白节点`);
+    setSelectedItemIds((ids) => ids.filter((id) => !blankIds.has(id)));
+    setSelectedItemId((id) => blankIds.has(id) ? "" : id);
+    toast.success(`已清理 ${blankIds.size} 个空白节点`);
+  }, [updateCanvas]);
 
   const copySelectedItems = useCallback(() => {
     const current = canvasRef.current;
@@ -2187,7 +3079,15 @@ export function useSmartCanvasController() {
       const id = createItemId(item.type);
       idMap.set(item.id, id);
       return createPastedCanvasItem(item, id, offset, now);
-    });
+    }).map((item) => item.type === "group"
+      ? {
+          ...item,
+          data: {
+            ...item.data,
+            group_item_ids: (item.data?.group_item_ids || []).map((memberId) => idMap.get(memberId) || memberId),
+          },
+        }
+      : item);
     const pastedEdges = clipboard.edges.flatMap((edge) => {
       const source = idMap.get(edge.source);
       const target = idMap.get(edge.target);
@@ -2206,11 +3106,11 @@ export function useSmartCanvasController() {
     return true;
   }, [updateCanvas]);
 
-  const addAssetToCanvas = useCallback((asset: ManagedImage) => {
+  const addAssetToCanvas = useCallback((asset: ManagedImageSummary) => {
     addImagesToCanvas(managedImagesToRefs([asset]));
   }, [addImagesToCanvas]);
 
-  const addAssetToComposer = useCallback((asset: ManagedImage) => {
+  const addAssetToComposer = useCallback((asset: ManagedImageSummary) => {
     addImagesToComposer(managedImagesToRefs([asset]));
   }, [addImagesToComposer]);
 
@@ -2326,6 +3226,7 @@ export function useSmartCanvasController() {
     selectedItemId,
     selectedItemIds,
     selectedItem,
+    blankNodeCount,
     viewport,
     tool,
     connectState,
@@ -2349,6 +3250,10 @@ export function useSmartCanvasController() {
     canvasPickerOpen,
     runHistoryOpen,
     operationHistoryOpen,
+    helpOpen,
+    helpTopic,
+    onboardingOpen,
+    portMenuRequest,
     leftRailCollapsed,
     canUndo: canUndoSmartCanvasHistory(history),
     canRedo: canRedoSmartCanvasHistory(history),
@@ -2361,6 +3266,9 @@ export function useSmartCanvasController() {
     setCanvasPickerOpen,
     setRunHistoryOpen,
     setOperationHistoryOpen,
+    setHelpOpen,
+    setHelpTopic,
+    setOnboardingOpen,
     setLeftRailCollapsed,
     undoCanvas,
     redoCanvas,
@@ -2371,6 +3279,12 @@ export function useSmartCanvasController() {
     reloadCanvases,
     updateItemData,
     addNodeAt,
+    addNodeFromPort,
+    openCanvasHelp,
+    openNodeHelp,
+    dismissOnboarding,
+    insertFlowTemplate,
+    createNodeHelpTemplate,
     appendEdge,
     deleteEdge,
     addImagesToComposer,
@@ -2401,11 +3315,15 @@ export function useSmartCanvasController() {
     runAngleControlForImageEditor,
     runLlmNode,
     runGeneratorNode,
+    stopLoopNode,
+    connectLlmImagesToGenerator,
+    connectLlmImagesToLoop,
     selectCanvas,
     createNewCanvas,
     deleteCanvasById,
     renameCanvas,
     renameCanvasById,
+    cleanupBlankNodes,
     deleteSelected,
     deleteItem,
     deleteImageFromItem,

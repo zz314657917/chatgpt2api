@@ -305,7 +305,7 @@ export function ConfigCard() {
                 min={1}
                 value={config?.image_retention_days || ""}
                 onChange={setImageRetentionDays}
-                placeholder="30"
+                placeholder="7"
                 unit="天"
               />
             </Field>

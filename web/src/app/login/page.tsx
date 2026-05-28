@@ -25,7 +25,7 @@ import { useRedirectIfAuthenticated } from "@/lib/use-auth-guard";
 const loginBackgroundClass =
   "bg-[#fff9fb] bg-[radial-gradient(rgba(20,86,240,0.12)_1px,transparent_1px),linear-gradient(145deg,#fff8fa_0%,#ffffff_48%,#f4f8ff_100%)] [background-position:0_0,center] [background-size:12px_12px,cover] dark:bg-[#090d16] dark:bg-[radial-gradient(rgba(96,165,250,0.16)_1px,transparent_1px),linear-gradient(145deg,#080b13_0%,#101827_52%,#070b12_100%)]";
 
-const leafNetworkBrandName = "落叶网络";
+const leafNetworkBrandName = "落叶AI";
 const leafNetworkLoginURL = "https://ai.3zapi.top/login";
 
 export default function LoginPage() {

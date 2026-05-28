@@ -9,9 +9,10 @@ import {
   type PointerEvent as ReactPointerEvent,
   type WheelEvent as ReactWheelEvent,
 } from "react";
-import { ChevronLeft, ChevronRight, Image as ImageIcon, LoaderCircle, RotateCcw, X, ZoomIn } from "lucide-react";
+import { ChevronLeft, ChevronRight, FileText, Image as ImageIcon, LoaderCircle, RotateCcw, X, ZoomIn } from "lucide-react";
 
 import { AuthenticatedImage } from "@/components/authenticated-image";
+import { ImageLightbox } from "@/components/image-lightbox";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import type { CanvasImageRef } from "@/lib/api";
@@ -66,7 +67,7 @@ type SmartCanvasImageEditorProps = {
   angleResultItem: SmartCanvasItem | null;
   runningAngle: boolean;
   onAngleValuesChange: (values: SmartCanvasAngleControlValues) => void;
-  onSubmitAngle: (values: SmartCanvasAngleControlValues) => void;
+  onSubmitAngle: (values: SmartCanvasAngleControlValues) => Promise<string>;
 };
 
 export function SmartCanvasImageEditor({
@@ -88,6 +89,8 @@ export function SmartCanvasImageEditor({
   const [outpaintBackground, setOutpaintBackground] = useState<OutpaintBackground>("white");
   const [zoom, setZoom] = useState(1);
   const [applying, setApplying] = useState(false);
+  const [submittingAngle, setSubmittingAngle] = useState(false);
+  const [angleResultLightboxOpen, setAngleResultLightboxOpen] = useState(false);
   const [bitmap, setBitmap] = useState<ImageBitmap | null>(null);
   const [bitmapError, setBitmapError] = useState("");
   const [brushSize, setBrushSize] = useState(28);
@@ -193,6 +196,7 @@ export function SmartCanvasImageEditor({
     setOutpaintBackground("white");
     setZoom(1);
     setApplying(false);
+    setSubmittingAngle(false);
     setBitmapError("");
     setBrushSize(28);
     setBrushColor("#ff2d55");
@@ -648,6 +652,21 @@ export function SmartCanvasImageEditor({
 
   const closeEditor = useCallback(() => onOpenChange(false), [onOpenChange]);
 
+  const submitAngleAndClose = useCallback(async () => {
+    if (submittingAngle) {
+      return;
+    }
+    setSubmittingAngle(true);
+    try {
+      const outputId = await onSubmitAngle(angleValues);
+      if (outputId) {
+        closeEditor();
+      }
+    } finally {
+      setSubmittingAngle(false);
+    }
+  }, [angleValues, closeEditor, onSubmitAngle, submittingAngle]);
+
   const updateCropPercent = useCallback((patch: Partial<SmartCanvasCropBox>) => {
     setCropBox((current) => {
       const next = { ...current, ...patch };
@@ -971,14 +990,15 @@ export function SmartCanvasImageEditor({
         </div>
 
         {isAngleMode ? (
-          <AngleControlEditorPanel
-            image={image}
-            values={angleValues}
-            prompt={anglePrompt}
-            resultItem={angleResultItem}
-            running={runningAngle}
-            onValueChange={updateAngleValue}
-          />
+        <AngleControlEditorPanel
+          image={image}
+          values={angleValues}
+          prompt={anglePrompt}
+          resultItem={angleResultItem}
+          running={runningAngle}
+          onValueChange={updateAngleValue}
+          onLightboxOpenChange={setAngleResultLightboxOpen}
+        />
         ) : (
           <div className="flex min-h-0 flex-1 gap-3">
             {isPreviewMode ? null : (
@@ -1174,7 +1194,7 @@ export function SmartCanvasImageEditor({
             className="h-9 rounded-full px-5 text-xs font-black"
             onClick={() => {
               if (isAngleMode) {
-                onSubmitAngle(angleValues);
+                void submitAngleAndClose();
                 return;
               }
               if (isPreviewMode) {
@@ -1185,13 +1205,18 @@ export function SmartCanvasImageEditor({
               }
               void applyEdit();
             }}
-            disabled={isAngleMode ? !src || runningAngle : !src || !bitmap || applying}
+            disabled={isAngleMode ? !src || runningAngle || submittingAngle : !src || !bitmap || applying}
           >
-            {applying || (isAngleMode && runningAngle) ? <LoaderCircle className="size-4 animate-spin" /> : <ActionIcon className="size-4" />}
+            {applying || (isAngleMode && (runningAngle || submittingAngle)) ? <LoaderCircle className="size-4 animate-spin" /> : <ActionIcon className="size-4" />}
             {isAngleMode ? "生成视角" : isPreviewMode ? "打开原图" : modeMeta.action}
           </Button>
         </div>
       </DialogContent>
+      <AngleControlResultLightbox
+        item={angleResultItem}
+        open={angleResultLightboxOpen}
+        onOpenChange={setAngleResultLightboxOpen}
+      />
     </Dialog>
   );
 }
@@ -1203,6 +1228,7 @@ function AngleControlEditorPanel({
   resultItem,
   running,
   onValueChange,
+  onLightboxOpenChange,
 }: {
   image: CanvasImageRef | null;
   values: SmartCanvasAngleControlValues;
@@ -1210,9 +1236,10 @@ function AngleControlEditorPanel({
   resultItem: SmartCanvasItem | null;
   running: boolean;
   onValueChange: (key: keyof SmartCanvasAngleControlValues, value: number) => void;
+  onLightboxOpenChange: (open: boolean) => void;
 }) {
   return (
-    <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 overflow-y-auto rounded-[18px] border border-border bg-muted/30 p-3 dark:border-slate-800 dark:bg-slate-950/30 lg:grid-cols-[340px_minmax(0,1fr)] lg:overflow-hidden">
+    <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 overflow-y-auto rounded-[18px] border border-border bg-muted/30 p-3 dark:border-slate-800 dark:bg-slate-950/30 lg:grid-cols-[380px_minmax(0,1fr)] lg:overflow-hidden">
       <aside className="flex min-h-0 min-w-0 flex-col gap-3 overflow-hidden rounded-[18px] border border-border bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
         <section className="flex min-h-0 min-w-0 shrink-0 flex-col">
           <div className="mb-2 flex items-center justify-between gap-3">
@@ -1226,7 +1253,7 @@ function AngleControlEditorPanel({
             <div className="absolute left-1/2 top-0 h-full w-px -rotate-12 bg-white/10" />
             <div className="absolute left-1/3 top-0 h-full w-px rotate-12 bg-white/10" />
             <div
-              className="relative h-[min(20vh,145px)] w-[min(24vw,250px)] rounded-xl border border-white/20 bg-slate-900 shadow-[0_22px_56px_rgba(0,0,0,0.32)] transition-transform duration-200"
+              className="relative inline-flex max-h-[150px] max-w-[250px] items-center justify-center overflow-hidden rounded-xl border border-white/20 bg-slate-900 shadow-[0_22px_56px_rgba(0,0,0,0.32)] transition-transform duration-200"
               style={{
                 transform: `perspective(760px) rotateY(${Math.round(values.horizontal) / 2.5}deg) rotateX(${-Math.round(values.vertical) / 2.5}deg) scale(${1 + Number(values.zoom || 0) / 24})`,
               }}
@@ -1235,8 +1262,8 @@ function AngleControlEditorPanel({
                 <AuthenticatedImage
                   src={canvasImagePreviewSource(image)}
                   alt={canvasImageLabel(image, 0)}
-                  className="h-full w-full rounded-xl object-cover opacity-80"
-                  placeholderClassName="h-full w-full rounded-xl bg-zinc-900"
+                  className="block max-h-[150px] max-w-[250px] rounded-xl object-contain opacity-80"
+                  placeholderClassName="h-[min(20vh,150px)] w-[min(24vw,250px)] rounded-xl bg-zinc-900"
                 />
               ) : null}
             </div>
@@ -1245,12 +1272,12 @@ function AngleControlEditorPanel({
 
         <section className="flex min-h-0 min-w-0 flex-1 flex-col">
           <div className="mb-2 text-[10px] font-black uppercase tracking-[0.3em] text-sky-700 dark:text-sky-200">02. 参数</div>
-          <div className="grid gap-4">
+          <div className="grid gap-3">
             <AngleControlField
               label="旋转"
               value={values.horizontal}
-              min={0}
-              max={360}
+              min={-180}
+              max={180}
               step={1}
               suffix="deg"
               onChange={(value) => onValueChange("horizontal", value)}
@@ -1258,7 +1285,7 @@ function AngleControlEditorPanel({
             <AngleControlField
               label="俯仰"
               value={values.vertical}
-              min={-30}
+              min={-90}
               max={90}
               step={1}
               suffix="deg"
@@ -1273,6 +1300,17 @@ function AngleControlEditorPanel({
               suffix="/10"
               onChange={(value) => onValueChange("zoom", value)}
             />
+            <label className="flex min-h-0 flex-1 flex-col">
+              <div className="mb-2 flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.22em] text-muted-foreground dark:text-slate-400">
+                <FileText className="size-3.5" />
+                Prompt
+              </div>
+              <textarea
+                value={prompt}
+                readOnly
+                className="min-h-[112px] resize-none rounded-[14px] border border-border bg-muted/40 p-3 text-xs font-semibold leading-5 text-foreground outline-none dark:border-slate-800 dark:bg-slate-950/55 dark:text-slate-100"
+              />
+            </label>
           </div>
         </section>
       </aside>
@@ -1280,11 +1318,8 @@ function AngleControlEditorPanel({
       <section className="flex min-w-0 flex-col">
         <div className="mb-2 flex items-center justify-between gap-3">
           <span className="text-[10px] font-black uppercase tracking-[0.3em] text-sky-700 dark:text-sky-200">03. 结果</span>
-          <span className="max-w-[60%] truncate text-[11px] font-semibold text-muted-foreground dark:text-slate-500" title={prompt}>
-            {prompt.split("\n")[1] || prompt}
-          </span>
         </div>
-        <AngleControlResultPreview item={resultItem} running={running} />
+        <AngleControlResultPreview item={resultItem} running={running} onOpen={() => onLightboxOpenChange(true)} />
       </section>
     </div>
   );
@@ -1350,19 +1385,26 @@ function AngleControlField({
   );
 }
 
-function AngleControlResultPreview({ item, running }: { item: SmartCanvasItem | null; running: boolean }) {
+function AngleControlResultPreview({ item, running, onOpen }: { item: SmartCanvasItem | null; running: boolean; onOpen: () => void }) {
   const images = item?.data?.output?.images || item?.data?.images || [];
   const status = item?.data?.status;
   const active = status === "queued" || status === "running" || running;
   return (
     <div className="relative flex min-h-[220px] flex-1 items-center justify-center overflow-hidden rounded-[18px] border border-border bg-white dark:border-slate-800 dark:bg-slate-900">
       {images[0] ? (
-        <AuthenticatedImage
-          src={canvasImagePreviewSource(images[0])}
-          alt={canvasImageLabel(images[0], 0)}
-          className="h-full w-full object-contain p-4 transition duration-500 hover:scale-[1.02]"
-          placeholderClassName="h-full w-full bg-muted dark:bg-slate-950"
-        />
+        <button
+          type="button"
+          className="group flex h-full w-full items-center justify-center p-4"
+          onClick={onOpen}
+          title="点击查看结果图"
+        >
+          <AuthenticatedImage
+            src={canvasImagePreviewSource(images[0])}
+            alt={canvasImageLabel(images[0], 0)}
+            className="max-h-[min(58vh,520px)] max-w-full rounded-[14px] object-contain shadow-[0_18px_60px_rgba(15,23,42,0.18)] transition duration-300 group-hover:scale-[1.015]"
+            placeholderClassName="h-[min(42vh,360px)] w-[min(48vw,520px)] rounded-[14px] bg-muted dark:bg-slate-950"
+          />
+        </button>
       ) : active ? (
         <div className="flex flex-col items-center gap-4 text-muted-foreground dark:text-slate-400">
           <LoaderCircle className="size-8 animate-spin" />
@@ -1384,5 +1426,32 @@ function AngleControlResultPreview({ item, running }: { item: SmartCanvasItem | 
         </div>
       ) : null}
     </div>
+  );
+}
+
+function AngleControlResultLightbox({
+  item,
+  open,
+  onOpenChange,
+}: {
+  item: SmartCanvasItem | null;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const images = item?.data?.output?.images || item?.data?.images || [];
+  const lightboxImages = images.map((image, index) => ({
+    id: `${item?.id || "angle-result"}-${index}`,
+    src: canvasImageSource(image) || canvasImagePreviewSource(image),
+    fileName: canvasImageLabel(image, index),
+  })).filter((image) => image.src);
+
+  return (
+    <ImageLightbox
+      images={lightboxImages}
+      currentIndex={0}
+      open={open && lightboxImages.length > 0}
+      onOpenChange={onOpenChange}
+      onIndexChange={() => undefined}
+    />
   );
 }
