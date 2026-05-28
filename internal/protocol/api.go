@@ -792,7 +792,7 @@ func ChatToolPrompt(body map[string]any) string {
 }
 
 func TextChatParts(body map[string]any) (string, []map[string]any, error) {
-	model := firstNonEmpty(util.Clean(body["model"]), "auto")
+	model := firstNonEmpty(util.Clean(body["model"]), util.ImageModelAuto)
 	messages, err := ChatMessagesFromBody(body)
 	if err != nil {
 		return "", nil, err
@@ -833,7 +833,7 @@ func ExtractVisionImages(body map[string]any) []UploadedImage {
 }
 
 func VisionChatParts(body map[string]any) (string, []map[string]any, []UploadedImage, error) {
-	model := firstNonEmpty(util.Clean(body["model"]), "auto")
+	model := firstNonEmpty(util.Clean(body["model"]), util.ImageModelAuto)
 	rawMessages, err := ChatMessagesFromBody(body)
 	if err != nil {
 		return "", nil, nil, err
@@ -1153,7 +1153,7 @@ func (e *Engine) ResponseEventsScoped(ctx context.Context, body map[string]any, 
 	if err != nil {
 		return nil, nil, err
 	}
-	responseModel := firstNonEmpty(util.Clean(body["model"]), "auto")
+	responseModel := firstNonEmpty(util.Clean(body["model"]), util.ImageModelAuto)
 	currentMessages := MessagesFromInput(body["input"], body["instructions"])
 	baseContext := MergeResponseContext(previous, currentMessages, nil)
 	if !HasResponseImageGenerationTool(body) {
@@ -1256,7 +1256,7 @@ func responseImageGenerationModel(model string) string {
 }
 
 func (e *Engine) StreamTextResponse(ctx context.Context, body map[string]any) (<-chan map[string]any, <-chan error) {
-	model := firstNonEmpty(util.Clean(body["model"]), "auto")
+	model := firstNonEmpty(util.Clean(body["model"]), util.ImageModelAuto)
 	messages := MessagesFromInput(body["input"], body["instructions"])
 	return e.StreamTextResponseWithMessages(ctx, model, messages)
 }
@@ -1595,7 +1595,7 @@ func MessageRequestFromBody(e *Engine, body map[string]any) MessageRequest {
 	policy := tooladapter.PolicyFromToolChoice(payload["tool_choice"])
 	payload["messages"] = PreprocessMessages(payload["messages"])
 	payload["system"] = MergeSystem(payload["system"], tooladapter.BuildPrompt(payload["tools"], policy))
-	return MessageRequest{Messages: NormalizeMessages(payload["messages"], payload["system"]), Model: firstNonEmpty(util.Clean(payload["model"]), "auto"), Tools: payload["tools"], ToolChoice: payload["tool_choice"]}
+	return MessageRequest{Messages: NormalizeMessages(payload["messages"], payload["system"]), Model: firstNonEmpty(util.Clean(payload["model"]), util.ImageModelAuto), Tools: payload["tools"], ToolChoice: payload["tool_choice"]}
 }
 
 func BuildToolPrompt(tools any) string {

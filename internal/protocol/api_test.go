@@ -11,6 +11,7 @@ import (
 	"chatgpt2api/internal/backend"
 	"chatgpt2api/internal/service"
 	"chatgpt2api/internal/storage"
+	"chatgpt2api/internal/util"
 )
 
 func ptrInt(value int) *int {
@@ -135,6 +136,41 @@ func TestTextModelDoesNotForceImageChatRoute(t *testing.T) {
 	}
 	if !IsImageChatRequest(map[string]any{"model": "gpt-5", "modalities": []any{"image"}, "messages": []any{map[string]any{"role": "user", "content": "draw"}}}) {
 		t.Fatal("gpt-5 with image modality should be routed as an image request")
+	}
+}
+
+func TestTextChatDefaultsToAuto(t *testing.T) {
+	body := map[string]any{
+		"messages": []any{map[string]any{"role": "user", "content": "hello"}},
+	}
+
+	model, _, err := TextChatParts(body)
+	if err != nil {
+		t.Fatalf("TextChatParts() error = %v", err)
+	}
+	if model != util.ImageModelAuto {
+		t.Fatalf("TextChatParts() model = %q, want %q", model, util.ImageModelAuto)
+	}
+}
+
+func TestVisionChatDefaultsToAuto(t *testing.T) {
+	imageData := base64.StdEncoding.EncodeToString([]byte("png-bytes"))
+	body := map[string]any{
+		"messages": []any{map[string]any{"role": "user", "content": []any{
+			map[string]any{"type": "text", "text": "describe this image"},
+			map[string]any{"type": "image_url", "image_url": map[string]any{"url": "data:image/png;base64," + imageData}},
+		}}},
+	}
+
+	model, _, images, err := VisionChatParts(body)
+	if err != nil {
+		t.Fatalf("VisionChatParts() error = %v", err)
+	}
+	if model != util.ImageModelAuto {
+		t.Fatalf("VisionChatParts() model = %q, want %q", model, util.ImageModelAuto)
+	}
+	if len(images) != 1 {
+		t.Fatalf("VisionChatParts() images = %#v, want one image", images)
 	}
 }
 
