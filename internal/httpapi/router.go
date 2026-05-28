@@ -72,7 +72,9 @@ func (a *App) routes() []appRoute {
 		subtree("/api/accounts", a.handleAccounts),
 		subtree("/api/cpa/pools", a.handleCPA),
 		subtree("/api/sub2api/servers", a.handleSub2API),
+		exact("", "/api/admin/creation-tasks/diagnostics", a.handleCreationTaskDiagnostics),
 		subtree("/api/creation-tasks", a.handleCreationTasks),
+		subtree("/api/social-projects", a.handleSocialProjects),
 		subtree("/api/canvases", a.handleCanvases),
 		exact(http.MethodGet, "/api/canvas/models", a.handleCanvasModels),
 		subtree("/api/canvas-runs", a.handleCanvasRuns),
@@ -95,6 +97,7 @@ func (a *App) routes() []appRoute {
 		prefix("/images/", a.handleImageFile),
 		prefix("/image-references/", a.handleImageReferenceFile),
 		prefix("/image-thumbnails/", a.handleImageThumbnail),
+		prefix("/image-previews/", a.handleImagePreview),
 		prefix("/login-page-images/", http.StripPrefix("/login-page-images/", http.FileServer(http.Dir(a.config.LoginPageImagesDir()))).ServeHTTP),
 	}
 }

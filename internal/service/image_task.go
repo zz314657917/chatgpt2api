@@ -20,7 +20,7 @@ const (
 	TaskStatusCancelled = "cancelled"
 
 	defaultImageTaskTimeout = 5 * time.Minute
-	maxImageTaskCount       = 8
+	maxImageTaskCount       = 10
 
 	imageOutputCallbackPayloadKey      = "image_output_callback"
 	imageOutputSlotAcquirerPayloadKey  = "image_output_slot_acquirer"
@@ -62,6 +62,31 @@ type ImageTaskService struct {
 	ownerSubmitTimes    map[string][]time.Time
 	ownerRunningUnits   map[string]int
 	creationUnitCond    *sync.Cond
+}
+
+type ImageTaskDiagnosticsSummary struct {
+	TotalTasks                  int `json:"total_tasks"`
+	ActiveTasks                 int `json:"active_tasks"`
+	QueuedTasks                 int `json:"queued_tasks"`
+	RunningTasks                int `json:"running_tasks"`
+	TerminalTasks               int `json:"terminal_tasks"`
+	DirtyTerminalTasks          int `json:"dirty_terminal_tasks"`
+	DirtyTerminalOutputStatuses int `json:"dirty_terminal_output_statuses"`
+	ActiveOutputStatuses        int `json:"active_output_statuses"`
+	RunningOwners               int `json:"running_owners"`
+	RunningUnits                int `json:"running_units"`
+}
+
+type ImageTaskRepairOptions struct {
+	FinalizeActive bool
+}
+
+type ImageTaskRepairResult struct {
+	RepairedTerminalTasks int                         `json:"repaired_terminal_tasks"`
+	FinalizedActiveTasks  int                         `json:"finalized_active_tasks"`
+	CancelledHandlers     int                         `json:"cancelled_handlers"`
+	Before                ImageTaskDiagnosticsSummary `json:"before"`
+	After                 ImageTaskDiagnosticsSummary `json:"after"`
 }
 
 type ImageTaskLimitError struct {
@@ -206,7 +231,7 @@ func (s *ImageTaskService) SubmitChat(ctx context.Context, identity Identity, cl
 	if len(nValues) > 0 {
 		n = normalizedImageTaskCount(nValues[0])
 	}
-	payload := map[string]any{"prompt": prompt, "model": model, "messages": messages, "n": n, "visibility": ImageVisibilityPrivate}
+	payload := map[string]any{"prompt": prompt, "model": firstNonEmpty(util.Clean(model), util.ImageModelAuto), "messages": messages, "n": n, "visibility": ImageVisibilityPrivate}
 	if billable {
 		payload[imageTaskBillingBillablePayloadKey] = true
 	}
@@ -334,6 +359,71 @@ func (s *ImageTaskService) CancelTask(identity Identity, clientTaskID string) (m
 		cancel()
 	}
 	return result, nil
+}
+
+func (s *ImageTaskService) DiagnosticsSummary() ImageTaskDiagnosticsSummary {
+	s.mu.Lock()
+	if s.cleanupLocked() {
+		_ = s.saveLocked()
+	}
+	summary := s.diagnosticsSummaryLocked()
+	s.mu.Unlock()
+	return summary
+}
+
+func (s *ImageTaskService) RepairDiagnostics(options ImageTaskRepairOptions) ImageTaskRepairResult {
+	var cancels []context.CancelFunc
+	var settleKeys []string
+	now := util.NowLocal()
+	s.mu.Lock()
+	if s.cleanupLocked() {
+		_ = s.saveLocked()
+	}
+	result := ImageTaskRepairResult{Before: s.diagnosticsSummaryLocked()}
+	changed := false
+	for key, task := range s.tasks {
+		status := util.Clean(task["status"])
+		if isActiveTaskStatus(status) {
+			if !options.FinalizeActive {
+				continue
+			}
+			task["status"] = TaskStatusError
+			task["error"] = "管理员已终止卡住的创作任务"
+			if task["data"] == nil {
+				task["data"] = []any{}
+			}
+			applyTerminalImageOutputStatuses(task, TaskStatusError)
+			task["updated_at"] = now
+			if cancel := s.cancels[key]; cancel != nil {
+				cancels = append(cancels, cancel)
+			}
+			delete(s.cancels, key)
+			settleKeys = append(settleKeys, key)
+			result.FinalizedActiveTasks++
+			changed = true
+			continue
+		}
+		if terminalTaskOutputStatusesDirty(task) {
+			if applyTerminalImageOutputStatuses(task, status) {
+				task["updated_at"] = now
+				result.RepairedTerminalTasks++
+				changed = true
+			}
+		}
+	}
+	if changed {
+		_ = s.saveLocked()
+	}
+	result.CancelledHandlers = len(cancels)
+	result.After = s.diagnosticsSummaryLocked()
+	s.mu.Unlock()
+	for _, cancel := range cancels {
+		cancel()
+	}
+	for _, key := range settleKeys {
+		s.settleTaskBilling(key)
+	}
+	return result
 }
 
 func (s *ImageTaskService) submit(ctx context.Context, identity Identity, clientTaskID, mode string, payload map[string]any) (map[string]any, error) {
@@ -923,6 +1013,58 @@ func (s *ImageTaskService) recoverUnfinishedLocked() bool {
 		}
 	}
 	return changed
+}
+
+func (s *ImageTaskService) diagnosticsSummaryLocked() ImageTaskDiagnosticsSummary {
+	summary := ImageTaskDiagnosticsSummary{TotalTasks: len(s.tasks), RunningOwners: len(s.ownerRunningUnits)}
+	for _, units := range s.ownerRunningUnits {
+		summary.RunningUnits += units
+	}
+	for _, task := range s.tasks {
+		status := util.Clean(task["status"])
+		switch status {
+		case TaskStatusQueued:
+			summary.ActiveTasks++
+			summary.QueuedTasks++
+		case TaskStatusRunning:
+			summary.ActiveTasks++
+			summary.RunningTasks++
+		case TaskStatusSuccess, TaskStatusError, TaskStatusCancelled:
+			summary.TerminalTasks++
+			if terminalTaskOutputStatusesDirty(task) {
+				summary.DirtyTerminalTasks++
+				for _, outputStatus := range util.AsStringSlice(task["output_statuses"]) {
+					if isActiveTaskStatus(outputStatus) {
+						summary.DirtyTerminalOutputStatuses++
+					}
+				}
+			}
+		}
+		for _, outputStatus := range util.AsStringSlice(task["output_statuses"]) {
+			if isActiveTaskStatus(outputStatus) {
+				summary.ActiveOutputStatuses++
+			}
+		}
+	}
+	return summary
+}
+
+func terminalTaskOutputStatusesDirty(task map[string]any) bool {
+	status := util.Clean(task["status"])
+	if isActiveTaskStatus(status) {
+		return false
+	}
+	switch status {
+	case TaskStatusSuccess, TaskStatusError, TaskStatusCancelled:
+	default:
+		return false
+	}
+	for _, outputStatus := range util.AsStringSlice(task["output_statuses"]) {
+		if isActiveTaskStatus(outputStatus) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *ImageTaskService) cleanupLocked() bool {

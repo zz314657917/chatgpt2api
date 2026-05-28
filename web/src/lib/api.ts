@@ -17,14 +17,14 @@ export const IMAGE_MODEL_OPTIONS = [
   { value: "gpt-5.4", label: "gpt-5.4" },
   { value: "gpt-5.5", label: "gpt-5.5" },
 ] as const;
-export type ImageModel = (typeof IMAGE_MODEL_OPTIONS)[number]["value"];
+export type ImageModel = string;
 export const DEFAULT_IMAGE_MODEL: ImageModel = "gpt-image-2";
 export const DEFAULT_CHAT_MODEL: ImageModel = "auto";
 export const CODEX_IMAGE_MODEL: ImageModel = "codex-gpt-image-2";
 export const OFFICIAL_IMAGE_MODEL: ImageModel = "gpt-image-2-official";
 const IMAGE_MODEL_VALUES = new Set<string>(IMAGE_MODEL_OPTIONS.map((option) => option.value));
-const IMAGE_TASK_MODEL_VALUES = new Set<ImageModel>(["gpt-image-2", "gpt-image-2-official"]);
-const CHAT_MODEL_VALUES = new Set<ImageModel>([
+const IMAGE_TASK_MODEL_VALUES = new Set<string>(["gpt-image-2", "gpt-image-2-official"]);
+const CHAT_MODEL_VALUES = new Set<string>([
   "auto",
   "gpt-5-mini",
   "gpt-5-3-mini",
@@ -97,11 +97,11 @@ export const IMAGE_MODEL_ROUTE_DETAILS: Partial<Record<
 };
 
 export function isImageModel(value: unknown): value is ImageModel {
-  return typeof value === "string" && IMAGE_MODEL_VALUES.has(value);
+  return typeof value === "string" && value.trim().length > 0;
 }
 
 export function isImageTaskModel(value: unknown): value is ImageModel {
-  return isImageModel(value) && IMAGE_TASK_MODEL_VALUES.has(value);
+  return isImageModel(value) && (IMAGE_TASK_MODEL_VALUES.has(value) || modelIDLooksImageCapable(value));
 }
 
 export function isImageCreationModel(value: unknown): value is ImageModel {
@@ -109,7 +109,27 @@ export function isImageCreationModel(value: unknown): value is ImageModel {
 }
 
 export function isChatModel(value: unknown): value is ImageModel {
-  return isImageModel(value) && CHAT_MODEL_VALUES.has(value);
+  return isImageModel(value) && (CHAT_MODEL_VALUES.has(value) || !modelIDLooksImageCapable(value));
+}
+
+export function canvasModelHasCapability(model: CanvasModelOption, capability: "chat" | "image" | "video") {
+  return Array.isArray(model.capabilities) && model.capabilities.includes(capability);
+}
+
+export function modelIDLooksImageCapable(model: string) {
+  const lower = model.trim().toLowerCase();
+  return [
+    "image",
+    "imagen",
+    "flux",
+    "stable-diffusion",
+    "sdxl",
+    "dall-e",
+    "midjourney",
+    "kolors",
+    "ideogram",
+    "recraft",
+  ].some((hint) => lower.includes(hint));
 }
 
 export function usesOfficialImageRoute(model: ImageModel) {
@@ -360,23 +380,31 @@ export type LoginPageImageSettings = {
   login_page_image_position_y: number;
 };
 
-export type ManagedImage = {
+export type ManagedImageSummary = {
   name: string;
   path: string;
-  owner_id?: string;
   owner_name?: string;
   visibility: ImageVisibility;
-  prompt?: string;
-  model?: ImageModel;
-  quality?: ImageQuality;
   date: string;
   size: number;
-  url: string;
   thumbnail_url?: string;
   preview_url?: string;
   width?: number;
   height?: number;
   resolution?: string;
+  aspect_ratio?: string;
+  orientation?: string;
+  megapixels?: number;
+  created_at: string;
+  published_at?: string;
+};
+
+export type ManagedImageDetail = ManagedImageSummary & {
+  owner_id?: string;
+  prompt?: string;
+  model?: ImageModel;
+  quality?: ImageQuality;
+  url: string;
   resolution_preset?: string;
   requested_size?: string;
   output_format?: ImageOutputFormat;
@@ -386,6 +414,9 @@ export type ManagedImage = {
   style?: string;
   partial_images?: number;
   input_image_mask?: string;
+  storage_backend?: string;
+  object_key?: string;
+  object_url?: string;
   reference_image_urls?: string[];
   reference_images?: Array<{
     path: string;
@@ -396,12 +427,9 @@ export type ManagedImage = {
   }>;
   share_prompt_parameters?: boolean;
   share_reference_images?: boolean;
-  aspect_ratio?: string;
-  orientation?: string;
-  megapixels?: number;
-  created_at: string;
-  published_at?: string;
 };
+
+export type ManagedImage = ManagedImageDetail;
 
 export type ManagedImageListScope = "mine" | "public" | "all";
 
@@ -420,8 +448,8 @@ export type ManagedImageListFilters = {
 };
 
 export type ManagedImageListResult = {
-  items: ManagedImage[];
-  groups: Array<{ date: string; items: ManagedImage[] }>;
+  items: ManagedImageSummary[];
+  groups: Array<{ date: string; items: ManagedImageSummary[] }>;
   next_cursor: string;
   has_more: boolean;
   page_size: number;
@@ -464,16 +492,39 @@ export type LogCleanupResult = {
   remaining: number;
 };
 
+export type CreationTaskDiagnosticsSummary = {
+  total_tasks: number;
+  active_tasks: number;
+  queued_tasks: number;
+  running_tasks: number;
+  terminal_tasks: number;
+  dirty_terminal_tasks: number;
+  dirty_terminal_output_statuses: number;
+  active_output_statuses: number;
+  running_owners: number;
+  running_units: number;
+};
+
+export type CreationTaskRepairResult = {
+  repaired_terminal_tasks: number;
+  finalized_active_tasks: number;
+  cancelled_handlers: number;
+  before: CreationTaskDiagnosticsSummary;
+  after: CreationTaskDiagnosticsSummary;
+};
+
 export type ImageStorageGovernanceSummary = {
   total_bytes: number;
   images_bytes: number;
   thumbnails_bytes: number;
+  previews_bytes: number;
   metadata_bytes: number;
   reference_bytes: number;
   images_count: number;
   public_images_count: number;
   private_images_count: number;
   thumbnail_files: number;
+  previews_files: number;
   metadata_files: number;
   reference_files: number;
   limit_bytes: number;
@@ -489,6 +540,7 @@ export type ImageStorageCleanupResult = {
   include_public?: boolean;
   deleted_images: number;
   deleted_thumbnails: number;
+  deleted_previews?: number;
   deleted_metadata_files: number;
   deleted_reference_files: number;
   deleted_bytes: number;
@@ -583,7 +635,7 @@ export type CreationTaskMessage = {
   content: string;
 };
 
-export type CanvasNodeType = "text" | "image" | "prompt" | "llm" | "loop" | "image_generation" | "image_edit" | "result";
+export type CanvasNodeType = "text" | "image" | "prompt" | "llm" | "loop" | "group" | "image_generation" | "image_edit" | "result";
 export type CanvasRunStatus = "queued" | "running" | "success" | "error" | "cancelled" | "blocked";
 
 export type CanvasImageRef = {
@@ -592,6 +644,7 @@ export type CanvasImageRef = {
   path?: string;
   name?: string;
   thumbnail_url?: string;
+  preview_url?: string;
 };
 
 export type CanvasNodeOutput = {
@@ -630,6 +683,7 @@ export type CanvasNodeData = {
   task_id?: string;
   input_images?: CanvasImageRef[];
   mention_images?: CanvasImageRef[];
+  group_item_ids?: string[];
   loop_mode?: "repeat" | "images";
   loop_count?: number;
   loop_concurrency?: number;
@@ -722,7 +776,73 @@ export type CanvasRun = {
 export type CanvasModelOption = {
   id: string;
   name: string;
-  kind: "text" | "image" | "both";
+  kind: "text" | "image" | "video" | "both";
+  capabilities?: Array<"chat" | "image" | "video">;
+  enabled?: boolean;
+};
+
+export type SocialPlatform = "xhs";
+export type SocialProjectStatus =
+  | "draft"
+  | "generating_copy"
+  | "copy_ready"
+  | "generating_cards"
+  | "cards_ready"
+  | "exported";
+export type SocialCardVisualMode = "info" | "ai" | "image";
+
+export type SocialImageRef = {
+  url?: string;
+  local_url?: string;
+  path?: string;
+  name?: string;
+  thumbnail_url?: string;
+};
+
+export type SocialCard = {
+  id: string;
+  index: number;
+  title?: string;
+  body?: string;
+  layout?: string;
+  visual_mode?: SocialCardVisualMode;
+  image_prompt?: string;
+  image_url?: string;
+  local_url?: string;
+  path?: string;
+  task_id?: string;
+  status?: CreationTask["status"];
+  accent?: string;
+};
+
+export type SocialProject = {
+  id: string;
+  owner_id?: string;
+  platform: SocialPlatform;
+  status: SocialProjectStatus;
+  topic?: string;
+  audience?: string;
+  tone?: string;
+  source_text?: string;
+  source_images?: SocialImageRef[];
+  title?: string;
+  caption?: string;
+  tags?: string[];
+  copy_markdown?: string;
+  cards?: SocialCard[];
+  copy_task_id?: string;
+  card_task_ids?: string[];
+  last_exported_at?: string;
+  exported_file?: string;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type SocialExportResult = {
+  item: SocialProject;
+  file_name: string;
+  markdown: string;
+  card_count: number;
 };
 
 export type FallbackReferenceImage = {
@@ -1466,6 +1586,76 @@ export async function cancelCreationTask(clientTaskId: string) {
   });
 }
 
+export async function fetchSocialProjects() {
+  const data = await httpRequest<{ items?: SocialProject[] }>("/api/social-projects", {
+    headers: {
+      "Cache-Control": "no-cache",
+      Pragma: "no-cache",
+    },
+  });
+  return Array.isArray(data.items) ? data.items : [];
+}
+
+export async function createSocialProject(project: Partial<SocialProject>) {
+  const data = await httpRequest<{ item: SocialProject }>("/api/social-projects", {
+    method: "POST",
+    body: project,
+  });
+  return data.item;
+}
+
+export async function fetchSocialProject(projectId: string) {
+  const data = await httpRequest<{ item: SocialProject }>(`/api/social-projects/${encodeURIComponent(projectId)}`, {
+    headers: {
+      "Cache-Control": "no-cache",
+      Pragma: "no-cache",
+    },
+  });
+  return data.item;
+}
+
+export async function saveSocialProject(project: SocialProject) {
+  const data = await httpRequest<{ item: SocialProject }>(`/api/social-projects/${encodeURIComponent(project.id)}`, {
+    method: "POST",
+    body: project,
+  });
+  return data.item;
+}
+
+export async function deleteSocialProject(projectId: string) {
+  return httpRequest<{ ok: boolean }>(`/api/social-projects/${encodeURIComponent(projectId)}`, {
+    method: "DELETE",
+  });
+}
+
+export async function generateSocialProjectCopy(projectId: string, model: string, clientTaskId?: string) {
+  return httpRequest<{ item: SocialProject; task: CreationTask }>(`/api/social-projects/${encodeURIComponent(projectId)}/generate-copy`, {
+    method: "POST",
+    body: {
+      model,
+      ...(clientTaskId ? { client_task_id: clientTaskId } : {}),
+    },
+  });
+}
+
+export async function generateSocialProjectCards(projectId: string, model: string) {
+  const data = await httpRequest<{ item: SocialProject; tasks?: CreationTask[] }>(`/api/social-projects/${encodeURIComponent(projectId)}/generate-cards`, {
+    method: "POST",
+    body: { model },
+  });
+  return {
+    item: data.item,
+    tasks: Array.isArray(data.tasks) ? data.tasks : [],
+  };
+}
+
+export async function exportSocialProject(projectId: string, fileName?: string) {
+  return httpRequest<SocialExportResult>(`/api/social-projects/${encodeURIComponent(projectId)}/export`, {
+    method: "POST",
+    body: fileName ? { file_name: fileName } : {},
+  });
+}
+
 export async function fetchCanvasModels() {
   const data = await httpRequest<{ items?: CanvasModelOption[] }>("/api/canvas/models", {
     headers: {
@@ -1591,14 +1781,14 @@ export async function fetchManagedImages(
 ): Promise<ManagedImageListResult> {
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(filters)) {
-    if (value === undefined || value === null || value === "" || value === "all") {
+    if (value === undefined || value === null || value === "" || (key !== "scope" && value === "all")) {
       continue;
     }
     params.set(key, String(value));
   }
   const data = await httpRequest<{
-    items?: ManagedImage[] | null;
-    groups?: Array<{ date: string; items: ManagedImage[] }> | null;
+    items?: ManagedImageSummary[] | null;
+    groups?: Array<{ date: string; items: ManagedImageSummary[] }> | null;
     next_cursor?: string | null;
     has_more?: boolean | null;
     page_size?: number | null;
@@ -1622,7 +1812,7 @@ export async function fetchManagedImageDetail(
 ) {
   const params = new URLSearchParams({ path });
   if (filters.scope) params.set("scope", filters.scope);
-  const data = await httpRequest<{ item: ManagedImage }>(
+  const data = await httpRequest<{ item: ManagedImageDetail }>(
     `/api/images/detail?${params.toString()}`,
     { signal: options.signal },
   );
@@ -1635,7 +1825,7 @@ export async function uploadManagedImages(files: File[], visibility: ImageVisibi
     formData.append("image[]", file);
   });
   formData.append("visibility", visibility);
-  const data = await httpRequest<{ items?: ManagedImage[] | null }>("/api/images/uploads", {
+  const data = await httpRequest<{ items?: ManagedImageDetail[] | null }>("/api/images/uploads", {
     method: "POST",
     body: formData,
   });
@@ -1647,7 +1837,7 @@ export async function updateManagedImageVisibility(
   visibility: ImageVisibility,
   options: { sharePromptParameters?: boolean; shareReferenceImages?: boolean } = {},
 ) {
-  return httpRequest<{ item: Partial<ManagedImage> & { path: string; visibility: ImageVisibility } }>(
+  return httpRequest<{ item: Partial<ManagedImageDetail> & { path: string; visibility: ImageVisibility } }>(
     "/api/images/visibility",
     {
       method: "PATCH",
@@ -1688,6 +1878,20 @@ export async function cleanupLogs(retentionDays: number) {
     method: "POST",
     body: { retention_days: retentionDays },
   });
+}
+
+export async function fetchCreationTaskDiagnostics() {
+  return httpRequest<{ diagnostics: CreationTaskDiagnosticsSummary }>("/api/admin/creation-tasks/diagnostics");
+}
+
+export async function repairCreationTaskDiagnostics(finalizeActive = false) {
+  return httpRequest<{ repair: CreationTaskRepairResult; diagnostics: CreationTaskDiagnosticsSummary }>(
+    "/api/admin/creation-tasks/diagnostics",
+    {
+      method: "POST",
+      body: { finalize_active: finalizeActive },
+    },
+  );
 }
 
 export async function fetchImageStorageGovernance() {

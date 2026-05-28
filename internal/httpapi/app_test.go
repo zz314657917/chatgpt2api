@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	"image/color"
@@ -1952,6 +1953,193 @@ func TestRBACPermissionsGateManagementAPIs(t *testing.T) {
 	}
 }
 
+func TestSocialProjectsPermissionsGateAndDefaultAccess(t *testing.T) {
+	app := newTestApp(t)
+	defer app.Close()
+
+	user, rawKey, err := app.auth.CreateAPIKey(service.AuthRoleUser, "social-user", service.AuthOwner{})
+	if err != nil {
+		t.Fatalf("CreateAPIKey() error = %v", err)
+	}
+	if !containsHTTPTestString(util.AsStringSlice(user["menu_paths"]), "/social") {
+		t.Fatalf("default user menu_paths missing /social: %#v", user["menu_paths"])
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/social", nil)
+	req.Header.Set("Authorization", "Bearer "+rawKey)
+	res := httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("default user /social status = %d body = %s", res.Code, res.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/social-projects", strings.NewReader(`{"platform":"xhs","topic":"权限测试"}`))
+	req.Header.Set("Authorization", "Bearer "+rawKey)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("default user create social project status = %d body = %s", res.Code, res.Body.String())
+	}
+	var created map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &created); err != nil {
+		t.Fatalf("create social project json: %v", err)
+	}
+	project := util.StringMap(created["item"])
+	projectID := util.Clean(project["id"])
+	if projectID == "" || project["platform"] != service.SocialPlatformXHS {
+		t.Fatalf("created social project = %#v", project)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/social-projects/"+projectID, nil)
+	req.Header.Set("Authorization", "Bearer "+rawKey)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("default user get social project status = %d body = %s", res.Code, res.Body.String())
+	}
+
+	role, err := app.auth.CreateRole(map[string]any{
+		"name":            "no social",
+		"menu_paths":      []string{"/image"},
+		"api_permissions": []string{service.APIPermissionKey(http.MethodGet, "/v1/models")},
+	})
+	if err != nil {
+		t.Fatalf("CreateRole() error = %v", err)
+	}
+	limited, limitedKey, err := app.auth.CreateAPIKey(service.AuthRoleUser, "limited-social-user", service.AuthOwner{})
+	if err != nil {
+		t.Fatalf("CreateAPIKey(limited) error = %v", err)
+	}
+	if app.auth.UpdateUser(util.Clean(limited["id"]), map[string]any{"role_id": role["id"]}) == nil {
+		t.Fatal("UpdateUser(limited role) returned nil")
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/social-projects", nil)
+	req.Header.Set("Authorization", "Bearer "+limitedKey)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusForbidden {
+		t.Fatalf("limited user social API status = %d body = %s", res.Code, res.Body.String())
+	}
+}
+
+func TestSocialProjectGenerateCardsCancelsSubmittedTasksOnPartialFailure(t *testing.T) {
+	app := newTestApp(t)
+	defer app.Close()
+
+	user, rawKey, err := app.auth.CreateAPIKey(service.AuthRoleUser, "social-partial", service.AuthOwner{})
+	if err != nil {
+		t.Fatalf("CreateAPIKey() error = %v", err)
+	}
+	callCount := 0
+	ownerID := util.Clean(user["id"])
+	app.tasks = service.NewStoredImageTaskService(testJSONStoreFromApp(t, app),
+		func(ctx context.Context, identity service.Identity, payload map[string]any) (map[string]any, error) {
+			callCount++
+			<-ctx.Done()
+			return nil, ctx.Err()
+		},
+		failingHTTPImageTaskHandler,
+		failingHTTPImageTaskHandler,
+		func() int { return 30 },
+	)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/social-projects", strings.NewReader(`{"platform":"xhs","topic":"partial","cards":[{"title":"A","visual_mode":"ai","image_prompt":"draw a"},{"title":"B","visual_mode":"ai","image_prompt":"生成血腥肢解的暴力画面"}]}`))
+	req.Header.Set("Authorization", "Bearer "+rawKey)
+	res := httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("create social project status = %d body = %s", res.Code, res.Body.String())
+	}
+	var created map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &created); err != nil {
+		t.Fatalf("create social project json: %v", err)
+	}
+	projectID := util.Clean(util.StringMap(created["item"])["id"])
+	if projectID == "" {
+		t.Fatalf("created social project missing id: %#v", created)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/social-projects/"+projectID+"/generate-cards", strings.NewReader(`{}`))
+	req.Header.Set("Authorization", "Bearer "+rawKey)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("generate cards status = %d body = %s", res.Code, res.Body.String())
+	}
+	var failed map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &failed); err != nil {
+		t.Fatalf("generate cards error json: %v", err)
+	}
+	detail := util.StringMap(failed["detail"])
+	if partial := util.AsMapSlice(detail["partial_tasks"]); len(partial) != 1 {
+		t.Fatalf("partial_tasks = %#v", detail["partial_tasks"])
+	}
+	if cancelErrors := util.AsStringSlice(detail["cancel_errors"]); len(cancelErrors) != 0 {
+		t.Fatalf("cancel_errors = %#v", cancelErrors)
+	}
+	if callCount > 1 {
+		t.Fatalf("handler calls = %d, want only the first queued task to reach handler", callCount)
+	}
+	item := util.StringMap(detail["item"])
+	taskIDs := util.AsStringSlice(item["card_task_ids"])
+	if len(taskIDs) != 1 {
+		t.Fatalf("stored partial card_task_ids = %#v item=%#v", item["card_task_ids"], item)
+	}
+	waitForHTTPTestCondition(t, func() bool {
+		task, ok := app.tasks.GetTask(service.Identity{ID: ownerID, Role: service.AuthRoleUser}, taskIDs[0])
+		return ok && task["status"] == service.TaskStatusCancelled
+	})
+}
+
+func TestCreationTaskChatCompletionDefaultsToChatModel(t *testing.T) {
+	app := newTestApp(t)
+	defer app.Close()
+
+	user, rawKey, err := app.auth.CreateAPIKey(service.AuthRoleUser, "chat-task", service.AuthOwner{})
+	if err != nil {
+		t.Fatalf("CreateAPIKey() error = %v", err)
+	}
+	ownerID := util.Clean(user["id"])
+	seenPayload := make(chan map[string]any, 1)
+	app.tasks = service.NewStoredImageTaskService(testJSONStoreFromApp(t, app),
+		failingHTTPImageTaskHandler,
+		failingHTTPImageTaskHandler,
+		func(ctx context.Context, identity service.Identity, payload map[string]any) (map[string]any, error) {
+			seenPayload <- payload
+			return map[string]any{"output_type": "text", "data": []map[string]any{{"text_response": "ok"}}}, nil
+		},
+		func() int { return 30 },
+	)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/creation-tasks/chat-completions", strings.NewReader(`{"client_task_id":"chat-default","prompt":"hello","messages":[{"role":"user","content":"hello"}]}`))
+	req.Header.Set("Authorization", "Bearer "+rawKey)
+	res := httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("submit chat task status = %d body = %s", res.Code, res.Body.String())
+	}
+	var submitted map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &submitted); err != nil {
+		t.Fatalf("submit chat task json: %v", err)
+	}
+	if submitted["model"] != util.DefaultChatModel {
+		t.Fatalf("submitted model = %#v, want %q", submitted["model"], util.DefaultChatModel)
+	}
+	waitForHTTPTestCondition(t, func() bool {
+		task, ok := app.tasks.GetTask(service.Identity{ID: ownerID, Role: service.AuthRoleUser}, "chat-default")
+		return ok && task["status"] == service.TaskStatusSuccess
+	})
+	select {
+	case payload := <-seenPayload:
+		if payload["model"] != util.DefaultChatModel {
+			t.Fatalf("handler model = %#v, want %q", payload["model"], util.DefaultChatModel)
+		}
+	default:
+		t.Fatal("chat task handler was not called")
+	}
+}
+
 func TestAccountToggleEnabledEndpoint(t *testing.T) {
 	app := newTestApp(t)
 	defer app.Close()
@@ -2321,18 +2509,18 @@ func TestCanvasModelsUseSub2APIGatewayForBoundUser(t *testing.T) {
 	defer app.Close()
 
 	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet || r.URL.Path != "/models" {
+		if r.Method != http.MethodGet || r.URL.Path != "/model-catalog" {
 			t.Fatalf("gateway request = %s %s", r.Method, r.URL.Path)
 		}
 		if got := r.Header.Get("Authorization"); got != "Bearer sub2-key" {
 			t.Fatalf("gateway Authorization = %q", got)
 		}
 		util.WriteJSON(w, http.StatusOK, map[string]any{
-			"object": "list",
-			"data": []map[string]any{
-				{"id": "remote-chat"},
-				{"id": util.ImageModelGPT},
-				{"id": util.ImageModelGPTOfficial},
+			"object": "model_catalog",
+			"items": []map[string]any{
+				{"id": "remote-chat", "name": "Remote Chat", "capabilities": []string{"chat"}, "enabled": true},
+				{"id": util.ImageModelGPT, "name": util.ImageModelGPT, "capabilities": []string{"image"}, "enabled": true},
+				{"id": "sora-2", "name": "sora-2", "capabilities": []string{"video"}, "enabled": false},
 			},
 		})
 	}))
@@ -2368,14 +2556,180 @@ func TestCanvasModelsUseSub2APIGatewayForBoundUser(t *testing.T) {
 		t.Fatalf("canvas models items = %#v", items)
 	}
 	ids := map[string]string{}
+	capabilities := map[string][]string{}
+	enabled := map[string]bool{}
 	for _, item := range items {
 		ids[util.Clean(item["id"])] = util.Clean(item["kind"])
+		capabilities[util.Clean(item["id"])] = util.AsStringSlice(item["capabilities"])
+		enabled[util.Clean(item["id"])] = util.ToBool(item["enabled"])
 	}
-	if ids["remote-chat"] != "text" || ids[util.ImageModelGPT] != "image" || ids[util.ImageModelGPTOfficial] != "image" {
+	if ids["remote-chat"] != "text" || ids[util.ImageModelGPT] != "image" || ids["sora-2"] != "video" {
 		t.Fatalf("canvas model kinds = %#v", ids)
+	}
+	if fmt.Sprint(capabilities["remote-chat"]) != "[chat]" || fmt.Sprint(capabilities[util.ImageModelGPT]) != "[image]" || fmt.Sprint(capabilities["sora-2"]) != "[video]" {
+		t.Fatalf("canvas model capabilities = %#v", capabilities)
+	}
+	if !enabled["remote-chat"] || !enabled[util.ImageModelGPT] || enabled["sora-2"] {
+		t.Fatalf("canvas model enabled flags = %#v", enabled)
 	}
 	if _, ok := ids[util.ImageModelAuto]; ok {
 		t.Fatalf("sub2api model catalog should not inject local auto model: %#v", ids)
+	}
+}
+
+func TestCanvasModelsFallbackToSub2APIModelsForBoundUser(t *testing.T) {
+	app := newTestApp(t)
+	defer app.Close()
+
+	requests := []string{}
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests = append(requests, r.URL.Path)
+		if got := r.Header.Get("Authorization"); got != "Bearer sub2-key" {
+			t.Fatalf("gateway Authorization = %q", got)
+		}
+		switch r.URL.Path {
+		case "/model-catalog":
+			util.WriteError(w, http.StatusNotFound, "model catalog not found")
+		case "/models":
+			util.WriteJSON(w, http.StatusOK, map[string]any{
+				"object": "list",
+				"data": []map[string]any{
+					{"id": "remote-chat"},
+					{"id": util.ImageModelGPT},
+				},
+			})
+		default:
+			t.Fatalf("gateway request = %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer gateway.Close()
+
+	owner := service.AuthOwner{ID: "sub2api:canvas-fallback-user", Name: "sub2api-canvas-fallback", Provider: service.AuthProviderSub2API}
+	_, sessionKey, err := app.auth.UpsertSub2APISession(owner)
+	if err != nil {
+		t.Fatalf("UpsertSub2APISession() error = %v", err)
+	}
+	if err := app.sub2Bindings.Save(service.Sub2APIBinding{
+		OwnerID:        owner.ID,
+		Sub2APIUserID:  "canvas-fallback-user",
+		APIKey:         "sub2-key",
+		GatewayBaseURL: gateway.URL,
+	}); err != nil {
+		t.Fatalf("Save(Sub2APIBinding) error = %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/canvas/models", nil)
+	req.Header.Set("Authorization", "Bearer "+sessionKey)
+	res := httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("canvas models status = %d body = %s", res.Code, res.Body.String())
+	}
+	if fmt.Sprint(requests) != "[/model-catalog /models]" {
+		t.Fatalf("gateway requests = %#v", requests)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("canvas models json: %v", err)
+	}
+	items := util.AsMapSlice(payload["items"])
+	if len(items) != 2 {
+		t.Fatalf("canvas models items = %#v", items)
+	}
+	ids := map[string]string{}
+	for _, item := range items {
+		ids[util.Clean(item["id"])] = util.Clean(item["kind"])
+	}
+	if ids["remote-chat"] != "text" || ids[util.ImageModelGPT] != "image" {
+		t.Fatalf("canvas model kinds = %#v", ids)
+	}
+}
+
+func TestAdminCreationTaskDiagnosticsAndRepair(t *testing.T) {
+	app := newTestApp(t)
+	defer app.Close()
+
+	_, userKey, err := app.auth.CreateAPIKey(service.AuthRoleUser, "limited", service.AuthOwner{})
+	if err != nil {
+		t.Fatalf("CreateAPIKey() error = %v", err)
+	}
+	started := make(chan struct{})
+	app.tasks = service.NewStoredImageTaskService(testJSONStoreFromApp(t, app),
+		func(ctx context.Context, identity service.Identity, payload map[string]any) (map[string]any, error) {
+			close(started)
+			<-ctx.Done()
+			return nil, ctx.Err()
+		},
+		failingHTTPImageTaskHandler,
+		failingHTTPImageTaskHandler,
+		func() int { return 30 },
+	)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/creation-tasks/image-generations", strings.NewReader(`{"client_task_id":"active","prompt":"draw","model":"gpt-image-2"}`))
+	req.Header.Set("Authorization", "Bearer "+userKey)
+	res := httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("submit active task status = %d body = %s", res.Code, res.Body.String())
+	}
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for active task handler")
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/admin/creation-tasks/diagnostics", nil)
+	req.Header.Set("Authorization", "Bearer "+userKey)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusForbidden {
+		t.Fatalf("user diagnostics status = %d body = %s", res.Code, res.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/admin/creation-tasks/diagnostics", nil)
+	req.Header.Set("Authorization", adminAuthHeader(t, app))
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("diagnostics status = %d body = %s", res.Code, res.Body.String())
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("diagnostics json: %v", err)
+	}
+	diagnostics, _ := payload["diagnostics"].(map[string]any)
+	if diagnostics["active_tasks"] != float64(1) || diagnostics["dirty_terminal_tasks"] != float64(0) {
+		t.Fatalf("diagnostics = %#v", diagnostics)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/admin/creation-tasks/diagnostics", strings.NewReader(`{}`))
+	req.Header.Set("Authorization", adminAuthHeader(t, app))
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("repair diagnostics status = %d body = %s", res.Code, res.Body.String())
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("repair diagnostics json: %v", err)
+	}
+	diagnostics, _ = payload["diagnostics"].(map[string]any)
+	if diagnostics["active_tasks"] != float64(1) {
+		t.Fatalf("repair diagnostics = %#v", diagnostics)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/admin/creation-tasks/diagnostics", strings.NewReader(`{"finalize_active":true}`))
+	req.Header.Set("Authorization", adminAuthHeader(t, app))
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("finalize active diagnostics status = %d body = %s", res.Code, res.Body.String())
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("finalize diagnostics json: %v", err)
+	}
+	diagnostics, _ = payload["diagnostics"].(map[string]any)
+	if diagnostics["active_tasks"] != float64(0) || diagnostics["dirty_terminal_tasks"] != float64(0) {
+		t.Fatalf("finalize diagnostics = %#v", diagnostics)
 	}
 }
 
@@ -2745,8 +3099,8 @@ func TestImageManagementIsScopedByOwner(t *testing.T) {
 			t.Fatalf("write image %s: %v", rel, err)
 		}
 	}
-	app.images.RecordImageOwners([]string{aliceRel}, owner.ID)
-	app.images.RecordImageOwners([]string{bobRel}, "linuxdo:456")
+	app.images.RecordGeneratedImages([]string{aliceRel}, owner.ID, owner.Name, service.ImageVisibilityPrivate)
+	app.images.RecordGeneratedImages([]string{bobRel}, "linuxdo:456", "bob", service.ImageVisibilityPrivate)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/images", nil)
 	req.Header.Set("Authorization", "Bearer "+sessionKey)
@@ -2804,6 +3158,9 @@ func TestImageManagementIsScopedByOwner(t *testing.T) {
 	if items := logItems(list); len(items) != 1 || items[0]["path"] != aliceRel || items[0]["owner_name"] != owner.Name {
 		t.Fatalf("public scoped images = %#v", list)
 	}
+	if items := logItems(list); len(items) == 1 && (items[0]["url"] != nil || items[0]["object_url"] != nil || items[0]["prompt"] != nil || items[0]["reference_image_urls"] != nil) {
+		t.Fatalf("public list item should stay lightweight = %#v", items[0])
+	}
 
 	req = httptest.NewRequest(http.MethodPatch, "/api/images/visibility", strings.NewReader(`{"path":"`+aliceRel+`","visibility":"private"}`))
 	req.Header.Set("Authorization", "Bearer "+sessionKey)
@@ -2855,6 +3212,9 @@ func TestImageManagementIsScopedByOwner(t *testing.T) {
 	items = logItems(list)
 	if len(items) != 3 {
 		t.Fatalf("admin all gallery should see all images, got %#v", list)
+	}
+	if len(items) > 0 && (items[0]["url"] != nil || items[0]["object_url"] != nil || items[0]["prompt"] != nil || items[0]["reference_image_urls"] != nil) {
+		t.Fatalf("admin all list item should stay lightweight = %#v", items[0])
 	}
 	seenPaths := make(map[string]bool, len(items))
 	for _, item := range items {
@@ -3116,19 +3476,37 @@ func TestImageThumbnailsAreGeneratedOnDemand(t *testing.T) {
 	if !strings.Contains(thumbnailURL, "/image-thumbnails/") {
 		t.Fatalf("thumbnail_url = %q, want lazy thumbnail route", thumbnailURL)
 	}
+	previewURL, _ := items[0]["preview_url"].(string)
+	if !strings.Contains(previewURL, "/image-previews/") {
+		t.Fatalf("preview_url = %q, want lazy preview route", previewURL)
+	}
 	parsedThumbnailURL, err := url.Parse(thumbnailURL)
 	if err != nil {
 		t.Fatalf("parse thumbnail URL: %v", err)
 	}
+	parsedPreviewURL, err := url.Parse(previewURL)
+	if err != nil {
+		t.Fatalf("parse preview URL: %v", err)
+	}
 	if !strings.HasSuffix(parsedThumbnailURL.Path, ".jpg") {
 		t.Fatalf("thumbnail path = %q, want .jpg suffix", parsedThumbnailURL.Path)
+	}
+	if !strings.HasSuffix(parsedPreviewURL.Path, ".jpg") {
+		t.Fatalf("preview path = %q, want .jpg suffix", parsedPreviewURL.Path)
 	}
 	if parsedThumbnailURL.Query().Get("v") == "" {
 		t.Fatalf("thumbnail URL = %q, want cache-busting query", thumbnailURL)
 	}
+	if parsedPreviewURL.Query().Get("v") == "" {
+		t.Fatalf("preview URL = %q, want cache-busting query", previewURL)
+	}
 	thumbPath := filepath.Join(app.config.ImageThumbnailsDir(), filepath.FromSlash(rel)+".jpg")
 	if _, err := os.Stat(thumbPath); !os.IsNotExist(err) {
 		t.Fatalf("/api/images should not create thumbnail synchronously, stat error = %v", err)
+	}
+	previewPath := filepath.Join(app.config.ImagePreviewsDir(), filepath.FromSlash(rel)+".jpg")
+	if _, err := os.Stat(previewPath); !os.IsNotExist(err) {
+		t.Fatalf("/api/images should not create preview synchronously, stat error = %v", err)
 	}
 
 	req = httptest.NewRequest(http.MethodGet, parsedThumbnailURL.Path, nil)
@@ -3149,6 +3527,26 @@ func TestImageThumbnailsAreGeneratedOnDemand(t *testing.T) {
 	}
 	if _, err := os.Stat(thumbPath); err != nil {
 		t.Fatalf("thumbnail was not created on demand: %v", err)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, parsedPreviewURL.Path, nil)
+	req.Header.Set("Authorization", adminAuthHeader(t, app))
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("preview status = %d body = %s", res.Code, res.Body.String())
+	}
+	if res.Body.Len() == 0 {
+		t.Fatal("preview body is empty")
+	}
+	if got := res.Header().Get("Cache-Control"); got != imageThumbnailCacheControl {
+		t.Fatalf("preview Cache-Control = %q, want %q", got, imageThumbnailCacheControl)
+	}
+	if got := res.Header().Get("Content-Type"); !strings.Contains(got, "image/jpeg") {
+		t.Fatalf("preview Content-Type = %q, want image/jpeg", got)
+	}
+	if _, err := os.Stat(previewPath); err != nil {
+		t.Fatalf("preview was not created on demand: %v", err)
 	}
 }
 
@@ -3197,12 +3595,16 @@ func TestManagedImagesEndpointPaginatesAndKeepsListLightweight(t *testing.T) {
 	if len(firstItems) != 2 || firstItems[0]["path"] != rels[2] || firstItems[1]["path"] != rels[1] {
 		t.Fatalf("first page items = %#v", first)
 	}
-	if firstItems[0]["prompt"] != nil || firstItems[0]["reference_image_urls"] != nil {
+	if firstItems[0]["prompt"] != nil || firstItems[0]["reference_image_urls"] != nil || firstItems[0]["url"] != nil || firstItems[0]["object_url"] != nil || firstItems[0]["object_key"] != nil || firstItems[0]["storage_backend"] != nil {
 		t.Fatalf("list item exposed heavy metadata = %#v", firstItems[0])
 	}
 	previewURL, _ := firstItems[0]["preview_url"].(string)
-	if !strings.Contains(previewURL, "/image-thumbnails/") {
+	if !strings.Contains(previewURL, "/image-previews/") {
 		t.Fatalf("preview_url = %q, want lightweight preview route", previewURL)
+	}
+	thumbnailURL, _ := firstItems[0]["thumbnail_url"].(string)
+	if !strings.Contains(thumbnailURL, "/image-thumbnails/") {
+		t.Fatalf("thumbnail_url = %q, want thumbnail route", thumbnailURL)
 	}
 	cursor, _ := first["next_cursor"].(string)
 	if cursor == "" || first["has_more"] != true {
@@ -3255,8 +3657,11 @@ func TestManagedImageDetailEndpointReturnsReusableMetadata(t *testing.T) {
 		t.Fatalf("detail json: %v", err)
 	}
 	item, _ := body["item"].(map[string]any)
-	if item["path"] != rel || item["prompt"] != "detail prompt" || item["model"] != "gpt-image-2" {
+	if item["path"] != rel || item["prompt"] != "detail prompt" || item["model"] != "gpt-image-2" || item["url"] == nil {
 		t.Fatalf("detail item = %#v", item)
+	}
+	if previewURL, _ := item["preview_url"].(string); !strings.Contains(previewURL, "/image-previews/") {
+		t.Fatalf("detail preview_url = %q, want preview route", previewURL)
 	}
 }
 
@@ -3284,49 +3689,55 @@ func TestManagedImageThumbnailsRequireOwnerOrPublicAccess(t *testing.T) {
 	}
 	app.images.RecordGeneratedImages([]string{rel}, owner.ID, owner.Name, service.ImageVisibilityPrivate)
 	thumbnailPath := "/image-thumbnails/" + rel + ".jpg"
+	previewPath := "/image-previews/" + rel + ".jpg"
 
-	req := httptest.NewRequest(http.MethodGet, thumbnailPath, nil)
-	res := httptest.NewRecorder()
-	app.Handler().ServeHTTP(res, req)
-	if res.Code != http.StatusUnauthorized {
-		t.Fatalf("anonymous private thumbnail status = %d body = %q, want 401", res.Code, res.Body.String())
-	}
+	for _, assetPath := range []string{thumbnailPath, previewPath} {
+		req := httptest.NewRequest(http.MethodGet, assetPath, nil)
+		res := httptest.NewRecorder()
+		app.Handler().ServeHTTP(res, req)
+		if res.Code != http.StatusUnauthorized {
+			t.Fatalf("anonymous private asset %s status = %d body = %q, want 401", assetPath, res.Code, res.Body.String())
+		}
 
-	req = httptest.NewRequest(http.MethodGet, thumbnailPath, nil)
-	req.Header.Set("Authorization", "Bearer "+bobKey)
-	res = httptest.NewRecorder()
-	app.Handler().ServeHTTP(res, req)
-	if res.Code != http.StatusNotFound {
-		t.Fatalf("other user private thumbnail status = %d body = %q, want 404", res.Code, res.Body.String())
-	}
+		req = httptest.NewRequest(http.MethodGet, assetPath, nil)
+		req.Header.Set("Authorization", "Bearer "+bobKey)
+		res = httptest.NewRecorder()
+		app.Handler().ServeHTTP(res, req)
+		if res.Code != http.StatusNotFound {
+			t.Fatalf("other user private asset %s status = %d body = %q, want 404", assetPath, res.Code, res.Body.String())
+		}
 
-	req = httptest.NewRequest(http.MethodGet, thumbnailPath, nil)
-	req.Header.Set("Authorization", "Bearer "+aliceKey)
-	res = httptest.NewRecorder()
-	app.Handler().ServeHTTP(res, req)
-	if res.Code != http.StatusOK {
-		t.Fatalf("owner private thumbnail status = %d body = %q", res.Code, res.Body.String())
-	}
-	if got := res.Header().Get("Content-Type"); !strings.Contains(got, "image/jpeg") {
-		t.Fatalf("owner private thumbnail Content-Type = %q, want image/jpeg", got)
-	}
+		req = httptest.NewRequest(http.MethodGet, assetPath, nil)
+		req.Header.Set("Authorization", "Bearer "+aliceKey)
+		res = httptest.NewRecorder()
+		app.Handler().ServeHTTP(res, req)
+		if res.Code != http.StatusOK {
+			t.Fatalf("owner private asset %s status = %d body = %q", assetPath, res.Code, res.Body.String())
+		}
+		if got := res.Header().Get("Content-Type"); !strings.Contains(got, "image/jpeg") {
+			t.Fatalf("owner private asset %s Content-Type = %q, want image/jpeg", assetPath, got)
+		}
 
-	req = httptest.NewRequest(http.MethodGet, thumbnailPath, nil)
-	req.AddCookie(&http.Cookie{Name: authSessionCookieName, Value: aliceKey})
-	res = httptest.NewRecorder()
-	app.Handler().ServeHTTP(res, req)
-	if res.Code != http.StatusOK {
-		t.Fatalf("owner private thumbnail cookie status = %d body = %q", res.Code, res.Body.String())
-	}
+		req = httptest.NewRequest(http.MethodGet, assetPath, nil)
+		req.AddCookie(&http.Cookie{Name: authSessionCookieName, Value: aliceKey})
+		res = httptest.NewRecorder()
+		app.Handler().ServeHTTP(res, req)
+		if res.Code != http.StatusOK {
+			t.Fatalf("owner private asset cookie %s status = %d body = %q", assetPath, res.Code, res.Body.String())
+		}
 
-	if _, err := app.images.UpdateImageVisibility(rel, service.ImageVisibilityPublic, service.ImageAccessScope{OwnerID: owner.ID}); err != nil {
-		t.Fatalf("publish image: %v", err)
-	}
-	req = httptest.NewRequest(http.MethodGet, thumbnailPath, nil)
-	res = httptest.NewRecorder()
-	app.Handler().ServeHTTP(res, req)
-	if res.Code != http.StatusOK {
-		t.Fatalf("anonymous public thumbnail status = %d body = %q", res.Code, res.Body.String())
+		if _, err := app.images.UpdateImageVisibility(rel, service.ImageVisibilityPublic, service.ImageAccessScope{OwnerID: owner.ID}); err != nil {
+			t.Fatalf("publish image: %v", err)
+		}
+		req = httptest.NewRequest(http.MethodGet, assetPath, nil)
+		res = httptest.NewRecorder()
+		app.Handler().ServeHTTP(res, req)
+		if res.Code != http.StatusOK {
+			t.Fatalf("anonymous public asset %s status = %d body = %q", assetPath, res.Code, res.Body.String())
+		}
+		if _, err := app.images.UpdateImageVisibility(rel, service.ImageVisibilityPrivate, service.ImageAccessScope{OwnerID: owner.ID}); err != nil {
+			t.Fatalf("unpublish image: %v", err)
+		}
 	}
 }
 
@@ -4788,9 +5199,16 @@ func TestImageStorageGovernanceEndpointCleansThumbnails(t *testing.T) {
 	}
 	app.images.RecordGeneratedImages([]string{rel}, "admin", "Admin", service.ImageVisibilityPrivate)
 	app.images.EnsureThumbnails([]string{rel})
+	if err := app.images.EnsurePreview(rel + ".jpg"); err != nil {
+		t.Fatalf("EnsurePreview() error = %v", err)
+	}
 	thumbPath := filepath.Join(app.config.ImageThumbnailsDir(), filepath.FromSlash(rel)+".jpg")
 	if _, err := os.Stat(thumbPath); err != nil {
 		t.Fatalf("thumbnail was not created: %v", err)
+	}
+	previewPath := filepath.Join(app.config.ImagePreviewsDir(), filepath.FromSlash(rel)+".jpg")
+	if _, err := os.Stat(previewPath); err != nil {
+		t.Fatalf("preview was not created: %v", err)
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "/api/images/storage-governance", nil)
@@ -4805,7 +5223,7 @@ func TestImageStorageGovernanceEndpointCleansThumbnails(t *testing.T) {
 		t.Fatalf("storage governance json: %v", err)
 	}
 	governance, _ := payload["governance"].(map[string]any)
-	if governance["images_count"] != float64(1) || governance["thumbnail_files"] != float64(1) {
+	if governance["images_count"] != float64(1) || governance["thumbnail_files"] != float64(1) || governance["previews_files"] != float64(1) {
 		t.Fatalf("storage governance = %#v", governance)
 	}
 
@@ -4821,7 +5239,7 @@ func TestImageStorageGovernanceEndpointCleansThumbnails(t *testing.T) {
 		t.Fatalf("thumbnail cleanup json: %v", err)
 	}
 	cleanup, _ := payload["cleanup"].(map[string]any)
-	if cleanup["deleted_thumbnails"] != float64(1) || cleanup["deleted_images"] != float64(0) {
+	if cleanup["deleted_thumbnails"] != float64(1) || cleanup["deleted_previews"] != float64(1) || cleanup["deleted_images"] != float64(0) {
 		t.Fatalf("thumbnail cleanup = %#v", cleanup)
 	}
 	if _, err := os.Stat(imagePath); err != nil {
@@ -4829,6 +5247,9 @@ func TestImageStorageGovernanceEndpointCleansThumbnails(t *testing.T) {
 	}
 	if _, err := os.Stat(thumbPath); !os.IsNotExist(err) {
 		t.Fatalf("thumbnail still exists, stat error = %v", err)
+	}
+	if _, err := os.Stat(previewPath); !os.IsNotExist(err) {
+		t.Fatalf("preview still exists, stat error = %v", err)
 	}
 }
 
@@ -4943,6 +5364,15 @@ func adminAuthHeader(t *testing.T, app *App) string {
 	return "Bearer " + token
 }
 
+func containsHTTPTestString(items []string, target string) bool {
+	for _, item := range items {
+		if item == target {
+			return true
+		}
+	}
+	return false
+}
+
 func waitForHTTPTestCondition(t *testing.T, ok func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(6 * time.Second)
@@ -4953,6 +5383,22 @@ func waitForHTTPTestCondition(t *testing.T, ok func() bool) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("timed out waiting for condition")
+}
+
+func failingHTTPImageTaskHandler(context.Context, service.Identity, map[string]any) (map[string]any, error) {
+	return nil, errors.New("unexpected image task handler call")
+}
+
+func testJSONStoreFromApp(t *testing.T, app *App) storage.Backend {
+	t.Helper()
+	backend, err := app.config.StorageBackend()
+	if err != nil {
+		t.Fatalf("StorageBackend() error = %v", err)
+	}
+	if _, ok := backend.(storage.JSONDocumentBackend); !ok {
+		t.Fatalf("storage backend %T does not implement JSONDocumentBackend", backend)
+	}
+	return backend
 }
 
 func waitForHTTPTestConditionResult(ok func() bool) bool {

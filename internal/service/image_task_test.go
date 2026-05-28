@@ -163,7 +163,7 @@ func TestImageTaskServiceRejectsBlockedImagePromptBeforeQueueing(t *testing.T) {
 	}
 }
 
-func TestImageTaskServiceAllowsEightQueuedOutputs(t *testing.T) {
+func TestImageTaskServiceAllowsTenQueuedOutputs(t *testing.T) {
 	handlerCalls := make(chan map[string]any, 1)
 	handler := func(ctx context.Context, identity Identity, payload map[string]any) (map[string]any, error) {
 		handlerCalls <- payload
@@ -177,18 +177,18 @@ func TestImageTaskServiceAllowsEightQueuedOutputs(t *testing.T) {
 	svc := newTestImageTaskService(t, handler, handler, handler, func() int { return 30 })
 	identity := Identity{ID: "alice", Name: "Alice", Role: "user"}
 
-	task, err := svc.SubmitGeneration(context.Background(), identity, "task-1", "draw", "gpt-image-2", "1024x1024", "high", "https://base.test", 8, nil)
+	task, err := svc.SubmitGeneration(context.Background(), identity, "task-1", "draw", "gpt-image-2", "1024x1024", "high", "https://base.test", 10, nil)
 	if err != nil {
 		t.Fatalf("SubmitGeneration() error = %v", err)
 	}
 	statuses, ok := task["output_statuses"].([]string)
-	if !ok || len(statuses) != 8 {
-		t.Fatalf("initial output_statuses = %#v, want 8 queued statuses", task["output_statuses"])
+	if !ok || len(statuses) != 10 {
+		t.Fatalf("initial output_statuses = %#v, want 10 queued statuses", task["output_statuses"])
 	}
 	select {
 	case payload := <-handlerCalls:
-		if got := imageTaskCount(payload); got != 8 {
-			t.Fatalf("handler imageTaskCount = %d, want 8 in %#v", got, payload)
+		if got := imageTaskCount(payload); got != 10 {
+			t.Fatalf("handler imageTaskCount = %d, want 10 in %#v", got, payload)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for handler payload")
@@ -199,12 +199,12 @@ func TestImageTaskServiceAllowsEightQueuedOutputs(t *testing.T) {
 	if len(items) != 1 {
 		t.Fatalf("ListTasks items = %#v, want one task", got)
 	}
-	if data := util.AsMapSlice(items[0]["data"]); len(data) != 8 {
-		t.Fatalf("stored task data count = %d, want 8", len(data))
+	if data := util.AsMapSlice(items[0]["data"]); len(data) != 10 {
+		t.Fatalf("stored task data count = %d, want 10", len(data))
 	}
 }
 
-func TestImageTaskServiceClampsQueuedOutputsToEight(t *testing.T) {
+func TestImageTaskServiceClampsQueuedOutputsToTen(t *testing.T) {
 	handlerCalls := make(chan map[string]any, 1)
 	handler := func(ctx context.Context, identity Identity, payload map[string]any) (map[string]any, error) {
 		handlerCalls <- payload
@@ -218,13 +218,13 @@ func TestImageTaskServiceClampsQueuedOutputsToEight(t *testing.T) {
 		t.Fatalf("SubmitGeneration() error = %v", err)
 	}
 	statuses, ok := task["output_statuses"].([]string)
-	if !ok || len(statuses) != 8 {
-		t.Fatalf("initial output_statuses = %#v, want 8 queued statuses", task["output_statuses"])
+	if !ok || len(statuses) != 10 {
+		t.Fatalf("initial output_statuses = %#v, want 10 queued statuses", task["output_statuses"])
 	}
 	select {
 	case payload := <-handlerCalls:
-		if got := imageTaskCount(payload); got != 8 {
-			t.Fatalf("handler imageTaskCount = %d, want 8 in %#v", got, payload)
+		if got := imageTaskCount(payload); got != 10 {
+			t.Fatalf("handler imageTaskCount = %d, want 10 in %#v", got, payload)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for handler payload")
@@ -602,6 +602,82 @@ func TestImageTaskServiceLimitsUserDefaultConcurrentCreationUnits(t *testing.T) 
 	close(releaseChat)
 	waitForTaskStatus(t, svc, alice, "edit-1", TaskStatusSuccess)
 	waitForTaskStatus(t, svc, alice, "chat-1", TaskStatusSuccess)
+}
+
+func TestImageTaskServiceCancelQueuedTaskWaitingForCreationUnit(t *testing.T) {
+	enteredQueued := make(chan struct{})
+	queuedStarted := make(chan struct{}, 1)
+	firstStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	var queuedOnce sync.Once
+	var firstOnce sync.Once
+	handler := func(ctx context.Context, identity Identity, payload map[string]any) (map[string]any, error) {
+		acquire, ok := payload["image_output_slot_acquirer"].(func(context.Context, int) (func(), error))
+		if !ok {
+			return nil, errors.New("image output slot acquirer missing")
+		}
+		prompt := util.Clean(payload["prompt"])
+		if prompt == "queued" {
+			queuedOnce.Do(func() { close(enteredQueued) })
+		}
+		releaseSlot, err := acquire(ctx, 1)
+		if err != nil {
+			return nil, err
+		}
+		defer releaseSlot()
+		if prompt == "queued" {
+			queuedStarted <- struct{}{}
+			return map[string]any{"data": []map[string]any{{"url": "https://example.test/queued.png"}}}, nil
+		}
+		firstOnce.Do(func() { close(firstStarted) })
+		select {
+		case <-releaseFirst:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		return map[string]any{"data": []map[string]any{{"url": "https://example.test/first.png"}}}, nil
+	}
+	svc := newTestImageTaskService(t, handler, handler, handler, func() int { return 30 }, func() int { return 1 })
+	alice := Identity{ID: "alice", Name: "Alice", Role: AuthRoleUser}
+
+	if _, err := svc.SubmitGeneration(context.Background(), alice, "task-1", "first", "gpt-image-2", "1024x1024", "high", "https://base.test", 1, nil); err != nil {
+		t.Fatalf("SubmitGeneration(task-1) error = %v", err)
+	}
+	select {
+	case <-firstStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for first image output to hold creation unit")
+	}
+	if _, err := svc.SubmitGeneration(context.Background(), alice, "task-2", "queued", "gpt-image-2", "1024x1024", "high", "https://base.test", 1, nil); err != nil {
+		t.Fatalf("SubmitGeneration(task-2) error = %v", err)
+	}
+	select {
+	case <-enteredQueued:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for second task to wait for creation unit")
+	}
+
+	cancelled, err := svc.CancelTask(alice, "task-2")
+	if err != nil {
+		t.Fatalf("CancelTask(task-2) error = %v", err)
+	}
+	if cancelled["status"] != TaskStatusCancelled {
+		t.Fatalf("cancelled task status = %#v", cancelled)
+	}
+	waitForTaskStatus(t, svc, alice, "task-2", TaskStatusCancelled)
+	got := svc.ListTasks(alice, []string{"task-2"})
+	item := got["items"].([]map[string]any)[0]
+	statuses := util.AsStringSlice(item["output_statuses"])
+	if len(statuses) != 1 || statuses[0] != TaskStatusCancelled {
+		t.Fatalf("cancelled queued output_statuses = %#v, want cancelled", statuses)
+	}
+	close(releaseFirst)
+	waitForTaskStatus(t, svc, alice, "task-1", TaskStatusSuccess)
+	select {
+	case <-queuedStarted:
+		t.Fatal("cancelled queued task acquired a creation unit after the first task finished")
+	case <-time.After(150 * time.Millisecond):
+	}
 }
 
 func TestImageTaskServiceLimitsUserDefaultRPM(t *testing.T) {
@@ -1160,6 +1236,101 @@ func TestImageTaskServiceRestoresUnfinishedTasksAsErrors(t *testing.T) {
 		case "running":
 			if len(statuses) != 3 || statuses[0] != TaskStatusSuccess || statuses[1] != TaskStatusError || statuses[2] != TaskStatusError {
 				t.Fatalf("restored running output_statuses = %#v, want success then errors", statuses)
+			}
+		}
+	}
+}
+
+func TestImageTaskServiceNormalizesTerminalOutputStatusesOnLoad(t *testing.T) {
+	backend := newTestStorageBackend(t)
+	now := util.NowLocal()
+	raw := map[string]any{"tasks": []map[string]any{
+		{"id": "error", "owner_id": "alice", "status": TaskStatusError, "mode": "generate", "count": 3, "data": []any{map[string]any{"url": "https://example.test/first.png"}}, "output_statuses": []any{TaskStatusSuccess, TaskStatusRunning, TaskStatusQueued}, "created_at": now, "updated_at": now},
+		{"id": "cancelled", "owner_id": "alice", "status": TaskStatusCancelled, "mode": "edit", "count": 2, "output_statuses": []any{TaskStatusRunning, TaskStatusQueued}, "created_at": now, "updated_at": now},
+		{"id": "success", "owner_id": "alice", "status": TaskStatusSuccess, "mode": "generate", "count": 2, "data": []any{map[string]any{"url": "https://example.test/first.png"}, map[string]any{"url": "https://example.test/second.png"}}, "output_statuses": []any{TaskStatusRunning, TaskStatusQueued}, "created_at": now, "updated_at": now},
+	}}
+	store, ok := backend.(storage.JSONDocumentBackend)
+	if !ok {
+		t.Fatalf("storage backend %T does not implement JSONDocumentBackend", backend)
+	}
+	if err := store.SaveJSONDocument("image_tasks.json", raw); err != nil {
+		t.Fatalf("SaveJSONDocument() error = %v", err)
+	}
+
+	svc := NewStoredImageTaskService(backend, failingImageTaskHandler, failingImageTaskHandler, failingImageTaskHandler, func() int { return 30 })
+	got := svc.ListTasks(Identity{ID: "alice"}, []string{"error", "cancelled", "success"})
+	items := got["items"].([]map[string]any)
+	if len(items) != 3 {
+		t.Fatalf("items = %#v", items)
+	}
+	for _, item := range items {
+		statuses := util.AsStringSlice(item["output_statuses"])
+		for _, status := range statuses {
+			if status == TaskStatusQueued || status == TaskStatusRunning {
+				t.Fatalf("terminal task kept active output status: %#v", item)
+			}
+		}
+		switch item["id"] {
+		case "error":
+			if len(statuses) != 3 || statuses[0] != TaskStatusSuccess || statuses[1] != TaskStatusError || statuses[2] != TaskStatusError {
+				t.Fatalf("error output_statuses = %#v, want success,error,error", statuses)
+			}
+		case "cancelled":
+			if len(statuses) != 2 || statuses[0] != TaskStatusCancelled || statuses[1] != TaskStatusCancelled {
+				t.Fatalf("cancelled output_statuses = %#v, want all cancelled", statuses)
+			}
+		case "success":
+			if len(statuses) != 2 || statuses[0] != TaskStatusSuccess || statuses[1] != TaskStatusSuccess {
+				t.Fatalf("success output_statuses = %#v, want all success", statuses)
+			}
+		}
+	}
+}
+
+func TestImageTaskServiceDiagnosticsAndRepair(t *testing.T) {
+	svc := newTestImageTaskService(t, failingImageTaskHandler, failingImageTaskHandler, failingImageTaskHandler, func() int { return 30 })
+	now := util.NowLocal()
+	svc.mu.Lock()
+	svc.tasks[taskKey("alice", "queued")] = map[string]any{"id": "queued", "owner_id": "alice", "status": TaskStatusQueued, "mode": "generate", "count": 1, "output_statuses": []string{TaskStatusQueued}, "created_at": now, "updated_at": now}
+	svc.tasks[taskKey("alice", "error")] = map[string]any{"id": "error", "owner_id": "alice", "status": TaskStatusError, "mode": "generate", "count": 2, "data": []map[string]any{{"url": "https://example.test/first.png"}}, "output_statuses": []string{TaskStatusSuccess, TaskStatusRunning}, "created_at": now, "updated_at": now}
+	svc.tasks[taskKey("alice", "success")] = map[string]any{"id": "success", "owner_id": "alice", "status": TaskStatusSuccess, "mode": "edit", "count": 1, "data": []map[string]any{{"url": "https://example.test/success.png"}}, "output_statuses": []string{TaskStatusSuccess}, "created_at": now, "updated_at": now}
+	_ = svc.saveLocked()
+	svc.mu.Unlock()
+
+	summary := svc.DiagnosticsSummary()
+	if summary.TotalTasks != 3 || summary.ActiveTasks != 1 || summary.DirtyTerminalTasks != 1 || summary.DirtyTerminalOutputStatuses != 1 {
+		t.Fatalf("diagnostics summary = %#v", summary)
+	}
+
+	result := svc.RepairDiagnostics(ImageTaskRepairOptions{})
+	if result.RepairedTerminalTasks != 1 || result.FinalizedActiveTasks != 0 {
+		t.Fatalf("repair result = %#v", result)
+	}
+	if result.After.ActiveTasks != 1 || result.After.DirtyTerminalTasks != 0 || result.After.DirtyTerminalOutputStatuses != 0 {
+		t.Fatalf("repair after = %#v", result.After)
+	}
+
+	result = svc.RepairDiagnostics(ImageTaskRepairOptions{FinalizeActive: true})
+	if result.FinalizedActiveTasks != 1 || result.After.ActiveTasks != 0 {
+		t.Fatalf("finalize active result = %#v", result)
+	}
+	got := svc.ListTasks(Identity{ID: "alice"}, []string{"queued", "error"})
+	items := got["items"].([]map[string]any)
+	if len(items) != 2 {
+		t.Fatalf("items = %#v", items)
+	}
+	for _, item := range items {
+		switch item["id"] {
+		case "queued":
+			if item["status"] != TaskStatusError {
+				t.Fatalf("queued task = %#v, want error", item)
+			}
+			if statuses := util.AsStringSlice(item["output_statuses"]); len(statuses) != 1 || statuses[0] != TaskStatusError {
+				t.Fatalf("queued output_statuses = %#v, want error", statuses)
+			}
+		case "error":
+			if statuses := util.AsStringSlice(item["output_statuses"]); len(statuses) != 2 || statuses[0] != TaskStatusSuccess || statuses[1] != TaskStatusError {
+				t.Fatalf("error output_statuses = %#v, want success,error", statuses)
 			}
 		}
 	}
