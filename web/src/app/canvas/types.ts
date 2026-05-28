@@ -13,7 +13,7 @@ export const SMART_CANVAS_KIND = "smart";
 export const SMART_CANVAS_SCHEMA_VERSION = 2;
 export const SMART_CANVAS_AUTOSAVE_DELAY_MS = 5000;
 
-export type SmartCanvasItemType = "image" | "prompt" | "llm" | "image_generation" | "result";
+export type SmartCanvasItemType = "image" | "prompt" | "llm" | "loop" | "image_generation" | "result";
 export type SmartCanvasSaveState = "saved" | "dirty" | "saving" | "error";
 export type SmartCanvasTool = "select" | "pan";
 export type SmartCanvasPortKind = "in" | "out";
@@ -46,6 +46,15 @@ export type SmartCanvasItemData = {
   source_images?: CanvasImageRef[];
   input_images?: CanvasImageRef[];
   mention_images?: CanvasImageRef[];
+  loop_mode?: "repeat" | "images";
+  loop_count?: number;
+  loop_concurrency?: number;
+  loop_progress?: {
+    total: number;
+    completed: number;
+    failed: number;
+    current: number;
+  };
   tool_type?: SmartCanvasImageToolType;
   tool_parameters?: SmartCanvasImageToolParameters;
   width?: number;

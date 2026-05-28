@@ -46,6 +46,7 @@ import {
   createHistoryEntry,
   createImageItem,
   createLlmNode,
+  createLoopNode,
   createOutputNode,
   createPromptNode,
   createSmartEdge,
@@ -153,11 +154,14 @@ function canConnectNodes(source: SmartCanvasItem, target: SmartCanvasItem) {
   if (target.type === "llm") {
     return source.type === "image" || source.type === "prompt" || source.type === "result";
   }
-  if (target.type === "image_generation") {
+  if (target.type === "loop") {
     return source.type === "image" || source.type === "prompt" || source.type === "llm" || source.type === "result";
   }
+  if (target.type === "image_generation") {
+    return source.type === "image" || source.type === "prompt" || source.type === "llm" || source.type === "loop" || source.type === "result";
+  }
   if (target.type === "result") {
-    return source.type === "image_generation" || source.type === "llm" || source.type === "image" || source.type === "result";
+    return source.type === "image_generation" || source.type === "llm" || source.type === "loop" || source.type === "image" || source.type === "result";
   }
   if (target.type === "image") {
     return source.type === "image" || source.type === "result";
@@ -170,6 +174,9 @@ function generatorInputImages(canvas: SmartCanvasDocument, generator: SmartCanva
   const upstreamImages = upstream.flatMap((item) => {
     if (item.type === "prompt") {
       return item.data?.input_images || [];
+    }
+    if (item.type === "loop") {
+      return item.data?.output?.images || item.data?.images || [];
     }
     if (item.type === "result") {
       return item.data?.output?.images || item.data?.images || [];
@@ -231,6 +238,9 @@ function llmInputImages(canvas: SmartCanvasDocument, node: SmartCanvasItem) {
     if (item.type === "result") {
       return item.data?.output?.images || item.data?.images || [];
     }
+    if (item.type === "loop") {
+      return item.data?.output?.images || item.data?.images || [];
+    }
     return item.data?.images || [];
   }));
 }
@@ -258,6 +268,9 @@ function canvasItemCenterOffset(type: SmartCanvasItem["type"]) {
   }
   if (type === "llm") {
     return { x: -190, y: -210 };
+  }
+  if (type === "loop") {
+    return { x: -170, y: -150 };
   }
   if (type === "prompt") {
     return { x: -150, y: -100 };
@@ -691,11 +704,13 @@ export function useSmartCanvasController() {
       ? createPromptNode(position)
       : type === "llm"
         ? createLlmNode(position)
-        : type === "image_generation"
-          ? createGeneratorNode(position)
-          : type === "result"
-            ? createOutputNode(position)
-            : createImageItem([], position);
+        : type === "loop"
+          ? createLoopNode(position)
+          : type === "image_generation"
+            ? createGeneratorNode(position)
+            : type === "result"
+              ? createOutputNode(position)
+              : createImageItem([], position);
     updateCanvas((current) => ({ ...current, nodes: [...current.nodes, item] }), true, `新增 ${type === "llm" ? "AI 提示词" : item.name || "节点"}`);
     selectSingleItem(item.id);
     return item;
