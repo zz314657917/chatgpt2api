@@ -256,7 +256,7 @@ function getQueueItemKey(item: QueueItemModel) {
 }
 
 function getQueueItemCreatedAt(item: QueueItemModel) {
-  return item.source === "image" ? item.turn.createdAt : item.run.createdAt;
+  return item.source === "image" ? item.turn.createdAt : item.run.startedAt || item.run.createdAt;
 }
 
 function isQueueItemBusy(item: QueueItemModel) {
@@ -332,7 +332,7 @@ function getCanvasTaskQueueItems(canvases: SmartCanvasDocument[]) {
     }),
   );
 
-  return items.sort((a, b) => a.run.createdAt.localeCompare(b.run.createdAt));
+  return items.sort((a, b) => (a.run.startedAt || a.run.createdAt).localeCompare(b.run.startedAt || b.run.createdAt));
 }
 
 function findQueueItem(conversations: ImageConversation[], conversationId: string, turnId: string) {
@@ -573,8 +573,9 @@ function CanvasQueueItemCard({
         : isRunning
           ? 8
           : 0;
-  const elapsedSeconds = isRunning && item.run.createdAt
-    ? Math.max(0, Math.floor((now - new Date(item.run.createdAt).getTime()) / 1000))
+  const runStartedAt = item.run.startedAt || item.run.createdAt;
+  const elapsedSeconds = isRunning && runStartedAt
+    ? Math.max(0, Math.floor((now - new Date(runStartedAt).getTime()) / 1000))
     : 0;
   const elapsed = isRunning ? formatElapsedClock(elapsedSeconds) : "";
   const routeDetail = getImageModelRouteDetail(item.run.model);
@@ -639,7 +640,7 @@ function CanvasQueueItemCard({
               <div className="h-full rounded-full bg-[#1456f0] transition-[width] duration-300" style={{ width: `${progressPercent}%` }} />
             </div>
             <div className="mt-1.5 flex items-center justify-between gap-2 text-[11px] text-[#8e8e93] dark:text-muted-foreground">
-              <span className="truncate">{progressDetail || formatQueueTime(item.run.createdAt)}</span>
+              <span className="truncate">{progressDetail || formatQueueTime(runStartedAt || item.run.createdAt)}</span>
               {elapsed ? <span className="shrink-0 font-mono tabular-nums">已运行 {elapsed}</span> : null}
             </div>
           </div>

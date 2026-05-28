@@ -132,7 +132,7 @@ export function ImageStorageGovernanceCard() {
   const governance = imageStorageGovernance;
   const totalBytes = governance?.total_bytes ?? 0;
   const limitBytes = governance?.limit_bytes ?? 0;
-  const retentionDays = Math.max(1, Number(config?.image_retention_days) || 30);
+  const retentionDays = Math.max(1, Number(config?.image_retention_days) || 7);
   const limitMb = Math.max(0, Number(config?.image_storage_limit_mb) || 0);
   const overLimit = (governance?.over_limit_bytes ?? 0) > 0;
 
@@ -151,7 +151,7 @@ export function ImageStorageGovernanceCard() {
     <SettingsCard
       icon={HardDrive}
       title="图片存储治理"
-      description="查看图片、缩略图和参考图占用，并按策略清理缓存文件。"
+      description="查看图片、预览缓存和参考图占用，并按策略清理缓存文件。"
       tone="slate"
       action={
         <Button
@@ -199,13 +199,13 @@ export function ImageStorageGovernanceCard() {
                   total={totalBytes}
                 />
                 <UsageBar
-                  label="缩略图"
-                  value={governance?.thumbnails_bytes ?? 0}
+                  label="预览缓存"
+                  value={(governance?.thumbnails_bytes ?? 0) + (governance?.previews_bytes ?? 0)}
                   total={totalBytes}
                 />
                 <UsageBar
                   label="元数据与参考图"
-                  value={governance?.metadata_bytes ?? 0}
+                  value={(governance?.metadata_bytes ?? 0) + (governance?.reference_bytes ?? 0)}
                   total={totalBytes}
                 />
               </div>
@@ -225,8 +225,8 @@ export function ImageStorageGovernanceCard() {
                 value={`${governance?.reference_files ?? 0} 个 · ${formatBytes(governance?.reference_bytes)}`}
               />
               <StatBlock
-                label="缩略图缓存"
-                value={`${governance?.thumbnail_files ?? 0} 个 · ${formatBytes(governance?.thumbnails_bytes)}`}
+                label="预览缓存"
+                value={`${(governance?.thumbnail_files ?? 0) + (governance?.previews_files ?? 0)} 个 · ${formatBytes((governance?.thumbnails_bytes ?? 0) + (governance?.previews_bytes ?? 0))}`}
               />
               <StatBlock
                 label="最早图片"
@@ -246,10 +246,10 @@ export function ImageStorageGovernanceCard() {
             variant="outline"
             className="min-h-11"
             onClick={() => setCleanupAction("thumbnails")}
-            disabled={isCleaningImageStorage || (governance?.thumbnail_files ?? 0) === 0}
+            disabled={isCleaningImageStorage || ((governance?.thumbnail_files ?? 0) + (governance?.previews_files ?? 0)) === 0}
           >
             <ImageIcon data-icon="inline-start" />
-            清缩略图
+            清预览缓存
           </Button>
           <Button
             type="button"
@@ -276,7 +276,7 @@ export function ImageStorageGovernanceCard() {
         {lastImageStorageCleanup ? (
           <SettingsNotice>
             上次清理删除 {lastImageStorageCleanup.deleted_images} 张图片、{" "}
-            {lastImageStorageCleanup.deleted_thumbnails} 个缩略图，释放{" "}
+            {(lastImageStorageCleanup.deleted_thumbnails || 0) + (lastImageStorageCleanup.deleted_previews || 0)} 个预览缓存，释放{" "}
             {formatBytes(lastImageStorageCleanup.deleted_bytes)}。
           </SettingsNotice>
         ) : null}
@@ -293,7 +293,7 @@ export function ImageStorageGovernanceCard() {
             <DialogTitle>确认清理图片存储</DialogTitle>
             <DialogDescription>
               {cleanupAction === "thumbnails"
-                ? "将删除缩略图缓存，原图和参考图不会被删除。"
+                ? "将删除缩略图和中图预览缓存，原图和参考图不会被删除。"
                 : cleanupAction === "quota"
                   ? "将按容量上限删除最旧的非公开图片，公开图库图片默认保留。"
                   : "将删除保留窗口以前的非公开图片，并同步清理缩略图、元数据和参考图。"}
@@ -304,7 +304,7 @@ export function ImageStorageGovernanceCard() {
               ? `当前容量上限为 ${limitMb} MB。`
               : cleanupAction === "retention"
                 ? `当前图片保留策略为最近 ${retentionDays} 天。`
-                : `当前缩略图缓存占用 ${formatBytes(governance?.thumbnails_bytes)}。`}
+                : `当前预览缓存占用 ${formatBytes((governance?.thumbnails_bytes ?? 0) + (governance?.previews_bytes ?? 0))}。`}
           </div>
           <DialogFooter>
             <DialogClose asChild>

@@ -31,7 +31,8 @@ import {
   fetchManagedImages,
   updateManagedImageVisibility,
   type ImageVisibility,
-  type ManagedImage,
+  type ManagedImageDetail,
+  type ManagedImageSummary,
 } from "@/lib/api";
 import {
   fetchAuthenticatedImageBlob,
@@ -52,29 +53,41 @@ import { cn } from "@/lib/utils";
 import { useAuthGuard } from "@/lib/use-auth-guard";
 import { canAccessPath, hasAPIPermission, type StoredAuthSession } from "@/store/auth";
 
-function getManagedImageFormatLabel(item: ManagedImage) {
-  const normalized = (item.name || item.url).split("?")[0]?.match(/\.([a-z0-9]+)$/i)?.[1] || "image";
+function getManagedImageFormatLabel(item: ManagedImageSummary) {
+  const normalized = (item.name || item.path).split("?")[0]?.match(/\.([a-z0-9]+)$/i)?.[1] || "image";
   const format = normalized.toLowerCase() === "jpeg" ? "jpg" : normalized.toLowerCase();
   return `IMAGE ${format.toUpperCase()}`;
 }
 
-function managedImageListPreviewSource(item: ManagedImage) {
-  return item.preview_url || item.thumbnail_url || item.url;
+function managedImageCardSource(item: ManagedImageSummary) {
+  return item.thumbnail_url || "";
 }
 
-function managedImageKey(item: ManagedImage) {
+function managedImagePreviewSource(item: ManagedImageSummary) {
+  return item.preview_url || item.thumbnail_url || "";
+}
+
+function managedImageKey(item: ManagedImageSummary) {
   return item.path;
 }
 
-function buildManagedImageDownloadName(item: ManagedImage, index: number) {
-  const sourceName = item.name || item.url.split("?")[0]?.split("/").filter(Boolean).pop();
+function managedImageDetailCacheKey(item: ManagedImageSummary, scope?: ImageGalleryView) {
+  return `${scope || ""}:${item.path}`;
+}
+
+function managedImageDetailCacheKeys(item: ManagedImageSummary) {
+  return ["mine", "public", "all"].map((scope) => managedImageDetailCacheKey(item, scope as ImageGalleryView));
+}
+
+function buildManagedImageDownloadName(item: ManagedImageSummary, index: number) {
+  const sourceName = item.name || item.path.split("?")[0]?.split("/").filter(Boolean).pop();
   if (sourceName) {
     return sourceName;
   }
   return `managed-image-${String(index + 1).padStart(2, "0")}.png`;
 }
 
-async function downloadManagedImage(item: ManagedImage, index: number) {
+async function downloadManagedImage(item: ManagedImageDetail, index: number) {
   let href = item.url;
   let objectUrl = "";
 
@@ -115,7 +128,7 @@ type DeleteImageTarget = {
 };
 
 type PublishImageTarget = {
-  items: ManagedImage[];
+  items: ManagedImageSummary[];
 };
 
 type PublishRecipeOptions = {
@@ -153,17 +166,17 @@ function imageManagerCacheScope(session: StoredAuthSession) {
   return [session.provider || "local", session.role, session.subjectId || session.key].join(":");
 }
 
-function imageOwnerLabel(item: ManagedImage) {
+function imageOwnerLabel(item: ManagedImageSummary) {
   return item.owner_name?.trim() || "未知用户";
 }
 
-function reusableImagePrompt(item: ManagedImage) {
+function reusableImagePrompt(item: ManagedImageDetail) {
   return item.share_prompt_parameters && item.prompt?.trim()
     ? item.prompt.trim()
     : "参考这张图，生成一张风格、主体和构图相近的新图片。";
 }
 
-function reusableImageReferenceUrls(item: ManagedImage) {
+function reusableImageReferenceUrls(item: ManagedImageDetail) {
   if (!item.share_reference_images) {
     return [item.url];
   }
@@ -173,7 +186,7 @@ function reusableImageReferenceUrls(item: ManagedImage) {
   return urls && urls.length > 0 ? Array.from(new Set(urls.map((url) => url.trim()).filter(Boolean))) : [item.url];
 }
 
-function managedImageDimensions(item: ManagedImage) {
+function managedImageDimensions(item: ManagedImageSummary) {
   const width = Number(item.width);
   const height = Number(item.height);
   if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
@@ -182,12 +195,12 @@ function managedImageDimensions(item: ManagedImage) {
   return { width, height };
 }
 
-function getManagedImageResolution(item: ManagedImage) {
+function getManagedImageResolution(item: ManagedImageSummary) {
   const dimensions = managedImageDimensions(item);
   return dimensions ? `${dimensions.width} x ${dimensions.height}` : "";
 }
 
-function getManagedImageMegapixels(item: ManagedImage) {
+function getManagedImageMegapixels(item: ManagedImageSummary) {
   const dimensions = managedImageDimensions(item);
   if (!dimensions) {
     return 0;
@@ -195,7 +208,7 @@ function getManagedImageMegapixels(item: ManagedImage) {
   return (dimensions.width * dimensions.height) / 1_000_000;
 }
 
-function getManagedImageAspectRatio(item: ManagedImage) {
+function getManagedImageAspectRatio(item: ManagedImageSummary) {
   const dimensions = managedImageDimensions(item);
   if (!dimensions) {
     return "";
@@ -230,7 +243,7 @@ function imageAspectRatioFilterLabel(value: ImageAspectRatioFilter) {
   return IMAGE_ASPECT_RATIO_FILTERS.find((item) => item.value === value)?.label ?? "全部比例";
 }
 
-function formatManagedImageMegapixels(item: ManagedImage) {
+function formatManagedImageMegapixels(item: ManagedImageSummary) {
   const megapixels = getManagedImageMegapixels(item);
   if (megapixels <= 0) {
     return "";
@@ -238,7 +251,7 @@ function formatManagedImageMegapixels(item: ManagedImage) {
   return megapixels >= 10 ? `${megapixels.toFixed(1)}MP` : `${megapixels.toFixed(2)}MP`;
 }
 
-function getManagedImageResolutionSummary(item: ManagedImage) {
+function getManagedImageResolutionSummary(item: ManagedImageSummary) {
   return [getManagedImageResolution(item), getManagedImageAspectRatio(item), formatManagedImageMegapixels(item)].filter(Boolean).join(" · ");
 }
 
@@ -358,11 +371,11 @@ function ImageManagerContent({
   const [isLoading, setIsLoading] = useState(() => !initialCache);
   const [loadError, setLoadError] = useState("");
   const [isAutoRefreshing, setIsAutoRefreshing] = useState(false);
-  const [items, setItems] = useState<ManagedImage[]>(() => initialCache?.items ?? []);
+  const [items, setItems] = useState<ManagedImageSummary[]>(() => initialCache?.items ?? []);
   const [nextCursor, setNextCursor] = useState(() => initialCache?.nextCursor ?? "");
   const [hasMoreItems, setHasMoreItems] = useState(() => initialCache?.hasMore ?? false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
-  const [detailItemsByPath, setDetailItemsByPath] = useState<Record<string, ManagedImage>>({});
+  const [detailItemsByPath, setDetailItemsByPath] = useState<Record<string, ManagedImageDetail>>({});
   const hasLocalFilters =
     searchKeyword.trim() !== "" ||
     visibilityFilter !== "all" ||
@@ -380,22 +393,43 @@ function ImageManagerContent({
     aspectRatioFilter !== "all" ? imageAspectRatioFilterLabel(aspectRatioFilter) : "",
   ].filter(Boolean);
   const activeFilterCount = activeFilterLabels.length;
+  const loadManagedImageDetail = useCallback(async (item: ManagedImageSummary) => {
+    const cacheKey = managedImageDetailCacheKey(item, galleryView);
+    const cached = detailItemsByPath[cacheKey];
+    if (cached) {
+      return cached;
+    }
+    const detail = await fetchManagedImageDetail(item.path, { scope: galleryView });
+    setDetailItemsByPath((current) => ({ ...current, [cacheKey]: detail }));
+    return detail;
+  }, [detailItemsByPath, galleryView]);
   const lightboxImages = useMemo(
     () =>
       items.map((item) => {
-        const detail = detailItemsByPath[item.path];
-        const image = detail || item;
+        const detail = detailItemsByPath[managedImageDetailCacheKey(item, galleryView)];
         return {
           id: item.path || item.name,
-          src: detail?.url || managedImageListPreviewSource(item),
-          fileName: image.name,
-          outputFormat: image.output_format,
-          sizeLabel: formatImageFileSize(image.size),
-          dimensions: getManagedImageResolutionSummary(image) || undefined,
+          src: managedImagePreviewSource(item),
+          fileName: detail?.name || item.name,
+          outputFormat: detail?.output_format,
+          sizeLabel: formatImageFileSize(detail?.size || item.size),
+          dimensions: getManagedImageResolutionSummary(detail || item) || undefined,
         };
       }),
-    [detailItemsByPath, items],
+    [detailItemsByPath, galleryView, items],
   );
+  const resolveLightboxDownloadSource = useCallback(async (_image: { id: string }, index: number) => {
+    const item = items[index];
+    if (!item) {
+      return null;
+    }
+    const detail = await loadManagedImageDetail(item);
+    return {
+      src: detail.url,
+      fileName: detail.name,
+      outputFormat: detail.output_format,
+    };
+  }, [items, loadManagedImageDetail]);
   const selectedItems = useMemo(
     () => items.filter((item) => selectedImageIds[managedImageKey(item)]),
     [items, selectedImageIds],
@@ -428,25 +462,12 @@ function ImageManagerContent({
     aspect_ratio: aspectRatioFilter,
   }), [aspectRatioFilter, endDate, formatFilter, galleryView, orientationFilter, resolutionFilter, searchKeyword, startDate, visibilityFilter]);
 
-  const loadManagedImageDetail = useCallback(async (item: ManagedImage) => {
-    const cached = detailItemsByPath[item.path];
-    if (cached) {
-      return cached;
-    }
-    const detail = await fetchManagedImageDetail(item.path, { scope: galleryView });
-    setDetailItemsByPath((current) => ({ ...current, [item.path]: detail }));
-    return detail;
-  }, [detailItemsByPath, galleryView]);
-
-  const openImagePreview = useCallback((item: ManagedImage, index: number) => {
+  const openImagePreview = useCallback((_item: ManagedImageSummary, index: number) => {
     setLightboxIndex(index);
     setLightboxOpen(true);
-    void loadManagedImageDetail(item).catch((error) => {
-      toast.error(error instanceof Error ? error.message : "读取图片详情失败");
-    });
-  }, [loadManagedImageDetail]);
+  }, []);
 
-  const copyManagedImageURL = useCallback(async (item: ManagedImage) => {
+  const copyManagedImageURL = useCallback(async (item: ManagedImageSummary) => {
     try {
       const detail = await loadManagedImageDetail(item);
       await navigator.clipboard.writeText(detail.url);
@@ -516,42 +537,34 @@ function ImageManagerContent({
         { signal: controller.signal },
       );
       const incomingByPath = new Map(data.items.map((item) => [item.path, item]));
-      const incomingPathSet = new Set(incomingByPath.keys());
-      const knownPaths = new Set(items.map((item) => item.path));
-      const incomingNewItems = data.items.filter((item) => !knownPaths.has(item.path));
-      const hasRemovedItems = items.some((item) => !incomingPathSet.has(item.path));
-      const hasUpdatedItems = items.some((item) => {
-        const incoming = incomingByPath.get(item.path);
-        return incoming ? JSON.stringify(incoming) !== JSON.stringify(item) : false;
+      const hasSameItems = items.length === data.items.length && items.every((item, index) => {
+        const incoming = data.items[index];
+        return incoming && incoming.path === item.path && JSON.stringify(incoming) === JSON.stringify(item);
       });
-      if (incomingNewItems.length === 0 && !hasRemovedItems && !hasUpdatedItems) {
+      if (hasSameItems) {
         return;
       }
       setItems((current) => {
-        const currentPaths = new Set(current.map((item) => item.path));
-        const newItems = data.items.filter((item) => !currentPaths.has(item.path));
-        const existingItems = current.flatMap((item) => {
-          const incoming = incomingByPath.get(item.path);
-          return incoming ? [{ ...item, ...incoming }] : [];
-        });
-        const next = [...newItems, ...existingItems];
-        if (next.length === current.length && newItems.length === 0 && !hasUpdatedItems) {
+        const next = data.items.map((item) => ({ ...current.find((currentItem) => currentItem.path === item.path), ...item }));
+        if (next.length === current.length && next.every((item, index) => item.path === current[index]?.path && JSON.stringify(item) === JSON.stringify(current[index]))) {
           return current;
         }
         updateImageManagerCache(currentCacheKey, next, nextCursor, hasMoreItems);
         return next;
       });
-      if (hasRemovedItems) {
-        setSelectedImageIds((current) => {
-          const next = { ...current };
-          Object.keys(next).forEach((path) => {
-            if (!incomingPathSet.has(path)) {
-              delete next[path];
-            }
-          });
-          return next;
+      setSelectedImageIds((current) => {
+        const incomingPaths = new Set(incomingByPath.keys());
+        let changed = false;
+        const next: Record<string, boolean> = {};
+        Object.entries(current).forEach(([key, selected]) => {
+          if (selected && incomingPaths.has(key)) {
+            next[key] = selected;
+          } else if (selected) {
+            changed = true;
+          }
         });
-      }
+        return changed ? next : current;
+      });
     } catch (error) {
       if (controller.signal.aborted || isRequestCanceled(error)) {
         return;
@@ -697,7 +710,7 @@ function ImageManagerContent({
     setHasMoreItems(false);
   }, []);
 
-  const toggleImageSelection = (item: ManagedImage) => {
+  const toggleImageSelection = (item: ManagedImageSummary) => {
     const key = managedImageKey(item);
     setSelectedImageIds((current) => ({
       ...current,
@@ -716,7 +729,7 @@ function ImageManagerContent({
     );
   };
 
-  const downloadItems = async (key: string, downloadItems: ManagedImage[]) => {
+  const downloadItems = async (key: string, downloadItems: ManagedImageSummary[]) => {
     if (downloadItems.length === 0 || downloadingKey) {
       return;
     }
@@ -738,12 +751,12 @@ function ImageManagerContent({
     }
   };
 
-  const handleGenerateSimilar = async (item: ManagedImage) => {
+  const handleGenerateSimilar = async (item: ManagedImageSummary) => {
     if (!canGenerateSimilar) {
       toast.error("当前账号没有创作台权限");
       return;
     }
-    let detail = item;
+    let detail: ManagedImageDetail;
     try {
       detail = await loadManagedImageDetail(item);
     } catch (error) {
@@ -768,7 +781,7 @@ function ImageManagerContent({
     toast.success(sourceImageUrls[0] === detail.url ? "已使用公开图准备同款生成" : "已带入公开的原始参考图和生成参数");
   };
 
-  const openDeleteConfirm = (targetItems: ManagedImage[]) => {
+  const openDeleteConfirm = (targetItems: ManagedImageSummary[]) => {
     if (!canDeleteImages) {
       return;
     }
@@ -815,7 +828,7 @@ function ImageManagerContent({
     }
   };
 
-  const openPublishConfirm = (targetItems: ManagedImage[]) => {
+  const openPublishConfirm = (targetItems: ManagedImageSummary[]) => {
     const pendingItems = targetItems.filter((item) => item.visibility !== "public");
     if (pendingItems.length === 0) {
       return;
@@ -825,7 +838,7 @@ function ImageManagerContent({
   };
 
   const handleVisibilityChange = async (
-    item: ManagedImage,
+    item: ManagedImageSummary,
     visibility: ImageVisibility,
     options: PublishRecipeOptions = { sharePromptParameters: false, shareReferenceImages: false },
   ) => {
@@ -849,6 +862,13 @@ function ImageManagerContent({
         visibility: data.item.visibility || visibility,
       };
       clearImageManagerCache();
+      setDetailItemsByPath((current) => {
+        const next = { ...current };
+        managedImageDetailCacheKeys(item).forEach((key) => {
+          delete next[key];
+        });
+        return next;
+      });
       setItems((current) => {
         const next = current.map((currentItem) =>
           currentItem.path === item.path
@@ -870,7 +890,7 @@ function ImageManagerContent({
   };
 
   const handleBulkVisibilityChange = async (
-    targetItems: ManagedImage[],
+    targetItems: ManagedImageSummary[],
     visibility: ImageVisibility,
     options: PublishRecipeOptions = { sharePromptParameters: false, shareReferenceImages: false },
   ) => {
@@ -904,6 +924,15 @@ function ImageManagerContent({
       if (updates.length > 0) {
         const updatesByPath = new Map(updates.map((item) => [item.path, item]));
         clearImageManagerCache();
+        setDetailItemsByPath((current) => {
+          const next = { ...current };
+          updates.forEach((item) => {
+            managedImageDetailCacheKeys({ path: item.path } as ManagedImageSummary).forEach((key) => {
+              delete next[key];
+            });
+          });
+          return next;
+        });
         setItems((current) => {
           const next = current.map((currentItem) => {
             const updated = updatesByPath.get(currentItem.path);
@@ -1188,6 +1217,7 @@ function ImageManagerContent({
               {[
                 { value: "mine" as const, label: "个人图库", icon: ImageIcon },
                 { value: "public" as const, label: "公开图库", icon: Globe2 },
+                ...(isAdmin ? [{ value: "all" as const, label: "全部", icon: SlidersHorizontal }] : []),
               ].map((option) => {
                 const Icon = option.icon;
                 const active = galleryView === option.value;
@@ -1211,7 +1241,7 @@ function ImageManagerContent({
             </div>
             <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
               <ImageIcon className="size-4 shrink-0" />
-              <span>{galleryView === "mine" ? "个人图库" : "公开图库"}</span>
+              <span>{galleryView === "mine" ? "个人图库" : galleryView === "all" ? "全部图片" : "公开图库"}</span>
               <span>{hasMoreItems ? `已加载 ${items.length} 张` : `共 ${items.length} 张`}</span>
             </div>
           </div>
@@ -1487,7 +1517,7 @@ function ImageManagerContent({
                 const imageMeta = [dimensions, ratioLabel, megapixelsLabel, sizeLabel].filter(Boolean).join(" | ");
                 const ownerLabel = imageOwnerLabel(item);
                 const canUpdateVisibility = galleryView === "mine";
-                const showVisibilityStatus = canUpdateVisibility || (isAdmin && galleryView === "public");
+                const showVisibilityStatus = canUpdateVisibility || (isAdmin && (galleryView === "public" || galleryView === "all"));
                 const imageAspectRatio = item.width && item.height ? `${item.width} / ${item.height}` : "1 / 1";
                 return (
                   <figure
@@ -1523,7 +1553,7 @@ function ImageManagerContent({
                       aria-label={selected ? "取消选择图片" : "选择图片"}
                     >
                       <AuthenticatedImage
-                        src={managedImageListPreviewSource(item)}
+                        src={managedImageCardSource(item)}
                         alt={item.name}
                         width={item.width || undefined}
                         height={item.height || undefined}
@@ -1572,7 +1602,7 @@ function ImageManagerContent({
                       >
                         <Eye className="size-3.5" />
                       </button>
-                      {galleryView === "public" && canGenerateSimilar ? (
+                      {(galleryView === "public" || galleryView === "all") && item.visibility === "public" && canGenerateSimilar ? (
                         <button
                           type="button"
                           onClick={(event) => {
@@ -1690,7 +1720,9 @@ function ImageManagerContent({
                     ? "调整关键词、状态、格式或方向筛选后再试。"
                     : galleryView === "mine"
                       ? "图片生成成功后会自动进入个人图库。"
-                      : "公开图库暂无公开图片。"}
+                      : galleryView === "all"
+                        ? "暂无可管理图片。"
+                        : "公开图库暂无公开图片。"}
                 </p>
               </div>
             </CardContent>
@@ -1704,6 +1736,7 @@ function ImageManagerContent({
         open={lightboxOpen}
         onOpenChange={setLightboxOpen}
         onIndexChange={setLightboxIndex}
+        resolveDownloadSource={resolveLightboxDownloadSource}
       />
       {publishTarget ? (
         <Dialog open onOpenChange={(open) => (!open && !visibilityMutatingPath ? setPublishTarget(null) : null)}>
