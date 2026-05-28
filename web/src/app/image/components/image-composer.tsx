@@ -54,6 +54,7 @@ import {
   supportsStructuredImageParameters,
   type ImageModel,
   type ImageOutputFormat,
+  type ImageQuality,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
@@ -69,6 +70,10 @@ type ImageComposerProps = {
   imageCustomRatio: string;
   imageCustomWidth: string;
   imageCustomHeight: string;
+  imageQuality: "auto" | ImageQuality;
+  imageBackground: string;
+  imageModeration: string;
+  imagePartialImages: string;
   imageOutputFormat: ImageOutputFormat;
   imageOutputCompression: string;
   highResolutionHint?: ReactNode;
@@ -87,6 +92,10 @@ type ImageComposerProps = {
   onImageCustomRatioChange: (value: string) => void;
   onImageCustomWidthChange: (value: string) => void;
   onImageCustomHeightChange: (value: string) => void;
+  onImageQualityChange: (value: "auto" | ImageQuality) => void;
+  onImageBackgroundChange: (value: string) => void;
+  onImageModerationChange: (value: string) => void;
+  onImagePartialImagesChange: (value: string) => void;
   onImageOutputFormatChange: (value: ImageOutputFormat) => void;
   onImageOutputCompressionChange: (value: string) => void;
   onSubmit: () => void | Promise<void>;
@@ -149,6 +158,31 @@ function ImageComposerDock({ children }: { children: ReactNode }) {
 
 const imageSettingsFieldClass =
   "flex min-h-8 min-w-0 items-center justify-between gap-2 rounded-xl border border-[#e5e7eb] bg-white px-3 py-1 text-[11px] dark:border-border dark:bg-background/70";
+
+const IMAGE_QUALITY_OPTIONS = [
+  { value: "auto", label: "自动", description: "不指定质量，由上游选择默认质量。" },
+  { value: "low", label: "低质量", description: "通常更快、成本更低。" },
+  { value: "medium", label: "中质量", description: "适合多数草稿和预览。" },
+  { value: "high", label: "高质量", description: "适合最终出图。" },
+] as const satisfies ReadonlyArray<ImageSettingsMenuOption<"auto" | ImageQuality>>;
+
+const IMAGE_BACKGROUND_OPTIONS = [
+  { value: "auto", label: "Auto", description: "不指定背景参数。" },
+  { value: "transparent", label: "透明", description: "请求透明背景，具体效果以上游能力为准。" },
+  { value: "opaque", label: "不透明", description: "请求不透明背景。" },
+] as const;
+
+const IMAGE_MODERATION_OPTIONS = [
+  { value: "auto", label: "Auto", description: "使用上游默认审核策略。" },
+  { value: "low", label: "Low", description: "低审核强度，是否生效以上游为准。" },
+] as const;
+
+const IMAGE_PARTIAL_IMAGE_OPTIONS = [
+  { value: "", label: "关闭", description: "不请求中间预览帧。" },
+  { value: "1", label: "1 帧", description: "请求 1 张中间预览。" },
+  { value: "2", label: "2 帧", description: "请求 2 张中间预览。" },
+  { value: "3", label: "3 帧", description: "请求 3 张中间预览。" },
+] as const;
 
 type ImageSettingsMenuOption<Value extends string> = {
   value: Value;
@@ -291,6 +325,10 @@ export function ImageComposer({
   imageCustomRatio,
   imageCustomWidth,
   imageCustomHeight,
+  imageQuality,
+  imageBackground,
+  imageModeration,
+  imagePartialImages,
   imageOutputFormat,
   imageOutputCompression,
   highResolutionHint,
@@ -309,6 +347,10 @@ export function ImageComposer({
   onImageCustomRatioChange,
   onImageCustomWidthChange,
   onImageCustomHeightChange,
+  onImageQualityChange,
+  onImageBackgroundChange,
+  onImageModerationChange,
+  onImagePartialImagesChange,
   onImageOutputFormatChange,
   onImageOutputCompressionChange,
   onSubmit,
@@ -322,6 +364,10 @@ export function ImageComposer({
   const [isModelMenuOpen, setIsModelMenuOpen] = useState(false);
   const [isAspectRatioMenuOpen, setIsAspectRatioMenuOpen] = useState(false);
   const [isResolutionMenuOpen, setIsResolutionMenuOpen] = useState(false);
+  const [isQualityMenuOpen, setIsQualityMenuOpen] = useState(false);
+  const [isBackgroundMenuOpen, setIsBackgroundMenuOpen] = useState(false);
+  const [isModerationMenuOpen, setIsModerationMenuOpen] = useState(false);
+  const [isPartialImagesMenuOpen, setIsPartialImagesMenuOpen] = useState(false);
   const [isImageSettingsOpen, setIsImageSettingsOpen] = useState(false);
   const [promptAreaHeight, setPromptAreaHeight] = useState(PROMPT_AREA_DEFAULT_HEIGHT);
   const [isPromptAreaResizing, setIsPromptAreaResizing] = useState(false);
@@ -343,6 +389,10 @@ export function ImageComposer({
       : IMAGE_ASPECT_RATIO_OPTIONS.find((option) => option.value === imageAspectRatio)?.label || "Auto";
   const imageResolutionLabel =
     IMAGE_RESOLUTION_OPTIONS.find((option) => option.value === imageResolution)?.label || "Auto";
+  const imageQualityLabel = IMAGE_QUALITY_OPTIONS.find((option) => option.value === imageQuality)?.label || "自动";
+  const imageBackgroundLabel = IMAGE_BACKGROUND_OPTIONS.find((option) => option.value === imageBackground)?.label || "Auto";
+  const imageModerationLabel = IMAGE_MODERATION_OPTIONS.find((option) => option.value === imageModeration)?.label || "Auto";
+  const imagePartialImagesLabel = IMAGE_PARTIAL_IMAGE_OPTIONS.find((option) => option.value === imagePartialImages)?.label || "关闭";
   const compressionSupported = supportsImageOutputCompression(imageOutputFormat);
   const compressionDisabled = !compressionSupported;
   const structuredImageParameters = supportsStructuredImageParameters(imageModel);
@@ -406,6 +456,10 @@ export function ImageComposer({
       setIsImageSettingsOpen(false);
       setIsAspectRatioMenuOpen(false);
       setIsResolutionMenuOpen(false);
+      setIsQualityMenuOpen(false);
+      setIsBackgroundMenuOpen(false);
+      setIsModerationMenuOpen(false);
+      setIsPartialImagesMenuOpen(false);
     }
   }, [composerMode]);
 
@@ -952,14 +1006,18 @@ export function ImageComposer({
                                 value={imageAspectRatio}
                                 valueLabel={imageAspectRatioLabel}
                                 options={IMAGE_ASPECT_RATIO_OPTIONS}
-                                open={isAspectRatioMenuOpen}
-                                onOpenChange={(open) => {
-                                  setIsAspectRatioMenuOpen(open);
-                                  setIsModelMenuOpen(false);
-                                  if (open) {
-                                    setIsResolutionMenuOpen(false);
-                                  }
-                                }}
+                            open={isAspectRatioMenuOpen}
+                            onOpenChange={(open) => {
+                              setIsAspectRatioMenuOpen(open);
+                              setIsModelMenuOpen(false);
+                              if (open) {
+                                setIsResolutionMenuOpen(false);
+                                setIsQualityMenuOpen(false);
+                                setIsBackgroundMenuOpen(false);
+                                setIsModerationMenuOpen(false);
+                                setIsPartialImagesMenuOpen(false);
+                              }
+                            }}
                                 onValueChange={onImageAspectRatioChange}
                               />
                             </div>
@@ -977,6 +1035,10 @@ export function ImageComposer({
                                   setIsModelMenuOpen(false);
                                   if (open) {
                                     setIsAspectRatioMenuOpen(false);
+                                    setIsQualityMenuOpen(false);
+                                    setIsBackgroundMenuOpen(false);
+                                    setIsModerationMenuOpen(false);
+                                    setIsPartialImagesMenuOpen(false);
                                   }
                                 }}
                                 onValueChange={onImageResolutionChange}
@@ -1034,6 +1096,97 @@ export function ImageComposer({
                               : "常规/官方图片线路只会把比例作为构图偏好，实际尺寸以上游返回为准；格式由后端保存结果时处理。"}
                           </p>
                         ) : null}
+                        <div className={imageSettingsFieldClass}>
+                          <span className="shrink-0 font-medium text-[#45515e] dark:text-muted-foreground">质量</span>
+                          <ImageSettingsPopoverMenu
+                            label="质量"
+                            value={imageQuality}
+                            valueLabel={imageQualityLabel}
+                            options={IMAGE_QUALITY_OPTIONS}
+                            open={isQualityMenuOpen}
+                            onOpenChange={(open) => {
+                              setIsQualityMenuOpen(open);
+                              setIsModelMenuOpen(false);
+                              if (open) {
+                                setIsAspectRatioMenuOpen(false);
+                                setIsResolutionMenuOpen(false);
+                                setIsBackgroundMenuOpen(false);
+                                setIsModerationMenuOpen(false);
+                                setIsPartialImagesMenuOpen(false);
+                              }
+                            }}
+                            onValueChange={onImageQualityChange}
+                          />
+                        </div>
+                        <div className={imageSettingsFieldClass}>
+                          <span className="shrink-0 font-medium text-[#45515e] dark:text-muted-foreground">背景</span>
+                          <ImageSettingsPopoverMenu
+                            label="背景"
+                            value={imageBackground}
+                            valueLabel={imageBackgroundLabel}
+                            options={IMAGE_BACKGROUND_OPTIONS}
+                            open={isBackgroundMenuOpen}
+                            onOpenChange={(open) => {
+                              setIsBackgroundMenuOpen(open);
+                              setIsModelMenuOpen(false);
+                              if (open) {
+                                setIsAspectRatioMenuOpen(false);
+                                setIsResolutionMenuOpen(false);
+                                setIsQualityMenuOpen(false);
+                                setIsModerationMenuOpen(false);
+                                setIsPartialImagesMenuOpen(false);
+                              }
+                            }}
+                            onValueChange={onImageBackgroundChange}
+                            align="start"
+                          />
+                        </div>
+                        <div className={imageSettingsFieldClass}>
+                          <span className="shrink-0 font-medium text-[#45515e] dark:text-muted-foreground">审核</span>
+                          <ImageSettingsPopoverMenu
+                            label="审核"
+                            value={imageModeration}
+                            valueLabel={imageModerationLabel}
+                            options={IMAGE_MODERATION_OPTIONS}
+                            open={isModerationMenuOpen}
+                            onOpenChange={(open) => {
+                              setIsModerationMenuOpen(open);
+                              setIsModelMenuOpen(false);
+                              if (open) {
+                                setIsAspectRatioMenuOpen(false);
+                                setIsResolutionMenuOpen(false);
+                                setIsQualityMenuOpen(false);
+                                setIsBackgroundMenuOpen(false);
+                                setIsPartialImagesMenuOpen(false);
+                              }
+                            }}
+                            onValueChange={onImageModerationChange}
+                            align="start"
+                          />
+                        </div>
+                        <div className={imageSettingsFieldClass}>
+                          <span className="shrink-0 font-medium text-[#45515e] dark:text-muted-foreground">预览帧</span>
+                          <ImageSettingsPopoverMenu
+                            label="预览帧"
+                            value={imagePartialImages}
+                            valueLabel={imagePartialImagesLabel}
+                            options={IMAGE_PARTIAL_IMAGE_OPTIONS}
+                            open={isPartialImagesMenuOpen}
+                            onOpenChange={(open) => {
+                              setIsPartialImagesMenuOpen(open);
+                              setIsModelMenuOpen(false);
+                              if (open) {
+                                setIsAspectRatioMenuOpen(false);
+                                setIsResolutionMenuOpen(false);
+                                setIsQualityMenuOpen(false);
+                                setIsBackgroundMenuOpen(false);
+                                setIsModerationMenuOpen(false);
+                              }
+                            }}
+                            onValueChange={onImagePartialImagesChange}
+                            align="start"
+                          />
+                        </div>
                         {outputControlsSupported ? (
                         <>
                         <div className={imageSettingsFieldClass}>

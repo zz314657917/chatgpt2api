@@ -12,6 +12,14 @@ Sprint 4 目标已完成：稳定当前 `/canvas` 未提交功能改动，并完
 
 ## 本次已完成
 
+- `/canvas` 循环重复生成修复：
+  - 前端循环进度合并时会用 `task.data` 里已经返回的图片反推 slot 成功，避免图片已出现但循环仍显示 `1/10、成功 0`。
+  - 后端图片账号调度不再因为同一 token 处于 busy 就排除该账号；图片并发改为按 `imageReservations` / 图片额度容量控制，允许单个支持高并发的账号同时跑多个图片输出。
+  - 更新账号调度和协议层测试，覆盖“文字 lease 不阻塞图片容量”“preferred 图片会话在容量未满时继续复用”“容量满时 fallback”。
+- 8081 Docker 部署修复：
+  - 确认 `http://127.0.0.1:8081/canvas` 来自 Docker 容器 `chatgpt2api`，旧问题复现时页面还在使用旧镜像/旧 bundle。
+  - Docker Desktop API 一度返回 500；恢复后用宿主机交叉编译 Linux 二进制，`docker cp` 到容器内，`docker commit chatgpt2api chatgpt2api:local` 后重启容器。
+  - 8081 当前已运行新二进制，页面加载新 bundle，可见 `1K / Q auto` 等新控件。
 - 新增 Sprint 4 contract：`docs/workflow/sprint-04-contract.md`。
 - `.gitignore` 加入 `.tmp/`，并清理临时构建产物。
 - 后端新增独立中图目录 `data/image_previews` 和 `GET /image-previews/...jpg`，鉴权规则与缩略图一致。
@@ -48,6 +56,8 @@ Sprint 4 目标已完成：稳定当前 `/canvas` 未提交功能改动，并完
 
 ## 已确认事实
 
+- 8081 是 Docker Desktop 中的 `chatgpt2api` 容器，端口映射为 `127.0.0.1:8081->80/tcp`；源码修改和 `web` build 后，必须替换镜像/重启容器才会在 8081 生效。
+- “重复 10”前端会一次提交 `n=10`；是否并行取决于后端图片账号调度和图片容量，不应再被单 token busy 锁限制成 1。
 - 当前不引入数据库；图片索引和元数据仍基于文件系统与 JSON。
 - 列表接口只提供轻摘要；完整元数据和原图 URL 只能通过 detail 按需读取。
 - 中图是服务端懒生成缓存，不在上传或列表请求中同步生成。
@@ -59,6 +69,7 @@ Sprint 4 目标已完成：稳定当前 `/canvas` 未提交功能改动，并完
 
 ## 待验证点
 
+- 真实图片并发验收：在 8081 刷新 `/canvas` 后重新跑“循环 -> API生成，重复 10”，确认多个 Output slot 能同时进入生成中，而不是长期只有 1 个 running。
 - 分页滚动验收：本地当前只有 17 张图片，未触发下一页。后续准备 300+ 张图片后，验证 `/image-manager` 和 `/canvas` 素材栏滚动追加正常。
 - 下载/高清原图验收：本轮未执行真实下载动作。后续在浏览器点击下载/高清查看，确认才请求 `/images/...` 或 detail 原图。
 - 生产卡顿复核：上线前建议在正式同量级数据上对 `/api/images?page_size=50` 响应体和首屏 Network 原图请求数做一次对比。
@@ -77,6 +88,12 @@ Sprint 4 已通过本机实现验证，可以关闭。组节点已完成前后�
 
 ## 验证记录
 
+- 循环进度修复验证：`cd web && npm.cmd run lint`：PASS。
+- 循环进度修复验证：`cd web && npm.cmd run build`：PASS。
+- 循环进度修复验证：`git diff --check`：PASS，仅 Windows LF -> CRLF 提示。
+- 图片账号并发调度验证：`go test ./internal/service ./internal/protocol`：PASS。
+- 8081 部署验证：`docker restart chatgpt2api` 后 `GET http://127.0.0.1:8081/health` 返回 `{"status":"ok","version":"0.0.0-dev"}`。
+- 8081 页面验证：`GET http://127.0.0.1:8081/canvas` 返回新 bundle `index-cSK4CgkM.js`；Browser 打开 `/canvas` 可见画布页面和 `1K / Q auto` 控件，控制台无 error。
 - `go test ./internal/service ./internal/httpapi`：PASS。
 - `go test ./internal/service -run "TestImageTaskService(CancelQueuedTaskWaitingForCreationUnit|NormalizesTerminalOutputStatusesOnLoad)$"`：PASS。
 - `go test ./internal/service ./internal/httpapi -count=1`：PASS。第一次目标包测试中 `internal/httpapi` 的 `TestCanvasModelsUseSub2APIGatewayForBoundUser` 曾失败，单测复现 PASS，重新跑目标包 PASS，判断为测试间共享状态或偶发请求顺序问题，未改业务代码。

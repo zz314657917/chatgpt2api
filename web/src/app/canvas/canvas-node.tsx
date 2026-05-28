@@ -51,7 +51,7 @@ import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import type { CanvasImageRef, CanvasModelOption, CreationTask, ImageVisibility, ManagedImageSummary } from "@/lib/api";
+import type { CanvasImageRef, CanvasModelOption, CreationTask, ImageQuality, ImageVisibility, ManagedImageSummary } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 import {
@@ -78,6 +78,7 @@ import {
   smartCanvasGroupCounts,
   smartCanvasRuns,
   statusLabel,
+  normalizeCanvasImageResolution,
 } from "./canvas-utils";
 import type {
   SmartCanvasConnectState,
@@ -98,7 +99,7 @@ const NODE_SIZE: Record<SmartCanvasItem["type"], { w: number; h: number }> = {
   llm: { w: 380, h: 420 },
   loop: { w: 340, h: 280 },
   group: { w: 340, h: 230 },
-  image_generation: { w: 390, h: 330 },
+  image_generation: { w: 390, h: 370 },
   result: { w: 440, h: 245 },
 };
 const EMPTY_SMART_CANVAS_NODES: SmartCanvasItem[] = [];
@@ -124,6 +125,26 @@ const canvasLabelClass = "text-muted-foreground dark:text-slate-400";
 const canvasAccentTextClass = "text-sky-700 dark:text-sky-200";
 const canvasDashedClass = "border-dashed border-border bg-muted/50 text-muted-foreground dark:border-slate-700 dark:bg-slate-950/40 dark:text-slate-500";
 const canvasGhostButtonClass = "border-border bg-background/70 text-foreground hover:bg-accent dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800";
+const canvasImageResolutionOptions = [
+  { value: "1080p", label: "1K" },
+  { value: "2k", label: "2K" },
+  { value: "4k", label: "4K" },
+] as const;
+const canvasImageRatioOptions = [
+  { value: "1:1", label: "1:1" },
+  { value: "2:3", label: "2:3" },
+  { value: "3:2", label: "3:2" },
+  { value: "3:4", label: "3:4" },
+  { value: "4:3", label: "4:3" },
+  { value: "9:16", label: "9:16" },
+  { value: "16:9", label: "16:9" },
+] as const;
+const canvasImageQualityOptions = [
+  { value: "auto", label: "自动" },
+  { value: "low", label: "低质量" },
+  { value: "medium", label: "中质量" },
+  { value: "high", label: "高质量" },
+] as const satisfies ReadonlyArray<{ value: "auto" | ImageQuality; label: string }>;
 
 function nodeInputImagesForCanvas(canvas: SmartCanvasDocument, item: SmartCanvasItem) {
   return expandedCanvasImagesFromItem(canvas, item);
@@ -150,6 +171,30 @@ function connectableNodeMenuItems(source?: SmartCanvasItem | null) {
     return items;
   }
   return items.filter((item) => canConnectSmartCanvasNodes(source, { type: item.type }));
+}
+
+function canvasImageRatioValue(value?: string) {
+  const normalized = String(value || "").trim();
+  switch (normalized) {
+    case "1024x1024":
+      return "1:1";
+    case "1024x1536":
+      return "2:3";
+    case "1536x1024":
+      return "3:2";
+    case "1080x1440":
+    case "864x1152":
+      return "3:4";
+    case "1440x1080":
+    case "1152x864":
+      return "4:3";
+    case "864x1536":
+      return "9:16";
+    case "1536x864":
+      return "16:9";
+    default:
+      return canvasImageRatioOptions.some((option) => option.value === normalized) ? normalized : "1:1";
+  }
 }
 
 const canvasSelectClass = "h-9 rounded-xl border-border bg-background text-xs text-foreground dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200";
@@ -1762,7 +1807,7 @@ export const SmartCanvasNode = memo(function SmartCanvasNode({
   const width = resizable ? Number(item.data?.width || size.w) : size.w;
   const minHeight = resizable ? Number(item.data?.height || size.h) : size.h;
   const canInput = item.type === "llm" || item.type === "loop" || item.type === "group" || item.type === "image_generation" || item.type === "result";
-  const canOutput = item.type !== "result";
+  const canOutput = true;
   const zIndex = item.type === "group" ? 1 : selected ? 35 : 10;
   const measureRef = (node: HTMLDivElement | null) => {
     if (!node) {
@@ -2450,6 +2495,10 @@ function GeneratorNodeBody({
   const llmReferenceImageCountLabel = missingLlmReferenceImages.length === 1 ? "一张图" : `${missingLlmReferenceImages.length} 张图`;
   const outputImages = item.data?.output?.images || [];
   const nodeRunning = isActiveTask(item.data?.status);
+  const imageCount = Math.max(1, Math.min(10, Number(item.data?.n || 1)));
+  const ratioValue = canvasImageRatioValue(item.data?.size);
+  const imageResolutionValue = normalizeCanvasImageResolution(item.data?.image_resolution);
+  const setImageCount = (next: number) => onUpdateData({ n: Math.max(1, Math.min(10, Math.round(next) || 1)) });
 
   return (
     <div className="space-y-3 p-3" data-node-interactive="true" onPointerDown={stopNodeInteraction}>
@@ -2535,17 +2584,67 @@ function GeneratorNodeBody({
           </SelectContent>
         </Select>
       </div>
-      <div className="grid grid-cols-[1fr_1fr_1fr] gap-2">
-        <Select value={String(item.data?.size || "1024x1024")} onValueChange={(size) => onUpdateData({ size })}>
+      <div className="grid grid-cols-[82px_minmax(0,1fr)_90px_100px] gap-2">
+        <Select value={imageResolutionValue} onValueChange={(imageResolution) => onUpdateData({ image_resolution: imageResolution })}>
           <SelectTrigger className={canvasSelectClass}>
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="1024x1024">1:1</SelectItem>
-            <SelectItem value="1024x1536">2:3</SelectItem>
-            <SelectItem value="1536x1024">3:2</SelectItem>
+            {canvasImageResolutionOptions.map((option) => (
+              <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+            ))}
           </SelectContent>
         </Select>
+        <Select value={ratioValue} onValueChange={(size) => onUpdateData({ size })}>
+          <SelectTrigger className={canvasSelectClass}>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {canvasImageRatioOptions.map((option) => (
+              <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Select value={String(item.data?.quality || "auto")} onValueChange={(quality) => onUpdateData({ quality })}>
+          <SelectTrigger className={canvasSelectClass}>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {canvasImageQualityOptions.map((option) => (
+              <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <div className={cn("grid h-9 grid-cols-[28px_1fr_28px] overflow-hidden rounded-xl border", canvasFieldClass)}>
+          <button
+            type="button"
+            className="flex items-center justify-center border-r border-border text-muted-foreground transition hover:bg-accent hover:text-foreground disabled:opacity-40 dark:border-slate-700"
+            disabled={imageCount <= 1}
+            onClick={() => setImageCount(imageCount - 1)}
+            aria-label="减少张数"
+          >
+            <ChevronLeft className="size-3.5" />
+          </button>
+          <Input
+            type="number"
+            min={1}
+            max={10}
+            value={imageCount}
+            onChange={(event) => setImageCount(Number(event.target.value) || 1)}
+            className="h-9 rounded-none border-0 bg-transparent p-0 text-center text-xs font-bold shadow-none focus-visible:ring-0"
+          />
+          <button
+            type="button"
+            className="flex items-center justify-center border-l border-border text-muted-foreground transition hover:bg-accent hover:text-foreground disabled:opacity-40 dark:border-slate-700"
+            disabled={imageCount >= 10}
+            onClick={() => setImageCount(imageCount + 1)}
+            aria-label="增加张数"
+          >
+            <ChevronRight className="size-3.5" />
+          </button>
+        </div>
+      </div>
+      <div className="grid grid-cols-[1fr_1fr] gap-2">
         <Select value={String(item.data?.visibility || "private")} onValueChange={(visibility) => onUpdateData({ visibility: visibility as ImageVisibility })}>
           <SelectTrigger className={canvasSelectClass}>
             <SelectValue />
@@ -2555,14 +2654,6 @@ function GeneratorNodeBody({
             <SelectItem value="public">公开</SelectItem>
           </SelectContent>
         </Select>
-        <Input
-          type="number"
-          min={1}
-          max={4}
-          value={Number(item.data?.n || 1)}
-          onChange={(event) => onUpdateData({ n: Math.max(1, Math.min(4, Number(event.target.value) || 1)) })}
-          className={cn("h-9 rounded-xl text-center text-xs", canvasFieldClass)}
-        />
       </div>
       {outputImages.length > 0 ? <CanvasImageStrip images={outputImages} limit={3} onOpen={onOpenImage} className="grid-cols-3" /> : null}
       {item.data?.error ? <div className="rounded-lg bg-rose-500/10 px-2 py-1.5 text-xs text-rose-200">{item.data.error}</div> : null}
@@ -2584,6 +2675,7 @@ function OutputNodeBody({ item, onOpenImage, onDeleteImage }: { item: SmartCanva
   const loading = item.data?.status === "running" || item.data?.status === "queued";
   const loopRaw = item.data?.output?.raw?.mode === "loop" ? item.data.output.raw : null;
   const startedAt = item.data?.started_at || item.data?.created_at || "";
+  const [showAllImages, setShowAllImages] = useState(false);
   return (
     <div className="p-3">
       {loopRaw ? (
@@ -2595,7 +2687,7 @@ function OutputNodeBody({ item, onOpenImage, onDeleteImage }: { item: SmartCanva
           onOpenImage={onOpenImage}
         />
       ) : images.length > 0 ? (
-        <CanvasImageStrip images={images} limit={4} onOpen={onOpenImage} onDelete={onDeleteImage} className="grid-cols-4" large />
+        <CanvasImageStrip images={images} limit={4} onOpen={onOpenImage} onOpenAll={() => setShowAllImages(true)} onDelete={onDeleteImage} className="grid-cols-4" large />
       ) : loading ? (
         <CanvasGenerationLoading status={item.data?.status} />
       ) : (
@@ -2604,6 +2696,18 @@ function OutputNodeBody({ item, onOpenImage, onDeleteImage }: { item: SmartCanva
         </div>
       )}
       {item.data?.error ? <div className="mt-2 rounded-lg bg-rose-500/10 px-2 py-1.5 text-xs text-rose-200">{item.data.error}</div> : null}
+      <Dialog open={showAllImages} onOpenChange={setShowAllImages}>
+        <DialogContent className={cn("w-[min(92vw,780px)] max-w-none rounded-2xl p-0", canvasPanelClass)}>
+          <DialogTitle className="sr-only">全部输出图片</DialogTitle>
+          <DialogDescription className="sr-only">查看当前 Output 节点中的全部输出图片。</DialogDescription>
+          <div className="border-b border-border px-4 py-3 text-sm font-black dark:border-slate-800">
+            Output 图片
+          </div>
+          <div className="max-h-[68vh] overflow-auto p-4">
+            <CanvasImageStrip images={images} onOpen={onOpenImage} onDelete={onDeleteImage} className="grid-cols-2 sm:grid-cols-3 md:grid-cols-4" />
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -2774,15 +2878,15 @@ function CanvasGenerationLoading({ status }: { status?: CreationTask["status"] }
   const queued = status === "queued";
   const progressPercent = queued ? 0 : 8;
   return (
-    <div className="flex h-36 items-center justify-center rounded-xl border border-[#f2f3f5] bg-white p-4 shadow-[0_4px_6px_rgba(0,0,0,0.04)] dark:border-slate-700 dark:bg-slate-950/45">
-      <div className="w-full max-w-[260px]">
-        <div className="mb-3 flex items-center gap-3">
+    <div className="flex h-36 items-center justify-center px-5">
+      <div className="w-full max-w-[250px]">
+        <div className="flex items-center gap-3">
           <span
             className={cn(
-              "flex size-9 shrink-0 items-center justify-center rounded-full ring-1",
+              "flex size-8 shrink-0 items-center justify-center rounded-full",
               queued
-                ? "bg-amber-50 text-amber-700 ring-amber-100 dark:bg-amber-950/30 dark:text-amber-300 dark:ring-amber-900/50"
-                : "bg-sky-50 text-[#1456f0] ring-sky-100 dark:bg-sky-950/30 dark:text-sky-300 dark:ring-sky-900/50",
+                ? "text-amber-600 dark:text-amber-300"
+                : "text-[#1456f0] dark:text-sky-300",
             )}
           >
             {queued ? <Clock3 className="size-4" /> : <LoaderCircle className="size-4 animate-spin" />}
@@ -2802,7 +2906,7 @@ function CanvasGenerationLoading({ status }: { status?: CreationTask["status"] }
             </div>
           </div>
         </div>
-        <div className="text-[11px] text-[#8e8e93] dark:text-muted-foreground">
+        <div className="mt-2 pl-11 text-[11px] text-[#8e8e93] dark:text-muted-foreground">
           {queued ? "画布任务排队中" : "画布任务处理中"}
         </div>
       </div>
@@ -2838,6 +2942,7 @@ export function CanvasImageStrip({
   images,
   limit = images.length,
   onOpen,
+  onOpenAll,
   onDelete,
   className,
   large,
@@ -2845,6 +2950,7 @@ export function CanvasImageStrip({
   images: CanvasImageRef[];
   limit?: number;
   onOpen?: (image: CanvasImageRef) => void;
+  onOpenAll?: () => void;
   onDelete?: (image: CanvasImageRef) => void;
   className?: string;
   large?: boolean;
@@ -2886,7 +2992,30 @@ export function CanvasImageStrip({
               </span>
             )}
             {overflow > 0 && index === visible.length - 1 ? (
-              <span className="absolute inset-0 flex items-center justify-center bg-background/75 text-sm font-bold text-foreground backdrop-blur-sm dark:bg-slate-950/75 dark:text-white">+{overflow}</span>
+              <span
+                role={onOpenAll ? "button" : undefined}
+                tabIndex={onOpenAll ? 0 : undefined}
+                className="absolute inset-0 z-10 flex items-center justify-center bg-background/75 text-sm font-bold text-foreground backdrop-blur-sm dark:bg-slate-950/75 dark:text-white"
+                title={onOpenAll ? `查看全部 ${images.length} 张图片` : undefined}
+                aria-label={onOpenAll ? `查看全部 ${images.length} 张图片` : undefined}
+                onClick={(event) => {
+                  if (!onOpenAll) {
+                    return;
+                  }
+                  event.stopPropagation();
+                  onOpenAll();
+                }}
+                onKeyDown={(event) => {
+                  if (!onOpenAll || (event.key !== "Enter" && event.key !== " ")) {
+                    return;
+                  }
+                  event.preventDefault();
+                  event.stopPropagation();
+                  onOpenAll();
+                }}
+              >
+                +{overflow}
+              </span>
             ) : null}
             {onDelete ? (
               <span

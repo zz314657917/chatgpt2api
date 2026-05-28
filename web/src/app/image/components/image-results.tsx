@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Check, CircleStop, Clock3, Download, Eye, Globe2, LoaderCircle, Lock, PencilLine, Plus, RotateCcw, Sparkles } from "lucide-react";
 
 import { AuthenticatedImage } from "@/components/authenticated-image";
@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { IMAGE_RESULT_DRAG_MIME, type ImageResultDragPayload } from "@/app/image/image-result-drag";
 import type { ImagePromptPreset } from "@/app/image/image-presets";
 import { formatImageSizeDisplay, getImageSizeRequirementLabel, isHighResolutionImageSize } from "@/app/image/image-options";
-import { IMAGE_MODEL_ROUTE_DETAILS, supportsImageOutputCompression } from "@/lib/api";
+import { fetchManagedImageDetail, IMAGE_MODEL_ROUTE_DETAILS, supportsImageOutputCompression } from "@/lib/api";
 import type { ImageVisibility } from "@/lib/api";
 import {
   fetchAuthenticatedImageBlob,
@@ -135,12 +135,19 @@ function imageResolutionLabel(image: StoredImage, dimensions?: string) {
   return dimensions || "";
 }
 
-function getTurnResultSizeLabel(turn: ImageTurn, dimensionsByImageId: Record<string, string>) {
+function getTurnResultSizeLabel(
+  turn: ImageTurn,
+  dimensionsByImageId: Record<string, string>,
+  detailMetaByImageId: Record<string, ImageDetailMeta>,
+) {
   const labels = Array.from(
     new Set(
       turn.images
         .filter((image) => image.status === "success")
-        .map((image) => imageResolutionLabel(image, dimensionsByImageId[image.id]))
+        .map((image) => imageResolutionLabel(
+          image,
+          imageDimensionsFromMeta(detailMetaByImageId[image.id]) || dimensionsByImageId[image.id],
+        ))
         .filter(Boolean),
     ),
   );
@@ -171,6 +178,31 @@ function getLongTaskHint(turn: ImageTurn, elapsedSeconds: number) {
     return "高分辨率目标已提交给上游判断";
   }
   return "";
+}
+
+type ImageDetailMeta = {
+  width?: number;
+  height?: number;
+  size?: number;
+};
+
+function positiveImageDimension(value: unknown) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric > 0 ? numeric : 0;
+}
+
+function imagePathForMetadata(image: StoredImage) {
+  return image.path || getManagedImagePathFromUrl(image.localUrl || image.url || "");
+}
+
+function imageDimensionsFromMeta(meta?: ImageDetailMeta) {
+  const width = positiveImageDimension(meta?.width);
+  const height = positiveImageDimension(meta?.height);
+  return width && height ? formatImageDimensions(width, height) : "";
+}
+
+function imageNeedsDetailMeta(image: StoredImage) {
+  return image.status === "success" && (!image.width || !image.height) && Boolean(imagePathForMetadata(image));
 }
 
 function imageVisibilityLabel(visibility?: ImageVisibility) {
@@ -307,10 +339,12 @@ export function ImageResults({
 }: ImageResultsProps) {
   const [imageDimensions, setImageDimensions] = useState<Record<string, string>>({});
   const [imageSizeLabels, setImageSizeLabels] = useState<Record<string, string>>({});
+  const [imageDetailMeta, setImageDetailMeta] = useState<Record<string, ImageDetailMeta>>({});
   const [selectedImageIds, setSelectedImageIds] = useState<Record<string, boolean>>({});
   const [previewFallbackImageIds, setPreviewFallbackImageIds] = useState<Record<string, boolean>>({});
   const [downloadingKey, setDownloadingKey] = useState<string | null>(null);
   const pendingImageSizeIdsRef = useRef<Set<string>>(new Set());
+  const pendingImageDetailIdsRef = useRef<Set<string>>(new Set());
 
   const updateImageDimensions = (id: string, width: number, height: number) => {
     const dimensions = formatImageDimensions(width, height);
@@ -353,6 +387,47 @@ export function ImageResults({
         pendingImageSizeIdsRef.current.delete(id);
       });
   };
+
+  const ensureImageDetailMeta = useCallback((id: string, path: string) => {
+    if (!path || imageDetailMeta[id] || pendingImageDetailIdsRef.current.has(id)) {
+      return;
+    }
+
+    pendingImageDetailIdsRef.current.add(id);
+    void fetchManagedImageDetail(path)
+      .then((detail) => {
+        setImageDetailMeta((current) => {
+          if (current[id]) {
+            return current;
+          }
+          return {
+            ...current,
+            [id]: {
+              width: detail.width,
+              height: detail.height,
+              size: detail.size,
+            },
+          };
+        });
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        pendingImageDetailIdsRef.current.delete(id);
+      });
+  }, [imageDetailMeta]);
+
+  useEffect(() => {
+    if (!selectedConversation) {
+      return;
+    }
+    for (const turn of selectedConversation.turns) {
+      for (const image of turn.images) {
+        if (imageNeedsDetailMeta(image)) {
+          ensureImageDetailMeta(image.id, imagePathForMetadata(image));
+        }
+      }
+    }
+  }, [ensureImageDetailMeta, selectedConversation]);
 
   const downloadItems = async (key: string, items: DownloadableImage[]) => {
     if (items.length === 0 || downloadingKey) {
@@ -459,6 +534,8 @@ export function ImageResults({
         const retryableImageIndexes = turn.images.flatMap((image, index) => isRetryableImageResult(image) ? [index] : []);
         const successfulTurnImages = turn.images.flatMap((image, index) => {
           const src = image.status === "success" ? getStoredImageSrc(image) : "";
+          const meta = imageDetailMeta[image.id];
+          const dimensions = imageResolutionLabel(image, imageDimensionsFromMeta(meta) || imageDimensions[image.id]);
           return src
             ? [
                 {
@@ -466,8 +543,12 @@ export function ImageResults({
                   src,
                   fileName: buildDownloadName(turn.createdAt, turn.id, index, image.outputFormat || turn.outputFormat, src),
                   outputFormat: image.outputFormat || turn.outputFormat,
-                  sizeLabel: image.b64_json ? formatBase64ImageFileSize(image.b64_json) : imageSizeLabels[image.id],
-                  dimensions: imageDimensions[image.id],
+                  sizeLabel: image.b64_json
+                    ? formatBase64ImageFileSize(image.b64_json)
+                    : meta?.size
+                      ? formatImageFileSize(meta.size)
+                      : imageSizeLabels[image.id],
+                  dimensions,
                 },
               ]
             : [];
@@ -485,7 +566,7 @@ export function ImageResults({
         const resultCount = visualImages.length || (turnBusy ? turn.count : 0);
         const outcomeLabel = getTurnOutcomeLabel(successCount, failedCount, cancelledCount);
         const showResultSummary = turn.mode !== "chat" && (visualImages.length > 0 || turnBusy);
-        const resultSizeLabel = getTurnResultSizeLabel(turn, imageDimensions);
+        const resultSizeLabel = getTurnResultSizeLabel(turn, imageDimensions, imageDetailMeta);
         const loadingPhase = getImageTurnLoadingPhase(turn);
         const isWaitingForQuota = loadingPhase === "queued";
         const isRunning = loadingPhase === "running";
@@ -717,6 +798,15 @@ export function ImageResults({
                       {turn.outputCompression != null && turn.outputFormat && supportsImageOutputCompression(turn.outputFormat) ? (
                         <span className="rounded-full bg-[#f0f0f0] px-3 py-1">压缩 {turn.outputCompression}</span>
                       ) : null}
+                      {turn.background ? (
+                        <span className="rounded-full bg-[#f0f0f0] px-3 py-1">背景 {turn.background}</span>
+                      ) : null}
+                      {turn.moderation ? (
+                        <span className="rounded-full bg-[#f0f0f0] px-3 py-1">审核 {turn.moderation}</span>
+                      ) : null}
+                      {turn.partialImages ? (
+                        <span className="rounded-full bg-[#f0f0f0] px-3 py-1">预览 {turn.partialImages}</span>
+                      ) : null}
                       {outcomeLabel ? <span className="rounded-full bg-[#f0f0f0] px-3 py-1">{outcomeLabel}</span> : null}
                       <span className={cn("rounded-full px-3 py-1", getStatusChipClass(turn.status))}>
                         {getTurnStatusLabel(turn.status)}
@@ -774,12 +864,18 @@ export function ImageResults({
                     const previewSrc = image.status === "success" ? getStoredImagePreviewSrc(image) : "";
                     if (image.status === "success" && imageSrc) {
                       const displaySrc = previewFallbackImageIds[image.id] ? imageSrc : previewSrc || imageSrc;
+                      const isDisplayingOriginal = displaySrc === imageSrc;
+                      const meta = imageDetailMeta[image.id];
                       const currentIndex = successfulTurnImages.findIndex((item) => item.id === image.id);
                       const imageNumber = currentIndex >= 0 ? currentIndex + 1 : index + 1;
                       const selectionKey = imageSelectionKey(selectedConversation.id, turn.id, image.id);
                       const selected = Boolean(selectedImageIds[selectionKey]);
-                      const sizeLabel = image.b64_json ? formatBase64ImageFileSize(image.b64_json) : imageSizeLabels[image.id] || "";
-                      const dimensions = imageResolutionLabel(image, imageDimensions[image.id]);
+                      const sizeLabel = image.b64_json
+                        ? formatBase64ImageFileSize(image.b64_json)
+                        : meta?.size
+                          ? formatImageFileSize(meta.size)
+                          : imageSizeLabels[image.id] || "";
+                      const dimensions = imageResolutionLabel(image, imageDimensionsFromMeta(meta) || imageDimensions[image.id]);
                       const imageMeta = [dimensions, sizeLabel].filter(Boolean).join(" | ");
                       const formatLabel = getImageFormatLabel(image, imageSrc);
                       const visibility = image.visibility || turn.visibility || "private";
@@ -836,11 +932,13 @@ export function ImageResults({
                               decoding="async"
                               className="block h-auto w-full transition duration-200 group-hover:brightness-95"
                               onLoad={(event) => {
-                                updateImageDimensions(
-                                  image.id,
-                                  event.currentTarget.naturalWidth,
-                                  event.currentTarget.naturalHeight,
-                                );
+                                if (isDisplayingOriginal) {
+                                  updateImageDimensions(
+                                    image.id,
+                                    event.currentTarget.naturalWidth,
+                                    event.currentTarget.naturalHeight,
+                                  );
+                                }
                                 if (!image.b64_json) {
                                   ensureImageSizeLabel(image.id, imageSrc);
                                 }

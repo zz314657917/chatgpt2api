@@ -1601,7 +1601,7 @@ func (s *AccountService) imageCandidatesLocked(excluded map[string]struct{}, all
 	var out []map[string]any
 	for _, item := range s.items {
 		token := util.Clean(item["access_token"])
-		if token == "" || !s.accountIdleLocked(token) {
+		if token == "" {
 			continue
 		}
 		if _, ok := excluded[token]; ok {

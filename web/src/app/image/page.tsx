@@ -73,6 +73,7 @@ import {
   IMAGE_OUTPUT_FORMAT_OPTIONS,
   isImageModel,
   isImageOutputFormat,
+  isImageQuality,
   modelIDLooksImageCapable,
   supportsImageOutputCompression,
   supportsImageOutputControls,
@@ -82,6 +83,7 @@ import {
   updateManagedImageVisibility,
   type ImageModel,
   type ImageOutputFormat,
+  type ImageQuality,
   type CreationTask,
   type CreationTaskMessage,
   type FallbackReferenceImage,
@@ -133,6 +135,10 @@ const IMAGE_CUSTOM_WIDTH_STORAGE_KEY = "chatgpt2api:image_last_custom_width";
 const IMAGE_CUSTOM_HEIGHT_STORAGE_KEY = "chatgpt2api:image_last_custom_height";
 const IMAGE_OUTPUT_FORMAT_STORAGE_KEY = "chatgpt2api:image_last_output_format";
 const IMAGE_OUTPUT_COMPRESSION_STORAGE_KEY = "chatgpt2api:image_last_output_compression";
+const IMAGE_QUALITY_STORAGE_KEY = "chatgpt2api:image_last_quality";
+const IMAGE_BACKGROUND_STORAGE_KEY = "chatgpt2api:image_last_background";
+const IMAGE_MODERATION_STORAGE_KEY = "chatgpt2api:image_last_moderation";
+const IMAGE_PARTIAL_IMAGES_STORAGE_KEY = "chatgpt2api:image_last_partial_images";
 const QUOTA_REFRESH_EVENT = "chatgpt2api:quota-refresh";
 const DEFAULT_IMAGE_OUTPUT_FORMAT: ImageOutputFormat = "png";
 const REFERENCE_IMAGE_MAX_SIDE = 2048;
@@ -156,6 +162,10 @@ type EditingTurnDraft = {
   customRatio: string;
   customWidth: string;
   customHeight: string;
+  quality: "auto" | ImageQuality;
+  background: string;
+  moderation: string;
+  partialImages: string;
   outputFormat: ImageOutputFormat;
   outputCompression: string;
   visibility: ImageVisibility;
@@ -497,6 +507,19 @@ function imageOutputCompressionForModel(model: ImageModel, format: ImageOutputFo
   return imageOutputCompressionForFormat(format, value);
 }
 
+function imageQualityForTask(value: "auto" | ImageQuality | undefined): ImageQuality | undefined {
+  return isImageQuality(value) ? value : undefined;
+}
+
+function imageToolOptionsForTask(turn: Pick<ImageTurn, "background" | "moderation" | "partialImages">) {
+  const partialImages = normalizePositiveImageParameter(turn.partialImages);
+  return {
+    ...(turn.background && turn.background !== "auto" ? { background: turn.background } : {}),
+    ...(turn.moderation && turn.moderation !== "auto" ? { moderation: turn.moderation } : {}),
+    ...(partialImages ? { partialImages } : {}),
+  };
+}
+
 function positiveDimension(value: unknown) {
   const dimension = Number(value);
   return Number.isFinite(dimension) && dimension > 0 ? Math.round(dimension) : undefined;
@@ -511,6 +534,17 @@ function normalizeOutputCompressionValue(value: unknown): number | undefined {
     return undefined;
   }
   return Math.min(100, Math.round(numeric));
+}
+
+function normalizePositiveImageParameter(value: unknown): number | undefined {
+  if (value === undefined || value === null || String(value).trim() === "") {
+    return undefined;
+  }
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return undefined;
+  }
+  return Math.round(numeric);
 }
 
 function imageOutputCompressionForFormat(format: ImageOutputFormat, value: unknown) {
@@ -841,6 +875,30 @@ function getStoredImageOutputCompression(): string {
   }
   const normalized = normalizeOutputCompressionValue(window.localStorage.getItem(IMAGE_OUTPUT_COMPRESSION_STORAGE_KEY));
   return normalized === undefined ? "" : String(normalized);
+}
+
+function getStoredImageQuality(): "auto" | ImageQuality {
+  if (typeof window === "undefined") {
+    return "auto";
+  }
+  const storedQuality = window.localStorage.getItem(IMAGE_QUALITY_STORAGE_KEY);
+  return isImageQuality(storedQuality) ? storedQuality : "auto";
+}
+
+function getStoredOptionalImageParameter(key: string, allowed: Set<string>) {
+  if (typeof window === "undefined") {
+    return "auto";
+  }
+  const value = window.localStorage.getItem(key) || "auto";
+  return allowed.has(value) ? value : "auto";
+}
+
+function getStoredImagePartialImages() {
+  if (typeof window === "undefined") {
+    return "";
+  }
+  const value = normalizePositiveImageParameter(window.localStorage.getItem(IMAGE_PARTIAL_IMAGES_STORAGE_KEY));
+  return value === undefined ? "" : String(value);
 }
 
 function serializeImageSizeSelection(selection: ImageSizeSelection): StoredImageSizeSelection {
@@ -1275,6 +1333,10 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
   const [imageCustomRatio, setImageCustomRatio] = useState(() => getStoredImageSizeSelection().customRatio);
   const [imageCustomWidth, setImageCustomWidth] = useState(() => getStoredImageSizeSelection().customWidth);
   const [imageCustomHeight, setImageCustomHeight] = useState(() => getStoredImageSizeSelection().customHeight);
+  const [imageQuality, setImageQuality] = useState<"auto" | ImageQuality>(getStoredImageQuality);
+  const [imageBackground, setImageBackground] = useState(() => getStoredOptionalImageParameter(IMAGE_BACKGROUND_STORAGE_KEY, new Set(["auto", "transparent", "opaque"])));
+  const [imageModeration, setImageModeration] = useState(() => getStoredOptionalImageParameter(IMAGE_MODERATION_STORAGE_KEY, new Set(["auto", "low"])));
+  const [imagePartialImages, setImagePartialImages] = useState(getStoredImagePartialImages);
   const [imageOutputFormat, setImageOutputFormat] = useState<ImageOutputFormat>(getStoredImageOutputFormat);
   const [imageOutputCompression, setImageOutputCompression] = useState(getStoredImageOutputCompression);
   const [defaultImageVisibility, setDefaultImageVisibility] = useState<ImageVisibility>("private");
@@ -1416,7 +1478,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
       imageModel === "gpt-image-2"
         ? "1K"
         : imagePriceSizeFromRequest(estimateSizeRequest.size);
-    return estimateImageDisplayPriceUSD(imageModel, parsedCount, estimateResolution);
+    return estimateImageDisplayPriceUSD(imageModel, parsedCount, estimateResolution, imageQuality);
   }, [
     composerMode,
     imageAspectRatio,
@@ -1424,6 +1486,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     imageCustomRatio,
     imageCustomWidth,
     imageModel,
+    imageQuality,
     imageResolution,
     imageSizeMode,
     parsedCount,
@@ -1548,6 +1611,10 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         setImageCustomRatio(storedSelection.customRatio);
         setImageCustomWidth(storedSelection.customWidth);
         setImageCustomHeight(storedSelection.customHeight);
+        setImageQuality(getStoredImageQuality());
+        setImageBackground(getStoredOptionalImageParameter(IMAGE_BACKGROUND_STORAGE_KEY, new Set(["auto", "transparent", "opaque"])));
+        setImageModeration(getStoredOptionalImageParameter(IMAGE_MODERATION_STORAGE_KEY, new Set(["auto", "low"])));
+        setImagePartialImages(getStoredImagePartialImages());
         setImageOutputFormat(getStoredImageOutputFormat());
         setImageOutputCompression(getStoredImageOutputCompression());
 
@@ -1754,6 +1821,27 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
       return;
     }
 
+    if (imageQuality === "auto") {
+      window.localStorage.removeItem(IMAGE_QUALITY_STORAGE_KEY);
+    } else {
+      window.localStorage.setItem(IMAGE_QUALITY_STORAGE_KEY, imageQuality);
+    }
+    if (imageBackground === "auto") {
+      window.localStorage.removeItem(IMAGE_BACKGROUND_STORAGE_KEY);
+    } else {
+      window.localStorage.setItem(IMAGE_BACKGROUND_STORAGE_KEY, imageBackground);
+    }
+    if (imageModeration === "auto") {
+      window.localStorage.removeItem(IMAGE_MODERATION_STORAGE_KEY);
+    } else {
+      window.localStorage.setItem(IMAGE_MODERATION_STORAGE_KEY, imageModeration);
+    }
+    const normalizedPartialImages = normalizePositiveImageParameter(imagePartialImages);
+    if (normalizedPartialImages === undefined) {
+      window.localStorage.removeItem(IMAGE_PARTIAL_IMAGES_STORAGE_KEY);
+    } else {
+      window.localStorage.setItem(IMAGE_PARTIAL_IMAGES_STORAGE_KEY, String(normalizedPartialImages));
+    }
     window.localStorage.setItem(IMAGE_OUTPUT_FORMAT_STORAGE_KEY, imageOutputFormat);
     const normalizedCompression = normalizeOutputCompressionValue(imageOutputCompression);
     if (normalizedCompression === undefined || !supportsImageOutputCompression(imageOutputFormat)) {
@@ -1761,7 +1849,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
       return;
     }
     window.localStorage.setItem(IMAGE_OUTPUT_COMPRESSION_STORAGE_KEY, String(normalizedCompression));
-  }, [imageOutputCompression, imageOutputFormat]);
+  }, [imageBackground, imageModeration, imageOutputCompression, imageOutputFormat, imagePartialImages, imageQuality]);
 
   useEffect(() => {
     if (selectedConversationId && !conversations.some((conversation) => conversation.id === selectedConversationId)) {
@@ -1951,6 +2039,10 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     promptApplyRequestIdRef.current += 1;
     setImagePrompt("");
     setImageCount("1");
+    setImageQuality("auto");
+    setImageBackground("auto");
+    setImageModeration("auto");
+    setImagePartialImages("");
     setImageOutputFormat(DEFAULT_IMAGE_OUTPUT_FORMAT);
     setImageOutputCompression("");
     setDefaultImageVisibility("private");
@@ -1991,6 +2083,10 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     setImageCustomRatio(presetSizeSelection.customRatio);
     setImageCustomWidth(presetSizeSelection.customWidth);
     setImageCustomHeight(presetSizeSelection.customHeight);
+    setImageQuality("auto");
+    setImageBackground("auto");
+    setImageModeration("auto");
+    setImagePartialImages("");
     setImageOutputFormat(DEFAULT_IMAGE_OUTPUT_FORMAT);
     setImageOutputCompression("");
     setDefaultImageVisibility("private");
@@ -2035,6 +2131,10 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     setImageCustomRatio(DEFAULT_IMAGE_CUSTOM_RATIO);
     setImageCustomWidth(DEFAULT_IMAGE_CUSTOM_WIDTH);
     setImageCustomHeight(DEFAULT_IMAGE_CUSTOM_HEIGHT);
+    setImageQuality("auto");
+    setImageBackground("auto");
+    setImageModeration("auto");
+    setImagePartialImages("");
     setImageOutputFormat(DEFAULT_IMAGE_OUTPUT_FORMAT);
     setImageOutputCompression("");
     setDefaultImageVisibility("private");
@@ -2421,6 +2521,13 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
       customRatio: targetTurn.mode === "chat" ? DEFAULT_IMAGE_CUSTOM_RATIO : sizeSelection.customRatio,
       customWidth: targetTurn.mode === "chat" ? DEFAULT_IMAGE_CUSTOM_WIDTH : sizeSelection.customWidth,
       customHeight: targetTurn.mode === "chat" ? DEFAULT_IMAGE_CUSTOM_HEIGHT : sizeSelection.customHeight,
+      quality: targetTurn.quality || "auto",
+      background: targetTurn.background || "auto",
+      moderation: targetTurn.moderation || "auto",
+      partialImages:
+        targetTurn.partialImages === undefined || targetTurn.partialImages === null
+          ? ""
+          : String(targetTurn.partialImages),
       outputFormat: targetTurn.outputFormat || DEFAULT_IMAGE_OUTPUT_FORMAT,
       outputCompression:
         targetTurn.outputCompression === undefined || targetTurn.outputCompression === null
@@ -2600,6 +2707,8 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
           taskOutputFormat === undefined
             ? undefined
             : imageOutputCompressionForModel(activeTurn.model, taskOutputFormat, activeTurn.outputCompression);
+        const taskImageQuality = imageQualityForTask(activeTurn.quality);
+        const taskToolOptions = imageToolOptionsForTask(activeTurn);
         const taskImageResolution =
           supportsStructuredImageParameters(activeTurn.model) && activeTurnSizeRequest.selection?.resolution !== "auto"
             ? activeTurnSizeRequest.selection?.resolution
@@ -2641,14 +2750,14 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
               activeTurn.prompt,
               activeTurn.model,
               activeTurnSizeRequest.size,
-              undefined,
+              taskImageQuality,
               group.count,
               taskMessages,
               activeTurn.visibility || "private",
               taskImageResolution,
               taskOutputFormat,
               taskOutputCompression,
-              undefined,
+              taskToolOptions,
               conversationId,
               fallbackReferenceImage,
             );
@@ -2658,14 +2767,14 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
             activeTurn.prompt,
             activeTurn.model,
             activeTurnSizeRequest.size,
-            undefined,
+            taskImageQuality,
             group.count,
             taskMessages,
             activeTurn.visibility || "private",
             taskImageResolution,
             taskOutputFormat,
             taskOutputCompression,
-            undefined,
+            taskToolOptions,
             conversationId,
             fallbackReferenceImage,
           );
@@ -3137,6 +3246,8 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         draftOutputFormat === undefined
           ? undefined
           : imageOutputCompressionForModel(draft.model, draftOutputFormat, draft.outputCompression);
+      const draftQuality = imageQualityForTask(draft.quality);
+      const draftPartialImages = normalizePositiveImageParameter(draft.partialImages);
       if (mode !== "chat" && supportsStructuredImageParameters(effectiveDraftModel) && isHighResolutionImageSize(draftImageSize)) {
         const sizeLabel = formatImageSizeDisplay(draftImageSize);
         if (regenerate) {
@@ -3166,9 +3277,12 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
               count: imageCount,
               size: draftImageSize,
               sizeSelection: mode === "chat" ? undefined : draftStoredSizeSelection,
-              quality: undefined,
+              quality: mode === "chat" ? undefined : draftQuality,
               outputFormat: draftOutputFormat,
               outputCompression: draftOutputCompression,
+              background: mode !== "chat" && draft.background !== "auto" ? draft.background : undefined,
+              moderation: mode !== "chat" && draft.moderation !== "auto" ? draft.moderation : undefined,
+              partialImages: mode !== "chat" ? draftPartialImages : undefined,
               visibility: mode === "chat" ? "private" : draft.visibility,
             };
             if (!regenerate) {
@@ -3279,6 +3393,8 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         effectiveOutputFormat === undefined
           ? undefined
           : imageOutputCompressionForModel(effectiveModel, effectiveOutputFormat, imageOutputCompression);
+      const effectiveImageQuality = imageQualityForTask(imageQuality);
+      const effectivePartialImages = normalizePositiveImageParameter(imagePartialImages);
       const isHighResolutionRequest =
         effectiveImageMode !== "chat" &&
         supportsStructuredImageParameters(effectiveModel) &&
@@ -3302,9 +3418,12 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         count: requestedCount,
         size: effectiveImageMode === "chat" ? "" : currentImageSize,
         sizeSelection: effectiveImageMode === "chat" ? undefined : currentImageSizeSelection,
-        quality: undefined,
+        quality: effectiveImageMode === "chat" ? undefined : effectiveImageQuality,
         outputFormat: effectiveOutputFormat,
         outputCompression: effectiveImageMode === "chat" ? undefined : effectiveOutputCompression,
+        background: effectiveImageMode !== "chat" && imageBackground !== "auto" ? imageBackground : undefined,
+        moderation: effectiveImageMode !== "chat" && imageModeration !== "auto" ? imageModeration : undefined,
+        partialImages: effectiveImageMode !== "chat" ? effectivePartialImages : undefined,
         visibility: effectiveImageMode === "chat" ? "private" : defaultImageVisibility,
         images: Array.from({ length: requestedCount }, (_, index): StoredImage => {
           const imageId = `${turnId}-${index}`;
@@ -3693,6 +3812,101 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                         {editingDraftOutputControls ? (
                           <>
                             <label className="flex flex-col gap-2 text-sm font-medium text-stone-700">
+                              质量
+                              <Select
+                                value={editingTurnDraft.quality}
+                                onValueChange={(value) =>
+                                  setEditingTurnDraft((current) =>
+                                    current && (value === "auto" || isImageQuality(value))
+                                      ? { ...current, quality: value }
+                                      : current,
+                                  )
+                                }
+                              >
+                                <SelectTrigger>
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectGroup>
+                                    <SelectItem value="auto">自动</SelectItem>
+                                    <SelectItem value="low">低质量</SelectItem>
+                                    <SelectItem value="medium">中质量</SelectItem>
+                                    <SelectItem value="high">高质量</SelectItem>
+                                  </SelectGroup>
+                                </SelectContent>
+                              </Select>
+                            </label>
+                            <label className="flex flex-col gap-2 text-sm font-medium text-stone-700">
+                              背景
+                              <Select
+                                value={editingTurnDraft.background}
+                                onValueChange={(value) =>
+                                  setEditingTurnDraft((current) =>
+                                    current && (value === "auto" || value === "transparent" || value === "opaque")
+                                      ? { ...current, background: value }
+                                      : current,
+                                  )
+                                }
+                              >
+                                <SelectTrigger>
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectGroup>
+                                    <SelectItem value="auto">Auto</SelectItem>
+                                    <SelectItem value="transparent">透明</SelectItem>
+                                    <SelectItem value="opaque">不透明</SelectItem>
+                                  </SelectGroup>
+                                </SelectContent>
+                              </Select>
+                            </label>
+                            <label className="flex flex-col gap-2 text-sm font-medium text-stone-700">
+                              审核
+                              <Select
+                                value={editingTurnDraft.moderation}
+                                onValueChange={(value) =>
+                                  setEditingTurnDraft((current) =>
+                                    current && (value === "auto" || value === "low")
+                                      ? { ...current, moderation: value }
+                                      : current,
+                                  )
+                                }
+                              >
+                                <SelectTrigger>
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectGroup>
+                                    <SelectItem value="auto">Auto</SelectItem>
+                                    <SelectItem value="low">Low</SelectItem>
+                                  </SelectGroup>
+                                </SelectContent>
+                              </Select>
+                            </label>
+                            <label className="flex flex-col gap-2 text-sm font-medium text-stone-700">
+                              预览帧
+                              <Select
+                                value={editingTurnDraft.partialImages || "off"}
+                                onValueChange={(value) =>
+                                  setEditingTurnDraft((current) =>
+                                    current ? { ...current, partialImages: value === "off" ? "" : value } : current,
+                                  )
+                                }
+                              >
+                                <SelectTrigger>
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectGroup>
+                                    <SelectItem value="off">关闭</SelectItem>
+                                    <SelectItem value="1">1 帧</SelectItem>
+                                    <SelectItem value="2">2 帧</SelectItem>
+                                    <SelectItem value="3">3 帧</SelectItem>
+                                  </SelectGroup>
+                                </SelectContent>
+                              </Select>
+                            </label>
+                            <label className="flex flex-col gap-2 text-sm font-medium text-stone-700">
                               格式
                               <Select
                                 value={editingTurnDraft.outputFormat}
@@ -3868,6 +4082,10 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                 imageCustomRatio={imageCustomRatio}
                 imageCustomWidth={imageCustomWidth}
                 imageCustomHeight={imageCustomHeight}
+                imageQuality={imageQuality}
+                imageBackground={imageBackground}
+                imageModeration={imageModeration}
+                imagePartialImages={imagePartialImages}
                 imageOutputFormat={imageOutputFormat}
                 imageOutputCompression={imageOutputCompression}
                 highResolutionHint={highResolutionHint}
@@ -3886,6 +4104,10 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                 onImageCustomRatioChange={setImageCustomRatio}
                 onImageCustomWidthChange={setImageCustomWidth}
                 onImageCustomHeightChange={setImageCustomHeight}
+                onImageQualityChange={setImageQuality}
+                onImageBackgroundChange={setImageBackground}
+                onImageModerationChange={setImageModeration}
+                onImagePartialImagesChange={setImagePartialImages}
                 onImageOutputFormatChange={setImageOutputFormat}
                 onImageOutputCompressionChange={setImageOutputCompression}
                 onSubmit={handleSubmit}
