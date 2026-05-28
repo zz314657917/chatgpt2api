@@ -463,7 +463,7 @@ func (c *Client) chatTarget() (string, string) {
 func textModelSlug(model string) string {
 	switch strings.TrimSpace(model) {
 	case "auto", "":
-		return "auto"
+		return util.DefaultChatModel
 	default:
 		return strings.TrimSpace(model)
 	}
@@ -748,7 +748,7 @@ func (c *Client) StreamMultimodalConversation(ctx context.Context, messages []ma
 func (c *Client) conversationPayload(messages []map[string]any, model, timezoneName string) map[string]any {
 	conversationMessages := []map[string]any{conversationUserMessage(conversationPrompt(messages))}
 	return map[string]any{
-		"action": "next", "messages": conversationMessages, "model": model, "parent_message_id": "client-created-root",
+		"action": "next", "messages": conversationMessages, "model": textModelSlug(model), "parent_message_id": "client-created-root",
 		"conversation_mode": map[string]any{"kind": "primary_assistant"}, "conversation_origin": nil,
 		"force_paragen": false, "force_paragen_model_slug": "", "force_rate_limit": false, "force_use_sse": true,
 		"history_and_training_disabled": true, "reset_rate_limits": false, "suggestions": []any{}, "supported_encodings": []any{"v1"},
