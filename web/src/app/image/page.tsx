@@ -56,6 +56,7 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import {
   cancelCreationTask,
+  canvasModelHasCapability,
   CHAT_MODEL_OPTIONS,
   createChatCompletionTask,
   createImageEditTaskFromReferenceIds,
@@ -63,19 +64,20 @@ import {
   DEFAULT_CHAT_MODEL,
   DEFAULT_IMAGE_MODEL,
   estimateImageDisplayPriceUSD,
+  fetchCanvasModels,
   fetchCreationTasks,
   fetchProfile,
   formatImageDisplayPriceUSD,
   IMAGE_CREATION_MODEL_OPTIONS,
   IMAGE_MODEL_ROUTE_DETAILS,
   IMAGE_OUTPUT_FORMAT_OPTIONS,
-  isChatModel,
-  isImageCreationModel,
   isImageModel,
   isImageOutputFormat,
+  modelIDLooksImageCapable,
   supportsImageOutputCompression,
   supportsImageOutputControls,
   supportsStructuredImageParameters,
+  type CanvasModelOption,
   uploadCreationTaskReferenceImage,
   updateManagedImageVisibility,
   type ImageModel,
@@ -170,6 +172,8 @@ type PublishRecipeOptions = {
   sharePromptParameters: boolean;
   shareReferenceImages: boolean;
 };
+
+type ImageModelMenuOption = { value: ImageModel; label: string };
 
 type CreationTaskDataItem = NonNullable<CreationTask["data"]>[number];
 
@@ -429,7 +433,7 @@ async function buildReferenceImageFromStoredImage(
   };
 }
 
-const IMAGE_TASK_IMAGE_COUNT = 1;
+const IMAGE_TASK_IMAGE_COUNT = 10;
 
 function normalizeRequestedImageCount(value: string | number) {
   return Math.max(1, Math.min(10, Number(value) || 1));
@@ -789,7 +793,7 @@ function getStoredImageModel(): ImageModel {
     return DEFAULT_IMAGE_MODEL;
   }
   const storedModel = window.localStorage.getItem(IMAGE_MODEL_STORAGE_KEY);
-  return isImageCreationModel(storedModel) ? storedModel : DEFAULT_IMAGE_MODEL;
+  return isImageModel(storedModel) ? storedModel : DEFAULT_IMAGE_MODEL;
 }
 
 function getStoredComposerMode(): ComposerMode {
@@ -983,6 +987,45 @@ function getComposerConversationMode(composerMode: ComposerMode, referenceImages
     return "generate";
   }
   return referenceImages.some((image) => image.source === "conversation") ? "edit" : "image";
+}
+
+function modelMenuOption(model: CanvasModelOption): ImageModelMenuOption {
+  return { value: model.id, label: model.name || model.id };
+}
+
+function hasMenuOption(options: readonly ImageModelMenuOption[], value: string) {
+  return options.some((option) => option.value === value);
+}
+
+function mergeImageModelOptions(
+  remoteOptions: ImageModelMenuOption[],
+  localOptions: readonly ImageModelMenuOption[],
+  selectedModel: ImageModel,
+) {
+  const seen = new Set<string>();
+  const merged: ImageModelMenuOption[] = [];
+  for (const option of [...remoteOptions, ...localOptions]) {
+    if (!option.value || seen.has(option.value)) {
+      continue;
+    }
+    seen.add(option.value);
+    merged.push(option);
+  }
+  if (selectedModel && !seen.has(selectedModel)) {
+    merged.unshift({ value: selectedModel, label: selectedModel });
+  }
+  return merged;
+}
+
+function canvasModelsByCapability(models: CanvasModelOption[], capability: "chat" | "image") {
+  return models
+    .filter((model) => model.enabled !== false)
+    .filter((model) =>
+      canvasModelHasCapability(model, capability) ||
+      (capability === "chat" && (model.kind === "text" || model.kind === "both")) ||
+      (capability === "image" && (model.kind === "image" || model.kind === "both"))
+    )
+    .map(modelMenuOption);
 }
 
 function buildCreationTaskMessages(conversation: ImageConversation, activeTurnId: string): CreationTaskMessage[] {
@@ -1241,6 +1284,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
   const [conversations, setConversations] = useState<ImageConversation[]>([]);
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
+  const [remoteCanvasModels, setRemoteCanvasModels] = useState<CanvasModelOption[]>([]);
   const [lightboxImages, setLightboxImages] = useState<ImageLightboxItem[]>([]);
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [lightboxIndex, setLightboxIndex] = useState(0);
@@ -1334,7 +1378,15 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
   const editingDraftSizeIsHighResolution = Boolean(
     editingDraftStructuredParameters && editingDraftImageSize && isHighResolutionImageSize(editingDraftImageSize),
   );
-  const composerModelOptions = composerMode === "chat" ? CHAT_MODEL_OPTIONS : IMAGE_CREATION_MODEL_OPTIONS;
+  const chatModelOptions = useMemo(
+    () => mergeImageModelOptions(canvasModelsByCapability(remoteCanvasModels, "chat"), CHAT_MODEL_OPTIONS, imageModel),
+    [imageModel, remoteCanvasModels],
+  );
+  const imageCreationModelOptions = useMemo(
+    () => mergeImageModelOptions(canvasModelsByCapability(remoteCanvasModels, "image"), IMAGE_CREATION_MODEL_OPTIONS, imageModel),
+    [imageModel, remoteCanvasModels],
+  );
+  const composerModelOptions = composerMode === "chat" ? chatModelOptions : imageCreationModelOptions;
   const selectedConversation = useMemo(
     () => conversations.find((item) => item.id === selectedConversationId) ?? null,
     [conversations, selectedConversationId],
@@ -1393,6 +1445,28 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
   useEffect(() => {
     conversationsRef.current = conversations;
   }, [conversations]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadModelCatalog = async () => {
+      try {
+        const models = await fetchCanvasModels();
+        if (!cancelled) {
+          setRemoteCanvasModels(models);
+        }
+      } catch {
+        if (!cancelled) {
+          setRemoteCanvasModels([]);
+        }
+      }
+    };
+
+    void loadModelCatalog();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     const node = composerDockRef.current;
@@ -1529,7 +1603,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     setComposerMode("image");
     setImagePrompt(prompt);
     setImageCount("1");
-    setImageModel(isImageCreationModel(intent.model) ? intent.model : DEFAULT_IMAGE_MODEL);
+    setImageModel(isImageModel(intent.model) && modelIDLooksImageCapable(intent.model) ? intent.model : imageCreationModelOptions[0]?.value || DEFAULT_IMAGE_MODEL);
     setImageSizeMode(sizeSelection.mode);
     setImageAspectRatio(sizeSelection.aspectRatio);
     setImageResolution(isImageResolution(intent.resolutionPreset) ? intent.resolutionPreset : sizeSelection.resolution);
@@ -1585,7 +1659,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
       .finally(() => {
         toast.dismiss(toastId);
       });
-  }, [isLoadingHistory]);
+  }, [imageCreationModelOptions, isLoadingHistory]);
 
   useEffect(() => {
     if (!selectedConversationId) {
@@ -1634,16 +1708,16 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
 
   useEffect(() => {
     if (composerMode === "chat") {
-      if (!isChatModel(imageModel)) {
-        setImageModel(DEFAULT_CHAT_MODEL);
+      if (!hasMenuOption(chatModelOptions, imageModel)) {
+        setImageModel(chatModelOptions[0]?.value || DEFAULT_CHAT_MODEL);
       }
       return;
     }
 
-    if (!isImageCreationModel(imageModel)) {
-      setImageModel(DEFAULT_IMAGE_MODEL);
+    if (!hasMenuOption(imageCreationModelOptions, imageModel)) {
+      setImageModel(imageCreationModelOptions[0]?.value || DEFAULT_IMAGE_MODEL);
     }
-  }, [composerMode, imageModel]);
+  }, [chatModelOptions, composerMode, imageCreationModelOptions, imageModel]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -2338,14 +2412,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
       conversationId,
       turnId,
       prompt: targetTurn.prompt,
-      model:
-        targetTurn.mode === "chat"
-          ? isChatModel(targetTurn.model)
-            ? targetTurn.model
-            : DEFAULT_CHAT_MODEL
-          : isImageCreationModel(targetTurn.model)
-            ? targetTurn.model
-            : DEFAULT_IMAGE_MODEL,
+      model: targetTurn.model || (targetTurn.mode === "chat" ? chatModelOptions[0]?.value || DEFAULT_CHAT_MODEL : imageCreationModelOptions[0]?.value || DEFAULT_IMAGE_MODEL),
       mode: targetTurn.mode,
       count: targetTurn.mode === "chat" ? "1" : String(normalizeRequestedImageCount(targetTurn.count || targetTurn.images.length || 1)),
       sizeMode: targetTurn.mode === "chat" ? "auto" : sizeSelection.mode,
@@ -2362,7 +2429,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
       visibility: targetTurn.visibility || "private",
       referenceImages: targetTurn.mode === "chat" ? [] : targetTurn.referenceImages,
     });
-  }, []);
+  }, [chatModelOptions, imageCreationModelOptions]);
 
   const handleEditReferenceImageChange = useCallback(async (files: File[]) => {
     if (files.length === 0) {
@@ -3021,6 +3088,14 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
 
       const imageCount = draft.mode === "chat" ? 1 : normalizeRequestedImageCount(draft.count);
       const mode = draft.mode === "chat" ? "chat" : getComposerConversationMode("image", draft.referenceImages);
+      const effectiveDraftModel =
+        mode === "chat"
+          ? hasMenuOption(chatModelOptions, draft.model)
+            ? draft.model
+            : chatModelOptions[0]?.value || DEFAULT_CHAT_MODEL
+          : hasMenuOption(imageCreationModelOptions, draft.model)
+            ? draft.model
+            : imageCreationModelOptions[0]?.value || DEFAULT_IMAGE_MODEL;
       const referenceImages = usesReferenceImages(mode) ? draft.referenceImages : [];
       const rawDraftSizeSelection = {
         mode: draft.sizeMode,
@@ -3033,7 +3108,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
       const draftSizeRequest =
         mode === "chat"
           ? null
-          : buildEffectiveImageSizeRequest(draft.model, rawDraftSizeSelection);
+          : buildEffectiveImageSizeRequest(effectiveDraftModel, rawDraftSizeSelection);
       if (
         mode !== "chat" &&
         draftSizeRequest &&
@@ -3057,12 +3132,12 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         return;
       }
       const draftOutputFormat =
-        mode === "chat" ? undefined : imageOutputFormatForModel(draft.model, draft.outputFormat);
+        mode === "chat" ? undefined : imageOutputFormatForModel(effectiveDraftModel, draft.outputFormat);
       const draftOutputCompression =
         draftOutputFormat === undefined
           ? undefined
           : imageOutputCompressionForModel(draft.model, draftOutputFormat, draft.outputCompression);
-      if (mode !== "chat" && supportsStructuredImageParameters(draft.model) && isHighResolutionImageSize(draftImageSize)) {
+      if (mode !== "chat" && supportsStructuredImageParameters(effectiveDraftModel) && isHighResolutionImageSize(draftImageSize)) {
         const sizeLabel = formatImageSizeDisplay(draftImageSize);
         if (regenerate) {
           toast.message(`${sizeLabel} 属于 Codex 结构化高分辨率任务，会直接提交给上游判断。`);
@@ -3085,7 +3160,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
             const baseTurn = {
               ...turn,
               prompt,
-              model: draft.model,
+              model: effectiveDraftModel,
               mode,
               referenceImages: resetReferenceUploads(referenceImages),
               count: imageCount,
@@ -3130,7 +3205,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         toast.success("已保存编辑设置");
       }
     },
-    [editingTurnDraft, resetReferenceUploads, runConversationQueue, updateConversation],
+    [chatModelOptions, editingTurnDraft, imageCreationModelOptions, resetReferenceUploads, runConversationQueue, updateConversation],
   );
 
   const handleSubmit = async () => {
@@ -3155,12 +3230,12 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
       const effectiveImageMode = getComposerConversationMode(composerMode, referenceImages);
       const effectiveModel =
         effectiveImageMode === "chat"
-          ? isChatModel(imageModel)
+          ? hasMenuOption(chatModelOptions, imageModel)
             ? imageModel
-            : DEFAULT_CHAT_MODEL
-          : isImageCreationModel(imageModel)
+            : chatModelOptions[0]?.value || DEFAULT_CHAT_MODEL
+          : hasMenuOption(imageCreationModelOptions, imageModel)
             ? imageModel
-            : DEFAULT_IMAGE_MODEL;
+            : imageCreationModelOptions[0]?.value || DEFAULT_IMAGE_MODEL;
       const requestedCount = effectiveImageMode === "chat" ? 1 : parsedCount;
       const rawImageSizeSelection = {
         mode: imageSizeMode,
@@ -3457,7 +3532,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                         </SelectTrigger>
                         <SelectContent>
                           <SelectGroup>
-                            {(editingTurnDraft.mode === "chat" ? CHAT_MODEL_OPTIONS : IMAGE_CREATION_MODEL_OPTIONS).map((option) => (
+                            {(editingTurnDraft.mode === "chat" ? chatModelOptions : imageCreationModelOptions).map((option) => (
                               <SelectItem key={option.value} value={option.value}>
                                 {option.label}
                               </SelectItem>

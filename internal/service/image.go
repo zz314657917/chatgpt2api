@@ -33,8 +33,11 @@ import (
 
 const (
 	ThumbnailSize            = 480
+	ImagePreviewSize         = 1200
 	thumbnailQuality         = 72
+	imagePreviewQuality      = 82
 	thumbnailCacheVersion    = 3
+	imagePreviewCacheVersion = 1
 	thumbnailExtension       = ".jpg"
 	imageReferencePrefix     = "references"
 	imageReferenceMarker     = ".refs/"
@@ -54,6 +57,7 @@ const (
 type ImageConfig interface {
 	ImagesDir() string
 	ImageThumbnailsDir() string
+	ImagePreviewsDir() string
 	ImageMetadataDir() string
 	ImageRetentionDays() int
 	ImageStorageLimitBytes() int64
@@ -158,12 +162,14 @@ type ImageStorageGovernanceSummary struct {
 	TotalBytes         int64  `json:"total_bytes"`
 	ImagesBytes        int64  `json:"images_bytes"`
 	ThumbnailsBytes    int64  `json:"thumbnails_bytes"`
+	PreviewsBytes      int64  `json:"previews_bytes"`
 	MetadataBytes      int64  `json:"metadata_bytes"`
 	ReferenceBytes     int64  `json:"reference_bytes"`
 	ImagesCount        int    `json:"images_count"`
 	PublicImagesCount  int    `json:"public_images_count"`
 	PrivateImagesCount int    `json:"private_images_count"`
 	ThumbnailFiles     int    `json:"thumbnail_files"`
+	PreviewFiles       int    `json:"previews_files"`
 	MetadataFiles      int    `json:"metadata_files"`
 	ReferenceFiles     int    `json:"reference_files"`
 	LimitBytes         int64  `json:"limit_bytes"`
@@ -179,6 +185,7 @@ type ImageStorageCleanupResult struct {
 	IncludePublic         bool   `json:"include_public,omitempty"`
 	DeletedImages         int    `json:"deleted_images"`
 	DeletedThumbnails     int    `json:"deleted_thumbnails"`
+	DeletedPreviews       int    `json:"deleted_previews"`
 	DeletedMetadataFiles  int    `json:"deleted_metadata_files"`
 	DeletedReferenceFiles int    `json:"deleted_reference_files"`
 	DeletedBytes          int64  `json:"deleted_bytes"`
@@ -264,6 +271,7 @@ type imageStorageRemovalStats struct {
 	bytes          int64
 	images         int
 	thumbnails     int
+	previews       int
 	metadataFiles  int
 	referenceFiles int
 }
@@ -324,9 +332,10 @@ func (s *ImageService) StorageGovernance() ImageStorageGovernanceSummary {
 		}
 	}
 	summary.ThumbnailsBytes, summary.ThumbnailFiles, _ = thumbnailCacheStats(s.config.ImageThumbnailsDir())
+	summary.PreviewsBytes, summary.PreviewFiles, _ = thumbnailCacheStats(s.config.ImagePreviewsDir())
 	summary.MetadataBytes, summary.MetadataFiles = directorySize(s.config.ImageMetadataDir(), "")
 	summary.ReferenceBytes, summary.ReferenceFiles = directorySize(s.imageReferencesDir(), "")
-	summary.TotalBytes = summary.ImagesBytes + summary.ThumbnailsBytes + summary.MetadataBytes
+	summary.TotalBytes = summary.ImagesBytes + summary.ThumbnailsBytes + summary.PreviewsBytes + summary.MetadataBytes + summary.ReferenceBytes
 	if summary.LimitBytes > 0 && summary.TotalBytes > summary.LimitBytes {
 		summary.OverLimitBytes = summary.TotalBytes - summary.LimitBytes
 	}
@@ -345,8 +354,14 @@ func (s *ImageService) CleanupStorage(options ImageStorageCleanupOptions) (Image
 		if err != nil {
 			return result, err
 		}
+		previewStats, err := s.clearPreviewCache()
+		if err != nil {
+			return result, err
+		}
+		stats.add(previewStats)
 		result.Action = "thumbnails"
 		result.DeletedThumbnails += stats.thumbnails
+		result.DeletedPreviews += stats.previews
 		result.DeletedMetadataFiles += stats.metadataFiles
 		result.DeletedBytes += stats.bytes
 	}
@@ -396,6 +411,7 @@ func (r *ImageStorageCleanupResult) addRemovalStats(stats imageStorageRemovalSta
 	r.DeletedBytes += stats.bytes
 	r.DeletedImages += stats.images
 	r.DeletedThumbnails += stats.thumbnails
+	r.DeletedPreviews += stats.previews
 	r.DeletedMetadataFiles += stats.metadataFiles
 	r.DeletedReferenceFiles += stats.referenceFiles
 }
@@ -495,36 +511,26 @@ func (s *ImageService) managedImageSummaryItem(baseURL string, entry imageIndexE
 	if thumbRel != "" {
 		thumbURL = thumbnailURL(baseURL, thumbRel, time.Unix(0, entry.ModifiedUnixNano))
 	}
+	previewURLValue := ""
+	previewPath := s.previewPath(entry.Path)
+	previewRel := thumbnailRelativePath(s.config.ImagePreviewsDir(), previewPath)
+	if previewRel != "" {
+		previewURLValue = previewURL(baseURL, previewRel, time.Unix(0, entry.ModifiedUnixNano))
+	}
 	item := map[string]any{
 		"name":        entry.Name,
 		"path":        entry.Path,
 		"date":        entry.Date,
 		"size":        entry.Size,
-		"url":         firstNonEmptyString(entry.ObjectURL, publicAssetURL(baseURL, "images", entry.Path)),
-		"preview_url": thumbURL,
+		"preview_url": previewURLValue,
 		"created_at":  unixNanoTimeString(entry.CreatedUnixNano),
 		"visibility":  entry.Visibility,
-	}
-	if entry.OwnerID != "" {
-		item["owner_id"] = entry.OwnerID
 	}
 	if entry.OwnerName != "" {
 		item["owner_name"] = entry.OwnerName
 	}
 	if entry.PublishedAt != "" {
 		item["published_at"] = entry.PublishedAt
-	}
-	if entry.StorageBackend != "" {
-		item["storage_backend"] = entry.StorageBackend
-	}
-	if entry.ObjectKey != "" {
-		item["object_key"] = entry.ObjectKey
-	}
-	if entry.ObjectURL != "" {
-		item["object_url"] = entry.ObjectURL
-	}
-	if entry.OutputFormat != "" {
-		item["output_format"] = entry.OutputFormat
 	}
 	if entry.Width > 0 && entry.Height > 0 {
 		setImageItemDimensions(item, entry.Width, entry.Height)
@@ -773,6 +779,7 @@ func (s *ImageService) managedImageItem(baseURL string, ref imageFileRef, info o
 	day := imageDay(ref.rel, info.ModTime())
 	meta := s.imageMetadata(ref.rel)
 	thumb := s.thumbnailInfo(ref.rel, info)
+	preview := s.previewInfo(ref.rel, info)
 	item := map[string]any{
 		"name":       filepath.Base(ref.path),
 		"path":       ref.rel,
@@ -791,6 +798,11 @@ func (s *ImageService) managedImageItem(baseURL string, ref imageFileRef, info o
 		item["thumbnail_url"] = thumbnailURL(baseURL, thumbRel, info.ModTime())
 	} else {
 		item["thumbnail_url"] = ""
+	}
+	if previewRel, ok := preview["preview_rel"].(string); ok && previewRel != "" {
+		item["preview_url"] = previewURL(baseURL, previewRel, info.ModTime())
+	} else {
+		item["preview_url"] = ""
 	}
 	if !setImageItemDimensions(item, thumb["width"], thumb["height"]) {
 		if width, height, ok := imageFileDimensions(ref.path); ok {
@@ -1425,6 +1437,10 @@ func (s *ImageService) SourceImageRelativePathFromThumbnail(thumbnailRel string)
 	return sourceImageRelativePathFromThumbnail(thumbnailRel)
 }
 
+func (s *ImageService) SourceImageRelativePathFromPreview(previewRel string) (string, error) {
+	return sourceImageRelativePathFromPreview(previewRel)
+}
+
 func (s *ImageService) EnsureThumbnail(thumbnailRel string) error {
 	sourceRel, err := s.SourceImageRelativePathFromThumbnail(thumbnailRel)
 	if err != nil {
@@ -1445,8 +1461,33 @@ func (s *ImageService) EnsureThumbnail(thumbnailRel string) error {
 	return nil
 }
 
+func (s *ImageService) EnsurePreview(previewRel string) error {
+	sourceRel, err := s.SourceImageRelativePathFromPreview(previewRel)
+	if err != nil {
+		return err
+	}
+	imageRoot, err := filepath.Abs(s.config.ImagesDir())
+	if err != nil {
+		return err
+	}
+	ref, err := s.imageFileRef(imageRoot, sourceRel)
+	if err != nil {
+		return err
+	}
+	preview := s.ensurePreviewForRef(ref)
+	if toString(preview["preview_rel"]) == "" {
+		return errors.New("preview unavailable")
+	}
+	return nil
+}
+
 func (s *ImageService) thumbnailInfo(rel string, sourceInfo os.FileInfo) map[string]any {
 	_, result, _ := s.thumbnailCacheInfo(rel, sourceInfo.ModTime())
+	return result
+}
+
+func (s *ImageService) previewInfo(rel string, sourceInfo os.FileInfo) map[string]any {
+	_, result, _ := s.previewCacheInfo(rel, sourceInfo.ModTime())
 	return result
 }
 
@@ -1454,11 +1495,23 @@ func (s *ImageService) ensureThumbnailForRef(ref imageFileRef) map[string]any {
 	if _, result, ok := s.thumbnailCacheInfo(ref.rel, ref.info.ModTime()); ok {
 		return result
 	}
-	return s.withThumbnailJob(ref.rel, func() map[string]any {
+	return s.withThumbnailJob("thumbnail:"+ref.rel, func() map[string]any {
 		if _, result, ok := s.thumbnailCacheInfo(ref.rel, ref.info.ModTime()); ok {
 			return result
 		}
 		return s.generateThumbnail(ref)
+	})
+}
+
+func (s *ImageService) ensurePreviewForRef(ref imageFileRef) map[string]any {
+	if _, result, ok := s.previewCacheInfo(ref.rel, ref.info.ModTime()); ok {
+		return result
+	}
+	return s.withThumbnailJob("preview:"+ref.rel, func() map[string]any {
+		if _, result, ok := s.previewCacheInfo(ref.rel, ref.info.ModTime()); ok {
+			return result
+		}
+		return s.generatePreview(ref)
 	})
 }
 
@@ -1504,6 +1557,24 @@ func (s *ImageService) thumbnailCacheInfo(rel string, sourceModTime time.Time) (
 	return thumbPath, result, true
 }
 
+func (s *ImageService) previewCacheInfo(rel string, sourceModTime time.Time) (string, map[string]any, bool) {
+	previewPath := s.previewPath(rel)
+	previewRel := thumbnailRelativePath(s.config.ImagePreviewsDir(), previewPath)
+	result := map[string]any{"preview_rel": previewRel}
+	previewInfo, err := os.Stat(previewPath)
+	if err != nil || previewInfo.ModTime().Before(sourceModTime) {
+		return previewPath, result, false
+	}
+	meta := s.readPreviewMetadata(rel, previewPath+".json", sourceModTime)
+	if !isCurrentPreviewMetadata(meta) {
+		return previewPath, result, false
+	}
+	for key, value := range meta {
+		result[key] = value
+	}
+	return previewPath, result, true
+}
+
 func (s *ImageService) generateThumbnail(ref imageFileRef) map[string]any {
 	thumbPath, result, _ := s.thumbnailCacheInfo(ref.rel, ref.info.ModTime())
 	file, err := os.Open(ref.path)
@@ -1518,7 +1589,7 @@ func (s *ImageService) generateThumbnail(ref imageFileRef) map[string]any {
 	bounds := img.Bounds()
 	width, height := bounds.Dx(), bounds.Dy()
 	thumb := resizeToFit(flattenImage(img), ThumbnailSize, ThumbnailSize)
-	if err := writeJPEGThumbnail(thumbPath, thumb); err != nil {
+	if err := writeJPEGThumbnail(thumbPath, thumb, thumbnailQuality); err != nil {
 		return map[string]any{}
 	}
 	_ = s.writeThumbnailMetadata(ref.rel, thumbPath+".json", map[string]any{
@@ -1528,6 +1599,36 @@ func (s *ImageService) generateThumbnail(ref imageFileRef) map[string]any {
 		"thumbnail_quality": thumbnailQuality,
 		"thumbnail_size":    ThumbnailSize,
 		"thumbnail_version": thumbnailCacheVersion,
+	})
+	result["width"] = width
+	result["height"] = height
+	return result
+}
+
+func (s *ImageService) generatePreview(ref imageFileRef) map[string]any {
+	previewPath, result, _ := s.previewCacheInfo(ref.rel, ref.info.ModTime())
+	file, err := os.Open(ref.path)
+	if err != nil {
+		return map[string]any{}
+	}
+	defer file.Close()
+	img, _, err := image.Decode(file)
+	if err != nil {
+		return map[string]any{}
+	}
+	bounds := img.Bounds()
+	width, height := bounds.Dx(), bounds.Dy()
+	preview := resizeToFit(flattenImage(img), ImagePreviewSize, ImagePreviewSize)
+	if err := writeJPEGThumbnail(previewPath, preview, imagePreviewQuality); err != nil {
+		return map[string]any{}
+	}
+	_ = s.writePreviewMetadata(ref.rel, previewPath+".json", map[string]any{
+		"width":           width,
+		"height":          height,
+		"preview_format":  "jpeg",
+		"preview_quality": imagePreviewQuality,
+		"preview_size":    ImagePreviewSize,
+		"preview_version": imagePreviewCacheVersion,
 	})
 	result["width"] = width
 	result["height"] = height
@@ -1583,6 +1684,10 @@ func (s *ImageService) imageFileRef(imageRoot, rel string) (imageFileRef, error)
 
 func (s *ImageService) thumbnailPath(rel string) string {
 	return filepath.Join(s.config.ImageThumbnailsDir(), filepath.FromSlash(rel)+thumbnailExtension)
+}
+
+func (s *ImageService) previewPath(rel string) string {
+	return filepath.Join(s.config.ImagePreviewsDir(), filepath.FromSlash(rel)+thumbnailExtension)
 }
 
 func (s *ImageService) imageOwner(rel string) string {
@@ -2238,6 +2343,19 @@ func (s *ImageService) removeImageGroup(rel string) (imageStorageRemovalStats, e
 		}
 		stats.bytes += bytes
 	}
+	previewRoot, err := filepath.Abs(s.config.ImagePreviewsDir())
+	if err != nil {
+		return stats, err
+	}
+	if removed, bytes, err := s.removeImagePreviewWithStats(previewRoot, rel); err != nil {
+		return stats, err
+	} else if removed > 0 {
+		stats.previews++
+		if removed > 1 {
+			stats.metadataFiles += removed - 1
+		}
+		stats.bytes += bytes
+	}
 	if removed, bytes, err := s.removeImageReferencesWithStats(rel); err != nil {
 		return stats, err
 	} else {
@@ -2340,6 +2458,34 @@ func (s *ImageService) removeImageThumbnailWithStats(root, rel string) (int, int
 	return removed, bytes, nil
 }
 
+func (s *ImageService) removeImagePreviewWithStats(root, rel string) (int, int64, error) {
+	previewPath := filepath.Join(root, filepath.FromSlash(rel)+thumbnailExtension)
+	if !pathInsideRoot(root, previewPath) {
+		return 0, 0, errors.New("invalid image path")
+	}
+	removed := 0
+	var bytes int64
+	if didRemove, size, err := removeFileWithStats(previewPath); err != nil {
+		return 0, 0, err
+	} else if didRemove {
+		removed++
+		bytes += size
+	}
+	if didRemove, size, err := removeFileWithStats(previewPath + ".json"); err != nil {
+		return 0, 0, err
+	} else if didRemove {
+		removed++
+		bytes += size
+	}
+	if s.store != nil {
+		if err := s.store.DeleteJSONDocument(previewMetadataDocumentName(rel)); err != nil {
+			return 0, 0, err
+		}
+	}
+	removeEmptyParentDirs(root, filepath.Dir(previewPath))
+	return removed, bytes, nil
+}
+
 func (s *ImageService) clearThumbnailCache() (imageStorageRemovalStats, error) {
 	root := s.config.ImageThumbnailsDir()
 	bytes, thumbnails, metadataFiles := thumbnailCacheStats(root)
@@ -2352,10 +2498,23 @@ func (s *ImageService) clearThumbnailCache() (imageStorageRemovalStats, error) {
 	return imageStorageRemovalStats{bytes: bytes, thumbnails: thumbnails, metadataFiles: metadataFiles}, nil
 }
 
+func (s *ImageService) clearPreviewCache() (imageStorageRemovalStats, error) {
+	root := s.config.ImagePreviewsDir()
+	bytes, previews, metadataFiles := thumbnailCacheStats(root)
+	if err := os.RemoveAll(root); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return imageStorageRemovalStats{}, err
+	}
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		return imageStorageRemovalStats{}, err
+	}
+	return imageStorageRemovalStats{bytes: bytes, previews: previews, metadataFiles: metadataFiles}, nil
+}
+
 func (s *ImageService) imageGroupSize(rel string, imageSize int64) int64 {
 	total := imageSize
 	thumbPath := s.thumbnailPath(rel)
-	for _, path := range []string{thumbPath, thumbPath + ".json"} {
+	previewPath := s.previewPath(rel)
+	for _, path := range []string{thumbPath, thumbPath + ".json", previewPath, previewPath + ".json"} {
 		if info, err := os.Stat(path); err == nil && !info.IsDir() {
 			total += info.Size()
 		}
@@ -2400,9 +2559,28 @@ func (s *ImageService) readThumbnailMetadata(rel, metaPath string, sourceMtime t
 	return readImageMetadata(metaPath, sourceMtime)
 }
 
+func (s *ImageService) readPreviewMetadata(rel, metaPath string, sourceMtime time.Time) map[string]any {
+	if s.store != nil {
+		raw, err := s.store.LoadJSONDocument(previewMetadataDocumentName(rel))
+		if err == nil {
+			if meta, ok := raw.(map[string]any); ok && meta["width"] != nil && meta["height"] != nil {
+				return meta
+			}
+		}
+	}
+	return readImageMetadata(metaPath, sourceMtime)
+}
+
 func (s *ImageService) writeThumbnailMetadata(rel, metaPath string, value map[string]any) error {
 	if s.store != nil {
 		return s.store.SaveJSONDocument(thumbnailMetadataDocumentName(rel), value)
+	}
+	return writeJSONFile(metaPath, value)
+}
+
+func (s *ImageService) writePreviewMetadata(rel, metaPath string, value map[string]any) error {
+	if s.store != nil {
+		return s.store.SaveJSONDocument(previewMetadataDocumentName(rel), value)
 	}
 	return writeJSONFile(metaPath, value)
 }
@@ -2602,15 +2780,27 @@ func thumbnailMetadataDocumentName(rel string) string {
 	return "image_thumbnails/" + filepath.ToSlash(rel) + thumbnailExtension + ".json"
 }
 
+func previewMetadataDocumentName(rel string) string {
+	return "image_previews/" + filepath.ToSlash(rel) + thumbnailExtension + ".json"
+}
+
 func sourceImageRelativePathFromThumbnail(value string) (string, error) {
-	thumbnailRel, err := cleanImageRelativePath(value)
+	return sourceImageRelativePathFromCache(value, "thumbnail")
+}
+
+func sourceImageRelativePathFromPreview(value string) (string, error) {
+	return sourceImageRelativePathFromCache(value, "preview")
+}
+
+func sourceImageRelativePathFromCache(value, label string) (string, error) {
+	cacheRel, err := cleanImageRelativePath(value)
 	if err != nil {
 		return "", err
 	}
-	if !strings.HasSuffix(thumbnailRel, thumbnailExtension) {
-		return "", errors.New("invalid thumbnail path")
+	if !strings.HasSuffix(cacheRel, thumbnailExtension) {
+		return "", fmt.Errorf("invalid %s path", label)
 	}
-	return cleanImageRelativePath(strings.TrimSuffix(thumbnailRel, thumbnailExtension))
+	return cleanImageRelativePath(strings.TrimSuffix(cacheRel, thumbnailExtension))
 }
 
 func setImageItemDimensions(item map[string]any, widthValue, heightValue any) bool {
@@ -2699,6 +2889,11 @@ func publicAssetURL(baseURL, prefix, rel string) string {
 func thumbnailURL(baseURL, thumbRel string, sourceModTime time.Time) string {
 	return publicAssetURL(baseURL, "image-thumbnails", thumbRel) +
 		"?v=" + strconv.Itoa(thumbnailCacheVersion) + "-" + strconv.FormatInt(sourceModTime.UnixNano(), 10)
+}
+
+func previewURL(baseURL, previewRel string, sourceModTime time.Time) string {
+	return publicAssetURL(baseURL, "image-previews", previewRel) +
+		"?v=" + strconv.Itoa(imagePreviewCacheVersion) + "-" + strconv.FormatInt(sourceModTime.UnixNano(), 10)
 }
 
 func cleanImageRelativePath(value string) (string, error) {
@@ -2893,6 +3088,7 @@ func (s *imageStorageRemovalStats) add(next imageStorageRemovalStats) {
 	s.bytes += next.bytes
 	s.images += next.images
 	s.thumbnails += next.thumbnails
+	s.previews += next.previews
 	s.metadataFiles += next.metadataFiles
 	s.referenceFiles += next.referenceFiles
 }
@@ -2979,9 +3175,13 @@ func thumbnailCacheStats(root string) (int64, int, int) {
 	return bytes, thumbnails, metadataFiles
 }
 
-func writeJPEGThumbnail(path string, img image.Image) error {
+func writeJPEGThumbnail(path string, img image.Image, qualityValues ...int) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
+	}
+	quality := thumbnailQuality
+	if len(qualityValues) > 0 && qualityValues[0] > 0 {
+		quality = qualityValues[0]
 	}
 	dir := filepath.Dir(path)
 	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".*.tmp")
@@ -2989,7 +3189,7 @@ func writeJPEGThumbnail(path string, img image.Image) error {
 		return err
 	}
 	tmpPath := tmp.Name()
-	encodeErr := jpeg.Encode(tmp, img, &jpeg.Options{Quality: thumbnailQuality})
+	encodeErr := jpeg.Encode(tmp, img, &jpeg.Options{Quality: quality})
 	closeErr := tmp.Close()
 	if encodeErr != nil || closeErr != nil {
 		_ = os.Remove(tmpPath)
@@ -3060,6 +3260,12 @@ func isCurrentThumbnailMetadata(meta map[string]any) bool {
 	return numericMetaValue(meta["thumbnail_version"]) == thumbnailCacheVersion &&
 		numericMetaValue(meta["thumbnail_size"]) == ThumbnailSize &&
 		numericMetaValue(meta["thumbnail_quality"]) == thumbnailQuality
+}
+
+func isCurrentPreviewMetadata(meta map[string]any) bool {
+	return numericMetaValue(meta["preview_version"]) == imagePreviewCacheVersion &&
+		numericMetaValue(meta["preview_size"]) == ImagePreviewSize &&
+		numericMetaValue(meta["preview_quality"]) == imagePreviewQuality
 }
 
 func numericMetaValue(value any) int {

@@ -35,6 +35,12 @@ func (c testImageConfig) ImageThumbnailsDir() string {
 	return path
 }
 
+func (c testImageConfig) ImagePreviewsDir() string {
+	path := filepath.Join(c.root, "image_previews")
+	_ = os.MkdirAll(path, 0o755)
+	return path
+}
+
 func (c testImageConfig) ImageMetadataDir() string {
 	path := filepath.Join(c.root, "image_metadata")
 	_ = os.MkdirAll(path, 0o755)
@@ -102,6 +108,10 @@ func TestImageServiceListImagesReturnsDimensionsWithoutGeneratingThumbnails(t *t
 	thumbPath := filepath.Join(config.ImageThumbnailsDir(), "2026", "04", "29", "sample.png"+thumbnailExtension)
 	if _, err := os.Stat(thumbPath); !os.IsNotExist(err) {
 		t.Fatalf("ListImages() should not create thumbnail synchronously, stat error = %v", err)
+	}
+	previewPath := filepath.Join(config.ImagePreviewsDir(), "2026", "04", "29", "sample.png"+thumbnailExtension)
+	if _, err := os.Stat(previewPath); !os.IsNotExist(err) {
+		t.Fatalf("ListImages() should not create preview synchronously, stat error = %v", err)
 	}
 }
 
@@ -347,7 +357,53 @@ func TestImageServiceEnsureThumbnailsHandlesConcurrentSameImage(t *testing.T) {
 	}
 }
 
-func TestImageServiceDeleteImagesRemovesOriginalAndThumbnail(t *testing.T) {
+func TestImageServiceEnsurePreviewCreatesJPEGPreviews(t *testing.T) {
+	root := t.TempDir()
+	config := testImageConfig{root: root}
+	imagePath := filepath.Join(config.ImagesDir(), "2026", "04", "29", "large.png")
+	if err := os.MkdirAll(filepath.Dir(imagePath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := writeLargeTestPNG(imagePath); err != nil {
+		t.Fatalf("writeLargeTestPNG() error = %v", err)
+	}
+
+	service := NewImageService(config)
+	previewRel := "2026/04/29/large.png" + thumbnailExtension
+	if err := service.EnsurePreview(previewRel); err != nil {
+		t.Fatalf("EnsurePreview() error = %v", err)
+	}
+
+	previewPath := filepath.Join(config.ImagePreviewsDir(), filepath.FromSlash(previewRel))
+	file, err := os.Open(previewPath)
+	if err != nil {
+		t.Fatalf("open preview: %v", err)
+	}
+	defer file.Close()
+	decoded, err := jpeg.Decode(file)
+	if err != nil {
+		t.Fatalf("decode jpeg preview: %v", err)
+	}
+	if decoded.Bounds().Dx() > ImagePreviewSize || decoded.Bounds().Dy() > ImagePreviewSize {
+		t.Fatalf("decoded preview bounds = %v, want max side <= %d", decoded.Bounds(), ImagePreviewSize)
+	}
+	meta, err := os.ReadFile(previewPath + ".json")
+	if err != nil {
+		t.Fatalf("read preview metadata: %v", err)
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal(meta, &metadata); err != nil {
+		t.Fatalf("unmarshal preview metadata: %v", err)
+	}
+	if numericMetaValue(metadata["preview_size"]) != ImagePreviewSize {
+		t.Fatalf("preview_size metadata = %v, want %d", metadata["preview_size"], ImagePreviewSize)
+	}
+	if numericMetaValue(metadata["preview_quality"]) != imagePreviewQuality {
+		t.Fatalf("preview_quality metadata = %v, want %d", metadata["preview_quality"], imagePreviewQuality)
+	}
+}
+
+func TestImageServiceDeleteImagesRemovesOriginalThumbnailAndPreview(t *testing.T) {
 	root := t.TempDir()
 	config := testImageConfig{root: root}
 	imagePath := filepath.Join(config.ImagesDir(), "2026", "04", "29", "sample.png")
@@ -360,9 +416,16 @@ func TestImageServiceDeleteImagesRemovesOriginalAndThumbnail(t *testing.T) {
 
 	service := NewImageService(config)
 	service.EnsureThumbnails([]string{"2026/04/29/sample.png"})
+	if err := service.EnsurePreview("2026/04/29/sample.png" + thumbnailExtension); err != nil {
+		t.Fatalf("EnsurePreview() error = %v", err)
+	}
 	thumbPath := filepath.Join(config.ImageThumbnailsDir(), "2026", "04", "29", "sample.png"+thumbnailExtension)
 	if _, err := os.Stat(thumbPath); err != nil {
 		t.Fatalf("thumbnail was not created: %v", err)
+	}
+	previewPath := filepath.Join(config.ImagePreviewsDir(), "2026", "04", "29", "sample.png"+thumbnailExtension)
+	if _, err := os.Stat(previewPath); err != nil {
+		t.Fatalf("preview was not created: %v", err)
 	}
 
 	result, err := service.DeleteImages([]string{"2026/04/29/sample.png"}, allImages)
@@ -380,6 +443,12 @@ func TestImageServiceDeleteImagesRemovesOriginalAndThumbnail(t *testing.T) {
 	}
 	if _, err := os.Stat(thumbPath + ".json"); !os.IsNotExist(err) {
 		t.Fatalf("thumbnail metadata still exists, stat error = %v", err)
+	}
+	if _, err := os.Stat(previewPath); !os.IsNotExist(err) {
+		t.Fatalf("preview still exists, stat error = %v", err)
+	}
+	if _, err := os.Stat(previewPath + ".json"); !os.IsNotExist(err) {
+		t.Fatalf("preview metadata still exists, stat error = %v", err)
 	}
 }
 
@@ -597,7 +666,7 @@ func TestImageServiceListImagesReturnsGenerationReuseMetadata(t *testing.T) {
 	}
 }
 
-func TestImageServiceListImagesUsesObjectURL(t *testing.T) {
+func TestImageServiceImageDetailUsesObjectURL(t *testing.T) {
 	root := t.TempDir()
 	config := testImageConfig{root: root}
 	rel := "2026/05/16/object.png"
@@ -631,8 +700,15 @@ func TestImageServiceListImagesUsesObjectURL(t *testing.T) {
 	if len(items) != 1 {
 		t.Fatalf("ListImages() = %#v", list)
 	}
-	if items[0]["url"] != "https://cdn.example.com/chatgpt2api/"+rel || items[0]["object_key"] != "chatgpt2api/"+rel {
+	if items[0]["url"] != nil || items[0]["object_key"] != nil || items[0]["object_url"] != nil || items[0]["storage_backend"] != nil {
 		t.Fatalf("image item = %#v", items[0])
+	}
+	detail, err := service.ImageDetail("http://127.0.0.1:8000", rel, ImageAccessScope{OwnerID: "linuxdo:123"})
+	if err != nil {
+		t.Fatalf("ImageDetail() error = %v", err)
+	}
+	if detail["url"] != "https://cdn.example.com/chatgpt2api/"+rel || detail["object_key"] != "chatgpt2api/"+rel {
+		t.Fatalf("image detail = %#v", detail)
 	}
 }
 
@@ -722,13 +798,13 @@ func TestImageServicePublicListHidesUnsharedGenerationMetadata(t *testing.T) {
 	if len(publicItems) != 1 {
 		t.Fatalf("public ListImages() = %#v", publicList)
 	}
-	if publicItems[0]["prompt"] != nil || publicItems[0]["reference_image_urls"] != nil {
+	if publicItems[0]["prompt"] != nil || publicItems[0]["reference_image_urls"] != nil || publicItems[0]["url"] != nil || publicItems[0]["object_url"] != nil || publicItems[0]["object_key"] != nil || publicItems[0]["storage_backend"] != nil {
 		t.Fatalf("public item exposed unshared metadata = %#v", publicItems[0])
 	}
 
 	ownerList := service.ListImages("http://127.0.0.1:8000", "", "", ImageAccessScope{OwnerID: "linuxdo:123"})
 	ownerItems := ownerList["items"].([]map[string]any)
-	if len(ownerItems) != 1 || ownerItems[0]["prompt"] != nil || ownerItems[0]["reference_image_urls"] != nil {
+	if len(ownerItems) != 1 || ownerItems[0]["prompt"] != nil || ownerItems[0]["reference_image_urls"] != nil || ownerItems[0]["url"] != nil || ownerItems[0]["object_url"] != nil || ownerItems[0]["object_key"] != nil || ownerItems[0]["storage_backend"] != nil {
 		t.Fatalf("owner list item should stay lightweight = %#v", ownerList)
 	}
 	ownerDetail, err := service.ImageDetail("http://127.0.0.1:8000", rel, ImageAccessScope{OwnerID: "linuxdo:123"})
@@ -772,8 +848,14 @@ func TestImageServiceListImagesPageUsesCursorAndLightweightItems(t *testing.T) {
 	if len(firstItems) != 2 || firstItems[0]["path"] != rels[2] || firstItems[1]["path"] != rels[1] {
 		t.Fatalf("first page = %#v", first)
 	}
-	if firstItems[0]["prompt"] != nil || firstItems[0]["reference_image_urls"] != nil {
+	if firstItems[0]["prompt"] != nil || firstItems[0]["reference_image_urls"] != nil || firstItems[0]["url"] != nil || firstItems[0]["object_url"] != nil || firstItems[0]["object_key"] != nil || firstItems[0]["storage_backend"] != nil {
 		t.Fatalf("list item should be lightweight = %#v", firstItems[0])
+	}
+	if previewURL := toString(firstItems[0]["preview_url"]); !strings.Contains(previewURL, "/image-previews/") {
+		t.Fatalf("preview_url = %q, want preview route", previewURL)
+	}
+	if thumbnailURL := toString(firstItems[0]["thumbnail_url"]); !strings.Contains(thumbnailURL, "/image-thumbnails/") {
+		t.Fatalf("thumbnail_url = %q, want thumbnail route", thumbnailURL)
 	}
 	cursor := toString(first["next_cursor"])
 	if cursor == "" || first["has_more"] != true {
@@ -832,16 +914,23 @@ func TestImageServiceCleanupStorageClearsThumbnailCacheOnly(t *testing.T) {
 	service := NewImageService(config)
 	service.RecordGeneratedImages([]string{rel}, "linuxdo:123", "alice", ImageVisibilityPrivate)
 	service.EnsureThumbnails([]string{rel})
+	if err := service.EnsurePreview(rel + thumbnailExtension); err != nil {
+		t.Fatalf("EnsurePreview() error = %v", err)
+	}
 	thumbPath := filepath.Join(config.ImageThumbnailsDir(), filepath.FromSlash(rel)+thumbnailExtension)
 	if _, err := os.Stat(thumbPath); err != nil {
 		t.Fatalf("thumbnail was not created: %v", err)
+	}
+	previewPath := filepath.Join(config.ImagePreviewsDir(), filepath.FromSlash(rel)+thumbnailExtension)
+	if _, err := os.Stat(previewPath); err != nil {
+		t.Fatalf("preview was not created: %v", err)
 	}
 
 	result, err := service.CleanupStorage(ImageStorageCleanupOptions{ClearThumbnails: true})
 	if err != nil {
 		t.Fatalf("CleanupStorage(thumbnails) error = %v", err)
 	}
-	if result.DeletedThumbnails != 1 || result.DeletedImages != 0 {
+	if result.DeletedThumbnails != 1 || result.DeletedPreviews != 1 || result.DeletedImages != 0 {
 		t.Fatalf("CleanupStorage(thumbnails) = %#v", result)
 	}
 	if _, err := os.Stat(imagePath); err != nil {
@@ -849,6 +938,9 @@ func TestImageServiceCleanupStorageClearsThumbnailCacheOnly(t *testing.T) {
 	}
 	if _, err := os.Stat(thumbPath); !os.IsNotExist(err) {
 		t.Fatalf("thumbnail still exists, stat error = %v", err)
+	}
+	if _, err := os.Stat(previewPath); !os.IsNotExist(err) {
+		t.Fatalf("preview still exists, stat error = %v", err)
 	}
 	list := service.ListImages("http://127.0.0.1:8000", "", "", ImageAccessScope{OwnerID: "linuxdo:123"})
 	if items := list["items"].([]map[string]any); len(items) != 1 || items[0]["path"] != rel {
@@ -873,11 +965,15 @@ func TestImageServiceCleanupStorageRetentionRemovesImageGroup(t *testing.T) {
 		ReferenceImages: []GeneratedImageReference{{Filename: "ref.png", ContentType: "image/png", Data: []byte("reference-bytes")}},
 	})
 	service.EnsureThumbnails([]string{rel})
+	if err := service.EnsurePreview(rel + thumbnailExtension); err != nil {
+		t.Fatalf("EnsurePreview() error = %v", err)
+	}
 	thumbPath := filepath.Join(config.ImageThumbnailsDir(), filepath.FromSlash(rel)+thumbnailExtension)
+	previewPath := filepath.Join(config.ImagePreviewsDir(), filepath.FromSlash(rel)+thumbnailExtension)
 	metaPath := filepath.Join(config.ImageMetadataDir(), filepath.FromSlash(rel)+".json")
 	refDir := filepath.Join(config.ImageMetadataDir(), "references", filepath.FromSlash(rel+".refs"))
 	old := time.Now().Add(-72 * time.Hour)
-	for _, path := range []string{imagePath, thumbPath, thumbPath + ".json", metaPath} {
+	for _, path := range []string{imagePath, thumbPath, thumbPath + ".json", previewPath, previewPath + ".json", metaPath} {
 		if err := os.Chtimes(path, old, old); err != nil {
 			t.Fatalf("Chtimes(%s) error = %v", path, err)
 		}
@@ -887,10 +983,10 @@ func TestImageServiceCleanupStorageRetentionRemovesImageGroup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CleanupStorage(retention) error = %v", err)
 	}
-	if result.DeletedImages != 1 || result.DeletedThumbnails != 1 || result.DeletedReferenceFiles != 1 {
+	if result.DeletedImages != 1 || result.DeletedThumbnails != 1 || result.DeletedPreviews != 1 || result.DeletedReferenceFiles != 1 {
 		t.Fatalf("CleanupStorage(retention) = %#v", result)
 	}
-	for _, path := range []string{imagePath, thumbPath, thumbPath + ".json", metaPath, refDir} {
+	for _, path := range []string{imagePath, thumbPath, thumbPath + ".json", previewPath, previewPath + ".json", metaPath, refDir} {
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Fatalf("%s still exists or stat failed unexpectedly: %v", path, err)
 		}
