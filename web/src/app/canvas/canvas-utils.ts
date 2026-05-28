@@ -36,6 +36,14 @@ export const DEFAULT_COMPOSER: SmartCanvasComposer = {
   mentionImages: [],
 };
 
+export function normalizeCanvasImageResolution(value?: string) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "2k" || normalized === "4k") {
+    return normalized;
+  }
+  return "1080p";
+}
+
 export function createItemId(type: SmartCanvasItem["type"]) {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
     return `${type}-${crypto.randomUUID()}`;
@@ -252,6 +260,8 @@ export function createGeneratorNode(position: { x: number; y: number }): SmartCa
       prompt: "",
       model: DEFAULT_COMPOSER.model,
       size: DEFAULT_COMPOSER.size,
+      image_resolution: "1080p",
+      quality: "auto",
       n: DEFAULT_COMPOSER.n,
       visibility: DEFAULT_COMPOSER.visibility,
       input_images: [],
@@ -781,7 +791,9 @@ function sanitizeSmartItemData(data?: SmartCanvasItemData): SmartCanvasItemData 
     prompt: typeof data.prompt === "string" ? data.prompt : "",
     model: typeof data.model === "string" && data.model ? data.model : "auto",
     size: typeof data.size === "string" && data.size ? data.size : "1024x1024",
-    n: Number.isFinite(Number(data.n)) ? Math.max(1, Math.min(4, Number(data.n))) : 1,
+    image_resolution: normalizeCanvasImageResolution(data.image_resolution),
+    quality: typeof data.quality === "string" && data.quality ? data.quality : "auto",
+    n: Number.isFinite(Number(data.n)) ? Math.max(1, Math.min(10, Number(data.n))) : 1,
     visibility: data.visibility === "public" ? "public" : "private",
     images: dedupeCanvasImageRefs(Array.isArray(data.images) ? data.images : []),
     source_images: dedupeCanvasImageRefs(Array.isArray(data.source_images) ? data.source_images : []),

@@ -40,6 +40,8 @@ export type SmartCanvasItemData = {
   prompt?: string;
   model?: string;
   size?: string;
+  image_resolution?: string;
+  quality?: string;
   n?: number;
   visibility?: ImageVisibility;
   images?: CanvasImageRef[];

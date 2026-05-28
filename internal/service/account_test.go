@@ -1031,7 +1031,7 @@ func TestAcquireTextAccessTokenLoadBalanceConsidersFreeAccounts(t *testing.T) {
 	}
 }
 
-func TestAccountLeaseBusyTokenBlocksImageWhileTextInFlight(t *testing.T) {
+func TestAccountLeaseBusyTokenDoesNotBlockImageCapacity(t *testing.T) {
 	accounts := newTestAccountService(t)
 	server := newAccountQuotaServer(t, map[string]any{"email": "user@example.com", "id": "user-1", "plan_type": "plus"}, []map[string]any{{
 		"feature_name": "image_gen",
@@ -1050,24 +1050,19 @@ func TestAccountLeaseBusyTokenBlocksImageWhileTextInFlight(t *testing.T) {
 	if textLease.Token != "shared-token" {
 		t.Fatalf("text token = %q, want shared-token", textLease.Token)
 	}
-	if lease, err := accounts.GetAvailableImageAccessTokenFor(context.Background(), func(account map[string]any) bool {
-		return util.Clean(account["access_token"]) == "shared-token"
-	}); err == nil {
-		lease.Release()
-		t.Fatalf("GetAvailableImageAccessTokenFor() succeeded while text lease busy")
-	}
-
-	textLease.Release()
 	imageLease, err := accounts.GetAvailableImageAccessTokenFor(context.Background(), func(account map[string]any) bool {
 		return util.Clean(account["access_token"]) == "shared-token"
 	})
 	if err != nil {
-		t.Fatalf("GetAvailableImageAccessTokenFor() after release error = %v", err)
+		textLease.Release()
+		t.Fatalf("GetAvailableImageAccessTokenFor() while text lease busy error = %v", err)
 	}
 	if imageLease.Token != "shared-token" {
+		textLease.Release()
 		t.Fatalf("image token = %q, want shared-token", imageLease.Token)
 	}
 	imageLease.Release()
+	textLease.Release()
 	accounts.MarkImageResult("shared-token", false)
 }
 
@@ -1189,14 +1184,14 @@ func TestFillFirstTextAndImageStickyAreIndependentAndSkipBusy(t *testing.T) {
 	if err != nil {
 		firstImage.Release()
 		accounts.releaseImageReservation(firstReservation.token)
-		t.Fatalf("second acquireImageCandidateLease() with sticky busy error = %v", err)
+		t.Fatalf("second acquireImageCandidateLease() with sticky reserved error = %v", err)
 	}
-	if secondImage.Token == imageSticky {
+	if secondImage.Token != imageSticky {
 		secondImage.Release()
 		accounts.releaseImageReservation(secondReservation.token)
 		firstImage.Release()
 		accounts.releaseImageReservation(firstReservation.token)
-		t.Fatalf("image scheduler reused busy sticky token %q", imageSticky)
+		t.Fatalf("image scheduler did not reuse sticky token with remaining capacity: got %q want %q", secondImage.Token, imageSticky)
 	}
 	secondImage.Release()
 	accounts.releaseImageReservation(secondReservation.token)

@@ -29,6 +29,7 @@ import {
   type CanvasDocument,
   type CanvasImageRef,
   type CreationTask,
+  type ImageQuality,
   type ImageVisibility,
   type ManagedImageSummary,
 } from "@/lib/api";
@@ -69,6 +70,7 @@ import {
   isActiveTask,
   managedImagesToRefs,
   mentionCandidateImages,
+  normalizeCanvasImageResolution,
   normalizeModelCatalog,
   normalizeSmartCanvas,
   screenToWorld,
@@ -236,6 +238,7 @@ function mergeLoopSlotStatuses(
   count: number,
   statuses: CreationTask["output_statuses"] = [],
   fallback: CreationTask["status"],
+  data: CreationTask["data"] = [],
 ) {
   const next = [...(current || [])];
   const normalizedCount = Math.max(1, count);
@@ -244,9 +247,31 @@ function mergeLoopSlotStatuses(
     if (index >= next.length) {
       break;
     }
-    next[index] = statuses[offset] || fallback;
+    const existing = next[index];
+    const status = statuses[offset] || fallback;
+    const item = data[offset];
+    if (item?.url || item?.local_url || item?.b64_json) {
+      next[index] = "success";
+    } else if (existing === "success") {
+      next[index] = existing;
+    } else {
+      next[index] = status;
+    }
   }
   return next;
+}
+
+function generatorImageResolution(generator: SmartCanvasItem) {
+  return normalizeCanvasImageResolution(generator.data?.image_resolution);
+}
+
+function generatorImageQuality(generator: SmartCanvasItem): ImageQuality | undefined {
+  const value = String(generator.data?.quality || "").trim().toLowerCase();
+  return value === "low" || value === "medium" || value === "high" ? value : undefined;
+}
+
+function generatorImageCount(generator: SmartCanvasItem) {
+  return Math.max(1, Math.min(10, Number(generator.data?.n || 1)));
 }
 
 function llmInputText(canvas: SmartCanvasDocument, node: SmartCanvasItem) {
@@ -2624,9 +2649,9 @@ export function useSmartCanvasController() {
             if (files.length === 0) {
               throw new Error("没有可读取的输入图片");
             }
-            task = await createImageEditTask(uniqueTaskId("smart-canvas-loop"), files, submittedPrompt, generator.data?.model || "auto", generator.data?.size || "1024x1024", undefined, taskCount, undefined, generator.data?.visibility || "private");
+            task = await createImageEditTask(uniqueTaskId("smart-canvas-loop"), files, submittedPrompt, generator.data?.model || "auto", generator.data?.size || "1024x1024", generatorImageQuality(generator), taskCount, undefined, generator.data?.visibility || "private", generatorImageResolution(generator));
           } else {
-            task = await createImageGenerationTask(uniqueTaskId("smart-canvas-loop"), submittedPrompt, generator.data?.model || "auto", generator.data?.size || "1024x1024", undefined, taskCount, undefined, generator.data?.visibility || "private");
+            task = await createImageGenerationTask(uniqueTaskId("smart-canvas-loop"), submittedPrompt, generator.data?.model || "auto", generator.data?.size || "1024x1024", generatorImageQuality(generator), taskCount, undefined, generator.data?.visibility || "private", generatorImageResolution(generator));
           }
           taskIds.push(task.id);
           for (let offset = 0; offset < taskCount && slotStart + offset < slotStatuses.length; offset += 1) {
@@ -2639,7 +2664,7 @@ export function useSmartCanvasController() {
             }
             const activeOutput = creationTaskToOutput(task);
             const activeImages = dedupeCanvasImageRefs([...outputImages, ...(activeOutput.images || [])]);
-            const activeSlots = mergeLoopSlotStatuses(slotStatuses, slotStart, taskCount, task.output_statuses, "running");
+            const activeSlots = mergeLoopSlotStatuses(slotStatuses, slotStart, taskCount, task.output_statuses, "running", task.data);
             const activeCompleted = activeSlots.filter((item) => item === "success").length;
             const activeFailed = activeSlots.filter((item) => item === "error" || item === "cancelled").length;
             updateLoopProgress(activeCompleted, activeFailed, Math.min(total - 1, slotStart + activeCompleted + activeFailed), "running", activeImages, outputTexts.join("\n\n"), "", taskIds, activeSlots);
@@ -2655,12 +2680,12 @@ export function useSmartCanvasController() {
             outputTexts.push(output.text);
           }
           if (task.status === "success") {
-            mergeLoopSlotStatuses(slotStatuses, slotStart, taskCount, task.output_statuses, "success").forEach((item, itemIndex) => {
+            mergeLoopSlotStatuses(slotStatuses, slotStart, taskCount, task.output_statuses, "success", task.data).forEach((item, itemIndex) => {
               slotStatuses[itemIndex] = item;
             });
           } else if (task.status === "cancelled") {
             lastError = "循环已中断";
-            mergeLoopSlotStatuses(slotStatuses, slotStart, taskCount, task.output_statuses, "cancelled").forEach((item, itemIndex) => {
+            mergeLoopSlotStatuses(slotStatuses, slotStart, taskCount, task.output_statuses, "cancelled", task.data).forEach((item, itemIndex) => {
               slotStatuses[itemIndex] = item;
             });
             completed = slotStatuses.filter((item) => item === "success").length;
@@ -2671,7 +2696,7 @@ export function useSmartCanvasController() {
             return;
           } else {
             const fallback = outputImageCount > 0 ? "success" : "error";
-            mergeLoopSlotStatuses(slotStatuses, slotStart, taskCount, task.output_statuses, fallback).forEach((item, itemIndex) => {
+            mergeLoopSlotStatuses(slotStatuses, slotStart, taskCount, task.output_statuses, fallback, task.data).forEach((item, itemIndex) => {
               slotStatuses[itemIndex] = item;
             });
             lastError = task.error || "循环子任务失败";
@@ -2751,9 +2776,9 @@ export function useSmartCanvasController() {
         if (files.length === 0) {
           throw new Error("没有可读取的输入图片");
         }
-        task = await createImageEditTask(clientTaskId, files, submittedPrompt, generator.data?.model || "auto", generator.data?.size || "1024x1024", undefined, Number(generator.data?.n || 1), undefined, generator.data?.visibility || "private");
+        task = await createImageEditTask(clientTaskId, files, submittedPrompt, generator.data?.model || "auto", generator.data?.size || "1024x1024", generatorImageQuality(generator), generatorImageCount(generator), undefined, generator.data?.visibility || "private", generatorImageResolution(generator));
       } else {
-        task = await createImageGenerationTask(clientTaskId, submittedPrompt, generator.data?.model || "auto", generator.data?.size || "1024x1024", undefined, Number(generator.data?.n || 1), undefined, generator.data?.visibility || "private");
+        task = await createImageGenerationTask(clientTaskId, submittedPrompt, generator.data?.model || "auto", generator.data?.size || "1024x1024", generatorImageQuality(generator), generatorImageCount(generator), undefined, generator.data?.visibility || "private", generatorImageResolution(generator));
       }
       const output = creationTaskToOutput(task);
       let outputIds = migrated.edges.filter((edge) => edge.source === generator.id)

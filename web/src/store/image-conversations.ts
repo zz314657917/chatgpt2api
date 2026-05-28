@@ -78,6 +78,9 @@ export type ImageTurn = {
   quality?: ImageQuality;
   outputFormat?: ImageOutputFormat;
   outputCompression?: number;
+  background?: string;
+  moderation?: string;
+  partialImages?: number;
   visibility?: ImageVisibility;
   images: StoredImage[];
   createdAt: string;
@@ -305,6 +308,17 @@ function normalizeOutputCompression(value: unknown): number | undefined {
   return Math.min(100, Math.round(numeric));
 }
 
+function normalizePositiveInt(value: unknown): number | undefined {
+  if (value === undefined || value === null || String(value).trim() === "") {
+    return undefined;
+  }
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return undefined;
+  }
+  return Math.round(numeric);
+}
+
 function dataUrlMimeType(dataUrl: string) {
   const match = dataUrl.match(/^data:(.*?);base64,/);
   return match?.[1] || "image/png";
@@ -395,6 +409,9 @@ function normalizeTurn(turn: ImageTurn & Record<string, unknown>): ImageTurn {
       isImageOutputFormat(turn.outputFormat) && supportsImageOutputCompression(turn.outputFormat)
         ? normalizeOutputCompression(turn.outputCompression)
         : undefined,
+    background: typeof turn.background === "string" && turn.background ? turn.background : undefined,
+    moderation: typeof turn.moderation === "string" && turn.moderation ? turn.moderation : undefined,
+    partialImages: normalizePositiveInt(turn.partialImages),
     visibility,
     images,
     createdAt: String(turn.createdAt || new Date().toISOString()),
@@ -425,6 +442,9 @@ function normalizeConversation(conversation: ImageConversation & Record<string, 
           quality: isImageQuality(conversation.quality) ? conversation.quality : undefined,
           outputFormat: isImageOutputFormat(conversation.outputFormat) ? conversation.outputFormat : undefined,
           outputCompression: normalizeOutputCompression(conversation.outputCompression),
+          background: typeof conversation.background === "string" && conversation.background ? conversation.background : undefined,
+          moderation: typeof conversation.moderation === "string" && conversation.moderation ? conversation.moderation : undefined,
+          partialImages: normalizePositiveInt(conversation.partialImages),
           images: Array.isArray(conversation.images) ? (conversation.images as StoredImage[]) : [],
           createdAt: String(conversation.createdAt || new Date().toISOString()),
           status:

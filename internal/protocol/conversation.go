@@ -56,6 +56,8 @@ type Engine struct {
 type savedImageResult struct {
 	URL      string
 	LocalURL string
+	Width    int
+	Height   int
 }
 
 type ImageOutputSlotAcquirer func(context.Context, int) (func(), error)
@@ -1219,6 +1221,11 @@ func (e *Engine) formatImageResultWithOptions(items []map[string]any, prompt, re
 		if saved.LocalURL != "" && saved.LocalURL != saved.URL {
 			responseItem["local_url"] = saved.LocalURL
 		}
+		if saved.Width > 0 && saved.Height > 0 {
+			responseItem["width"] = saved.Width
+			responseItem["height"] = saved.Height
+			responseItem["resolution"] = fmt.Sprintf("%dx%d", saved.Width, saved.Height)
+		}
 		if responseFormat == "b64_json" {
 			responseItem["b64_json"] = base64.StdEncoding.EncodeToString(imageBytes)
 		}
@@ -1259,12 +1266,13 @@ func (e *Engine) SaveImageBytesForOwnerWithFormatResult(imageData []byte, baseUR
 		baseURL = e.Config.BaseURL()
 	}
 	localURL := strings.TrimRight(baseURL, "/") + "/images/" + filepath.ToSlash(rel)
+	width, height := imageBytesDimensions(imageData)
 	stored := e.uploadImageObject(rel, imageData, outputFormat)
 	e.writeImageOwnerMetadata(rel, ownerID, ownerName, stored)
 	if stored.URL != "" {
-		return savedImageResult{URL: stored.URL, LocalURL: localURL}
+		return savedImageResult{URL: stored.URL, LocalURL: localURL, Width: width, Height: height}
 	}
-	return savedImageResult{URL: localURL, LocalURL: localURL}
+	return savedImageResult{URL: localURL, LocalURL: localURL, Width: width, Height: height}
 }
 
 func (e *Engine) uploadImageObject(rel string, imageData []byte, outputFormat string) imagestore.StoredObject {
@@ -1313,6 +1321,14 @@ func imageContentType(outputFormat string) string {
 	default:
 		return "image/png"
 	}
+}
+
+func imageBytesDimensions(data []byte) (int, int) {
+	config, _, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil || config.Width <= 0 || config.Height <= 0 {
+		return 0, 0
+	}
+	return config.Width, config.Height
 }
 
 func encodeImageBytes(data []byte, options ImageOutputOptions) ([]byte, error) {
