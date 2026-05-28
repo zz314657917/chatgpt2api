@@ -22,6 +22,7 @@ import {
   updateLoginPageImageSettings,
   updateRegisterConfig,
   updateSettingsConfig,
+  type AccountScheduleMode,
   type BillingPeriod,
   type BillingType,
   type CPAPool,
@@ -84,6 +85,10 @@ function normalizeDefaultLogView(value: unknown): LogView {
   return "meaningful";
 }
 
+function normalizeAccountScheduleMode(value: unknown): AccountScheduleMode {
+  return value === "fill_first" ? "fill_first" : "load_balance";
+}
+
 function normalizeConfig(config: SettingsConfig): SettingsConfig {
   const loginImageTransform = normalizeLoginPageImageTransform({
     zoom: Number(config.login_page_image_zoom),
@@ -107,6 +112,8 @@ function normalizeConfig(config: SettingsConfig): SettingsConfig {
     default_log_view: normalizeDefaultLogView(config.default_log_view),
     auto_remove_invalid_accounts: Boolean(config.auto_remove_invalid_accounts),
     auto_remove_rate_limited_accounts: Boolean(config.auto_remove_rate_limited_accounts),
+    text_account_schedule_mode: normalizeAccountScheduleMode(config.text_account_schedule_mode),
+    image_account_schedule_mode: normalizeAccountScheduleMode(config.image_account_schedule_mode),
     log_levels: Array.isArray(config.log_levels) ? config.log_levels : [],
     proxy: typeof config.proxy === "string" ? config.proxy : "",
     base_url: typeof config.base_url === "string" ? config.base_url : "",
@@ -203,6 +210,8 @@ type SettingsStore = {
   setDefaultLogView: (value: LogView) => void;
   setAutoRemoveInvalidAccounts: (value: boolean) => void;
   setAutoRemoveRateLimitedAccounts: (value: boolean) => void;
+  setTextAccountScheduleMode: (value: AccountScheduleMode) => void;
+  setImageAccountScheduleMode: (value: AccountScheduleMode) => void;
   setLogLevel: (level: string, enabled: boolean) => void;
   setProxy: (value: string) => void;
   setBaseUrl: (value: string) => void;
@@ -348,6 +357,8 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         default_log_view: normalizeDefaultLogView(config.default_log_view),
         auto_remove_invalid_accounts: Boolean(config.auto_remove_invalid_accounts),
         auto_remove_rate_limited_accounts: Boolean(config.auto_remove_rate_limited_accounts),
+        text_account_schedule_mode: normalizeAccountScheduleMode(config.text_account_schedule_mode),
+        image_account_schedule_mode: normalizeAccountScheduleMode(config.image_account_schedule_mode),
         proxy: config.proxy.trim(),
         base_url: String(config.base_url || "").trim(),
         registration_enabled: Boolean(config.registration_enabled),
@@ -448,6 +459,14 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
 
   setAutoRemoveRateLimitedAccounts: (value) => {
     set((state) => state.config ? { config: { ...state.config, auto_remove_rate_limited_accounts: value } } : {});
+  },
+
+  setTextAccountScheduleMode: (value) => {
+    set((state) => state.config ? { config: { ...state.config, text_account_schedule_mode: normalizeAccountScheduleMode(value) } } : {});
+  },
+
+  setImageAccountScheduleMode: (value) => {
+    set((state) => state.config ? { config: { ...state.config, image_account_schedule_mode: normalizeAccountScheduleMode(value) } } : {});
   },
 
   setLogLevel: (level, enabled) => {

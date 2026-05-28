@@ -16,6 +16,7 @@ const (
 	CanvasNodeTypeText        = "text"
 	CanvasNodeTypeImage       = "image"
 	CanvasNodeTypePrompt      = "prompt"
+	CanvasNodeTypeLoop        = "loop"
 	CanvasNodeTypeImageCreate = "image_generation"
 	CanvasNodeTypeImageEdit   = "image_edit"
 	CanvasNodeTypeResult      = "result"
@@ -1052,7 +1053,7 @@ func summarizeCanvasRun(run CanvasRun) CanvasRunSummary {
 
 func isKnownCanvasNodeType(nodeType string) bool {
 	switch nodeType {
-	case CanvasNodeTypeText, CanvasNodeTypeImage, CanvasNodeTypePrompt, CanvasNodeTypeImageCreate, CanvasNodeTypeImageEdit, CanvasNodeTypeResult:
+	case CanvasNodeTypeText, CanvasNodeTypeImage, CanvasNodeTypePrompt, CanvasNodeTypeLoop, CanvasNodeTypeImageCreate, CanvasNodeTypeImageEdit, CanvasNodeTypeResult:
 		return true
 	default:
 		return false

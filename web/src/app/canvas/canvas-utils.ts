@@ -52,7 +52,7 @@ export function normalizeSmartCanvas(input?: CanvasDocument | null): SmartCanvas
   }
   const nodes = Array.isArray(input.nodes)
     ? input.nodes.flatMap((node) => {
-        if (node.type !== "image" && node.type !== "prompt" && node.type !== "llm" && node.type !== "image_generation" && node.type !== "result") {
+        if (node.type !== "image" && node.type !== "prompt" && node.type !== "llm" && node.type !== "loop" && node.type !== "image_generation" && node.type !== "result") {
           return [];
         }
         return [{
@@ -120,6 +120,8 @@ export function smartItemTitle(type: SmartCanvasItem["type"]) {
       return "Prompt";
     case "llm":
       return "AI 提示词";
+    case "loop":
+      return "循环";
     case "image_generation":
       return "API生成";
     case "result":
@@ -178,6 +180,23 @@ export function createLlmNode(position: { x: number; y: number }): SmartCanvasIt
       model: "auto",
       output: { text: "" },
       status: undefined,
+      created_at: new Date().toISOString(),
+    },
+  };
+}
+
+export function createLoopNode(position: { x: number; y: number }): SmartCanvasItem {
+  return {
+    id: createItemId("loop"),
+    type: "loop",
+    name: "循环",
+    position,
+    data: {
+      loop_mode: "repeat",
+      loop_count: 3,
+      loop_concurrency: 1,
+      status: undefined,
+      output: { images: [] },
       created_at: new Date().toISOString(),
     },
   };
@@ -571,6 +590,17 @@ function sanitizeSmartItemData(data?: SmartCanvasItemData): SmartCanvasItemData 
     source_images: dedupeCanvasImageRefs(Array.isArray(data.source_images) ? data.source_images : []),
     input_images: dedupeCanvasImageRefs(Array.isArray(data.input_images) ? data.input_images : []),
     mention_images: dedupeCanvasImageRefs(Array.isArray(data.mention_images) ? data.mention_images : []),
+    loop_mode: data.loop_mode === "images" ? "images" : "repeat",
+    loop_count: Number.isFinite(Number(data.loop_count)) ? Math.max(1, Math.min(20, Number(data.loop_count))) : undefined,
+    loop_concurrency: 1,
+    loop_progress: data.loop_progress && typeof data.loop_progress === "object"
+      ? {
+          total: Math.max(0, Number(data.loop_progress.total) || 0),
+          completed: Math.max(0, Number(data.loop_progress.completed) || 0),
+          failed: Math.max(0, Number(data.loop_progress.failed) || 0),
+          current: Math.max(0, Number(data.loop_progress.current) || 0),
+        }
+      : undefined,
     tool_type: data.tool_type,
     tool_parameters: data.tool_parameters && typeof data.tool_parameters === "object" ? data.tool_parameters : undefined,
     width: Number.isFinite(Number(data.width)) ? Math.max(180, Math.min(720, Number(data.width))) : undefined,

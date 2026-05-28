@@ -12,6 +12,7 @@ import {
   CircleAlert,
   CircleDot,
   Clock3,
+  Repeat2,
   FileText,
   Grid2X2,
   History,
@@ -77,6 +78,7 @@ const NODE_SIZE: Record<SmartCanvasItem["type"], { w: number; h: number }> = {
   image: { w: 270, h: 260 },
   prompt: { w: 310, h: 210 },
   llm: { w: 380, h: 420 },
+  loop: { w: 340, h: 280 },
   image_generation: { w: 390, h: 330 },
   result: { w: 440, h: 245 },
 };
@@ -396,6 +398,7 @@ export function SmartCanvasTopBar({
         <ToolbarButton icon={<ImagePlus className="size-4" />} label="上传" onClick={onUploadClick} />
         <ToolbarButton icon={<FileText className="size-4" />} label="提示词" onClick={() => onAddNode("prompt")} />
         <ToolbarButton icon={<Sparkles className="size-4" />} label="AI 提示词" onClick={() => onAddNode("llm")} />
+        <ToolbarButton icon={<Repeat2 className="size-4" />} label="循环" onClick={() => onAddNode("loop")} />
         <ToolbarButton icon={<WandSparkles className="size-4" />} label="API生成" onClick={() => onAddNode("image_generation")} />
         <ToolbarButton icon={<CircleDot className="size-4" />} label="Output" onClick={() => onAddNode("result")} />
         <ToolbarButton icon={<History className="size-4" />} label={`记录${runCount ? ` ${runCount}` : ""}`} onClick={onRunHistoryToggle} />
@@ -944,6 +947,7 @@ function SmartCanvasContextMenu({
     { label: "上传卡片", icon: <ImagePlus className="size-4" />, action: onUpload },
     { label: "提示词", icon: <FileText className="size-4" />, action: () => onCreate("prompt") },
     { label: "AI 提示词", icon: <Bot className="size-4" />, action: () => onCreate("llm") },
+    { label: "循环节点", icon: <Repeat2 className="size-4" />, action: () => onCreate("loop") },
     { label: "API生成", icon: <WandSparkles className="size-4" />, action: () => onCreate("image_generation") },
     { label: "Output", icon: <CircleDot className="size-4" />, action: () => onCreate("result") },
   ];
@@ -1259,7 +1263,7 @@ export const SmartCanvasNode = memo(function SmartCanvasNode({
   const size = NODE_SIZE[item.type];
   const width = item.type === "image" ? Number(item.data?.width || size.w) : size.w;
   const minHeight = item.type === "image" ? Number(item.data?.height || size.h) : size.h;
-  const canInput = item.type === "llm" || item.type === "image_generation" || item.type === "result";
+  const canInput = item.type === "llm" || item.type === "loop" || item.type === "image_generation" || item.type === "result";
   const canOutput = item.type !== "result";
   const measureRef = (node: HTMLDivElement | null) => {
     if (!node) {
@@ -1340,6 +1344,12 @@ export const SmartCanvasNode = memo(function SmartCanvasNode({
           running={running}
           onUpdateData={onUpdateData}
           onRunLlm={onRunLlm}
+        />
+      ) : item.type === "loop" ? (
+        <LoopNodeBody
+          canvas={canvas}
+          item={item}
+          onUpdateData={onUpdateData}
         />
       ) : item.type === "image_generation" ? (
         <GeneratorNodeBody
@@ -1586,6 +1596,91 @@ function LlmNodeBody({
         {running || nodeRunning ? <LoaderCircle className="size-4 animate-spin" /> : <Bot className="size-4" />}
         生成提示词
       </Button>
+    </div>
+  );
+}
+
+function LoopNodeBody({
+  canvas,
+  item,
+  onUpdateData,
+}: {
+  canvas: SmartCanvasDocument;
+  item: SmartCanvasItem;
+  onUpdateData: (patch: Partial<SmartCanvasItem["data"]>) => void;
+}) {
+  const upstream = incomingItems(canvas, item.id);
+  const inputImages = dedupeCanvasImageRefs(upstream.flatMap((node) => canvasImagesFromItem(node)));
+  const inputTexts = upstream.map((node) => String(canvasPromptFromItem(node)).trim()).filter(Boolean);
+  const downstreamGenerators = canvas.edges
+    .filter((edge) => edge.source === item.id)
+    .map((edge) => canvas.nodes.find((node) => node.id === edge.target))
+    .filter((node): node is SmartCanvasItem => node?.type === "image_generation");
+  const mode = item.data?.loop_mode === "images" ? "images" : "repeat";
+  const count = Math.max(1, Math.min(20, Number(item.data?.loop_count || 3)));
+  const total = mode === "images" ? Math.max(1, inputImages.length) : count;
+  const progress = item.data?.loop_progress;
+  const outputImages = item.data?.output?.images || [];
+  const nodeRunning = isActiveTask(item.data?.status);
+
+  return (
+    <div className="space-y-3 p-3" data-node-interactive="true" onPointerDown={stopNodeInteraction}>
+      <div className="grid grid-cols-[92px_1fr] gap-2">
+        <Select value={mode} onValueChange={(loopMode) => onUpdateData({ loop_mode: loopMode as "repeat" | "images" })}>
+          <SelectTrigger className={canvasSelectClass}>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="repeat">重复</SelectItem>
+            <SelectItem value="images">逐图</SelectItem>
+          </SelectContent>
+        </Select>
+        <Input
+          type="number"
+          min={1}
+          max={20}
+          value={count}
+          disabled={mode === "images"}
+          onChange={(event) => onUpdateData({ loop_count: Math.max(1, Math.min(20, Number(event.target.value) || 1)) })}
+          className={cn("h-9 rounded-xl text-center text-xs", canvasFieldClass)}
+        />
+      </div>
+
+      <div className={cn("rounded-xl border p-3 text-xs", canvasDashedClass)}>
+        <div className="grid grid-cols-3 gap-2 text-center">
+          <div>
+            <div className="text-lg font-black text-foreground dark:text-slate-100">{inputTexts.length}</div>
+            <div>文本</div>
+          </div>
+          <div>
+            <div className="text-lg font-black text-foreground dark:text-slate-100">{inputImages.length}</div>
+            <div>图片</div>
+          </div>
+          <div>
+            <div className="text-lg font-black text-foreground dark:text-slate-100">{downstreamGenerators.length}</div>
+            <div>下游</div>
+          </div>
+        </div>
+        <div className="mt-2 leading-5">
+          {mode === "images" ? "按上游图片逐张提交到下游 API生成。" : "按相同输入重复提交到下游 API生成。"}
+        </div>
+      </div>
+
+      {inputImages.length > 0 ? <CanvasImageStrip images={inputImages} limit={4} className="grid-cols-5" /> : null}
+
+      {nodeRunning ? (
+        <div className="rounded-xl border border-sky-500/20 bg-sky-500/10 px-3 py-2 text-xs font-bold text-sky-700 dark:text-sky-200">
+          <LoaderCircle className="mr-2 inline size-4 animate-spin" />
+          循环中 {progress?.current || 0}/{progress?.total || total}，成功 {progress?.completed || 0}，失败 {progress?.failed || 0}
+        </div>
+      ) : progress?.total ? (
+        <div className="rounded-xl border border-border bg-background/70 px-3 py-2 text-xs font-semibold text-muted-foreground dark:border-slate-700 dark:bg-slate-950/45">
+          上次运行：成功 {progress.completed}/{progress.total}，失败 {progress.failed}
+        </div>
+      ) : null}
+
+      {outputImages.length > 0 ? <CanvasImageStrip images={outputImages} limit={4} className="grid-cols-4" /> : null}
+      {item.data?.error ? <div className="rounded-lg bg-rose-500/10 px-2 py-1.5 text-xs text-rose-600 dark:text-rose-200">{item.data.error}</div> : null}
     </div>
   );
 }
