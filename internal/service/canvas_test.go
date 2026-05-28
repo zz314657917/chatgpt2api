@@ -101,6 +101,36 @@ func TestCanvasServiceStripsRoutingSecretsFromNodeData(t *testing.T) {
 	assertCanvasNodeDataHasNoRoutingSecrets(t, got.Nodes[0].Data)
 }
 
+func TestCanvasServiceAllowsGroupNode(t *testing.T) {
+	backend := newTestStorageBackend(t)
+	svc := NewCanvasService(backend)
+	identity := Identity{ID: "user-1", Role: AuthRoleUser, OwnerID: "user-1"}
+
+	created, err := svc.CreateCanvas(identity, CanvasDocument{
+		Name:          "Group Canvas",
+		Kind:          "smart",
+		SchemaVersion: 2,
+		Nodes: []CanvasNode{
+			{ID: "img1", Type: CanvasNodeTypeImage, Name: "Image", Data: map[string]any{"path": "images/a.png"}},
+			{ID: "prompt1", Type: CanvasNodeTypePrompt, Name: "Prompt", Data: map[string]any{"prompt": "keep style"}},
+			{ID: "group1", Type: CanvasNodeTypeGroup, Name: "Group", Data: map[string]any{"group_item_ids": []any{"img1", "prompt1"}}},
+			{ID: "out1", Type: CanvasNodeTypeResult, Name: "Output"},
+		},
+		Edges: []CanvasEdge{{ID: "e1", Source: "group1", Target: "out1"}},
+	})
+	if err != nil {
+		t.Fatalf("CreateCanvas() error = %v", err)
+	}
+
+	saved, err := svc.SaveCanvas(identity, created.ID, created)
+	if err != nil {
+		t.Fatalf("SaveCanvas() error = %v", err)
+	}
+	if len(saved.Nodes) != 4 || saved.Nodes[2].Type != CanvasNodeTypeGroup {
+		t.Fatalf("SaveCanvas() nodes = %#v", saved.Nodes)
+	}
+}
+
 func assertCanvasNodeDataHasNoRoutingSecrets(t *testing.T, data map[string]any) {
 	t.Helper()
 	for _, key := range []string{"api_key", "apiKey", "base_url", "baseURL", "group_id", "groupId", "secret_key", "secretKey", "gateway_url", "gatewayURL"} {

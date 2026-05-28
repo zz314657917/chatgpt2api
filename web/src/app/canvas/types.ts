@@ -6,14 +6,14 @@ import type {
   CanvasNodeOutput,
   CreationTask,
   ImageVisibility,
-  ManagedImage,
+  ManagedImageSummary,
 } from "@/lib/api";
 
 export const SMART_CANVAS_KIND = "smart";
 export const SMART_CANVAS_SCHEMA_VERSION = 2;
 export const SMART_CANVAS_AUTOSAVE_DELAY_MS = 5000;
 
-export type SmartCanvasItemType = "image" | "prompt" | "llm" | "loop" | "image_generation" | "result";
+export type SmartCanvasItemType = "image" | "prompt" | "llm" | "loop" | "group" | "image_generation" | "result";
 export type SmartCanvasSaveState = "saved" | "dirty" | "saving" | "error";
 export type SmartCanvasTool = "select" | "pan";
 export type SmartCanvasPortKind = "in" | "out";
@@ -46,6 +46,7 @@ export type SmartCanvasItemData = {
   source_images?: CanvasImageRef[];
   input_images?: CanvasImageRef[];
   mention_images?: CanvasImageRef[];
+  group_item_ids?: string[];
   loop_mode?: "repeat" | "images";
   loop_count?: number;
   loop_concurrency?: number;
@@ -63,6 +64,8 @@ export type SmartCanvasItemData = {
   status?: CreationTask["status"];
   error?: string;
   task_id?: string;
+  started_at?: string;
+  stop_requested?: boolean;
   created_at?: string;
   updated_at?: string;
 };
@@ -100,14 +103,20 @@ export type SmartCanvasComposer = {
 export type SmartCanvasDragState =
   | { kind: "none" }
   | { kind: "pan"; pointerId: number; startClientX: number; startClientY: number; startViewport: SmartCanvasViewport }
-  | { kind: "item"; pointerId: number; itemId: string; itemIds: string[]; startClientX: number; startClientY: number; startPositions: Record<string, { x: number; y: number }> }
+  | { kind: "item"; pointerId: number; itemId: string; itemIds: string[]; groupCandidateIds: string[]; startClientX: number; startClientY: number; startPositions: Record<string, { x: number; y: number }> }
   | { kind: "resize"; pointerId: number; itemId: string; startClientX: number; startClientY: number; startSize: { w: number; h: number } };
 
 export type SmartCanvasConnectState =
   | { kind: "none" }
   | { kind: "link"; pointerId: number; sourceId: string; pointer: { x: number; y: number } };
 
-export type SmartCanvasAsset = ManagedImage;
+export type SmartCanvasPortMenuRequest = {
+  id: number;
+  sourceId: string;
+  screen: { x: number; y: number };
+};
+
+export type SmartCanvasAsset = ManagedImageSummary;
 
 export type SmartCanvasRunRecord = {
   id: string;
@@ -118,6 +127,7 @@ export type SmartCanvasRunRecord = {
   taskId?: string;
   images: CanvasImageRef[];
   error?: string;
+  startedAt?: string;
   createdAt: string;
   updatedAt?: string;
 };
@@ -126,6 +136,7 @@ export type SmartCanvasModelCatalog = {
   all: CanvasModelOption[];
   text: CanvasModelOption[];
   image: CanvasModelOption[];
+  video: CanvasModelOption[];
 };
 
 export type SmartCanvasHistoryEntry = {

@@ -7,7 +7,7 @@ export function AppShell() {
   const location = useLocation();
   const pathname = location.pathname.replace(/\/+$/, "") || "/";
   const isCanvasPage = pathname === "/canvas";
-  const isViewportWorkspacePage = pathname === "/canvas" || pathname === "/image" || pathname === "/image-manager";
+  const isViewportWorkspacePage = pathname === "/canvas" || pathname === "/image" || pathname === "/image-manager" || pathname === "/social";
 
   return (
     <main className={cn("bg-background text-foreground", isViewportWorkspacePage ? "h-dvh overflow-hidden" : "min-h-screen")}>
