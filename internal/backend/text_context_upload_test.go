@@ -62,11 +62,11 @@ func TestUploadTextContextFileUsesChatGPTFileFlow(t *testing.T) {
 	if ref.FileID != "file_context" || ref.FileName != "history.txt" || ref.MIMEType != "text/plain" || ref.Size != len("hello context") {
 		t.Fatalf("ref = %#v", ref)
 	}
-	if createBody["file_name"] != "history.txt" || createBody["mime_type"] != "text/plain" || createBody["use_case"] != "my_files" {
+	if createBody["file_name"] != "history.txt" || createBody["mime_type"] != "text/plain" || createBody["use_case"] != "multimodal" {
 		t.Fatalf("unexpected create body: %#v", createBody)
 	}
-	if createBody["store_in_library"] != true || createBody["library_persistence_mode"] != "opportunistic" {
-		t.Fatalf("create body missing library fields: %#v", createBody)
+	if createBody["store_in_library"] != false || createBody["library_persistence_mode"] != nil {
+		t.Fatalf("create body should use temporary non-library storage: %#v", createBody)
 	}
 	if putBody != "hello context" {
 		t.Fatalf("put body = %q", putBody)
@@ -78,7 +78,7 @@ func TestUploadTextContextFileUsesChatGPTFileFlow(t *testing.T) {
 		t.Fatalf("unexpected process body: %#v", processBody)
 	}
 	metadata, ok := processBody["metadata"].(map[string]any)
-	if !ok || metadata["store_in_library"] != true || metadata["is_temporary_chat"] != false {
+	if !ok || metadata["store_in_library"] != false || metadata["is_temporary_chat"] != true || processBody["library_persistence_mode"] != nil {
 		t.Fatalf("unexpected process metadata: %#v", processBody["metadata"])
 	}
 }

@@ -91,14 +91,13 @@ type textContextFileCreateResponse struct {
 
 func (c *Client) createTextContextFile(ctx context.Context, filename, mimeType string, size int, reqs ChatRequirements) (textContextFileCreateResponse, error) {
 	payload := map[string]any{
-		"file_name":                filename,
-		"file_size":                size,
-		"use_case":                 "my_files",
-		"timezone_offset_min":      -480,
-		"reset_rate_limits":        false,
-		"mime_type":                mimeType,
-		"store_in_library":         true,
-		"library_persistence_mode": "opportunistic",
+		"file_name":           filename,
+		"file_size":           size,
+		"use_case":            "multimodal",
+		"timezone_offset_min": -480,
+		"reset_rate_limits":   false,
+		"mime_type":           mimeType,
+		"store_in_library":    false,
 	}
 	resp, err := c.postJSON(ctx, textFileCreatePath, payload, c.officialHeaders(textFileCreatePath, reqs, "", "application/json"), false)
 	if err != nil {
@@ -145,14 +144,13 @@ func (c *Client) processTextContextFile(ctx context.Context, fileID, filename st
 	processCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	payload := map[string]any{
-		"file_id":                  fileID,
-		"use_case":                 "my_files",
-		"index_for_retrieval":      true,
-		"file_name":                filename,
-		"library_persistence_mode": "opportunistic",
+		"file_id":             fileID,
+		"use_case":            "multimodal",
+		"index_for_retrieval": true,
+		"file_name":           filename,
 		"metadata": map[string]any{
-			"store_in_library":  true,
-			"is_temporary_chat": false,
+			"store_in_library":  false,
+			"is_temporary_chat": true,
 		},
 		"entry_surface": "chat_composer",
 	}
