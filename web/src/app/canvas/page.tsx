@@ -3,7 +3,6 @@
 import { LoaderCircle } from "lucide-react";
 
 import {
-  SmartCanvasAngleControlDialog,
   SmartCanvasAssetSidebar,
   SmartCanvasBoard,
   SmartCanvasLeftRail,
@@ -94,9 +93,6 @@ export default function CanvasPage() {
             onSelectItem={canvas.selectItem}
             onOpenImage={canvas.openImage}
             onDeleteImage={canvas.deleteImageFromItem}
-            onOpenImageEditorForItem={canvas.openImageEditorForItem}
-            onRunDetailEnhanceForItem={canvas.runDetailEnhanceForItem}
-            onOpenAngleControlForItem={canvas.openAngleControlForItem}
             onZoomIn={() => canvas.zoomBy(1.12)}
             onZoomOut={() => canvas.zoomBy(0.88)}
             onFit={canvas.fitContent}
@@ -157,26 +153,18 @@ export default function CanvasPage() {
         image={canvas.imageEditorImage}
         open={Boolean(canvas.imageEditorImage)}
         onApplyEdit={canvas.applyEditedImageFiles}
+        angleValues={canvas.angleControlValues}
+        anglePrompt={canvas.angleControlPrompt}
+        angleResultItem={canvas.angleControlResultItem}
+        runningAngle={canvas.running}
+        onAngleValuesChange={canvas.setAngleControlValues}
+        onSubmitAngle={canvas.runAngleControlForImageEditor}
         onOpenChange={(open) => {
           if (!open) {
             canvas.setImageEditorImage(null);
+            canvas.setImageEditorSourceItemId("");
           }
         }}
-      />
-
-      <SmartCanvasAngleControlDialog
-        open={canvas.angleControlOpen}
-        image={canvas.angleControlImage}
-        values={canvas.angleControlValues}
-        running={canvas.running}
-        onOpenChange={(open) => {
-          canvas.setAngleControlOpen(open);
-          if (!open) {
-            canvas.setAngleControlImage(null);
-          }
-        }}
-        onValuesChange={canvas.setAngleControlValues}
-        onSubmit={canvas.runAngleControlSelected}
       />
 
       <SmartCanvasPickerDialog

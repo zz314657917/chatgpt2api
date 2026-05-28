@@ -62,8 +62,10 @@ import {
   createImageGenerationTask,
   DEFAULT_CHAT_MODEL,
   DEFAULT_IMAGE_MODEL,
+  estimateImageDisplayPriceUSD,
   fetchCreationTasks,
   fetchProfile,
+  formatImageDisplayPriceUSD,
   IMAGE_CREATION_MODEL_OPTIONS,
   IMAGE_MODEL_ROUTE_DETAILS,
   IMAGE_OUTPUT_FORMAT_OPTIONS,
@@ -435,6 +437,24 @@ function normalizeRequestedImageCount(value: string | number) {
 
 function isInvalidCustomRatioSelection(sizeMode: ImageSizeMode, aspectRatio: ImageAspectRatio, customRatio: string) {
   return sizeMode === "ratio" && aspectRatio === CUSTOM_IMAGE_ASPECT_RATIO && !parseImageRatio(customRatio);
+}
+
+function imagePriceSizeFromRequest(size: string) {
+  const trimmed = size.trim();
+  switch (trimmed) {
+    case "1:1":
+      return "1024x1024";
+    case "2:3":
+      return "1024x1536";
+    case "3:2":
+      return "1536x1024";
+    case "16:9":
+      return "1536x864";
+    case "9:16":
+      return "864x1536";
+    default:
+      return trimmed || "default";
+  }
 }
 
 function effectiveImageSizeSelection(model: ImageModel, selection: ImageSizeSelection): ImageSizeSelection {
@@ -1328,6 +1348,35 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     [conversations],
   );
   const estimatedBillingUnits = composerMode === "chat" ? 1 : parsedCount;
+  const estimatedImagePrice = useMemo(() => {
+    if (composerMode === "chat") {
+      return null;
+    }
+    const estimateSizeRequest = buildEffectiveImageSizeRequest(imageModel, {
+      mode: imageSizeMode,
+      aspectRatio: imageAspectRatio,
+      resolution: imageResolution,
+      customRatio: imageCustomRatio,
+      customWidth: imageCustomWidth,
+      customHeight: imageCustomHeight,
+    });
+    const estimateResolution =
+      imageModel === "gpt-image-2"
+        ? "1K"
+        : imagePriceSizeFromRequest(estimateSizeRequest.size);
+    return estimateImageDisplayPriceUSD(imageModel, parsedCount, estimateResolution);
+  }, [
+    composerMode,
+    imageAspectRatio,
+    imageCustomHeight,
+    imageCustomRatio,
+    imageCustomWidth,
+    imageModel,
+    imageResolution,
+    imageSizeMode,
+    parsedCount,
+  ]);
+  const estimatedImagePriceLabel = formatImageDisplayPriceUSD(estimatedImagePrice);
   const billingBlocked = !hasEnoughBilling(session, estimatedBillingUnits);
   const deleteConfirmTitle = deleteConfirm?.type === "all" ? "清空历史记录" : deleteConfirm?.type === "one" ? "删除对话" : "";
   const deleteConfirmDescription =
@@ -3747,6 +3796,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                 imageOutputFormat={imageOutputFormat}
                 imageOutputCompression={imageOutputCompression}
                 highResolutionHint={highResolutionHint}
+                estimatedImagePriceLabel={estimatedImagePriceLabel}
                 billingBlocked={billingBlocked}
                 referenceImages={referenceImages}
                 textareaRef={textareaRef}

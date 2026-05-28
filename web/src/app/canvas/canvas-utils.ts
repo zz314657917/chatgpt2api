@@ -285,8 +285,7 @@ export function updateResultItemFromTask(item: SmartCanvasItem, task: CreationTa
 
 export function managedImagesToRefs(items: ManagedImage[]): CanvasImageRef[] {
   return dedupeCanvasImageRefs(items.map((item) => ({
-    url: item.preview_url || item.url,
-    local_url: item.url,
+    url: item.preview_url || item.thumbnail_url || "",
     path: item.path,
     name: item.name,
     thumbnail_url: item.thumbnail_url,

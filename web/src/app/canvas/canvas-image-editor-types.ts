@@ -1,4 +1,4 @@
-export type ImageEditMode = "preview" | "crop" | "outpaint" | "mask" | "brush" | "grid";
+export type ImageEditMode = "preview" | "crop" | "outpaint" | "mask" | "brush" | "grid" | "angle";
 export type BrushTool = "free" | "rect" | "ellipse" | "label";
 export type GridOrientation = "h" | "v";
 export type CropAspect = "free" | "1:1" | "4:3" | "3:4" | "16:9" | "9:16";

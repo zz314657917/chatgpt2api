@@ -329,9 +329,9 @@ export function useSmartCanvasController() {
   const [draggingImages, setDraggingImages] = useState(false);
   const [mentionOpen, setMentionOpen] = useState(false);
   const [imageEditorImage, setImageEditorImage] = useState<CanvasImageRef | null>(null);
-  const [angleControlOpen, setAngleControlOpen] = useState(false);
-  const [angleControlImage, setAngleControlImage] = useState<CanvasImageRef | null>(null);
+  const [imageEditorSourceItemId, setImageEditorSourceItemId] = useState("");
   const [angleControlValues, setAngleControlValues] = useState<SmartCanvasAngleControlValues>(DEFAULT_ANGLE_CONTROL_VALUES);
+  const [angleControlResultItemId, setAngleControlResultItemId] = useState("");
   const [canvasPickerOpen, setCanvasPickerOpen] = useState(false);
   const [leftRailCollapsed, setLeftRailCollapsed] = useState(() => {
     if (typeof window === "undefined") {
@@ -367,6 +367,13 @@ export function useSmartCanvasController() {
   );
   const selectedImageToolDisabledReason = useMemo(() => imageToolUnavailableReason(selectedItem), [selectedItem]);
   const mentionItems = useMemo(() => mentionCandidateImages(canvas, assets), [assets, canvas]);
+  const angleControlPrompt = useMemo(() => buildAngleControlPrompt(angleControlValues), [angleControlValues]);
+  const angleControlResultItem = useMemo(() => {
+    if (!angleControlResultItemId) {
+      return null;
+    }
+    return canvas?.nodes.find((item) => item.id === angleControlResultItemId) || null;
+  }, [angleControlResultItemId, canvas]);
 
   useEffect(() => {
     canvasRef.current = canvas;
@@ -1401,6 +1408,10 @@ export function useSmartCanvasController() {
     const src = canvasImageSource(image);
     if (src) {
       setImageEditorImage(image);
+      const key = canvasImageKey(image);
+      const sourceItem = canvasRef.current?.nodes.find((item) => imageToolImagesFromItem(item).some((candidate) => canvasImageKey(candidate) === key));
+      setImageEditorSourceItemId(sourceItem?.id || "");
+      setAngleControlResultItemId("");
     }
   }, []);
 
@@ -1570,7 +1581,7 @@ export function useSmartCanvasController() {
     parameters?: SmartCanvasImageToolParameters,
   ) => {
     if (!selected) {
-      return;
+      return "";
     }
     setRunning(true);
     try {
@@ -1583,8 +1594,10 @@ export function useSmartCanvasController() {
       const outputId = createImageToolResultNode(selected.item, selected.image, type, prompt, task, parameters);
       void pollTaskIntoToolResult(task.id, outputId, imageToolLabel(type));
       toast.success(`${imageToolLabel(type)}任务已提交`);
+      return outputId;
     } catch (error) {
       toast.error(error instanceof Error ? error.message : `${imageToolLabel(type)}提交失败`);
+      return "";
     } finally {
       setRunning(false);
     }
@@ -1595,7 +1608,7 @@ export function useSmartCanvasController() {
     prompt: string,
     parameters?: SmartCanvasImageToolParameters,
   ) => {
-    await runImageEditTool(getSelectedSingleImage(), type, prompt, parameters);
+    return runImageEditTool(getSelectedSingleImage(), type, prompt, parameters);
   }, [getSelectedSingleImage, runImageEditTool]);
 
   const runImageEditToolForItem = useCallback(async (
@@ -1605,7 +1618,7 @@ export function useSmartCanvasController() {
     parameters?: SmartCanvasImageToolParameters,
   ) => {
     selectSingleItem(itemId);
-    await runImageEditTool(getSingleImageFromItem(itemId), type, prompt, parameters);
+    return runImageEditTool(getSingleImageFromItem(itemId), type, prompt, parameters);
   }, [getSingleImageFromItem, runImageEditTool, selectSingleItem]);
 
   const runDetailEnhanceSelected = useCallback(() => {
@@ -1622,6 +1635,8 @@ export function useSmartCanvasController() {
       return;
     }
     setImageEditorImage(selected.image);
+    setImageEditorSourceItemId(selected.item.id);
+    setAngleControlResultItemId("");
   }, [getSelectedSingleImage]);
 
   const openImageEditorForItem = useCallback((itemId: string) => {
@@ -1631,37 +1646,36 @@ export function useSmartCanvasController() {
       return;
     }
     setImageEditorImage(selected.image);
+    setImageEditorSourceItemId(selected.item.id);
+    setAngleControlResultItemId("");
   }, [getSingleImageFromItem, selectSingleItem]);
 
-  const openAngleControl = useCallback(() => {
-    const selected = getSelectedSingleImage();
-    if (!selected) {
+  const runAngleControlForImageEditor = useCallback((values: SmartCanvasAngleControlValues) => {
+    if (!imageEditorImage) {
+      toast.info("请先打开一张图片");
       return;
     }
-    setAngleControlImage(selected.image);
-    setAngleControlOpen(true);
-  }, [getSelectedSingleImage]);
-
-  const openAngleControlForItem = useCallback((itemId: string) => {
-    selectSingleItem(itemId);
-    const selected = getSingleImageFromItem(itemId);
-    if (!selected) {
-      return;
-    }
-    setAngleControlImage(selected.image);
-    setAngleControlOpen(true);
-  }, [getSingleImageFromItem, selectSingleItem]);
-
-  const runAngleControlSelected = useCallback((values: SmartCanvasAngleControlValues) => {
     const normalized = {
       horizontal: Math.max(0, Math.min(360, Number(values.horizontal) || 0)),
       vertical: Math.max(-30, Math.min(90, Number(values.vertical) || 0)),
       zoom: Math.max(0, Math.min(10, Number(values.zoom) || 0)),
     };
     setAngleControlValues(normalized);
-    setAngleControlOpen(false);
-    void runSelectedImageEditTool("angle_control", buildAngleControlPrompt(normalized), normalized);
-  }, [runSelectedImageEditTool]);
+    void (async () => {
+      const prompt = buildAngleControlPrompt(normalized);
+      const sourceItem = imageEditorSourceItemId
+        ? canvasRef.current?.nodes.find((item) => item.id === imageEditorSourceItemId) || null
+        : findItemContainingImage(imageEditorImage);
+      if (!sourceItem) {
+        toast.info("无法定位这张图片所在节点");
+        return;
+      }
+      const outputId = await runImageEditTool({ item: sourceItem, image: imageEditorImage }, "angle_control", prompt, normalized);
+      if (outputId) {
+        setAngleControlResultItemId(outputId);
+      }
+    })();
+  }, [findItemContainingImage, imageEditorImage, imageEditorSourceItemId, runImageEditTool]);
 
   const pollTaskIntoGenerator = useCallback(async (taskId: string, generatorId: string, outputIds: string[]) => {
     if (pollingTasksRef.current.has(taskId)) {
@@ -2312,9 +2326,10 @@ export function useSmartCanvasController() {
     mentionOpen,
     mentionItems,
     imageEditorImage,
-    angleControlOpen,
-    angleControlImage,
+    imageEditorSourceItemId,
     angleControlValues,
+    angleControlPrompt,
+    angleControlResultItem,
     selectedImageToolDisabledReason,
     canvasPickerOpen,
     runHistoryOpen,
@@ -2362,16 +2377,13 @@ export function useSmartCanvasController() {
     openImage,
     applyEditedImageFiles,
     setImageEditorImage,
-    setAngleControlOpen,
-    setAngleControlImage,
+    setImageEditorSourceItemId,
     setAngleControlValues,
     runDetailEnhanceSelected,
     runDetailEnhanceForItem,
     openSelectedImageEditor,
     openImageEditorForItem,
-    openAngleControl,
-    openAngleControlForItem,
-    runAngleControlSelected,
+    runAngleControlForImageEditor,
     runLlmNode,
     runGeneratorNode,
     selectCanvas,

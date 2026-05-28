@@ -1,6 +1,6 @@
 # Current Task
 
-更新时间：2026-05-27 04:52 +08:00
+更新时间：2026-05-28 00:42 +08:00
 
 ## 背景
 
@@ -101,6 +101,13 @@
   - 顶部保留 `裁剪 / 扩图 / 遮罩 / 画笔 / 宫格切分` 编辑模式切换。
   - 左侧只显示当前模式参数和子工具，避免把全局模式列表塞进参数栏。
   - `canvas-image-editor.tsx` 已拆出 `canvas-image-editor-config.ts`、`canvas-image-editor-types.ts`、`canvas-image-editor-utils.ts`、`canvas-image-editor-fields.tsx`、`canvas-image-editor-tool-panel.tsx`。
+- 本轮继续图片多场景性能优化自检修复：
+  - `/api/images` 列表接口不再同步执行 `CleanupStorage()`，避免图片列表请求触发全盘扫描/治理导致正式环境卡住。
+  - `scope=public` 对管理员也只返回公开图片；管理员查看全部图片需显式使用 `scope=all`。
+  - 列表 `preview_url` 改为轻量缩略图路由，详情/下载/同款生成再按需读取 `/api/images/detail`。
+  - `/image-manager` 图片墙改为 `react-virtuoso` 虚拟网格，去掉滚动哨兵和本地全量 DOM 增长。
+  - 图片库预览、复制公开图地址、下载、同款生成改为按需拉详情，首屏卡片只加载缩略/预览源。
+  - `/canvas` 素材引用改为 `path + thumbnail/preview` 轻引用，拖入画布不再保存 `local_url` 原图；后端运行图生图时优先用 `path` 读取原图。
 
 ## 已确认事实
 
@@ -112,6 +119,8 @@
 - `细节增强` 和 `图片编辑` 当前主要是快捷入口，和节点内既有能力有重复；后续更适合下沉为节点内或右键动作，保留 `角度控制` 作为更独立的工具入口。
 - Worker 产出的 `canvas-error-details.ts`、`canvas-asset-filters.ts` 只经过构建验证，当前还不是用户可见功能。
 - Docker 容器内访问本机 8080 的 Sub2API 服务应使用 `host.docker.internal:8080`；`127.0.0.1:8080` 会指向 chatgpt2api 容器自身。
+- 图片列表接口的热路径不能同步执行清理治理；清理保留在启动、生成后清理和显式治理接口中。
+- 图片库列表项仍保留 `url` 兼容旧调用，但前端首屏渲染和画布素材引用不再依赖它加载原图。
 - Sprint 3 已实现：
   - 左侧 `SmartCanvasLeftRail` 改为可收缩画布列表，支持切换、新建、刷新、重命名和二次确认删除，折叠状态写入 `localStorage`。
   - 顶部和右键菜单统一创建 `Prompt`、`LLM`、`API生成`、`Output`；右侧图片库移除画布列表，只保留素材选择。
@@ -167,6 +176,15 @@
   - `git diff --check`：PASS，仅 Windows LF -> CRLF 工作区提示。
   - `http://127.0.0.1:8081/health` 返回 200。
   - 容器内访问 `http://host.docker.internal:8080/health` 返回 ok。
+- 本轮图片多场景性能优化验证：
+  - `go test ./internal/service ./internal/httpapi`：PASS。
+  - `cd web && npm.cmd run lint`：PASS，0 warnings / 0 errors。
+  - `cd web && npm.cmd run build`：PASS。
+  - `git diff --check`：PASS，仅 Windows LF -> CRLF 工作区提示。
+  - 已构建 Linux embed 二进制并热替换 8081 Docker 容器，容器 healthy。
+  - `http://127.0.0.1:8081/image` 返回 200。
+  - 8081 API 烟测：`/api/images?page_size=50&scope=mine` 返回分页结构；当前本地个人图库为空，`scope=all` 可见 14 张历史图片，`scope=public` 为 0，符合权限语义。
+  - 浏览器插件受当前登录页只暴露落叶网络登录入口、插件页面脚本为只读等限制，未完成自动化点选级图片库验收；本轮已用构建、API 和容器健康检查覆盖。
 
 ## Sprint 2 验收结论
 
