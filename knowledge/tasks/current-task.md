@@ -1,203 +1,102 @@
 # Current Task
 
-更新时间：2026-05-28 00:42 +08:00
+更新时间：2026-05-28 17:02 +08:00
 
 ## 背景
 
-`/canvas` 已从 React Flow 试验版改为 React 自研画布。当前阶段不接 ComfyUI、不需要 GPU，仍复用 `chatgpt2api` 现有图片库、`creation-tasks`、权限体系和 Sub2API 模型路由。`F:/java/Infinite-Canvas-main` 只作为交互参考，不复制代码。
+`/canvas` 已进入节点式图片创作画布方向，继续复用 `chatgpt2api` 现有图片库、`creation-tasks`、权限体系和 Sub2API 模型路由。本轮 Sprint 4 从项目整体收口图片多场景性能，而不是只优化 `/image-manager` 局部。
 
 ## 当前目标
 
-把 `/canvas` 调整为 Infinite-Canvas 风格的节点式图片创作画布：
-
-- 保留全局顶部导航，用户仍可在“创作台 / 无限画布 / 图片库”等入口之间切换。
-- 左侧为可收缩画布列表，顶部和右键菜单为节点创建工具条。
-- 图片、Prompt、LLM、API生成、Output 都是画布节点。
-- 节点参数直接在节点内编辑，不再依赖右侧参数面板。
-- 连线表达图片/Prompt -> API生成 -> Output 的轻量关系。
-- 生成仍直接复用现有 `creation-tasks/image-generations` 和 `creation-tasks/image-edits`，不走 ComfyUI。
+Sprint 4 目标已完成：稳定当前 `/canvas` 未提交功能改动，并完成图片接口轻量化、中图预览、图片库按需详情读取和画布图片轻引用。本轮在此基础上补充 `/canvas` 组节点，用于把多张图片和多段文本作为一个可复用输入集合传给后续节点。
 
 ## 本次已完成
 
-- 已把 `/canvas` 后续开发纳入 P/G/E 门禁：
-  - `docs/workflow/status.md`
-  - `docs/workflow/agent-matrix.md`
-  - `docs/workflow/spec.md`
-  - `docs/workflow/sprint-01-contract.md`
-  - `docs/workflow/tasks/canvas-sprint-001.md`
-  - `docs/workflow/sprint-01-review.md`
-  - `docs/workflow/sprint-01-qa.md`
-  - `docs/workflow/sprint-01-fix-log.md`
-- `.gitignore` 已放开 `docs/workflow/**`，让 P/G/E 文档能进入版本控制。
-- `AGENTS.md` 和 `knowledge/00-start-here.md` 已加入 P/G/E 受管入口片段。
-- Sprint 1 已实现核心图片输入稳定性：
-  - 图片引用去重优先识别图片库 `path`，兼容 `url/local_url/thumbnail_url`。
-  - 右侧图片库“输入”、拖拽到 API生成节点、选中 API生成节点后粘贴图片，统一创建或复用上游图片节点并连线。
-  - API生成节点展示输入图时使用同一套去重 key，避免上游连线和旧 `input_images` 导致重复缩略图。
-  - 运行生成前会把遗留直接 `input_images` 迁移为上游图片节点，画布关系保持可见。
-  - 预览仍允许使用缩略图；编辑、裁剪、生成和图生图提交继续通过 `canvasImageSource()` 读取原图引用。
-- `/canvas` 前端改成节点式画布：
-  - `web/src/app/canvas/page.tsx` 只负责页面壳和组件接线。
-  - `web/src/app/canvas/use-smart-canvas-controller.ts` 承载保存、上传、运行、拖拽、粘贴、缩放、连线和节点状态。
-  - `web/src/app/canvas/canvas-node.tsx` 承载左侧导航、顶部工具条、画布、连线、节点 UI、小地图。
-  - `web/src/app/canvas/canvas-utils.ts` 承载智能画布数据转换、默认节点、连线和输出转换。
-  - `web/src/app/canvas/types.ts` 承载节点、连线、视口和连接状态类型。
-- 新增节点类型：
-  - `image`
-  - `prompt`
-  - `image_generation`
-  - `result`
-- 新建画布会自动出现默认链路：
-  - `Prompt -> API生成 -> Output`
-- 已保存的空智能画布保持空白，不再每次加载都强行补默认节点。
-- API生成节点内可编辑：
-  - Prompt 补充文本
-  - 模型
-  - 尺寸比例
-  - 可见性
-  - 生成数量
-  - 生成按钮
-- 图片拖拽/粘贴/上传会创建图片节点；如果当前选中 API生成节点，会自动连到该节点。
-- Prompt 节点内支持 `@图片` 引用当前画布和图片库图片。
-- API生成节点运行时会读取上游 Prompt 和图片节点，有图片走图生图，无图片走文生图。
-- Output 节点展示生成结果；如果没有 Output 下游，运行时自动创建并连线。
-- `/canvas` 在 `AppShell` 中保持全宽工作区，但恢复全局 `TopNav`；画布主体仍不受 1440px 居中容器限制。
-- 修复画布按钮点不动问题：
-  - `SmartCanvasBoard` 显式使用 `h-full min-h-0`，避免绝对定位画布层在部分尺寸下命中区域异常。
-  - 节点内部 Prompt、API生成、缩放等交互区域在 `pointerdown` 阶段阻止冒泡，避免被画布拖拽/连线事件吞掉。
-- 修复自检发现的第一批可用性问题：
-  - 自动保存改成版本号保护，保存请求返回时不会用旧画布覆盖后续新编辑。
-  - 切换画布、新建画布、返回前会先 flush 保存；保存失败才弹确认。
-  - 生成节点处于 queued/running 时会禁用再次提交，并在重新打开画布时恢复轮询。
-  - API生成节点读取图片输入时统一包含自身输入、上游 Prompt 图片、上游图片节点、上游结果图片。
-  - 运行时不再把“上游 Prompt + 节点 Prompt”的合并文本写回生成节点，避免重复叠加。
-  - 右侧图片库浮层和运行记录浮层已重新挂载，桌面视口可见。
-  - 侧栏暂未实现的黑夜模式/API 设置/工作流设置按钮改为禁用状态，避免误导为可点击功能。
-- 修复第二批交互问题：
-  - 节点头部增加明确拖拽手柄，拖动节点时不再依赖 React state 生效后的事件监听。
-  - 拖拽会在 `pointerdown` 即时绑定窗口级 `pointermove/pointerup`，避免快速拖动丢事件。
-  - 平移画布时同步 `viewportRef`，保存的视口不再落后。
-  - 拖动端口连线时松手会按坐标检测目标输入端口，减少 pointer capture 导致的连接失败。
-  - 新增节点会按已有节点数错位，减少连续点击“提示词/节点”后堆叠遮挡。
-  - 选中节点提高层级，避免被历史重叠节点盖住。
-  - 顶部上传按钮改为创建图片节点；拖图片到 API生成节点时会在其左侧创建图片节点并自动连线。
-- 8081 Docker 容器已更新到最新嵌入前端资源。
-- Sprint 2 已实现 Infinite Canvas 三工具迁移：
-  - `/canvas` 左侧工具栏新增 `细节增强`、`图片编辑`、`角度控制`。
-  - 三个工具只在当前选中节点包含单张可编辑图片时启用；未选中、无图或多图时置灰并给出 tooltip。
-  - `细节增强` 使用默认高清修复/纹理增强 prompt，复用 `creation-tasks/image-edits`，输出为新 `result` 节点并连回来源节点。
-  - `角度控制` 新增水平角、垂直角、缩放滑杆面板；第一阶段把参数转为 image edit prompt，并把 `tool_type`、`tool_parameters`、`source_images` 保存到结果节点。
-  - `图片编辑` 复用现有 `SmartCanvasImageEditor`；应用后上传图片库，创建相邻图片节点，保存来源图片与工具参数，并连回来源节点。
-  - 三工具产物可见性跟随来源节点，避免任务提交和节点数据不一致。
-- 用户要求“起多个智能体开发不同的功能”后，已并行启动并关闭 3 个 sub-agent：
-  - `web/src/app/canvas/canvas-history.ts`：撤销/重做历史纯 TS 模块，后续 Sprint 3 已接入 controller/UI。
-  - `web/src/app/canvas/canvas-error-details.ts`：错误详情格式化纯 TS 模块，暂作为候选模块保留。
-  - `web/src/app/canvas/canvas-asset-filters.ts`：图库筛选纯 TS 模块，暂作为候选模块保留。
-- 本轮修复 Sub2API launch/redeem 进入失败：
-  - Docker 容器内访问宿主或其他本地服务不能用 `127.0.0.1:8080` 指向宿主。
-  - `.env` 中 `CHATGPT2API_SUB2API_REDEEM_URL` 和 `CHATGPT2API_SUB2API_GATEWAY_BASE_URL` 已改为 `host.docker.internal:8080`。
-  - 8081 容器已热替换 Linux embed 二进制并恢复 healthy。
-- 本轮调整图片编辑器布局：
-  - 顶部保留 `裁剪 / 扩图 / 遮罩 / 画笔 / 宫格切分` 编辑模式切换。
-  - 左侧只显示当前模式参数和子工具，避免把全局模式列表塞进参数栏。
-  - `canvas-image-editor.tsx` 已拆出 `canvas-image-editor-config.ts`、`canvas-image-editor-types.ts`、`canvas-image-editor-utils.ts`、`canvas-image-editor-fields.tsx`、`canvas-image-editor-tool-panel.tsx`。
-- 本轮继续图片多场景性能优化自检修复：
-  - `/api/images` 列表接口不再同步执行 `CleanupStorage()`，避免图片列表请求触发全盘扫描/治理导致正式环境卡住。
-  - `scope=public` 对管理员也只返回公开图片；管理员查看全部图片需显式使用 `scope=all`。
-  - 列表 `preview_url` 改为轻量缩略图路由，详情/下载/同款生成再按需读取 `/api/images/detail`。
-  - `/image-manager` 图片墙改为 `react-virtuoso` 虚拟网格，去掉滚动哨兵和本地全量 DOM 增长。
-  - 图片库预览、复制公开图地址、下载、同款生成改为按需拉详情，首屏卡片只加载缩略/预览源。
-  - `/canvas` 素材引用改为 `path + thumbnail/preview` 轻引用，拖入画布不再保存 `local_url` 原图；后端运行图生图时优先用 `path` 读取原图。
+- 新增 Sprint 4 contract：`docs/workflow/sprint-04-contract.md`。
+- `.gitignore` 加入 `.tmp/`，并清理临时构建产物。
+- 后端新增独立中图目录 `data/image_previews` 和 `GET /image-previews/...jpg`，鉴权规则与缩略图一致。
+- 中图采用懒生成缓存：最长边 1200px、JPEG quality 82、独立 cache version、源图 mtime cache-busting。
+- 删除图片时同步删除原图、缩略图、中图、metadata、references 和对象存储文件。
+- 存储治理统计扩展 `previews_bytes/previews_files`，总容量纳入中图；`thumbnails` 清理动作现在清理缩略图和中图缓存，UI 称为“预览缓存”。
+- `/api/images` 列表项已轻量化，不返回 `url/object_url/object_key/storage_backend/prompt/reference_images/reference_image_urls` 等重字段。
+- `/api/images/detail` 保留完整字段，继续作为原图 URL、对象存储元数据和可复用生成参数入口。
+- 前端拆分 `ManagedImageSummary` 和 `ManagedImageDetail`；列表只读 summary，下载、复制原图地址、同款生成按需拉 detail。
+- 修复 `fetchManagedImages()` 参数过滤，`scope=all` 会保留，筛选字段里的 `"all"` 才省略。
+- `/image-manager` 卡片只用 `thumbnail_url`；lightbox 初始用 `preview_url`；高清/下载才拉 detail 原图。
+- 详情缓存 key 改为 `${scope}:${path}`，避免个人图库和公开/全部图库串用完整元数据。
+- 自动刷新只合并第一页新增/更新项，不再用第一页结果删除已滚动加载的旧页。
+- `CanvasImageRef` 增加 `preview_url`；画布素材栏和拖入节点保存 `path + thumbnail_url + preview_url`。
+- `canvasImageSource()` 仍可由 `path` 解析原图，图生图、编辑、裁剪提交不受列表移除 `url` 影响。
+- `authenticated-image` 受保护路径加入 `/image-previews/`，删除图片时会同步失效缩略图和中图 blob cache。
+- 修复 `loop -> API生成` 连续运行时，API 生成节点 prompt 被重复叠加的问题。
+- 复核创作任务状态收尾逻辑：取消、超时、无输出失败、服务重启恢复均会收尾终态任务的 `output_statuses`，避免历史 queued/running 脏状态继续卡住“创作并发额度”。
+- 新增回归测试覆盖：
+  - 等待创作并发额度中的 queued 任务被取消后保持 `cancelled`，释放前序任务后不会重新获取额度继续运行。
+  - 已经是 `success/error/cancelled` 的历史任务加载时会把 `output_statuses` 规范成终态，不保留 queued/running。
+- 新增 `/canvas` `group` 节点：
+  - 工具栏和节点菜单可创建“组”；多选图片、提示词、LLM、Output 节点后创建组会自动记录成员。
+  - 手动连线到组时会同步维护 `group_item_ids`；删除节点或删除连线会清理组成员引用。
+  - 参考 Infinite-Canvas 补齐空间容器交互：普通节点拖入组框时自动加入组，拖出组框时自动移除；多个组重叠时归入重叠面积最大的组。
+  - 组可连接到 API生成、AI 提示词、循环和 Output；后续节点读取组时会展开组内图片和文本。
+  - 拖动组会带成员一起移动，但选择状态仍以组节点为主，避免误删成员。
+- 后端新增 `group` 节点类型白名单；保存画布和旧 `canvas-run` 执行路径都允许组节点存在，执行时保底把组的输入透传为输出。
+- 新增管理员创作任务治理入口：
+  - `GET /api/admin/creation-tasks/diagnostics` 返回任务总数、活动任务、queued/running 数、终态脏 `output_statuses` 数、当前并发占用等诊断数据。
+  - `POST /api/admin/creation-tasks/diagnostics` 默认只修复终态任务里的 queued/running 脏 `output_statuses`。
+  - `POST /api/admin/creation-tasks/diagnostics` 携带 `finalize_active=true` 时，会把当前 queued/running 任务收尾为 error，取消运行 handler，并触发计费结算。
+  - `/settings` 管理员页面新增“创作任务治理”卡片，可刷新诊断、修复终态状态、确认后终止卡住任务。
 
 ## 已确认事实
 
-- 节点数据仍不保存 API key、base_url、group_id。
-- 图片本体仍由现有图片库和对象存储管理，画布只保存引用。
-- 当前没有引入 Infinite-Canvas 代码，也没有引入 ComfyUI 运行时。
-- 当前参数仍以内联节点编辑为主；右侧只保留图片库素材、运行记录和最近操作浮层。
-- `细节增强` 和 `角度控制` 第一阶段仍是 prompt 化 image edit，不是专用 upscale 或多角度模型。
-- `细节增强` 和 `图片编辑` 当前主要是快捷入口，和节点内既有能力有重复；后续更适合下沉为节点内或右键动作，保留 `角度控制` 作为更独立的工具入口。
-- Worker 产出的 `canvas-error-details.ts`、`canvas-asset-filters.ts` 只经过构建验证，当前还不是用户可见功能。
-- Docker 容器内访问本机 8080 的 Sub2API 服务应使用 `host.docker.internal:8080`；`127.0.0.1:8080` 会指向 chatgpt2api 容器自身。
-- 图片列表接口的热路径不能同步执行清理治理；清理保留在启动、生成后清理和显式治理接口中。
-- 图片库列表项仍保留 `url` 兼容旧调用，但前端首屏渲染和画布素材引用不再依赖它加载原图。
-- Sprint 3 已实现：
-  - 左侧 `SmartCanvasLeftRail` 改为可收缩画布列表，支持切换、新建、刷新、重命名和二次确认删除，折叠状态写入 `localStorage`。
-  - 顶部和右键菜单统一创建 `Prompt`、`LLM`、`API生成`、`Output`；右侧图片库移除画布列表，只保留素材选择。
-  - 新增 `llm` 节点类型，复用 `creation-tasks/chat-completions` 输出文本，可连接到 API生成作为提示词输入。
-  - API生成节点合并顺序为：上游 Prompt 文本 + 上游 LLM 输出文本 + 自身补充提示词。
-  - `canvas-history.ts` 已接入 controller，提供顶部撤销/重做按钮、`Ctrl+Z` / `Ctrl+Y` 和右侧最近操作列表。
+- 当前不引入数据库；图片索引和元数据仍基于文件系统与 JSON。
+- 列表接口只提供轻摘要；完整元数据和原图 URL 只能通过 detail 按需读取。
+- 中图是服务端懒生成缓存，不在上传或列表请求中同步生成。
+- 画布节点保存轻引用，不保存图片列表里的原图 URL。
+- 组节点只保存成员节点 ID，不保存图片本体、原图 URL 或密钥；组节点行为是复用 Infinite-Canvas 的“聚合上下文”思路，不是复制其源码。
+- `/image-previews/` 与 `/image-thumbnails/` 共享同一类源图权限判断：先从缓存路径反解源图，再按源图授权。
+- `ImageTaskService` 当前已有 `recoverUnfinishedLocked()`、`CancelTask()`、超时和 no-output 收尾逻辑；本轮没有改业务逻辑，只补了防回归测试。
+- 创作任务治理接口是管理员专用；普通用户即使有 `/api/creation-tasks` 权限，也不能访问 `/api/admin/creation-tasks/diagnostics`。
+
+## 待验证点
+
+- 分页滚动验收：本地当前只有 17 张图片，未触发下一页。后续准备 300+ 张图片后，验证 `/image-manager` 和 `/canvas` 素材栏滚动追加正常。
+- 下载/高清原图验收：本轮未执行真实下载动作。后续在浏览器点击下载/高清查看，确认才请求 `/images/...` 或 detail 原图。
+- 生产卡顿复核：上线前建议在正式同量级数据上对 `/api/images?page_size=50` 响应体和首屏 Network 原图请求数做一次对比。
+- 组节点浏览器验收：本地 Vite 访问 `/canvas` 会被登录页拦截，本轮未完成登录态内创建、连线和运行的点击验收。
+
+## 当前结论
+
+Sprint 4 已通过本机实现验证，可以关闭。组节点已完成前后端类型、交互和基础保存校验；剩余风险主要是登录态内画布点击验收、大数据量浏览器滚动和下载动作的人工验收，不影响已实现的字段边界与前端类型约束。
+
+## 下一步
+
+- 关闭 Sprint 4 -> 验证：确认 `docs/workflow/status.md` 为 `done`，并由用户决定是否进入下一 Sprint。
+- 组节点人工验收 -> 验证：登录后在 `/canvas` 多选两张图片创建组，或把图片节点拖入/拖出组框，连接到 API生成/AI 提示词/循环，确认图片和提示词上下文被展开。
+- 大样本验收 -> 验证：准备 300+ 张图片，检查首屏只请求第一页和缩略图，滚动到底追加下一页。
+- 生产前复核 -> 验证：DevTools Network 中首屏不出现大量 `/images/...` 原图请求，`/api/images?page_size=50` 响应体明显小于旧全量接口。
 
 ## 验证记录
 
-- 本轮 P/G/E Sprint 1 验证：
-  - `cd web && npm.cmd run lint`：PASS，0 warnings / 0 errors。
-  - `cd web && npm.cmd run build`：PASS，仅 Vite chunk size warning。
-  - `go test ./...`：PASS。
-  - `git diff --check`：PASS，仅 Windows LF -> CRLF 工作区提示。
-  - 已构建 Linux embed 二进制，热替换 8081 Docker 容器并重启，`/health` 返回 200。
-  - Browser 打开 `http://127.0.0.1:8081/canvas` 被重定向到 `/login`，提示“授权信息无效”；本轮浏览器交互验收记录为受登录态限制。
-  - 用户真实 Chrome 登录态验收：PASS，Sprint 1 核心链路测试没问题。
-- `cd web && npm.cmd run build`
-- `cd web && npm.cmd run lint`
-- `go test ./...`
-- Sprint 3 验证：
-  - `cd web && npm.cmd run build`：PASS，仅 Vite chunk size warning。
-  - `cd web && npm.cmd run lint`：PASS，0 warnings / 0 errors。
-  - `go test ./...`：PASS。
-- `git diff --check`
-- 8081 Docker 容器已热替换当前 Linux embed 二进制并重启，健康检查返回 200。
-- Playwright 浏览器登录后打开 `/canvas`，快照确认已渲染：
-  - 全局顶部导航，包含“创作台 / 无限画布 / 图片库”
-  - 左侧功能导航
-  - 顶部节点工具条
-  - Prompt 节点
-  - API生成节点
-  - Output 节点
-  - 连线和小地图
-- 右侧图片库和运行记录浮层在 1920x1080 视口可见。
-- Playwright 点击验证：
-  - 点击顶部“提示词”后新增 Prompt 节点，保存状态变为“未保存”。
-  - Prompt 输入框可填入 `smoke prompt`，输入值保持。
-  - 点击“放大”后缩放按钮可正常响应。
-- Playwright 交互验证：
-  - 空白画布拖拽平移后 world transform 变化。
-  - 节点头部拖拽后节点 transform 变化。
-  - 新增 Prompt 输入文本后，至少一个 `API生成` 按钮变为可用。
-- Sprint 2 验证：
-  - `cd web && npm.cmd run build`：PASS，仅 npm config warning 与 Vite chunk size warning。
-  - `cd web && npm.cmd run lint`：PASS，0 warnings / 0 errors。
-  - `go test ./...`：PASS。
-  - `git diff --check`：PASS，仅 Windows LF -> CRLF 工作区提示。
-  - 临时 smoke 后端曾启动于 `127.0.0.1:18080`，验证后已停止；由于登录页只暴露 leaf network 登录按钮，本轮未完成自动化点选级浏览器验收。
-- 本轮登录链路与图片编辑器布局验证：
-  - `cd web && npm.cmd run build`：PASS，仅 Vite chunk size warning。
-  - `cd web && npm.cmd run lint`：PASS，0 warnings / 0 errors。
-  - `git diff --check`：PASS，仅 Windows LF -> CRLF 工作区提示。
-  - `http://127.0.0.1:8081/health` 返回 200。
-  - 容器内访问 `http://host.docker.internal:8080/health` 返回 ok。
-- 本轮图片多场景性能优化验证：
-  - `go test ./internal/service ./internal/httpapi`：PASS。
-  - `cd web && npm.cmd run lint`：PASS，0 warnings / 0 errors。
-  - `cd web && npm.cmd run build`：PASS。
-  - `git diff --check`：PASS，仅 Windows LF -> CRLF 工作区提示。
-  - 已构建 Linux embed 二进制并热替换 8081 Docker 容器，容器 healthy。
-  - `http://127.0.0.1:8081/image` 返回 200。
-  - 8081 API 烟测：`/api/images?page_size=50&scope=mine` 返回分页结构；当前本地个人图库为空，`scope=all` 可见 14 张历史图片，`scope=public` 为 0，符合权限语义。
-  - 浏览器插件受当前登录页只暴露落叶网络登录入口、插件页面脚本为只读等限制，未完成自动化点选级图片库验收；本轮已用构建、API 和容器健康检查覆盖。
-
-## Sprint 2 验收结论
-
-- Sprint 2 已关闭：Infinite Canvas 三工具迁移完成，命令验证通过。
-- `docs/workflow/status.md` 已进入 `done`，下一步应先进入 Sprint 3 Planner，再起草新的 contract。
-- 本轮未发现需要立即回滚或阻断发布的问题。
-
-## 后续可补
-
-- 可开关资产库浮层，参考 Infinite-Canvas 的资产库。
-- 收敛 `细节增强`、`图片编辑`、`角度控制` 的入口层级：重复快捷功能优先下沉到节点内或右键菜单，专用模型接入后再提升入口。
-- 节点复制/粘贴；撤销/重做已具备当前浏览器会话内存历史，后续可评估服务端版本历史。
-- 运行日志浮层、错误详情和任务取消；已有 `canvas-error-details.ts` 候选模块。
-- 图片库筛选；已有 `canvas-asset-filters.ts` 候选模块。
-- 专用模型适配：`fal-ai/recraft/upscale/crisp` 风格细节增强、多角度图像编辑参数化后端。
-- ComfyUI / RunningHub / 视频生成按钮暂时只是占位，后续需要单独设计。
+- `go test ./internal/service ./internal/httpapi`：PASS。
+- `go test ./internal/service -run "TestImageTaskService(CancelQueuedTaskWaitingForCreationUnit|NormalizesTerminalOutputStatusesOnLoad)$"`：PASS。
+- `go test ./internal/service ./internal/httpapi -count=1`：PASS。第一次目标包测试中 `internal/httpapi` 的 `TestCanvasModelsUseSub2APIGatewayForBoundUser` 曾失败，单测复现 PASS，重新跑目标包 PASS，判断为测试间共享状态或偶发请求顺序问题，未改业务代码。
+- `cd web && npm.cmd run lint`：PASS，0 warnings / 0 errors。
+- `cd web && npm.cmd run build`：PASS。
+- `git diff --check`：PASS，仅 Windows CRLF 提示。
+- Browser 打开 `http://127.0.0.1:8081/image-manager`：PASS。
+- 8081 管理员“全部”视图可见本地 17 张图片；卡片 `data-authenticated-image-cache-key` 为 `/image-thumbnails/...`；打开预览后新增 `/image-previews/...`。
+- 组节点验证：`cd web && npm.cmd run lint`：PASS，0 warnings / 0 errors。
+- 组节点验证：`cd web && npm.cmd run build`：PASS。
+- 组节点验证：`go test ./internal/service -run Canvas`：PASS。
+- 组节点验证：`git diff --check -- web/src/app/canvas/types.ts web/src/app/canvas/canvas-utils.ts web/src/app/canvas/use-smart-canvas-controller.ts web/src/app/canvas/canvas-node.tsx web/src/lib/api.ts internal/service/canvas.go internal/service/canvas_test.go internal/httpapi/canvas.go`：PASS，仅 Windows LF -> CRLF 提示。
+- 组节点验证：`go test ./internal/service ./internal/httpapi` 中 `internal/service` PASS，`internal/httpapi` FAIL 于 `TestCanvasModelsUseSub2APIGatewayForBoundUser` 的 `GET /model-catalog` 断言，属于当前模型目录相关改动/既有状态，不是组节点路径。
+- 组节点浏览器验证：Vite dev server 已启动在 `http://127.0.0.1:5173/`；打开 `http://127.0.0.1:5173/canvas` 被登录页拦截，未完成登录态内点击验收。
+- 拖入组交互补丁验证：`cd web && npm.cmd run lint`：PASS，0 warnings / 0 errors。
+- 拖入组交互补丁验证：`cd web && npm.cmd run build`：PASS。
+- 拖入组交互补丁验证：`git diff --check -- web/src/app/canvas/types.ts web/src/app/canvas/use-smart-canvas-controller.ts web/src/app/canvas/canvas-node.tsx knowledge/tasks/current-task.md`：PASS，仅 Windows LF -> CRLF 提示。
+- 创作任务治理验证：`go test ./internal/service -run "TestImageTaskServiceDiagnosticsAndRepair|TestImageTaskService(CancelQueuedTaskWaitingForCreationUnit|NormalizesTerminalOutputStatusesOnLoad)$"`：PASS。
+- 创作任务治理验证：`go test ./internal/httpapi -run TestAdminCreationTaskDiagnosticsAndRepair -count=1 -v`：PASS。
+- 创作任务治理验证：`go test ./internal/service ./internal/httpapi -count=1`：PASS。
+- 创作任务治理验证：`cd web && npm.cmd run lint`：PASS，0 warnings / 0 errors。
+- 创作任务治理验证：`cd web && npm.cmd run build`：PASS。
+- 创作任务治理验证：`git diff --check -- internal/service/image_task.go internal/service/image_task_test.go internal/httpapi/routes.go internal/httpapi/router.go internal/httpapi/app_test.go internal/service/permissions.go web/src/lib/api.ts web/src/app/settings/store.ts web/src/app/settings/page.tsx web/src/app/settings/components/creation-task-governance-card.tsx`：PASS，仅 Windows LF -> CRLF 提示。
