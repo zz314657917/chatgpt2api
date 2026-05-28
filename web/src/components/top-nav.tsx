@@ -32,6 +32,7 @@ import {
 const navItems = [
   { href: "/image", label: "创作台" },
   { href: "/canvas", label: "无限画布" },
+  { href: "/social", label: "社媒运营" },
   { href: "/image-manager", label: "图片库" },
 ];
 const profileNavItem = { href: "/profile", label: "个人中心" };
@@ -342,7 +343,7 @@ export function TopNav() {
               aria-hidden="true"
               className="size-7 rounded-[10px] shadow-[0_4px_10px_rgba(184,90,127,0.16)]"
             />
-            <span className="truncate">{appMeta.app_title || "落叶网络"}</span>
+            <span className="truncate">{appMeta.app_title || "落叶AI"}</span>
             {navCollapsed ? <ChevronDown aria-hidden="true" /> : <ChevronUp aria-hidden="true" />}
           </Button>
           <div className="ml-auto flex shrink-0 items-center gap-1 lg:hidden">

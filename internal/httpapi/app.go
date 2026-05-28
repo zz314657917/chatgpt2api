@@ -52,6 +52,7 @@ type App struct {
 	images       *service.ImageService
 	tasks        *service.ImageTaskService
 	canvases     *service.CanvasService
+	social       *service.SocialProjectService
 	announce     *service.AnnouncementService
 	prompts      *service.PromptFavoriteService
 	cpa          *service.CPAConfig
@@ -101,7 +102,7 @@ func NewApp() (*App, error) {
 	sub2Bindings := service.NewSub2APIBindingStore(documentStore)
 	imageSessions := service.NewImageConversationSessionService(filepath.Join(cfg.DataDir, "image_conversation_sessions.json"), storageBackend)
 	engine := &protocol.Engine{Accounts: accounts, Config: cfg, Storage: documentStore, Proxy: proxy, Logger: logger, ImageConversationSessions: imageSessions}
-	app := &App{config: cfg, auth: auth, accounts: accounts, billing: billing, logs: logs, logger: logger, proxy: proxy, engine: engine, images: service.NewImageService(cfg, storageBackend), canvases: service.NewCanvasService(storageBackend), announce: service.NewAnnouncementService(storageBackend), prompts: service.NewPromptFavoriteService(storageBackend), cpa: service.NewCPAConfig(storageBackend), sub2: service.NewSub2APIConfig(storageBackend), sub2Bindings: sub2Bindings, update: newUpdateService(cfg), cancel: cancel}
+	app := &App{config: cfg, auth: auth, accounts: accounts, billing: billing, logs: logs, logger: logger, proxy: proxy, engine: engine, images: service.NewImageService(cfg, storageBackend), canvases: service.NewCanvasService(storageBackend), social: service.NewSocialProjectService(storageBackend), announce: service.NewAnnouncementService(storageBackend), prompts: service.NewPromptFavoriteService(storageBackend), cpa: service.NewCPAConfig(storageBackend), sub2: service.NewSub2APIConfig(storageBackend), sub2Bindings: sub2Bindings, update: newUpdateService(cfg), cancel: cancel}
 	app.cpaImport = service.NewCPAImportService(app.cpa, accounts, proxy)
 	app.sub2Import = service.NewSub2APIService(app.sub2, accounts)
 	app.sub2Launch = service.NewSub2APILaunchService(auth, sub2Bindings, cfg)
@@ -273,7 +274,7 @@ func (a *App) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	body["owner_id"] = identityScope(identity)
 	body["owner_name"] = identityDisplayName(identity)
 	a.attachCreationTaskLimiter(body, identity)
-	model := firstNonEmpty(util.Clean(body["model"]), "auto")
+	model := firstNonEmpty(util.Clean(body["model"]), util.ImageModelAuto)
 	if err := a.checkProtocolBilling(identity, protocolBillableUnits("/v1/chat/completions", body)); err != nil {
 		a.writeProtocol(w, r, nil, nil, err, "openai", "/v1/chat/completions", model, identity, "文本生成", service.ImageVisibilityPrivate, service.BillingReference{})
 		return
@@ -299,7 +300,7 @@ func (a *App) handleResponses(w http.ResponseWriter, r *http.Request) {
 	body["owner_id"] = identityScope(identity)
 	body["owner_name"] = identityDisplayName(identity)
 	a.attachCreationTaskLimiter(body, identity)
-	model := firstNonEmpty(util.Clean(body["model"]), "auto")
+	model := firstNonEmpty(util.Clean(body["model"]), util.ImageModelAuto)
 	if err := a.checkProtocolBilling(identity, protocolBillableUnits("/v1/responses", body)); err != nil {
 		a.writeProtocol(w, r, nil, nil, err, "openai", "/v1/responses", model, identity, "Responses", service.ImageVisibilityPrivate, service.BillingReference{})
 		return
@@ -326,7 +327,7 @@ func (a *App) handleMessages(w http.ResponseWriter, r *http.Request) {
 		util.WriteError(w, http.StatusBadRequest, "invalid json body")
 		return
 	}
-	model := firstNonEmpty(util.Clean(body["model"]), "auto")
+	model := firstNonEmpty(util.Clean(body["model"]), util.ImageModelAuto)
 	ctx, _ := protocol.WithAccountUsageTracker(r.Context())
 	r = r.WithContext(ctx)
 	result, stream, err := a.engine.HandleMessages(ctx, body)
@@ -617,8 +618,8 @@ func (a *App) handleSettings(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) handleAppMeta(w http.ResponseWriter, r *http.Request) {
 	util.WriteJSON(w, http.StatusOK, map[string]any{
-		"app_title":                   "落叶网络",
-		"project_name":                "落叶网络",
+		"app_title":                   "落叶AI",
+		"project_name":                "落叶AI",
 		"login_page_image_url":        a.config.LoginPageImageURL(),
 		"login_page_image_mode":       a.config.LoginPageImageMode(),
 		"login_page_image_zoom":       a.config.LoginPageImageZoom(),
@@ -1121,6 +1122,39 @@ func (a *App) handleImageThumbnail(w http.ResponseWriter, r *http.Request) {
 	http.NotFound(w, r)
 }
 
+func (a *App) handleImagePreview(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	previewRel, err := imagePreviewRequestPath(r)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	sourceRel, sourceErr := a.images.SourceImageRelativePathFromPreview(previewRel)
+	if sourceErr != nil {
+		http.NotFound(w, r)
+		return
+	}
+	if _, ok := a.authorizeImageFileRequest(w, r, sourceRel); !ok {
+		return
+	}
+	_ = a.images.EnsurePreview(previewRel)
+	previewPath := filepath.Join(a.config.ImagePreviewsDir(), filepath.FromSlash(previewRel))
+	if info, err := os.Stat(previewPath); err == nil && !info.IsDir() {
+		w.Header().Set("Cache-Control", imageThumbnailCacheControl)
+		http.ServeFile(w, r, previewPath)
+		return
+	}
+	sourcePath := filepath.Join(a.config.ImagesDir(), filepath.FromSlash(sourceRel))
+	if info, err := os.Stat(sourcePath); err == nil && !info.IsDir() {
+		http.ServeFile(w, r, sourcePath)
+		return
+	}
+	http.NotFound(w, r)
+}
+
 func imageFileRequestPath(r *http.Request) (string, error) {
 	raw := strings.TrimPrefix(r.URL.EscapedPath(), "/images/")
 	if raw == "" || raw == r.URL.EscapedPath() {
@@ -1149,6 +1183,18 @@ func imageThumbnailRequestPath(r *http.Request) (string, error) {
 	raw := strings.TrimPrefix(r.URL.EscapedPath(), "/image-thumbnails/")
 	if raw == "" || raw == r.URL.EscapedPath() {
 		return "", errors.New("invalid thumbnail path")
+	}
+	rel, err := url.PathUnescape(raw)
+	if err != nil {
+		return "", err
+	}
+	return rel, nil
+}
+
+func imagePreviewRequestPath(r *http.Request) (string, error) {
+	raw := strings.TrimPrefix(r.URL.EscapedPath(), "/image-previews/")
+	if raw == "" || raw == r.URL.EscapedPath() {
+		return "", errors.New("invalid preview path")
 	}
 	rel, err := url.PathUnescape(raw)
 	if err != nil {
