@@ -91,3 +91,63 @@ func TestCanvasPermissionsAreExplicit(t *testing.T) {
 		}
 	}
 }
+
+func TestSocialPermissionsAreDefaultAndExplicit(t *testing.T) {
+	defaults := DefaultPermissionSetForRole(AuthRoleUser)
+	if !containsString(defaults.MenuPaths, "/social") {
+		t.Fatalf("default user menu paths missing /social: %#v", defaults.MenuPaths)
+	}
+	if !containsString(defaults.MenuPaths, "/image-manager") {
+		t.Fatalf("default user menu paths missing /image-manager: %#v", defaults.MenuPaths)
+	}
+	for _, tc := range []struct {
+		method string
+		path   string
+	}{
+		{"GET", "/api/social-projects"},
+		{"POST", "/api/social-projects"},
+		{"GET", "/api/social-projects/project-1"},
+		{"POST", "/api/social-projects/project-1/generate-copy"},
+		{"POST", "/api/social-projects/project-1/generate-cards"},
+		{"POST", "/api/social-projects/project-1/export"},
+		{"DELETE", "/api/social-projects/project-1"},
+	} {
+		if !HasAPIPermission(defaults, tc.method, tc.path) {
+			t.Fatalf("missing default social permission for %s %s in %#v", tc.method, tc.path, defaults.APIPermissions)
+		}
+	}
+
+	readOnly := PermissionSet{APIPermissions: []string{APIPermissionKey("GET", "/api/social-projects")}}
+	if !HasAPIPermission(readOnly, "GET", "/api/social-projects/project-1") {
+		t.Fatalf("read-only social permission should allow project detail")
+	}
+	if HasAPIPermission(readOnly, "POST", "/api/social-projects/project-1") {
+		t.Fatalf("read-only social permission should not allow project mutation")
+	}
+}
+
+func TestImageTagPermissionsAreDefaultAndExplicit(t *testing.T) {
+	defaults := DefaultPermissionSetForRole(AuthRoleUser)
+	for _, tc := range []struct {
+		method string
+		path   string
+	}{
+		{"GET", "/api/images/tags"},
+		{"PATCH", "/api/images/tags"},
+		{"POST", "/api/images/tags"},
+		{"DELETE", "/api/images/tags"},
+	} {
+		if !HasAPIPermission(defaults, tc.method, tc.path) {
+			t.Fatalf("missing default image tag permission for %s %s in %#v", tc.method, tc.path, defaults.APIPermissions)
+		}
+	}
+}
+
+func containsString(items []string, target string) bool {
+	for _, item := range items {
+		if item == target {
+			return true
+		}
+	}
+	return false
+}

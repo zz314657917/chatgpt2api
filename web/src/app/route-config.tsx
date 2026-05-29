@@ -14,6 +14,7 @@ const routePageComponents = {
   rbac: lazy(() => import("@/app/rbac/page")),
   register: lazy(() => import("@/app/register/page")),
   settings: lazy(() => import("@/app/settings/page")),
+  social: lazy(() => import("@/app/social/page")),
   users: lazy(() => import("@/app/users/page")),
 };
 
@@ -38,6 +39,7 @@ export const appRoutes: AppRouteConfig[] = [
   { path: "/logs", Component: routePageComponents.logs, requiredPath: "/logs" },
   { path: "/settings", Component: routePageComponents.settings, requiredPath: "/settings" },
   { path: "/image", Component: routePageComponents.image, requiredPath: "/image" },
+  { path: "/social", Component: routePageComponents.social, requiredPath: "/social" },
   { path: "/canvas", Component: routePageComponents.canvas, requiredPath: "/canvas" },
   { path: "*", Component: routePageComponents.home },
 ];

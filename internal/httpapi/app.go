@@ -13,8 +13,10 @@ import (
 	_ "image/png"
 	"io"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"net/url"
+	"net/netip"
 	"os"
 	"path"
 	"path/filepath"
@@ -35,6 +37,8 @@ import (
 
 const (
 	maxLoginPageImageSize      = 10 << 20
+	maxJSONImageReferenceSize  = 50 << 20
+	maxJSONImageURLRedirects   = 5
 	imageThumbnailCacheControl = "public, max-age=31536000, immutable"
 	authSessionCookieName      = "chatgpt2api_session"
 	imageMaxSavedPerUserLimit  = 30
@@ -52,6 +56,7 @@ type App struct {
 	images       *service.ImageService
 	tasks        *service.ImageTaskService
 	canvases     *service.CanvasService
+	social       *service.SocialProjectService
 	announce     *service.AnnouncementService
 	prompts      *service.PromptFavoriteService
 	cpa          *service.CPAConfig
@@ -101,7 +106,7 @@ func NewApp() (*App, error) {
 	sub2Bindings := service.NewSub2APIBindingStore(documentStore)
 	imageSessions := service.NewImageConversationSessionService(filepath.Join(cfg.DataDir, "image_conversation_sessions.json"), storageBackend)
 	engine := &protocol.Engine{Accounts: accounts, Config: cfg, Storage: documentStore, Proxy: proxy, Logger: logger, ImageConversationSessions: imageSessions}
-	app := &App{config: cfg, auth: auth, accounts: accounts, billing: billing, logs: logs, logger: logger, proxy: proxy, engine: engine, images: service.NewImageService(cfg, storageBackend), canvases: service.NewCanvasService(storageBackend), announce: service.NewAnnouncementService(storageBackend), prompts: service.NewPromptFavoriteService(storageBackend), cpa: service.NewCPAConfig(storageBackend), sub2: service.NewSub2APIConfig(storageBackend), sub2Bindings: sub2Bindings, update: newUpdateService(cfg), cancel: cancel}
+	app := &App{config: cfg, auth: auth, accounts: accounts, billing: billing, logs: logs, logger: logger, proxy: proxy, engine: engine, images: service.NewImageService(cfg, storageBackend), canvases: service.NewCanvasService(storageBackend), social: service.NewSocialProjectService(storageBackend), announce: service.NewAnnouncementService(storageBackend), prompts: service.NewPromptFavoriteService(storageBackend), cpa: service.NewCPAConfig(storageBackend), sub2: service.NewSub2APIConfig(storageBackend), sub2Bindings: sub2Bindings, update: newUpdateService(cfg), cancel: cancel}
 	app.cpaImport = service.NewCPAImportService(app.cpa, accounts, proxy)
 	app.sub2Import = service.NewSub2APIService(app.sub2, accounts)
 	app.sub2Launch = service.NewSub2APILaunchService(auth, sub2Bindings, cfg)
@@ -110,6 +115,9 @@ func NewApp() (*App, error) {
 		func(ctx context.Context, identity service.Identity, payload map[string]any) (map[string]any, error) {
 			if binding, ok := app.sub2APIBindingForIdentity(identity); ok {
 				return app.runLoggedSub2APIImageGenerationTask(ctx, identity, payload, binding)
+			}
+			if identity.Provider == service.AuthProviderSub2API {
+				return nil, sub2APIKeyBindingRequiredError()
 			}
 			return app.runLoggedImageTask(ctx, identity, payload, "/api/creation-tasks/image-generations", "文生图", func(ctx context.Context, payload map[string]any) (map[string]any, error) {
 				result, _, err := engine.HandleImageGenerations(ctx, payload)
@@ -120,6 +128,9 @@ func NewApp() (*App, error) {
 			if binding, ok := app.sub2APIBindingForIdentity(identity); ok {
 				return app.runLoggedSub2APIImageEditTask(ctx, identity, payload, binding)
 			}
+			if identity.Provider == service.AuthProviderSub2API {
+				return nil, sub2APIKeyBindingRequiredError()
+			}
 			return app.runLoggedImageTask(ctx, identity, payload, "/api/creation-tasks/image-edits", "图生图", func(ctx context.Context, payload map[string]any) (map[string]any, error) {
 				images, _ := payload["images"].([]protocol.UploadedImage)
 				result, _, err := engine.HandleImageEdits(ctx, payload, images)
@@ -129,6 +140,9 @@ func NewApp() (*App, error) {
 		func(ctx context.Context, identity service.Identity, payload map[string]any) (map[string]any, error) {
 			if binding, ok := app.sub2APIBindingForIdentity(identity); ok {
 				return app.runLoggedSub2APIChatTask(ctx, identity, payload, binding)
+			}
+			if identity.Provider == service.AuthProviderSub2API {
+				return nil, sub2APIKeyBindingRequiredError()
 			}
 			return app.runLoggedChatTask(ctx, identity, payload)
 		},
@@ -196,7 +210,7 @@ func (a *App) handleImageGenerations(w http.ResponseWriter, r *http.Request) {
 	}
 	body, err := readJSONMap(r)
 	if err != nil {
-		util.WriteError(w, http.StatusBadRequest, "invalid json body")
+		writeOpenAIError(w, http.StatusBadRequest, "invalid json body")
 		return
 	}
 	body["owner_id"] = identityScope(identity)
@@ -206,16 +220,17 @@ func (a *App) handleImageGenerations(w http.ResponseWriter, r *http.Request) {
 	a.attachCreationTaskLimiter(body, identity)
 	visibility, err := service.NormalizeImageVisibility(util.Clean(body["visibility"]))
 	if err != nil {
-		util.WriteError(w, http.StatusBadRequest, err.Error())
+		writeOpenAIError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	model := firstNonEmpty(util.Clean(body["model"]), util.ImageModelAuto)
-	if err := a.checkProtocolBilling(identity, protocolBillableUnits("/v1/images/generations", body)); err != nil {
+	billingUnitAmount := protocolImageBillingUnitAmount(model, body)
+	if err := a.checkProtocolBilling(identity, protocolBillableUnits("/v1/images/generations", body)*billingUnitAmount); err != nil {
 		a.writeProtocol(w, r, nil, nil, err, "openai", "/v1/images/generations", model, identity, "文生图", visibility, service.BillingReference{})
 		return
 	}
 	billingRef := a.protocolBillingReference(identity, "/v1/images/generations", model)
-	a.attachProtocolBillingCharger(body, identity, billingRef)
+	a.attachProtocolBillingCharger(body, identity, billingRef, billingUnitAmount)
 	result, stream, err := a.engine.HandleImageGenerations(r.Context(), body)
 	a.writeProtocol(w, r, result, stream, err, "openai", "/v1/images/generations", model, identity, "文生图", visibility, billingRef, body)
 }
@@ -225,17 +240,17 @@ func (a *App) handleImageEdits(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	body, images, err := readMultipartImageBody(r)
+	body, images, err := a.readImageEditBody(r, identity)
 	if err != nil {
-		util.WriteError(w, http.StatusBadRequest, err.Error())
+		writeOpenAIError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if n := util.ToInt(body["n"], 1); n < 1 || n > 4 {
-		util.WriteError(w, http.StatusBadRequest, "n must be between 1 and 4")
+		writeOpenAIError(w, http.StatusBadRequest, "n must be between 1 and 4")
 		return
 	}
 	if len(images) == 0 {
-		util.WriteError(w, http.StatusBadRequest, "image file is required")
+		writeOpenAIError(w, http.StatusBadRequest, "image file or image_url is required")
 		return
 	}
 	body["owner_id"] = identityScope(identity)
@@ -246,16 +261,17 @@ func (a *App) handleImageEdits(w http.ResponseWriter, r *http.Request) {
 	body["images"] = images
 	visibility, err := service.NormalizeImageVisibility(util.Clean(body["visibility"]))
 	if err != nil {
-		util.WriteError(w, http.StatusBadRequest, err.Error())
+		writeOpenAIError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	model := firstNonEmpty(util.Clean(body["model"]), util.ImageModelAuto)
-	if err := a.checkProtocolBilling(identity, protocolBillableUnits("/v1/images/edits", body)); err != nil {
+	billingUnitAmount := protocolImageBillingUnitAmount(model, body)
+	if err := a.checkProtocolBilling(identity, protocolBillableUnits("/v1/images/edits", body)*billingUnitAmount); err != nil {
 		a.writeProtocol(w, r, nil, nil, err, "openai", "/v1/images/edits", model, identity, "图生图", visibility, service.BillingReference{})
 		return
 	}
 	billingRef := a.protocolBillingReference(identity, "/v1/images/edits", model)
-	a.attachProtocolBillingCharger(body, identity, billingRef)
+	a.attachProtocolBillingCharger(body, identity, billingRef, billingUnitAmount)
 	result, stream, err := a.engine.HandleImageEdits(r.Context(), body, images)
 	a.writeProtocol(w, r, result, stream, err, "openai", "/v1/images/edits", model, identity, "图生图", visibility, billingRef, body)
 }
@@ -267,19 +283,20 @@ func (a *App) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 	body, err := readJSONMap(r)
 	if err != nil {
-		util.WriteError(w, http.StatusBadRequest, "invalid json body")
+		writeOpenAIError(w, http.StatusBadRequest, "invalid json body")
 		return
 	}
 	body["owner_id"] = identityScope(identity)
 	body["owner_name"] = identityDisplayName(identity)
 	a.attachCreationTaskLimiter(body, identity)
-	model := firstNonEmpty(util.Clean(body["model"]), "auto")
-	if err := a.checkProtocolBilling(identity, protocolBillableUnits("/v1/chat/completions", body)); err != nil {
+	model := firstNonEmpty(util.Clean(body["model"]), util.ImageModelAuto)
+	billingUnitAmount := protocolImageBillingUnitAmount(model, body)
+	if err := a.checkProtocolBilling(identity, protocolBillableUnits("/v1/chat/completions", body)*billingUnitAmount); err != nil {
 		a.writeProtocol(w, r, nil, nil, err, "openai", "/v1/chat/completions", model, identity, "文本生成", service.ImageVisibilityPrivate, service.BillingReference{})
 		return
 	}
 	billingRef := a.protocolBillingReference(identity, "/v1/chat/completions", model)
-	a.attachProtocolBillingCharger(body, identity, billingRef)
+	a.attachProtocolBillingCharger(body, identity, billingRef, billingUnitAmount)
 	ctx, _ := protocol.WithAccountUsageTracker(r.Context())
 	r = r.WithContext(ctx)
 	result, stream, err := a.engine.HandleChatCompletions(ctx, body)
@@ -293,19 +310,20 @@ func (a *App) handleResponses(w http.ResponseWriter, r *http.Request) {
 	}
 	body, err := readJSONMap(r)
 	if err != nil {
-		util.WriteError(w, http.StatusBadRequest, "invalid json body")
+		writeOpenAIError(w, http.StatusBadRequest, "invalid json body")
 		return
 	}
 	body["owner_id"] = identityScope(identity)
 	body["owner_name"] = identityDisplayName(identity)
 	a.attachCreationTaskLimiter(body, identity)
-	model := firstNonEmpty(util.Clean(body["model"]), "auto")
-	if err := a.checkProtocolBilling(identity, protocolBillableUnits("/v1/responses", body)); err != nil {
+	model := firstNonEmpty(util.Clean(body["model"]), util.ImageModelAuto)
+	billingUnitAmount := protocolImageBillingUnitAmount(model, body)
+	if err := a.checkProtocolBilling(identity, protocolBillableUnits("/v1/responses", body)*billingUnitAmount); err != nil {
 		a.writeProtocol(w, r, nil, nil, err, "openai", "/v1/responses", model, identity, "Responses", service.ImageVisibilityPrivate, service.BillingReference{})
 		return
 	}
 	billingRef := a.protocolBillingReference(identity, "/v1/responses", model)
-	a.attachProtocolBillingCharger(body, identity, billingRef)
+	a.attachProtocolBillingCharger(body, identity, billingRef, billingUnitAmount)
 	ctx, _ := protocol.WithAccountUsageTracker(r.Context())
 	r = r.WithContext(ctx)
 	result, stream, err := a.engine.HandleResponsesScoped(ctx, body, identityScope(identity))
@@ -323,10 +341,10 @@ func (a *App) handleMessages(w http.ResponseWriter, r *http.Request) {
 	}
 	body, err := readJSONMap(r)
 	if err != nil {
-		util.WriteError(w, http.StatusBadRequest, "invalid json body")
+		writeOpenAIError(w, http.StatusBadRequest, "invalid json body")
 		return
 	}
-	model := firstNonEmpty(util.Clean(body["model"]), "auto")
+	model := firstNonEmpty(util.Clean(body["model"]), util.ImageModelAuto)
 	ctx, _ := protocol.WithAccountUsageTracker(r.Context())
 	r = r.WithContext(ctx)
 	result, stream, err := a.engine.HandleMessages(ctx, body)
@@ -433,7 +451,7 @@ func protocolErrorHTTPStatus(err error) int {
 func (a *App) writeProtocolError(w http.ResponseWriter, err error) {
 	var httpErr protocol.HTTPError
 	if errors.As(err, &httpErr) {
-		util.WriteError(w, httpErr.Status, httpErr.Message)
+		writeOpenAIError(w, httpErr.Status, httpErr.Message)
 		return
 	}
 	var policyErr service.ImageContentPolicyError
@@ -456,7 +474,51 @@ func (a *App) writeProtocolError(w http.ResponseWriter, err error) {
 		util.WriteJSON(w, http.StatusTooManyRequests, map[string]any{"error": map[string]any{"message": util.LocalizeErrorMessage("no available image quota"), "type": "insufficient_quota", "param": nil, "code": "insufficient_quota"}})
 		return
 	}
-	util.WriteJSON(w, http.StatusBadGateway, map[string]any{"detail": map[string]any{"error": util.LocalizeErrorMessage(message)}})
+	writeOpenAIError(w, http.StatusBadGateway, message)
+}
+
+func writeOpenAIError(w http.ResponseWriter, status int, message string) {
+	if status <= 0 {
+		status = http.StatusBadRequest
+	}
+	util.WriteJSON(w, status, map[string]any{
+		"error": map[string]any{
+			"message": util.LocalizeErrorMessage(message),
+			"type":    openAIErrorTypeForStatus(status),
+			"param":   nil,
+			"code":    openAIErrorCodeForStatus(status),
+		},
+	})
+}
+
+func openAIErrorTypeForStatus(status int) string {
+	switch {
+	case status == http.StatusUnauthorized:
+		return "authentication_error"
+	case status == http.StatusForbidden:
+		return "permission_error"
+	case status == http.StatusTooManyRequests:
+		return "rate_limit_error"
+	case status >= 500:
+		return "server_error"
+	default:
+		return "invalid_request_error"
+	}
+}
+
+func openAIErrorCodeForStatus(status int) any {
+	switch {
+	case status == http.StatusUnauthorized:
+		return "invalid_api_key"
+	case status == http.StatusForbidden:
+		return "permission_denied"
+	case status == http.StatusTooManyRequests:
+		return "rate_limit_exceeded"
+	case status >= 500:
+		return "server_error"
+	default:
+		return nil
+	}
 }
 
 func (a *App) handleLogin(w http.ResponseWriter, r *http.Request) {
@@ -617,8 +679,8 @@ func (a *App) handleSettings(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) handleAppMeta(w http.ResponseWriter, r *http.Request) {
 	util.WriteJSON(w, http.StatusOK, map[string]any{
-		"app_title":                   "落叶网络",
-		"project_name":                "落叶网络",
+		"app_title":                   "落叶AI",
+		"project_name":                "落叶AI",
 		"login_page_image_url":        a.config.LoginPageImageURL(),
 		"login_page_image_mode":       a.config.LoginPageImageMode(),
 		"login_page_image_zoom":       a.config.LoginPageImageZoom(),
@@ -824,6 +886,7 @@ func (a *App) handleImages(w http.ResponseWriter, r *http.Request) {
 			Orientation:      strings.TrimSpace(r.URL.Query().Get("orientation")),
 			ResolutionPreset: strings.TrimSpace(r.URL.Query().Get("resolution")),
 			AspectRatio:      strings.TrimSpace(r.URL.Query().Get("aspect_ratio")),
+			Tags:             imageTagsFromQuery(r.URL.Query()),
 		}, scope)
 		a.decorateImageList(payload)
 		util.WriteJSON(w, http.StatusOK, payload)
@@ -834,6 +897,56 @@ func (a *App) handleImages(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		result, err := a.images.DeleteImages(util.AsStringSlice(body["paths"]), imageAccessScope(identity))
+		if err != nil {
+			util.WriteError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		util.WriteJSON(w, http.StatusOK, result)
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func (a *App) handleImageTags(w http.ResponseWriter, r *http.Request) {
+	identity, ok := a.requireIdentity(w, r, "")
+	if !ok {
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		scope, status, message := imageListAccessScope(identity, r.URL.Query().Get("scope"))
+		if status != 0 {
+			util.WriteError(w, status, message)
+			return
+		}
+		util.WriteJSON(w, http.StatusOK, map[string]any{"tags": a.images.ListImageTags(scope)})
+	case http.MethodPatch, http.MethodPost:
+		body, err := readJSONMap(r)
+		if err != nil {
+			util.WriteError(w, http.StatusBadRequest, "invalid json body")
+			return
+		}
+		path := util.Clean(body["path"])
+		if path == "" {
+			util.WriteError(w, http.StatusBadRequest, "path is required")
+			return
+		}
+		scope := imageAccessScope(identity)
+		item, err := a.images.UpdateImageTags(path, service.NormalizeImageTags(body["tags"]), scope)
+		if err != nil {
+			status := http.StatusBadRequest
+			if err.Error() == "image not found" {
+				status = http.StatusNotFound
+			}
+			util.WriteError(w, status, err.Error())
+			return
+		}
+		a.decorateImageItem(item, a.imageOwnerDisplayNames())
+		util.WriteJSON(w, http.StatusOK, map[string]any{"item": item, "tags": a.images.ListImageTags(scope)})
+	case http.MethodDelete:
+		body, _ := readJSONMap(r)
+		tag := firstNonEmpty(util.Clean(body["tag"]), util.Clean(r.URL.Query().Get("tag")))
+		result, err := a.images.DeleteImageTag(tag, imageAccessScope(identity))
 		if err != nil {
 			util.WriteError(w, http.StatusBadRequest, err.Error())
 			return
@@ -1121,6 +1234,39 @@ func (a *App) handleImageThumbnail(w http.ResponseWriter, r *http.Request) {
 	http.NotFound(w, r)
 }
 
+func (a *App) handleImagePreview(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	previewRel, err := imagePreviewRequestPath(r)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	sourceRel, sourceErr := a.images.SourceImageRelativePathFromPreview(previewRel)
+	if sourceErr != nil {
+		http.NotFound(w, r)
+		return
+	}
+	if _, ok := a.authorizeImageFileRequest(w, r, sourceRel); !ok {
+		return
+	}
+	_ = a.images.EnsurePreview(previewRel)
+	previewPath := filepath.Join(a.config.ImagePreviewsDir(), filepath.FromSlash(previewRel))
+	if info, err := os.Stat(previewPath); err == nil && !info.IsDir() {
+		w.Header().Set("Cache-Control", imageThumbnailCacheControl)
+		http.ServeFile(w, r, previewPath)
+		return
+	}
+	sourcePath := filepath.Join(a.config.ImagesDir(), filepath.FromSlash(sourceRel))
+	if info, err := os.Stat(sourcePath); err == nil && !info.IsDir() {
+		http.ServeFile(w, r, sourcePath)
+		return
+	}
+	http.NotFound(w, r)
+}
+
 func imageFileRequestPath(r *http.Request) (string, error) {
 	raw := strings.TrimPrefix(r.URL.EscapedPath(), "/images/")
 	if raw == "" || raw == r.URL.EscapedPath() {
@@ -1149,6 +1295,18 @@ func imageThumbnailRequestPath(r *http.Request) (string, error) {
 	raw := strings.TrimPrefix(r.URL.EscapedPath(), "/image-thumbnails/")
 	if raw == "" || raw == r.URL.EscapedPath() {
 		return "", errors.New("invalid thumbnail path")
+	}
+	rel, err := url.PathUnescape(raw)
+	if err != nil {
+		return "", err
+	}
+	return rel, nil
+}
+
+func imagePreviewRequestPath(r *http.Request) (string, error) {
+	raw := strings.TrimPrefix(r.URL.EscapedPath(), "/image-previews/")
+	if raw == "" || raw == r.URL.EscapedPath() {
+		return "", errors.New("invalid preview path")
 	}
 	rel, err := url.PathUnescape(raw)
 	if err != nil {
@@ -1325,13 +1483,21 @@ func (a *App) requireIdentity(w http.ResponseWriter, r *http.Request, overrideAu
 	token := overrideAuthToken(overrideAuth, r)
 	if identity := a.auth.Authenticate(token); identity != nil {
 		if !a.identityCanAccessRequest(*identity, r) {
-			util.WriteError(w, http.StatusForbidden, "permission denied")
+			if strings.HasPrefix(r.URL.Path, "/v1/") {
+				writeOpenAIError(w, http.StatusForbidden, "permission denied")
+			} else {
+				util.WriteError(w, http.StatusForbidden, "permission denied")
+			}
 			return service.Identity{}, false
 		}
 		*r = *r.WithContext(withRequestIdentity(r.Context(), *identity))
 		return *identity, true
 	}
-	util.WriteError(w, http.StatusUnauthorized, "authorization is invalid")
+	if strings.HasPrefix(r.URL.Path, "/v1/") {
+		writeOpenAIError(w, http.StatusUnauthorized, "authorization is invalid")
+	} else {
+		util.WriteError(w, http.StatusUnauthorized, "authorization is invalid")
+	}
 	return service.Identity{}, false
 }
 
@@ -1416,6 +1582,10 @@ func isPermissionCheckSkipped(path string) bool {
 		return true
 	case "/api/profile/prompt-favorites":
 		return true
+	case "/api/sub2api/binding":
+		return true
+	case "/api/sub2api/api-keys":
+		return true
 	default:
 		return strings.HasPrefix(path, "/api/profile/api-key/") || strings.HasPrefix(path, "/api/profile/prompt-favorites/")
 	}
@@ -1485,6 +1655,10 @@ func readJSONMap(r *http.Request) (map[string]any, error) {
 }
 
 func (a *App) readImageEditTaskBody(r *http.Request, identity service.Identity) (map[string]any, []protocol.UploadedImage, error) {
+	return a.readImageEditBody(r, identity)
+}
+
+func (a *App) readImageEditBody(r *http.Request, identity service.Identity) (map[string]any, []protocol.UploadedImage, error) {
 	contentType := strings.ToLower(r.Header.Get("Content-Type"))
 	if !strings.Contains(contentType, "application/json") {
 		return readMultipartImageBody(r)
@@ -1493,25 +1667,315 @@ func (a *App) readImageEditTaskBody(r *http.Request, identity service.Identity) 
 	if err != nil {
 		return nil, nil, fmt.Errorf("invalid json body")
 	}
-	refs := util.AsStringSlice(body["reference_image_ids"])
-	if len(refs) == 0 {
-		return nil, nil, fmt.Errorf("reference_image_ids is required")
-	}
-	managedImages, err := a.images.TempReferenceImageBytes(refs, identityScope(identity))
+	images, err := a.jsonImageEditUploads(r.Context(), body, identity)
 	if err != nil {
 		return nil, nil, err
 	}
-	images := make([]protocol.UploadedImage, 0, len(managedImages))
-	for _, image := range managedImages {
-		images = append(images, protocol.UploadedImage{
-			Filename:    image.Filename,
-			ContentType: image.ContentType,
-			Data:        image.Data,
-		})
+	if len(images) == 0 {
+		return nil, nil, fmt.Errorf("image file or image_url is required")
 	}
 	body["response_format"] = firstNonEmpty(util.Clean(body["response_format"]), "b64_json")
 	body["stream"] = util.ToBool(body["stream"])
 	return body, images, nil
+}
+
+func (a *App) jsonImageEditUploads(ctx context.Context, body map[string]any, identity service.Identity) ([]protocol.UploadedImage, error) {
+	var images []protocol.UploadedImage
+	refs := util.AsStringSlice(body["reference_image_ids"])
+	if len(refs) > 0 {
+		managedImages, err := a.images.TempReferenceImageBytes(refs, identityScope(identity))
+		if err != nil {
+			return nil, err
+		}
+		for _, image := range managedImages {
+			images = append(images, protocol.UploadedImage{
+				Filename:    image.Filename,
+				ContentType: image.ContentType,
+				Data:        image.Data,
+			})
+		}
+	}
+	urls, err := jsonImageURLReferences(body)
+	if err != nil {
+		return nil, err
+	}
+	for _, rawURL := range urls {
+		image, err := uploadedImageFromJSONImageURL(ctx, rawURL)
+		if err != nil {
+			return nil, err
+		}
+		images = append(images, image)
+	}
+	return images, nil
+}
+
+func jsonImageURLReferences(body map[string]any) ([]string, error) {
+	var refs []string
+	appendRef := func(value any) error {
+		urlValue, err := jsonImageURLReference(value)
+		if err != nil {
+			return err
+		}
+		if urlValue != "" {
+			refs = append(refs, urlValue)
+		}
+		return nil
+	}
+	if value, ok := body["image_url"]; ok {
+		if err := appendRef(value); err != nil {
+			return nil, err
+		}
+	}
+	if value, ok := body["image"]; ok {
+		if err := appendRef(value); err != nil {
+			return nil, err
+		}
+	}
+	switch values := body["images"].(type) {
+	case []any:
+		for _, value := range values {
+			if err := appendRef(value); err != nil {
+				return nil, err
+			}
+		}
+	case []map[string]any:
+		for _, value := range values {
+			if err := appendRef(value); err != nil {
+				return nil, err
+			}
+		}
+	default:
+		if values != nil {
+			if err := appendRef(values); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return refs, nil
+}
+
+func jsonImageURLReference(value any) (string, error) {
+	if value == nil {
+		return "", nil
+	}
+	if raw := strings.TrimSpace(util.Clean(value)); raw != "" && raw != "<nil>" && !strings.HasPrefix(raw, "map[") {
+		return raw, nil
+	}
+	m := util.StringMap(value)
+	if len(m) == 0 {
+		return "", nil
+	}
+	if util.Clean(m["file_id"]) != "" {
+		return "", fmt.Errorf("file_id image references are not supported; use image_url or multipart image")
+	}
+	for _, key := range []string{"image_url", "url"} {
+		nested := util.StringMap(m[key])
+		if len(nested) > 0 {
+			if util.Clean(nested["file_id"]) != "" {
+				return "", fmt.Errorf("file_id image references are not supported; use image_url or multipart image")
+			}
+			if raw := strings.TrimSpace(firstNonEmpty(util.Clean(nested["url"]), util.Clean(nested["image_url"]))); raw != "" {
+				return raw, nil
+			}
+		}
+		if raw := strings.TrimSpace(util.Clean(m[key])); raw != "" {
+			return raw, nil
+		}
+	}
+	return "", nil
+}
+
+func uploadedImageFromJSONImageURL(ctx context.Context, rawURL string) (protocol.UploadedImage, error) {
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" {
+		return protocol.UploadedImage{}, nil
+	}
+	if strings.HasPrefix(strings.ToLower(rawURL), "data:") {
+		return uploadedImageFromDataURL(rawURL)
+	}
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return protocol.UploadedImage{}, fmt.Errorf("image_url must be a data URL or http/https URL")
+	}
+	switch strings.ToLower(parsed.Scheme) {
+	case "http", "https":
+	default:
+		return protocol.UploadedImage{}, fmt.Errorf("image_url must be a data URL or http/https URL")
+	}
+	if err := validateJSONImageURLTarget(ctx, parsed); err != nil {
+		return protocol.UploadedImage{}, err
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return protocol.UploadedImage{}, err
+	}
+	request.Header.Set("Accept", "image/*")
+	request.Header.Set("User-Agent", "chatgpt2api-image-url-fetcher")
+	client := http.Client{
+		Timeout: 30 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= maxJSONImageURLRedirects {
+				return fmt.Errorf("image_url redirected too many times")
+			}
+			req.Header.Set("Accept", "image/*")
+			req.Header.Set("User-Agent", "chatgpt2api-image-url-fetcher")
+			return validateJSONImageURLTarget(ctx, req.URL)
+		},
+	}
+	resp, err := client.Do(request)
+	if err != nil {
+		return protocol.UploadedImage{}, fmt.Errorf("download image_url failed: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return protocol.UploadedImage{}, fmt.Errorf("download image_url failed with status %d", resp.StatusCode)
+	}
+	data, err := readLimitedImageURLBytes(resp.Body)
+	if err != nil {
+		return protocol.UploadedImage{}, err
+	}
+	contentType := uploadedImageContentTypeForJSON(data, resp.Header.Get("Content-Type"))
+	if !strings.HasPrefix(contentType, "image/") {
+		return protocol.UploadedImage{}, fmt.Errorf("image_url must point to an image")
+	}
+	filename := safeUploadStem(path.Base(parsed.Path))
+	if filename == "" {
+		filename = "image"
+	}
+	ext := extensionForContentType(contentType)
+	if ext == "" {
+		ext = strings.ToLower(filepath.Ext(parsed.Path))
+	}
+	if ext == "" {
+		ext = ".png"
+	}
+	return protocol.UploadedImage{Data: data, Filename: filename + ext, ContentType: contentType}, nil
+}
+
+func validateJSONImageURLTarget(ctx context.Context, parsed *url.URL) error {
+	if parsed == nil {
+		return fmt.Errorf("image_url must be a data URL or http/https URL")
+	}
+	host := strings.TrimSpace(parsed.Hostname())
+	if host == "" {
+		return fmt.Errorf("image_url must be a data URL or http/https URL")
+	}
+	addrs, err := resolveJSONImageURLAddrs(ctx, host)
+	if err != nil {
+		return fmt.Errorf("image_url host lookup failed: %w", err)
+	}
+	if len(addrs) == 0 {
+		return fmt.Errorf("image_url host lookup failed: no address found")
+	}
+	for _, addr := range addrs {
+		if isBlockedJSONImageURLAddr(addr) {
+			return fmt.Errorf("image_url must not target private or local network addresses")
+		}
+	}
+	return nil
+}
+
+func resolveJSONImageURLAddrs(ctx context.Context, host string) ([]netip.Addr, error) {
+	if ip := net.ParseIP(host); ip != nil {
+		addr, ok := netip.AddrFromSlice(ip)
+		if !ok {
+			return nil, fmt.Errorf("invalid ip address")
+		}
+		return []netip.Addr{addr.Unmap()}, nil
+	}
+	ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]netip.Addr, 0, len(ips))
+	for _, item := range ips {
+		addr, ok := netip.AddrFromSlice(item.IP)
+		if !ok {
+			continue
+		}
+		out = append(out, addr.Unmap())
+	}
+	return out, nil
+}
+
+func isBlockedJSONImageURLAddr(addr netip.Addr) bool {
+	addr = addr.Unmap()
+	return addr.IsLoopback() ||
+		addr.IsPrivate() ||
+		addr.IsLinkLocalUnicast() ||
+		addr.IsLinkLocalMulticast() ||
+		addr.IsMulticast() ||
+		addr.IsUnspecified()
+}
+
+func uploadedImageFromDataURL(value string) (protocol.UploadedImage, error) {
+	header, dataPart, ok := strings.Cut(value, ",")
+	if !ok {
+		return protocol.UploadedImage{}, fmt.Errorf("invalid image_url data URL")
+	}
+	header = strings.TrimSpace(header)
+	if !strings.HasPrefix(strings.ToLower(header), "data:image/") {
+		return protocol.UploadedImage{}, fmt.Errorf("image_url data URL must be image/*")
+	}
+	if !strings.Contains(strings.ToLower(header), ";base64") {
+		return protocol.UploadedImage{}, fmt.Errorf("image_url data URL must be base64 encoded")
+	}
+	data, err := base64.StdEncoding.DecodeString(strings.TrimSpace(dataPart))
+	if err != nil {
+		return protocol.UploadedImage{}, fmt.Errorf("invalid image_url data URL")
+	}
+	if len(data) == 0 {
+		return protocol.UploadedImage{}, fmt.Errorf("image_url is empty")
+	}
+	if len(data) > maxJSONImageReferenceSize {
+		return protocol.UploadedImage{}, fmt.Errorf("image_url exceeds %d bytes", maxJSONImageReferenceSize)
+	}
+	contentType := uploadedImageContentTypeForJSON(data, strings.TrimPrefix(strings.Split(header, ";")[0], "data:"))
+	if !strings.HasPrefix(contentType, "image/") {
+		return protocol.UploadedImage{}, fmt.Errorf("image_url data URL must be image/*")
+	}
+	return protocol.UploadedImage{Data: data, Filename: "image" + extensionForContentType(contentType), ContentType: contentType}, nil
+}
+
+func readLimitedImageURLBytes(reader io.Reader) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(reader, maxJSONImageReferenceSize+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxJSONImageReferenceSize {
+		return nil, fmt.Errorf("image_url exceeds %d bytes", maxJSONImageReferenceSize)
+	}
+	if len(data) == 0 {
+		return nil, fmt.Errorf("image_url is empty")
+	}
+	return data, nil
+}
+
+func uploadedImageContentTypeForJSON(data []byte, value string) string {
+	value = strings.ToLower(strings.TrimSpace(strings.Split(value, ";")[0]))
+	switch value {
+	case "image/png", "image/jpeg", "image/jpg", "image/gif", "image/webp":
+		if value == "image/jpg" {
+			return "image/jpeg"
+		}
+		return value
+	}
+	return http.DetectContentType(data)
+}
+
+func extensionForContentType(contentType string) string {
+	switch strings.ToLower(strings.TrimSpace(contentType)) {
+	case "image/jpeg", "image/jpg":
+		return ".jpg"
+	case "image/png":
+		return ".png"
+	case "image/gif":
+		return ".gif"
+	case "image/webp":
+		return ".webp"
+	default:
+		return ""
+	}
 }
 
 func readMultipartImageBody(r *http.Request) (map[string]any, []protocol.UploadedImage, error) {
@@ -1847,6 +2311,15 @@ func imageListAccessScope(identity service.Identity, value string) (service.Imag
 	}
 }
 
+func imageTagsFromQuery(query url.Values) []string {
+	raw := append([]string{}, query["tag"]...)
+	raw = append(raw, query["tags"]...)
+	if len(raw) == 0 {
+		return nil
+	}
+	return service.NormalizeImageTags(strings.Join(raw, ","))
+}
+
 func (a *App) recordGeneratedImages(identity service.Identity, urls []string, visibility string) {
 	if len(urls) == 0 || a.images == nil {
 		return
@@ -1971,15 +2444,19 @@ func (a *App) chargeProtocolBilling(identity service.Identity, consumed int, ref
 }
 
 // attachProtocolBillingCharger sets the per-image-output inline charge hook on
-// the request body. The hook atomically deducts 1 billing unit before each
-// image is persisted to disk, preventing gallery writes when balance/quota is
-// insufficient. The chargeIndex counter ensures unique charge keys per output.
-func (a *App) attachProtocolBillingCharger(body map[string]any, identity service.Identity, billingRef service.BillingReference) {
+// the request body. The hook atomically deducts the estimated image price before
+// each image is persisted to disk, preventing gallery writes when balance/quota
+// is insufficient. The chargeIndex counter ensures unique charge keys per output.
+func (a *App) attachProtocolBillingCharger(body map[string]any, identity service.Identity, billingRef service.BillingReference, unitAmountValues ...int) {
 	if a == nil || a.billing == nil || body == nil {
 		return
 	}
 	if identity.Role != service.AuthRoleUser || identity.Provider == service.AuthProviderSub2API {
 		return
+	}
+	unitAmount := 1
+	if len(unitAmountValues) > 0 && unitAmountValues[0] > 0 {
+		unitAmount = unitAmountValues[0]
 	}
 	var mu sync.Mutex
 	chargeIndex := 0
@@ -1989,7 +2466,7 @@ func (a *App) attachProtocolBillingCharger(body map[string]any, identity service
 		chargeIndex++
 		mu.Unlock()
 		ref := protocolChargeReference(billingRef, "inline", idx)
-		return a.billing.Charge(identity, 1, ref)
+		return a.billing.Charge(identity, unitAmount, ref)
 	}
 }
 
@@ -2230,6 +2707,28 @@ func normalizedProtocolImageCount(value any) int {
 		return 4
 	}
 	return n
+}
+
+func protocolImageBillingUnitAmount(model string, body map[string]any) int {
+	size := protocolBillingResolution("", body)
+	if size == "" {
+		size = util.Clean(body["requested_size"])
+	}
+	if size == "" {
+		size = util.Clean(body["size"])
+	}
+	return service.EstimateImageBillingUnitAmount(model, size, util.Clean(body["quality"]))
+}
+
+func protocolBillingResolution(size string, body map[string]any) string {
+	switch service.NormalizeImageResolutionPreset(util.Clean(body["image_resolution"])) {
+	case "2k":
+		return "2K"
+	case "4k":
+		return "4K"
+	default:
+		return size
+	}
 }
 
 func billableProtocolOutputCount(endpoint string, result map[string]any) int {

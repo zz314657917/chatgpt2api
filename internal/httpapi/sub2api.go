@@ -46,11 +46,82 @@ func (a *App) handleSub2APILaunch(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (a *App) handleSub2APIKeys(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	identity, ok := a.requireSub2APIIdentity(w, r)
+	if !ok {
+		return
+	}
+	items, err := a.sub2Launch.ListAPIKeys(r.Context(), identity)
+	if err != nil {
+		util.WriteError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	var binding any
+	if current, ok := a.sub2APIBindingForIdentity(identity); ok {
+		binding = current.PublicMap()
+	}
+	util.WriteJSON(w, http.StatusOK, map[string]any{"items": items, "binding": binding})
+}
+
+func (a *App) handleSub2APIBinding(w http.ResponseWriter, r *http.Request) {
+	identity, ok := a.requireSub2APIIdentity(w, r)
+	if !ok {
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		var binding any
+		if current, ok := a.sub2APIBindingForIdentity(identity); ok {
+			binding = current.PublicMap()
+		}
+		util.WriteJSON(w, http.StatusOK, map[string]any{"binding": binding})
+	case http.MethodPost:
+		body, err := readJSONMap(r)
+		if err != nil {
+			util.WriteError(w, http.StatusBadRequest, "invalid json body")
+			return
+		}
+		binding, err := a.sub2Launch.BindAPIKey(r.Context(), identity, util.Clean(body["api_key_id"]))
+		if err != nil {
+			util.WriteError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		util.WriteJSON(w, http.StatusOK, map[string]any{"binding": binding.PublicMap()})
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func (a *App) requireSub2APIIdentity(w http.ResponseWriter, r *http.Request) (service.Identity, bool) {
+	identity, ok := a.requireIdentity(w, r, "")
+	if !ok {
+		return service.Identity{}, false
+	}
+	if identity.Provider != service.AuthProviderSub2API {
+		util.WriteError(w, http.StatusForbidden, "sub2api session is required")
+		return service.Identity{}, false
+	}
+	if a == nil || a.sub2Launch == nil {
+		util.WriteError(w, http.StatusServiceUnavailable, "sub2api launch is not configured")
+		return service.Identity{}, false
+	}
+	return identity, true
+}
+
 func (a *App) sub2APIBindingForIdentity(identity service.Identity) (service.Sub2APIBinding, bool) {
 	if a == nil || a.sub2Bindings == nil || identity.Provider != service.AuthProviderSub2API {
 		return service.Sub2APIBinding{}, false
 	}
-	return a.sub2Bindings.Get(identityScope(identity))
+	binding, ok := a.sub2Bindings.Get(identityScope(identity))
+	return binding, ok && binding.HasAPIKey()
+}
+
+func sub2APIKeyBindingRequiredError() error {
+	return protocol.HTTPError{Status: http.StatusPreconditionRequired, Message: "请先选择 Sub2API API Key 后再开始创作"}
 }
 
 func (a *App) runLoggedSub2APIImageGenerationTask(ctx context.Context, identity service.Identity, payload map[string]any, binding service.Sub2APIBinding) (map[string]any, error) {
@@ -71,7 +142,7 @@ func (a *App) runLoggedSub2APIChatTask(ctx context.Context, identity service.Ide
 	payload["owner_id"] = identityScope(identity)
 	payload["owner_name"] = identityDisplayName(identity)
 	payload["stream"] = false
-	model := firstNonEmpty(util.Clean(payload["model"]), util.ImageModelAuto)
+	model := sub2APIChatModel(payload["model"])
 	result, err := a.callSub2APIChatCompletions(ctx, payload, binding)
 	if err != nil {
 		a.logCall(ctx, identity, "文本生成", http.MethodPost, "/api/creation-tasks/chat-completions", model, start, "failed", protocolErrorHTTPStatus(err), err.Error(), nil, requestCapture)
@@ -126,7 +197,7 @@ func (a *App) callSub2APIImageEdits(ctx context.Context, identity service.Identi
 	})
 }
 
-const sub2APIImageBatchLimit = 1
+const sub2APIImageBatchLimit = 10
 
 const (
 	sub2APIImageTaskPollInitialDelay = 500 * time.Millisecond
@@ -140,25 +211,21 @@ func (a *App) callSub2APIImageBatches(ctx context.Context, identity service.Iden
 	created := time.Now().Unix()
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	results := make([]sub2APIImageBatchOutput, 0, requested)
-	for index := 1; index <= requested; index++ {
-		result := a.callSub2APIImageBatch(ctx, identity, payload, call, acquire, index)
-		results = append(results, result)
-		if result.err != nil {
-			cancel()
-			return sub2APIImageBatchResult(created, sub2APIIndexedImageData(results, true)), result.err
-		}
-		if result.created != 0 {
-			created = result.created
-		}
-		if progress != nil {
-			data := sub2APIIndexedImageData(results, true)
-			if len(data) > 0 {
-				progress(data)
-			}
+	result := a.callSub2APIImageBatch(ctx, identity, payload, call, acquire, 1, requested)
+	if result.err != nil {
+		cancel()
+		return sub2APIImageBatchResult(created, sub2APIIndexedImageData([]sub2APIImageBatchOutput{result}, true, requested)), result.err
+	}
+	if result.created != 0 {
+		created = result.created
+	}
+	if progress != nil {
+		data := sub2APIIndexedImageData([]sub2APIImageBatchOutput{result}, true, requested)
+		if len(data) > 0 {
+			progress(data)
 		}
 	}
-	return sub2APIImageBatchResult(created, sub2APIIndexedImageData(results, false)), nil
+	return sub2APIImageBatchResult(created, sub2APIIndexedImageData([]sub2APIImageBatchOutput{result}, false, requested)), nil
 }
 
 type sub2APIImageBatchOutput struct {
@@ -168,11 +235,11 @@ type sub2APIImageBatchOutput struct {
 	err     error
 }
 
-func (a *App) callSub2APIImageBatch(ctx context.Context, identity service.Identity, payload map[string]any, call func(map[string]any) (map[string]any, error), acquire protocol.ImageOutputSlotAcquirer, index int) sub2APIImageBatchOutput {
+func (a *App) callSub2APIImageBatch(ctx context.Context, identity service.Identity, payload map[string]any, call func(map[string]any) (map[string]any, error), acquire protocol.ImageOutputSlotAcquirer, index int, count int) sub2APIImageBatchOutput {
 	out := sub2APIImageBatchOutput{index: index}
 	batchPayload := util.CopyMap(payload)
-	batchPayload["n"] = sub2APIImageBatchLimit
-	release, err := sub2APIAcquireBatchSlot(ctx, acquire, index)
+	batchPayload["n"] = count
+	release, err := sub2APIAcquireBatchSlots(ctx, acquire, index, count)
 	if err != nil {
 		out.err = err
 		return out
@@ -193,7 +260,7 @@ func (a *App) callSub2APIImageBatch(ctx context.Context, identity service.Identi
 	return out
 }
 
-func sub2APIIndexedImageData(results []sub2APIImageBatchOutput, keepPlaceholders bool) []map[string]any {
+func sub2APIIndexedImageData(results []sub2APIImageBatchOutput, keepPlaceholders bool, requested int) []map[string]any {
 	if len(results) == 0 {
 		return nil
 	}
@@ -201,7 +268,7 @@ func sub2APIIndexedImageData(results []sub2APIImageBatchOutput, keepPlaceholders
 		return results[i].index < results[j].index
 	})
 	if keepPlaceholders {
-		maxIndex := 0
+		maxIndex := requested
 		for _, result := range results {
 			if result.index > maxIndex {
 				maxIndex = result.index
@@ -216,8 +283,14 @@ func sub2APIIndexedImageData(results []sub2APIImageBatchOutput, keepPlaceholders
 				continue
 			}
 			cloned := sub2APICloneImageData(result.data)
-			data[result.index-1] = cloned[0]
-			data = append(data, cloned[1:]...)
+			for offset, item := range cloned {
+				target := result.index - 1 + offset
+				if target >= len(data) {
+					data = append(data, item)
+					continue
+				}
+				data[target] = item
+			}
 		}
 		return data
 	}
@@ -254,6 +327,9 @@ func sub2APIImageRequestedCount(payload map[string]any) int {
 	count := util.ToInt(payload["n"], 1)
 	if count < 1 {
 		return 1
+	}
+	if count > sub2APIImageBatchLimit {
+		return sub2APIImageBatchLimit
 	}
 	return count
 }
@@ -292,6 +368,28 @@ func sub2APIAcquireBatchSlot(ctx context.Context, acquire protocol.ImageOutputSl
 		return func() {}, nil
 	}
 	return release, nil
+}
+
+func sub2APIAcquireBatchSlots(ctx context.Context, acquire protocol.ImageOutputSlotAcquirer, start int, count int) (func(), error) {
+	if count < 1 {
+		count = 1
+	}
+	releases := make([]func(), 0, count)
+	for offset := 0; offset < count; offset++ {
+		release, err := sub2APIAcquireBatchSlot(ctx, acquire, start+offset)
+		if err != nil {
+			for index := len(releases) - 1; index >= 0; index-- {
+				releases[index]()
+			}
+			return nil, err
+		}
+		releases = append(releases, release)
+	}
+	return func() {
+		for index := len(releases) - 1; index >= 0; index-- {
+			releases[index]()
+		}
+	}, nil
 }
 
 func sub2APIImageJSONPayload(payload map[string]any) map[string]any {
@@ -383,7 +481,7 @@ func sub2APIImageContentType(image protocol.UploadedImage) string {
 
 func sub2APIChatPayload(payload map[string]any) map[string]any {
 	out := map[string]any{
-		"model":    firstNonEmpty(util.Clean(payload["model"]), util.ImageModelAuto),
+		"model":    sub2APIChatModel(payload["model"]),
 		"messages": util.AsMapSlice(payload["messages"]),
 		"stream":   false,
 	}
@@ -391,6 +489,14 @@ func sub2APIChatPayload(payload map[string]any) map[string]any {
 		out["n"] = n
 	}
 	return out
+}
+
+func sub2APIChatModel(value any) string {
+	model := firstNonEmpty(util.Clean(value), util.ImageModelAuto)
+	if model == util.ImageModelAuto {
+		return util.DefaultChatModel
+	}
+	return model
 }
 
 func sub2APIChatTaskResult(result map[string]any, text string) map[string]any {

@@ -9,6 +9,7 @@ import { AnnouncementsCard } from "./components/announcements-card";
 import { ConfigCard } from "./components/config-card";
 import { CPAPoolDialog } from "./components/cpa-pool-dialog";
 import { CPAPoolsCard } from "./components/cpa-pools-card";
+import { CreationTaskGovernanceCard } from "./components/creation-task-governance-card";
 import { ImageStorageGovernanceCard } from "./components/image-storage-governance-card";
 import { ImportBrowserDialog } from "./components/import-browser-dialog";
 import { LinuxDoLoginCard } from "./components/linuxdo-login-card";
@@ -74,6 +75,11 @@ function AdminSettingsPageContent({
         <SettingsMasonryItem>
           <LogGovernanceCard />
         </SettingsMasonryItem>
+        {canManageSystem ? (
+          <SettingsMasonryItem>
+            <CreationTaskGovernanceCard />
+          </SettingsMasonryItem>
+        ) : null}
         <SettingsMasonryItem>
           <ImageStorageGovernanceCard />
         </SettingsMasonryItem>

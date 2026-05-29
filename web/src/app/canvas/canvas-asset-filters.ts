@@ -1,4 +1,4 @@
-import type { ImageVisibility, ManagedImage } from "@/lib/api";
+import type { ImageVisibility, ManagedImageSummary } from "@/lib/api";
 
 export type SmartCanvasAssetVisibilityFilter = ImageVisibility | "all";
 export type SmartCanvasAssetOrientationFilter = "all" | "square" | "portrait" | "landscape";
@@ -47,9 +47,9 @@ export function resetSmartCanvasAssetFilters(patch: SmartCanvasAssetFilterPatch 
 }
 
 export function filterSmartCanvasAssets(
-  assets: readonly ManagedImage[],
+  assets: readonly ManagedImageSummary[],
   filters: SmartCanvasAssetFilterState = DEFAULT_SMART_CANVAS_ASSET_FILTERS,
-): ManagedImage[] {
+): ManagedImageSummary[] {
   const normalizedFilters = normalizeSmartCanvasAssetFilters(filters);
   const query = normalizedFilters.query.toLowerCase();
 
@@ -79,7 +79,7 @@ export function normalizeSmartCanvasAssetFilters(filters: SmartCanvasAssetFilter
   };
 }
 
-export function getSmartCanvasAssetOrientation(asset: ManagedImage): Exclude<SmartCanvasAssetOrientationFilter, "all"> | "" {
+export function getSmartCanvasAssetOrientation(asset: ManagedImageSummary): Exclude<SmartCanvasAssetOrientationFilter, "all"> | "" {
   const width = Number(asset.width);
   const height = Number(asset.height);
   if (Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0) {
@@ -94,7 +94,7 @@ export function getSmartCanvasAssetOrientation(asset: ManagedImage): Exclude<Sma
 }
 
 function matchesSmartCanvasAssetFilters(
-  asset: ManagedImage,
+  asset: ManagedImageSummary,
   filters: SmartCanvasAssetFilterState,
   normalizedQuery: string,
 ) {
@@ -113,7 +113,7 @@ function matchesSmartCanvasAssetFilters(
   return smartCanvasAssetSearchText(asset).includes(normalizedQuery);
 }
 
-function compareSmartCanvasAssets(left: ManagedImage, right: ManagedImage, sort: SmartCanvasAssetSort) {
+function compareSmartCanvasAssets(left: ManagedImageSummary, right: ManagedImageSummary, sort: SmartCanvasAssetSort) {
   if (sort === "name") {
     return compareSmartCanvasAssetNames(left, right);
   }
@@ -123,7 +123,7 @@ function compareSmartCanvasAssets(left: ManagedImage, right: ManagedImage, sort:
   return sort === "oldest" ? leftTime - rightTime : rightTime - leftTime;
 }
 
-function compareSmartCanvasAssetNames(left: ManagedImage, right: ManagedImage) {
+function compareSmartCanvasAssetNames(left: ManagedImageSummary, right: ManagedImageSummary) {
   const leftName = smartCanvasAssetName(left);
   const rightName = smartCanvasAssetName(right);
   return leftName.localeCompare(rightName, undefined, {
@@ -132,22 +132,19 @@ function compareSmartCanvasAssetNames(left: ManagedImage, right: ManagedImage) {
   });
 }
 
-function smartCanvasAssetName(asset: ManagedImage) {
-  return asset.name || asset.path || asset.url || "";
+function smartCanvasAssetName(asset: ManagedImageSummary) {
+  return asset.name || asset.path || "";
 }
 
-function smartCanvasAssetTime(asset: ManagedImage) {
+function smartCanvasAssetTime(asset: ManagedImageSummary) {
   const time = Date.parse(asset.created_at || asset.date || "");
   return Number.isFinite(time) ? time : 0;
 }
 
-function smartCanvasAssetSearchText(asset: ManagedImage) {
+function smartCanvasAssetSearchText(asset: ManagedImageSummary) {
   return [
     asset.name,
     asset.path,
-    asset.url,
-    asset.prompt,
-    asset.model,
     asset.visibility,
     asset.created_at,
     asset.date,

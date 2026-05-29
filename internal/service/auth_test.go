@@ -34,6 +34,9 @@ func TestAuthServiceCreateAuthenticateDisableAndDelete(t *testing.T) {
 	if !HasAPIPermission(PermissionSet{APIPermissions: identity.APIPermissions}, "DELETE", "/api/images") {
 		t.Fatalf("default user permissions missing owner-scoped image delete: %#v", identity.APIPermissions)
 	}
+	if !HasAPIPermission(PermissionSet{APIPermissions: identity.APIPermissions}, "PATCH", "/api/images/tags") {
+		t.Fatalf("default user permissions missing image tags: %#v", identity.APIPermissions)
+	}
 
 	keyID, _ := public["id"].(string)
 	revealed, found := auth.RevealKey(keyID, filter)

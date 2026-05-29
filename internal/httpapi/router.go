@@ -71,8 +71,12 @@ func (a *App) routes() []appRoute {
 		subtree("/api/auth/users", a.handleUserKeys),
 		subtree("/api/accounts", a.handleAccounts),
 		subtree("/api/cpa/pools", a.handleCPA),
+		exact("", "/api/sub2api/binding", a.handleSub2APIBinding),
+		exact(http.MethodGet, "/api/sub2api/api-keys", a.handleSub2APIKeys),
 		subtree("/api/sub2api/servers", a.handleSub2API),
+		exact("", "/api/admin/creation-tasks/diagnostics", a.handleCreationTaskDiagnostics),
 		subtree("/api/creation-tasks", a.handleCreationTasks),
+		subtree("/api/social-projects", a.handleSocialProjects),
 		subtree("/api/canvases", a.handleCanvases),
 		exact(http.MethodGet, "/api/canvas/models", a.handleCanvasModels),
 		subtree("/api/canvas-runs", a.handleCanvasRuns),
@@ -82,6 +86,7 @@ func (a *App) routes() []appRoute {
 		exact(http.MethodGet, "/api/app-meta", a.handleAppMeta),
 		exact(http.MethodGet, "/api/admin/permissions", a.handlePermissionCatalog),
 		exact("", "/api/images/visibility", a.handleImageVisibility),
+		exact("", "/api/images/tags", a.handleImageTags),
 		exact(http.MethodPost, "/api/images/uploads", a.handleImageUploads),
 		exact(http.MethodGet, "/api/images/detail", a.handleImageDetail),
 		exact("", "/api/images", a.handleImages),
@@ -95,6 +100,7 @@ func (a *App) routes() []appRoute {
 		prefix("/images/", a.handleImageFile),
 		prefix("/image-references/", a.handleImageReferenceFile),
 		prefix("/image-thumbnails/", a.handleImageThumbnail),
+		prefix("/image-previews/", a.handleImagePreview),
 		prefix("/login-page-images/", http.StripPrefix("/login-page-images/", http.FileServer(http.Dir(a.config.LoginPageImagesDir()))).ServeHTTP),
 	}
 }
@@ -122,6 +128,10 @@ func (a *App) serveHTTP(w http.ResponseWriter, r *http.Request, routes []appRout
 		return
 	}
 	if isAPISpace(r.URL.Path) {
+		if strings.HasPrefix(r.URL.Path, "/v1/") || r.URL.Path == "/v1" {
+			writeOpenAIError(w, http.StatusNotFound, "not found")
+			return
+		}
 		http.NotFound(w, r)
 		return
 	}

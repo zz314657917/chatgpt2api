@@ -44,3 +44,11 @@ export function getManagedImageThumbnailUrlFromPath(value: string) {
   }
   return `/image-thumbnails/${path.split("/").filter(Boolean).map(encodeURIComponent).join("/")}.jpg`;
 }
+
+export function getManagedImagePreviewUrlFromPath(value: string) {
+  const path = value.trim().replace(/\\/g, "/").replace(/^\/+/, "");
+  if (!path) {
+    return "";
+  }
+  return `/image-previews/${path.split("/").filter(Boolean).map(encodeURIComponent).join("/")}.jpg`;
+}

@@ -1588,7 +1588,7 @@ func (a *App) handleCreationTasks(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.URL.Path == "/api/creation-tasks/chat-completions" && r.Method == http.MethodPost {
 		body, _ := readJSONMap(r)
-		task, err := a.tasks.SubmitChat(r.Context(), identity, util.Clean(body["client_task_id"]), util.Clean(body["prompt"]), firstNonEmpty(util.Clean(body["model"]), util.ImageModelAuto), body["messages"], protocol.IsImageChatRequest(body), util.ToInt(body["n"], 1))
+		task, err := a.tasks.SubmitChat(r.Context(), identity, util.Clean(body["client_task_id"]), util.Clean(body["prompt"]), firstNonEmpty(util.Clean(body["model"]), util.DefaultChatModel), body["messages"], protocol.IsImageChatRequest(body), util.ToInt(body["n"], 1))
 		if err != nil {
 			writeCreationTaskSubmitError(w, err)
 			return
@@ -1611,6 +1611,37 @@ func (a *App) handleCreationTasks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.NotFound(w, r)
+}
+
+func (a *App) handleCreationTaskDiagnostics(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Pragma", "no-cache")
+	identity, ok := a.requireIdentity(w, r, "")
+	if !ok {
+		return
+	}
+	if identity.Role != service.AuthRoleAdmin {
+		util.WriteError(w, http.StatusForbidden, "permission denied")
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		staleThreshold := service.ImageTaskStaleThresholdFromSeconds(util.ToInt(r.URL.Query().Get("stale_seconds"), 0))
+		util.WriteJSON(w, http.StatusOK, map[string]any{"diagnostics": a.tasks.DiagnosticsSummary(staleThreshold)})
+	case http.MethodPost:
+		body, _ := readJSONMap(r)
+		staleThreshold := service.ImageTaskStaleThresholdFromSeconds(util.ToInt(body["stale_seconds"], util.ToInt(r.URL.Query().Get("stale_seconds"), 0)))
+		result := a.tasks.RepairDiagnostics(service.ImageTaskRepairOptions{
+			FinalizeActive: util.ToBool(body["finalize_active"]),
+			StaleThreshold: staleThreshold,
+		})
+		util.WriteJSON(w, http.StatusOK, map[string]any{
+			"repair":      result,
+			"diagnostics": result.After,
+		})
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
 }
 
 func imageTaskRequestMetadata(body map[string]any) map[string]any {

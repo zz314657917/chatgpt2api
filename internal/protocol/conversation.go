@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -56,6 +57,8 @@ type Engine struct {
 type savedImageResult struct {
 	URL      string
 	LocalURL string
+	Width    int
+	Height   int
 }
 
 type ImageOutputSlotAcquirer func(context.Context, int) (func(), error)
@@ -1219,6 +1222,11 @@ func (e *Engine) formatImageResultWithOptions(items []map[string]any, prompt, re
 		if saved.LocalURL != "" && saved.LocalURL != saved.URL {
 			responseItem["local_url"] = saved.LocalURL
 		}
+		if saved.Width > 0 && saved.Height > 0 {
+			responseItem["width"] = saved.Width
+			responseItem["height"] = saved.Height
+			responseItem["resolution"] = fmt.Sprintf("%dx%d", saved.Width, saved.Height)
+		}
 		if responseFormat == "b64_json" {
 			responseItem["b64_json"] = base64.StdEncoding.EncodeToString(imageBytes)
 		}
@@ -1259,12 +1267,13 @@ func (e *Engine) SaveImageBytesForOwnerWithFormatResult(imageData []byte, baseUR
 		baseURL = e.Config.BaseURL()
 	}
 	localURL := strings.TrimRight(baseURL, "/") + "/images/" + filepath.ToSlash(rel)
+	width, height := imageBytesDimensions(imageData)
 	stored := e.uploadImageObject(rel, imageData, outputFormat)
 	e.writeImageOwnerMetadata(rel, ownerID, ownerName, stored)
 	if stored.URL != "" {
-		return savedImageResult{URL: stored.URL, LocalURL: localURL}
+		return savedImageResult{URL: stored.URL, LocalURL: localURL, Width: width, Height: height}
 	}
-	return savedImageResult{URL: localURL, LocalURL: localURL}
+	return savedImageResult{URL: localURL, LocalURL: localURL, Width: width, Height: height}
 }
 
 func (e *Engine) uploadImageObject(rel string, imageData []byte, outputFormat string) imagestore.StoredObject {
@@ -1313,6 +1322,14 @@ func imageContentType(outputFormat string) string {
 	default:
 		return "image/png"
 	}
+}
+
+func imageBytesDimensions(data []byte) (int, int) {
+	config, _, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil || config.Width <= 0 || config.Height <= 0 {
+		return 0, 0
+	}
+	return config.Width, config.Height
 }
 
 func encodeImageBytes(data []byte, options ImageOutputOptions) ([]byte, error) {
@@ -1652,6 +1669,140 @@ func CountImagePartTokens(part any) int {
 		return estimateImageTokensFromDimensions(width, height)
 	}
 	return imageUnknownDetailTokens
+}
+
+func ImageResponseUsage(prompt string, messages []map[string]any, model string, inputImages []UploadedImage, result map[string]any, size, quality string) map[string]any {
+	textTokens := CountTextTokens(prompt, model) + CountMessageTokens(messages, model)
+	inputImageTokens := CountUploadedImageTokens(inputImages, "")
+	outputImageTokens := CountImageOutputTokens(result, size, quality)
+	inputTokens := textTokens + inputImageTokens
+	outputTokens := outputImageTokens
+	return map[string]any{
+		"input_tokens":  inputTokens,
+		"output_tokens": outputTokens,
+		"total_tokens":  inputTokens + outputTokens,
+		"input_tokens_details": map[string]any{
+			"text_tokens":  textTokens,
+			"image_tokens": inputImageTokens,
+		},
+		"output_tokens_details": map[string]any{
+			"text_tokens":  0,
+			"image_tokens": outputImageTokens,
+		},
+	}
+}
+
+func CountUploadedImageTokens(images []UploadedImage, detail string) int {
+	total := 0
+	for _, imageValue := range images {
+		if strings.EqualFold(strings.TrimSpace(detail), "low") {
+			total += imageLowDetailTokens
+			continue
+		}
+		config, _, err := image.DecodeConfig(bytes.NewReader(imageValue.Data))
+		if err != nil || config.Width <= 0 || config.Height <= 0 {
+			total += imageUnknownDetailTokens
+			continue
+		}
+		total += estimateImageTokensFromDimensions(config.Width, config.Height)
+	}
+	return total
+}
+
+func CountImageOutputTokens(result map[string]any, size, quality string) int {
+	data := imageResultData(result)
+	if len(data) == 0 {
+		return 0
+	}
+	total := 0
+	for _, item := range data {
+		if width, height, ok := imageOutputDimensions(item); ok {
+			total += estimateGeneratedImageTokens(width, height, quality)
+			continue
+		}
+		if width, height, ok := parseImageSize(size); ok {
+			total += estimateGeneratedImageTokens(width, height, quality)
+		} else {
+			total += imageUnknownDetailTokens
+		}
+	}
+	return total
+}
+
+func imageResultData(result map[string]any) []map[string]any {
+	if len(result) == 0 {
+		return nil
+	}
+	switch values := result["data"].(type) {
+	case []map[string]any:
+		return values
+	case []any:
+		out := make([]map[string]any, 0, len(values))
+		for _, value := range values {
+			if item := util.StringMap(value); len(item) > 0 {
+				out = append(out, item)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func imageOutputDimensions(item map[string]any) (int, int, bool) {
+	if width := util.ToInt(item["width"], 0); width > 0 {
+		if height := util.ToInt(item["height"], 0); height > 0 {
+			return width, height, true
+		}
+	}
+	b64 := strings.TrimSpace(util.Clean(item["b64_json"]))
+	if b64 == "" {
+		return 0, 0, false
+	}
+	data, err := base64.StdEncoding.DecodeString(b64)
+	if err != nil {
+		return 0, 0, false
+	}
+	config, _, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil || config.Width <= 0 || config.Height <= 0 {
+		return 0, 0, false
+	}
+	return config.Width, config.Height, true
+}
+
+func parseImageSize(value string) (int, int, bool) {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" || value == "auto" {
+		return 0, 0, false
+	}
+	parts := strings.Split(value, "x")
+	if len(parts) != 2 {
+		return 0, 0, false
+	}
+	width, err := strconv.Atoi(strings.TrimSpace(parts[0]))
+	if err != nil {
+		return 0, 0, false
+	}
+	height, err := strconv.Atoi(strings.TrimSpace(parts[1]))
+	if err != nil {
+		return 0, 0, false
+	}
+	return width, height, width > 0 && height > 0
+}
+
+func estimateGeneratedImageTokens(width, height int, quality string) int {
+	if width <= 0 || height <= 0 {
+		return imageUnknownDetailTokens
+	}
+	patches := ceilDiv(width, 32) * ceilDiv(height, 32)
+	switch strings.ToLower(strings.TrimSpace(quality)) {
+	case "low":
+		return max(1, ceilDiv(patches*17, 64))
+	case "high", "hd":
+		return max(1, ceilDiv(patches*65, 16))
+	default:
+		return max(1, ceilDiv(patches*33, 32))
+	}
 }
 
 func imagePartURLAndDetail(part any) (string, string) {

@@ -17,9 +17,11 @@ import (
 const canvasTaskPollInterval = 600 * time.Millisecond
 
 type canvasModelOption struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
-	Kind string `json:"kind"`
+	ID           string   `json:"id"`
+	Name         string   `json:"name"`
+	Kind         string   `json:"kind"`
+	Capabilities []string `json:"capabilities"`
+	Enabled      bool     `json:"enabled"`
 }
 
 func (a *App) handleCanvasModels(w http.ResponseWriter, r *http.Request) {
@@ -190,6 +192,8 @@ func (a *App) ExecuteCanvasNode(ctx context.Context, identity service.Identity, 
 		return output, nil
 	case service.CanvasNodeTypeResult:
 		return canvasResultNodeOutput(exec.Inputs), nil
+	case service.CanvasNodeTypeGroup:
+		return canvasResultNodeOutput(exec.Inputs), nil
 	case service.CanvasNodeTypePrompt:
 		return a.executeCanvasPromptNode(ctx, identity, exec)
 	case service.CanvasNodeTypeImageCreate:
@@ -339,35 +343,72 @@ func (a *App) canvasUploadedImages(identity service.Identity, node service.Canva
 
 func (a *App) canvasModelCatalog(ctx context.Context, identity service.Identity) []canvasModelOption {
 	if binding, ok := a.sub2APIBindingForIdentity(identity); ok {
+		if result, err := a.getSub2APIModelCatalog(ctx, binding); err == nil {
+			return canvasModelOptionsFromCatalog(result)
+		}
 		if result, err := a.getSub2APIModels(ctx, binding); err == nil {
-			return canvasModelOptionsFromResult(result, false)
+			return canvasModelOptionsFromModelList(result, false)
 		}
 	}
 	result, err := a.engine.ListModels(ctx)
 	if err != nil {
 		result = map[string]any{"data": []map[string]any{}}
 	}
-	return canvasModelOptionsFromResult(result, true)
+	return canvasModelOptionsFromModelList(result, true)
+}
+
+func (a *App) getSub2APIModelCatalog(ctx context.Context, binding service.Sub2APIBinding) (map[string]any, error) {
+	return a.doSub2APIRequest(ctx, binding, http.MethodGet, "model-catalog", "", nil)
 }
 
 func (a *App) getSub2APIModels(ctx context.Context, binding service.Sub2APIBinding) (map[string]any, error) {
 	return a.doSub2APIRequest(ctx, binding, http.MethodGet, "models", "", nil)
 }
 
-func canvasModelOptionsFromResult(result map[string]any, includeLocal bool) []canvasModelOption {
+func canvasModelOptionsFromCatalog(result map[string]any) []canvasModelOption {
+	seen := map[string]canvasModelOption{}
+	for _, item := range util.AsMapSlice(result["items"]) {
+		id := util.Clean(item["id"])
+		if id == "" || shouldHideCanvasModel(id) {
+			continue
+		}
+		capabilities := canvasModelCapabilities(item["capabilities"], id)
+		seen[id] = canvasModelOption{
+			ID:           id,
+			Name:         firstNonEmpty(util.Clean(item["name"]), util.Clean(item["display_name"]), id),
+			Kind:         canvasModelKindFromCapabilities(capabilities),
+			Capabilities: capabilities,
+			Enabled:      canvasModelEnabled(item["enabled"]),
+		}
+	}
+	return sortedCanvasModelOptions(seen)
+}
+
+func canvasModelOptionsFromModelList(result map[string]any, includeLocal bool) []canvasModelOption {
 	seen := map[string]canvasModelOption{}
 	for _, item := range util.AsMapSlice(result["data"]) {
-		if id := util.Clean(item["id"]); id != "" {
-			seen[id] = canvasModelOption{ID: id, Name: id, Kind: canvasModelKind(id)}
+		if id := util.Clean(item["id"]); id != "" && !shouldHideCanvasModel(id) {
+			seen[id] = newCanvasModelOption(id, firstNonEmpty(util.Clean(item["display_name"]), util.Clean(item["name"]), id))
 		}
 	}
 	if includeLocal {
 		for _, id := range util.ModelList() {
+			if shouldHideCanvasModel(id) {
+				continue
+			}
 			if _, ok := seen[id]; !ok {
-				seen[id] = canvasModelOption{ID: id, Name: id, Kind: canvasModelKind(id)}
+				seen[id] = newCanvasModelOption(id, id)
 			}
 		}
 	}
+	return sortedCanvasModelOptions(seen)
+}
+
+func shouldHideCanvasModel(id string) bool {
+	return strings.TrimSpace(id) == util.ImageModelCodex
+}
+
+func sortedCanvasModelOptions(seen map[string]canvasModelOption) []canvasModelOption {
 	items := make([]canvasModelOption, 0, len(seen))
 	for _, item := range seen {
 		items = append(items, item)
@@ -529,12 +570,113 @@ func sortCanvasModelOptions(items []canvasModelOption) {
 }
 
 func canvasModelKind(id string) string {
+	return canvasModelKindFromCapabilities(canvasModelCapabilities(nil, id))
+}
+
+func newCanvasModelOption(id string, name string) canvasModelOption {
+	capabilities := canvasModelCapabilities(nil, id)
+	return canvasModelOption{
+		ID:           id,
+		Name:         firstNonEmpty(name, id),
+		Kind:         canvasModelKindFromCapabilities(capabilities),
+		Capabilities: capabilities,
+		Enabled:      true,
+	}
+}
+
+func canvasModelCapabilities(value any, id string) []string {
+	seen := map[string]struct{}{}
+	var capabilities []string
+	for _, capability := range util.AsStringSlice(value) {
+		normalized := normalizeCanvasModelCapability(capability)
+		if normalized == "" {
+			continue
+		}
+		if _, ok := seen[normalized]; ok {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		capabilities = append(capabilities, normalized)
+	}
+	if len(capabilities) > 0 {
+		return capabilities
+	}
 	switch id {
 	case util.ImageModelAuto:
-		return "both"
+		return []string{"chat", "image"}
 	case util.ImageModelGPT, util.ImageModelGPTOfficial, util.ImageModelCodex:
+		return []string{"image"}
+	default:
+		if canvasModelLooksLikeVideo(id) {
+			return []string{"video"}
+		}
+		if canvasModelLooksLikeImage(id) {
+			return []string{"image"}
+		}
+		return []string{"chat"}
+	}
+}
+
+func normalizeCanvasModelCapability(capability string) string {
+	switch strings.ToLower(strings.TrimSpace(capability)) {
+	case "text", "llm", "chat":
+		return "chat"
+	case "image", "images":
 		return "image"
+	case "video", "videos":
+		return "video"
+	default:
+		return ""
+	}
+}
+
+func canvasModelKindFromCapabilities(capabilities []string) string {
+	hasChat := canvasModelHasCapability(capabilities, "chat")
+	hasImage := canvasModelHasCapability(capabilities, "image")
+	switch {
+	case hasChat && hasImage:
+		return "both"
+	case hasImage:
+		return "image"
+	case canvasModelHasCapability(capabilities, "video"):
+		return "video"
 	default:
 		return "text"
 	}
+}
+
+func canvasModelHasCapability(capabilities []string, capability string) bool {
+	for _, item := range capabilities {
+		if item == capability {
+			return true
+		}
+	}
+	return false
+}
+
+func canvasModelEnabled(value any) bool {
+	if value == nil {
+		return true
+	}
+	return util.ToBool(value)
+}
+
+func canvasModelLooksLikeImage(id string) bool {
+	lower := strings.ToLower(strings.TrimSpace(id))
+	for _, hint := range []string{"image", "imagen", "flux", "stable-diffusion", "sdxl", "dall-e", "midjourney", "kolors", "ideogram", "recraft"} {
+		if strings.Contains(lower, hint) {
+			return true
+		}
+	}
+	return false
+}
+
+func canvasModelLooksLikeVideo(id string) bool {
+	lower := strings.ToLower(strings.TrimSpace(id))
+	for _, hint := range []string{"video", "text-to-video", "image-to-video", "t2v", "i2v", "sora", "veo", "kling", "hailuo", "runway", "luma", "seedance", "wan2", "wanx"} {
+		if strings.Contains(lower, hint) {
+			return true
+		}
+	}
+	return false
 }

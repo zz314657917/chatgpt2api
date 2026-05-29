@@ -6,6 +6,7 @@ import { motion, useReducedMotion, type Transition } from "motion/react";
 import { Link, NavLink, useLocation, useNavigate } from "react-router-dom";
 
 import { ImageTaskQueue } from "@/components/image-task-queue";
+import { Sub2APIKeyMenu } from "@/components/sub2api-key-picker";
 import webConfig from "@/constants/common-env";
 import {
   AUTH_SESSION_CHANGE_EVENT,
@@ -32,6 +33,7 @@ import {
 const navItems = [
   { href: "/image", label: "创作台" },
   { href: "/canvas", label: "无限画布" },
+  { href: "/social", label: "社媒运营" },
   { href: "/image-manager", label: "图片库" },
 ];
 const profileNavItem = { href: "/profile", label: "个人中心" };
@@ -97,17 +99,25 @@ type NavItem = {
   label: string;
 };
 
+function buildNavTarget(href: string, search: string) {
+  const params = new URLSearchParams(search);
+  if (params.get("ui_mode") !== "embedded") {
+    return href;
+  }
+  return `${href}?ui_mode=embedded`;
+}
+
 function isActivePath(pathname: string, href: string) {
   return pathname === href || pathname.startsWith(`${href}/`);
 }
 
-function NavPill({ item, pathname }: { item: NavItem; pathname: string }) {
+function NavPill({ item, pathname, search }: { item: NavItem; pathname: string; search: string }) {
   const active = isActivePath(pathname, item.href);
   const prefersReducedMotion = useReducedMotion();
 
   return (
     <NavLink
-      to={item.href}
+      to={buildNavTarget(item.href, search)}
       className={() =>
         cn(
           "relative isolate shrink-0 whitespace-nowrap rounded-full px-3 py-1.5 text-[13px] font-medium transition-colors sm:text-sm",
@@ -342,19 +352,23 @@ export function TopNav() {
               aria-hidden="true"
               className="size-7 rounded-[10px] shadow-[0_4px_10px_rgba(184,90,127,0.16)]"
             />
-            <span className="truncate">{appMeta.app_title || "落叶网络"}</span>
+            <span className="truncate">{appMeta.app_title || "落叶AI"}</span>
             {navCollapsed ? <ChevronDown aria-hidden="true" /> : <ChevronUp aria-hidden="true" />}
           </Button>
           <div className="ml-auto flex shrink-0 items-center gap-1 lg:hidden">
             {canAccessImageTasks ? <ImageTaskQueue className="size-8 px-0" /> : null}
             <ThemeToggleButton theme={theme} onToggle={handleThemeToggle} />
-            <AccountMenu
-              session={session}
-              roleLabel={roleLabel}
-              availableQuota={availableQuota}
-              pathname={pathname}
-              onLogout={handleLogout}
-            />
+            {session.provider === "sub2api" ? (
+              <Sub2APIKeyMenu session={session} />
+            ) : (
+              <AccountMenu
+                session={session}
+                roleLabel={roleLabel}
+                availableQuota={availableQuota}
+                pathname={pathname}
+                onLogout={handleLogout}
+              />
+            )}
           </div>
         </div>
         <nav
@@ -366,19 +380,23 @@ export function TopNav() {
           )}
         >
           {visibleNavItems.map((item) => (
-            <NavPill key={item.href} item={item} pathname={pathname} />
+            <NavPill key={item.href} item={item} pathname={pathname} search={location.search} />
           ))}
         </nav>
         <div className="hidden items-center justify-end gap-1.5 lg:flex">
           {canAccessImageTasks ? <ImageTaskQueue /> : null}
           <ThemeToggleButton theme={theme} onToggle={handleThemeToggle} />
-          <AccountMenu
-            session={session}
-            roleLabel={roleLabel}
-            availableQuota={availableQuota}
-            pathname={pathname}
-            onLogout={handleLogout}
-          />
+          {session.provider === "sub2api" ? (
+            <Sub2APIKeyMenu session={session} />
+          ) : (
+            <AccountMenu
+              session={session}
+              roleLabel={roleLabel}
+              availableQuota={availableQuota}
+              pathname={pathname}
+              onLogout={handleLogout}
+            />
+          )}
         </div>
       </div>
     </header>

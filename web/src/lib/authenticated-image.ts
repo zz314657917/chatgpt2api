@@ -1,7 +1,7 @@
 import webConfig from "@/constants/common-env";
 import { getStoredSessionToken } from "@/store/auth";
 
-const MANAGED_IMAGE_PREFIXES = ["/images/", "/image-references/", "/image-thumbnails/"] as const;
+const MANAGED_IMAGE_PREFIXES = ["/images/", "/image-references/", "/image-thumbnails/", "/image-previews/"] as const;
 const MAX_CACHED_AUTHENTICATED_IMAGE_ENTRIES = 320;
 const MAX_CACHED_AUTHENTICATED_IMAGE_BYTES = 160 * 1024 * 1024;
 
@@ -80,6 +80,10 @@ function managedImageSourcePathFromURL(value: string) {
     if (pathname.startsWith("/image-thumbnails/")) {
       const thumbnailPath = decodedPathSegment(pathname.slice("/image-thumbnails/".length));
       return normalizeManagedCachePath(thumbnailPath.replace(/\.jpg$/i, ""));
+    }
+    if (pathname.startsWith("/image-previews/")) {
+      const previewPath = decodedPathSegment(pathname.slice("/image-previews/".length));
+      return normalizeManagedCachePath(previewPath.replace(/\.jpg$/i, ""));
     }
     if (pathname.startsWith("/image-references/")) {
       const referencePath = normalizeManagedCachePath(decodedPathSegment(pathname.slice("/image-references/".length)));
