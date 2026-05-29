@@ -715,6 +715,51 @@ func TestHandleImageGenerationsReturnsArbitraryUpstreamImageText(t *testing.T) {
 	}
 }
 
+func TestHandleImageResponsesIncludeImageUsage(t *testing.T) {
+	var pngBuf bytes.Buffer
+	img := image.NewRGBA(image.Rect(0, 0, 32, 24))
+	if err := png.Encode(&pngBuf, img); err != nil {
+		t.Fatalf("encode png: %v", err)
+	}
+	engine := &Engine{
+		ImageTokenProvider: func(context.Context) (string, error) { return "test-token", nil },
+		ImageClientFactory: func(string) *backend.Client { return nil },
+	}
+	engine.StreamImageOutputsFunc = func(ctx context.Context, client *backend.Client, request ConversationRequest, index, total int) (<-chan ImageOutput, <-chan error) {
+		out := make(chan ImageOutput, 1)
+		errCh := make(chan error, 1)
+		out <- ImageOutput{Kind: "result", Model: request.Model, Index: index, Total: total, Created: time.Now().Unix(), Data: []map[string]any{{"b64_json": base64.StdEncoding.EncodeToString(pngBuf.Bytes())}}}
+		close(out)
+		errCh <- nil
+		close(errCh)
+		return out, errCh
+	}
+	generation, _, err := engine.HandleImageGenerations(context.Background(), map[string]any{
+		"prompt": "draw a tile",
+		"model":  "gpt-image-2",
+		"n":      1,
+	})
+	if err != nil {
+		t.Fatalf("HandleImageGenerations() error = %v", err)
+	}
+	if usage := util.StringMap(generation["usage"]); util.ToInt(usage["input_tokens"], 0) <= 0 || util.ToInt(usage["output_tokens"], 0) <= 0 {
+		t.Fatalf("generation usage = %#v", generation["usage"])
+	}
+	edit, _, err := engine.HandleImageEdits(context.Background(), map[string]any{
+		"prompt": "edit a tile",
+		"model":  "gpt-image-2",
+		"n":      1,
+	}, []UploadedImage{{Filename: "input.png", ContentType: "image/png", Data: pngBuf.Bytes()}})
+	if err != nil {
+		t.Fatalf("HandleImageEdits() error = %v", err)
+	}
+	usage := util.StringMap(edit["usage"])
+	inputDetails := util.StringMap(usage["input_tokens_details"])
+	if util.ToInt(inputDetails["image_tokens"], 0) <= 0 || util.ToInt(usage["output_tokens"], 0) <= 0 {
+		t.Fatalf("edit usage = %#v", usage)
+	}
+}
+
 func TestImageConversationFallbackReferenceUsedOnlyForNewUpstreamSession(t *testing.T) {
 	fallback := "data:image/png;base64," + base64.StdEncoding.EncodeToString([]byte("fallback"))
 	sessions := service.NewImageConversationSessionService(filepath.Join(t.TempDir(), "sessions.json"))

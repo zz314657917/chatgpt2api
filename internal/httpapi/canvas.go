@@ -369,7 +369,7 @@ func canvasModelOptionsFromCatalog(result map[string]any) []canvasModelOption {
 	seen := map[string]canvasModelOption{}
 	for _, item := range util.AsMapSlice(result["items"]) {
 		id := util.Clean(item["id"])
-		if id == "" {
+		if id == "" || shouldHideCanvasModel(id) {
 			continue
 		}
 		capabilities := canvasModelCapabilities(item["capabilities"], id)
@@ -387,18 +387,25 @@ func canvasModelOptionsFromCatalog(result map[string]any) []canvasModelOption {
 func canvasModelOptionsFromModelList(result map[string]any, includeLocal bool) []canvasModelOption {
 	seen := map[string]canvasModelOption{}
 	for _, item := range util.AsMapSlice(result["data"]) {
-		if id := util.Clean(item["id"]); id != "" {
+		if id := util.Clean(item["id"]); id != "" && !shouldHideCanvasModel(id) {
 			seen[id] = newCanvasModelOption(id, firstNonEmpty(util.Clean(item["display_name"]), util.Clean(item["name"]), id))
 		}
 	}
 	if includeLocal {
 		for _, id := range util.ModelList() {
+			if shouldHideCanvasModel(id) {
+				continue
+			}
 			if _, ok := seen[id]; !ok {
 				seen[id] = newCanvasModelOption(id, id)
 			}
 		}
 	}
 	return sortedCanvasModelOptions(seen)
+}
+
+func shouldHideCanvasModel(id string) bool {
+	return strings.TrimSpace(id) == util.ImageModelCodex
 }
 
 func sortedCanvasModelOptions(seen map[string]canvasModelOption) []canvasModelOption {

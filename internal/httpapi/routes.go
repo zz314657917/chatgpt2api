@@ -1626,11 +1626,14 @@ func (a *App) handleCreationTaskDiagnostics(w http.ResponseWriter, r *http.Reque
 	}
 	switch r.Method {
 	case http.MethodGet:
-		util.WriteJSON(w, http.StatusOK, map[string]any{"diagnostics": a.tasks.DiagnosticsSummary()})
+		staleThreshold := service.ImageTaskStaleThresholdFromSeconds(util.ToInt(r.URL.Query().Get("stale_seconds"), 0))
+		util.WriteJSON(w, http.StatusOK, map[string]any{"diagnostics": a.tasks.DiagnosticsSummary(staleThreshold)})
 	case http.MethodPost:
 		body, _ := readJSONMap(r)
+		staleThreshold := service.ImageTaskStaleThresholdFromSeconds(util.ToInt(body["stale_seconds"], util.ToInt(r.URL.Query().Get("stale_seconds"), 0)))
 		result := a.tasks.RepairDiagnostics(service.ImageTaskRepairOptions{
 			FinalizeActive: util.ToBool(body["finalize_active"]),
+			StaleThreshold: staleThreshold,
 		})
 		util.WriteJSON(w, http.StatusOK, map[string]any{
 			"repair":      result,

@@ -141,9 +141,9 @@ const canvasImageRatioOptions = [
 ] as const;
 const canvasImageQualityOptions = [
   { value: "auto", label: "自动" },
-  { value: "low", label: "低质量" },
-  { value: "medium", label: "中质量" },
-  { value: "high", label: "高质量" },
+  { value: "low", label: "速度优先" },
+  { value: "medium", label: "标准" },
+  { value: "high", label: "高品质" },
 ] as const satisfies ReadonlyArray<{ value: "auto" | ImageQuality; label: string }>;
 
 function nodeInputImagesForCanvas(canvas: SmartCanvasDocument, item: SmartCanvasItem) {

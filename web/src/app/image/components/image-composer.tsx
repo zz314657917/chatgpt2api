@@ -9,7 +9,6 @@ import {
   MessageCircle,
   Plus,
   SlidersHorizontal,
-  Store,
   X,
 } from "lucide-react";
 import {
@@ -99,7 +98,6 @@ type ImageComposerProps = {
   onImageOutputFormatChange: (value: ImageOutputFormat) => void;
   onImageOutputCompressionChange: (value: string) => void;
   onSubmit: () => void | Promise<void>;
-  onOpenPromptMarket: () => void;
   onReferenceImageChange: (files: File[]) => void | Promise<void>;
   onImageResultDrop: (imageIds: string[]) => void | Promise<void>;
   onRemoveReferenceImage: (index: number) => void;
@@ -161,9 +159,9 @@ const imageSettingsFieldClass =
 
 const IMAGE_QUALITY_OPTIONS = [
   { value: "auto", label: "自动", description: "不指定质量，由上游选择默认质量。" },
-  { value: "low", label: "低质量", description: "通常更快、成本更低。" },
-  { value: "medium", label: "中质量", description: "适合多数草稿和预览。" },
-  { value: "high", label: "高质量", description: "适合最终出图。" },
+  { value: "low", label: "速度优先", description: "优先速度和成本，适合草稿测试。" },
+  { value: "medium", label: "标准", description: "兼顾速度与细节，适合日常生成。" },
+  { value: "high", label: "高品质", description: "优先细节效果，适合最终出图。" },
 ] as const satisfies ReadonlyArray<ImageSettingsMenuOption<"auto" | ImageQuality>>;
 
 const IMAGE_BACKGROUND_OPTIONS = [
@@ -354,7 +352,6 @@ export function ImageComposer({
   onImageOutputFormatChange,
   onImageOutputCompressionChange,
   onSubmit,
-  onOpenPromptMarket,
   onReferenceImageChange,
   onImageResultDrop,
   onRemoveReferenceImage,
@@ -872,16 +869,6 @@ export function ImageComposer({
                     </div>
                   ) : null}
                 </div>
-                <button
-                  type="button"
-                  className="inline-flex size-9 shrink-0 items-center justify-center gap-1.5 rounded-full text-[#686b73] transition hover:bg-black/[0.05] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1456f0]/30 dark:text-muted-foreground dark:hover:bg-accent/60 dark:hover:text-foreground sm:h-8 sm:w-auto sm:border sm:border-[#e5e7eb] sm:bg-white sm:px-3 sm:text-xs sm:font-medium sm:text-[#45515e] sm:dark:border-border sm:dark:bg-background/70 sm:dark:text-muted-foreground"
-                  onClick={onOpenPromptMarket}
-                  aria-label="打开提示词市场"
-                  title="提示词市场"
-                >
-                  <Store className="size-5 sm:size-3.5" />
-                  <span className="hidden sm:inline">市场</span>
-                </button>
                 {composerMode === "image" ? (
                   <Popover open={isImageSettingsOpen} onOpenChange={handleImageSettingsOpenChange}>
                     <PopoverTrigger asChild>

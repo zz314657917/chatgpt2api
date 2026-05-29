@@ -97,6 +97,9 @@ func TestSocialPermissionsAreDefaultAndExplicit(t *testing.T) {
 	if !containsString(defaults.MenuPaths, "/social") {
 		t.Fatalf("default user menu paths missing /social: %#v", defaults.MenuPaths)
 	}
+	if !containsString(defaults.MenuPaths, "/image-manager") {
+		t.Fatalf("default user menu paths missing /image-manager: %#v", defaults.MenuPaths)
+	}
 	for _, tc := range []struct {
 		method string
 		path   string
@@ -120,6 +123,23 @@ func TestSocialPermissionsAreDefaultAndExplicit(t *testing.T) {
 	}
 	if HasAPIPermission(readOnly, "POST", "/api/social-projects/project-1") {
 		t.Fatalf("read-only social permission should not allow project mutation")
+	}
+}
+
+func TestImageTagPermissionsAreDefaultAndExplicit(t *testing.T) {
+	defaults := DefaultPermissionSetForRole(AuthRoleUser)
+	for _, tc := range []struct {
+		method string
+		path   string
+	}{
+		{"GET", "/api/images/tags"},
+		{"PATCH", "/api/images/tags"},
+		{"POST", "/api/images/tags"},
+		{"DELETE", "/api/images/tags"},
+	} {
+		if !HasAPIPermission(defaults, tc.method, tc.path) {
+			t.Fatalf("missing default image tag permission for %s %s in %#v", tc.method, tc.path, defaults.APIPermissions)
+		}
 	}
 }
 

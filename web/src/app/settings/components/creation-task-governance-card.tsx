@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   Dialog,
   DialogClose,
@@ -27,6 +28,27 @@ import {
   SettingsNotice,
   settingsPanelClassName,
 } from "./settings-ui";
+
+const DEFAULT_STALE_SECONDS = 600;
+
+function normalizeStaleSeconds(value: string) {
+  const seconds = Number(value);
+  if (!Number.isFinite(seconds) || seconds <= 0) return DEFAULT_STALE_SECONDS;
+  return Math.min(604800, Math.max(1, Math.round(seconds)));
+}
+
+function formatDuration(seconds: number) {
+  if (seconds >= 3600 && seconds % 3600 === 0) return `${seconds / 3600} 小时`;
+  if (seconds >= 60 && seconds % 60 === 0) return `${seconds / 60} 分钟`;
+  return `${seconds} 秒`;
+}
+
+function formatAge(seconds: number) {
+  if (seconds >= 86400) return `${Math.floor(seconds / 86400)} 天`;
+  if (seconds >= 3600) return `${Math.floor(seconds / 3600)} 小时`;
+  if (seconds >= 60) return `${Math.floor(seconds / 60)} 分钟`;
+  return `${Math.max(0, Math.floor(seconds))} 秒`;
+}
 
 function StatBlock({
   label,
@@ -60,6 +82,7 @@ function StatBlock({
 
 export function CreationTaskGovernanceCard() {
   const [finalizeDialogOpen, setFinalizeDialogOpen] = useState(false);
+  const [staleSecondsValue, setStaleSecondsValue] = useState(String(DEFAULT_STALE_SECONDS));
   const didLoadRef = useRef(false);
   const diagnostics = useSettingsStore((state) => state.creationTaskDiagnostics);
   const lastRepair = useSettingsStore((state) => state.lastCreationTaskRepair);
@@ -76,24 +99,31 @@ export function CreationTaskGovernanceCard() {
 
   const dirtyCount = diagnostics?.dirty_terminal_tasks ?? 0;
   const activeCount = diagnostics?.active_tasks ?? 0;
+  const staleSeconds = normalizeStaleSeconds(staleSecondsValue);
+  const staleCount = diagnostics?.stale_active_tasks ?? 0;
+  const suspiciousTasks = diagnostics?.suspicious_tasks ?? [];
   const canRepairDirty = dirtyCount > 0;
-  const canFinalizeActive = activeCount > 0;
+  const canFinalizeActive = staleCount > 0;
 
   useEffect(() => {
     if (didLoadRef.current) {
       return;
     }
     didLoadRef.current = true;
-    void loadDiagnostics();
-  }, [loadDiagnostics]);
+    void loadDiagnostics(false, staleSeconds);
+  }, [loadDiagnostics, staleSeconds]);
 
   const handleRepairDirty = async () => {
-    await repairStatuses(false);
+    await repairStatuses(false, staleSeconds);
   };
 
   const handleFinalizeActive = async () => {
-    await repairStatuses(true);
+    await repairStatuses(true, staleSeconds);
     setFinalizeDialogOpen(false);
+  };
+
+  const handleRefresh = () => {
+    void loadDiagnostics(false, staleSeconds);
   };
 
   return (
@@ -107,7 +137,7 @@ export function CreationTaskGovernanceCard() {
           type="button"
           variant="outline"
           size="lg"
-          onClick={() => void loadDiagnostics()}
+          onClick={handleRefresh}
           disabled={isLoading}
         >
           {isLoading ? (
@@ -133,23 +163,29 @@ export function CreationTaskGovernanceCard() {
                 tone={activeCount > 0 ? "warning" : "default"}
               />
               <StatBlock
+                label="疑似卡住"
+                value={String(staleCount)}
+                tone={staleCount > 0 ? "danger" : "default"}
+              />
+              <StatBlock
                 label="脏终态任务"
                 value={String(dirtyCount)}
                 tone={dirtyCount > 0 ? "danger" : "default"}
               />
-              <StatBlock
-                label="占用并发"
-                value={String(diagnostics?.running_units ?? 0)}
-                tone={(diagnostics?.running_units ?? 0) > 0 ? "warning" : "default"}
-              />
             </section>
 
             <section className={settingsPanelClassName}>
-              <div className="grid gap-3 text-sm leading-6 sm:grid-cols-2">
+              <div className="grid gap-3 text-sm leading-6 sm:grid-cols-2 lg:grid-cols-3">
                 <div className="min-w-0">
                   <span className="text-muted-foreground">queued / running</span>
                   <p className="font-semibold text-foreground">
                     {diagnostics?.queued_tasks ?? 0} / {diagnostics?.running_tasks ?? 0}
+                  </p>
+                </div>
+                <div className="min-w-0">
+                  <span className="text-muted-foreground">占用并发</span>
+                  <p className="font-semibold text-foreground">
+                    {diagnostics?.running_units ?? 0}
                   </p>
                 </div>
                 <div className="min-w-0">
@@ -172,6 +208,61 @@ export function CreationTaskGovernanceCard() {
                 </div>
               </div>
             </section>
+
+            <section className={settingsPanelClassName}>
+              <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_160px] sm:items-end">
+                <div>
+                  <span className="text-sm font-medium text-foreground">卡住阈值</span>
+                  <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                    只有 updated_at 超过该阈值的 queued/running 任务会被终止。
+                  </p>
+                </div>
+                <Input
+                  type="number"
+                  inputMode="numeric"
+                  min={1}
+                  max={604800}
+                  value={staleSecondsValue}
+                  onChange={(event) => setStaleSecondsValue(event.target.value)}
+                  onBlur={handleRefresh}
+                  aria-label="卡住阈值秒数"
+                />
+              </div>
+              <p className="mt-2 text-xs leading-5 text-muted-foreground">
+                当前阈值：{formatDuration(staleSeconds)}
+              </p>
+            </section>
+
+            {suspiciousTasks.length > 0 ? (
+              <section className={settingsPanelClassName}>
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <span className="text-sm font-semibold text-foreground">可疑任务</span>
+                  <span className="text-xs text-muted-foreground">最多显示 20 条</span>
+                </div>
+                <div className="space-y-2">
+                  {suspiciousTasks.map((task) => (
+                    <div
+                      key={`${task.owner_id}:${task.id}`}
+                      className="grid gap-2 rounded-[12px] border border-border/70 bg-background px-3 py-2 text-xs leading-5 sm:grid-cols-[minmax(0,1fr)_auto]"
+                    >
+                      <div className="min-w-0">
+                        <p className="truncate font-medium text-foreground">
+                          {task.id} · {task.status} · {task.mode}
+                        </p>
+                        <p className="truncate text-muted-foreground">
+                          {task.owner_id || "unknown"} · 更新于 {task.updated_at || "-"}
+                        </p>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2 text-muted-foreground sm:justify-end">
+                        <span>{formatAge(task.age_seconds)}前</span>
+                        {task.stale ? <span className="text-red-600">超阈值</span> : null}
+                        {task.dirty_terminal ? <span className="text-amber-600">终态脏状态</span> : null}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            ) : null}
 
             <div className="grid gap-3 sm:grid-cols-2">
               <Button
@@ -202,8 +293,9 @@ export function CreationTaskGovernanceCard() {
 
             {lastRepair ? (
               <SettingsNotice>
-                上次修复终态任务 {lastRepair.repaired_terminal_tasks} 个，终止活动任务{" "}
-                {lastRepair.finalized_active_tasks} 个，取消运行处理器{" "}
+                上次修复终态任务 {lastRepair.repaired_terminal_tasks} 个，终止卡住任务{" "}
+                {lastRepair.finalized_active_tasks} 个，跳过未超时活动任务{" "}
+                {lastRepair.skipped_active_tasks} 个，取消运行处理器{" "}
                 {lastRepair.cancelled_handlers} 个。
               </SettingsNotice>
             ) : (
@@ -220,11 +312,12 @@ export function CreationTaskGovernanceCard() {
           <DialogHeader>
             <DialogTitle>终止卡住的创作任务</DialogTitle>
             <DialogDescription>
-              会把当前 queued/running 的创作任务标记为 error，并尝试取消仍在运行的处理器。
+              只会把超过阈值的 queued/running 创作任务标记为 error，并尝试取消仍在运行的处理器。
             </DialogDescription>
           </DialogHeader>
           <div className={settingsPanelClassName}>
-            当前检测到 {activeCount} 个活动任务。确认后这些任务不会继续占用创作并发额度。
+            当前检测到 {activeCount} 个活动任务，其中 {staleCount} 个超过{" "}
+            {formatDuration(staleSeconds)}。未超过阈值的任务会被跳过。
           </div>
           <DialogFooter>
             <DialogClose asChild>

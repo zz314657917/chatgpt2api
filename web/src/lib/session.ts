@@ -29,6 +29,7 @@ export function authSessionFromLoginResponse(data: LoginResponse, key: string): 
     menuPaths: data.menu_paths || [],
     apiPermissions: data.api_permissions || [],
     menus: data.menus || [],
+    sub2api: data.sub2api ?? null,
   };
 }
 

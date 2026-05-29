@@ -2,7 +2,7 @@
 
 import localforage from "localforage";
 
-import type { BillingState } from "@/lib/api";
+import type { BillingState, Sub2APIBinding } from "@/lib/api";
 
 export type AuthRole = "admin" | "user";
 
@@ -29,6 +29,7 @@ export type StoredAuthSession = {
   menuPaths: string[];
   apiPermissions: string[];
   menus: AuthMenuItem[];
+  sub2api?: Sub2APIBinding | null;
 };
 
 export const AUTH_SESSION_STORAGE_KEY = "chatgpt2api_auth_session";
@@ -108,6 +109,35 @@ function normalizeSession(value: unknown, fallbackKey = ""): StoredAuthSession |
     menuPaths: normalizeStringList(candidate.menuPaths),
     apiPermissions: normalizeStringList(candidate.apiPermissions),
     menus: normalizeMenus(candidate.menus),
+    sub2api: normalizeSub2APIBinding(candidate.sub2api),
+  };
+}
+
+function normalizeSub2APIBinding(value: unknown): Sub2APIBinding | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const item = value as Partial<Sub2APIBinding>;
+  const ownerId = String(item.owner_id || "").trim();
+  const sub2apiUserId = String(item.sub2api_user_id || "").trim();
+  if (!ownerId || !sub2apiUserId) {
+    return null;
+  }
+  return {
+    owner_id: ownerId,
+    sub2api_user_id: sub2apiUserId,
+    user_email: String(item.user_email || "").trim(),
+    user_name: String(item.user_name || "").trim(),
+    api_key_id: String(item.api_key_id || "").trim(),
+    api_key_name: String(item.api_key_name || "").trim(),
+    api_key_last4: String(item.api_key_last4 || "").trim(),
+    group_id: String(item.group_id || "").trim(),
+    group_name: String(item.group_name || "").trim(),
+    group_platform: String(item.group_platform || "").trim(),
+    gateway_base_url: String(item.gateway_base_url || "").trim(),
+    expires_at: String(item.expires_at || "").trim(),
+    updated_at: String(item.updated_at || "").trim(),
+    has_bound_api_key: Boolean(item.has_bound_api_key),
   };
 }
 
@@ -121,7 +151,7 @@ function normalizeBillingState(value: unknown): BillingState | null {
   }
   return {
     ...item,
-    unit: "image",
+    unit: item.unit === "cny_milli" ? "cny_milli" : "image",
     unlimited: Boolean(item.unlimited),
     available: Math.max(0, Number(item.available) || 0),
   };
@@ -151,7 +181,7 @@ export function hasAPIPermission(session: StoredAuthSession | null | undefined, 
 }
 
 export function getDefaultRouteForSession(session: StoredAuthSession) {
-  for (const path of ["/image", "/canvas", "/social", "/image-manager", "/settings", ...session.menuPaths, "/profile"]) {
+  for (const path of ["/image", "/canvas", "/social", "/settings", ...session.menuPaths, "/profile"]) {
     if (canAccessPath(session, path)) {
       return path;
     }

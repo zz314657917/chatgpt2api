@@ -15,6 +15,7 @@ import {
 
 import { appRoutes } from "@/app/route-config";
 import { getCachedAuthSession } from "@/lib/session";
+import { cn } from "@/lib/utils";
 import { canAccessPath, getDefaultRouteForSession } from "@/store/auth";
 
 const routeTransition: Transition = {
@@ -65,6 +66,7 @@ export function AnimatedRoutes() {
   const location = useLocation();
   const prefersReducedMotion = useReducedMotion();
   const pathname = location.pathname.replace(/\/+$/, "") || "/";
+  const isEmbeddedMode = new URLSearchParams(location.search).get("ui_mode") === "embedded";
   const isViewportWorkspacePage = pathname === "/canvas" || pathname === "/image" || pathname === "/image-manager" || pathname === "/social";
 
   return (
@@ -76,7 +78,10 @@ export function AnimatedRoutes() {
         animate="animate"
         exit="exit"
         transition={prefersReducedMotion ? reducedRouteTransition : routeTransition}
-        className={isViewportWorkspacePage ? "min-h-0 min-w-0 flex-1 overflow-hidden" : "min-w-0"}
+        className={cn(
+          isViewportWorkspacePage ? "min-h-0 min-w-0 flex-1 overflow-hidden" : "min-w-0",
+          isEmbeddedMode && "embedded-workspace",
+        )}
       >
         <Routes location={location}>
           {appRoutes.map((route) => {

@@ -128,6 +128,9 @@ func (e *Engine) HandleImageGenerations(ctx context.Context, body map[string]any
 		return nil, &StreamResult{Items: StreamImageChunks(outputs), Err: errCh, Kind: "openai"}, nil
 	}
 	result, err := e.CollectImageOutputsWithProgress(outputs, errCh, imageOutputProgressCallback(body))
+	if result != nil {
+		result["usage"] = ImageResponseUsage(prompt, request.Messages, model, nil, result, size, quality)
+	}
 	return result, nil, err
 }
 
@@ -178,6 +181,9 @@ func (e *Engine) HandleImageEdits(ctx context.Context, body map[string]any, imag
 		return nil, &StreamResult{Items: StreamImageChunks(outputs), Err: errCh, Kind: "openai"}, nil
 	}
 	result, err := e.CollectImageOutputsWithProgress(outputs, errCh, imageOutputProgressCallback(body))
+	if result != nil {
+		result["usage"] = ImageResponseUsage(request.Prompt, request.Messages, request.Model, images, result, request.Size, request.Quality)
+	}
 	return result, nil, err
 }
 

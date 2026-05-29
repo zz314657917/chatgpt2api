@@ -78,6 +78,7 @@ type imageMetadata struct {
 	StorageBackend    string
 	ObjectKey         string
 	ObjectURL         string
+	Tags              []string
 	Prompt            string
 	Model             string
 	Quality           string
@@ -236,6 +237,7 @@ type ImageListOptions struct {
 	Orientation      string
 	ResolutionPreset string
 	AspectRatio      string
+	Tags             []string
 }
 
 type ImageService struct {
@@ -283,24 +285,25 @@ type imageIndexDocument struct {
 }
 
 type imageIndexEntry struct {
-	Path              string `json:"path"`
-	Name              string `json:"name"`
-	Date              string `json:"date"`
-	Size              int64  `json:"size"`
-	CreatedAt         string `json:"created_at"`
-	CreatedUnixNano   int64  `json:"created_unix_nano"`
-	ModifiedUnixNano  int64  `json:"modified_unix_nano"`
-	OwnerID           string `json:"owner_id,omitempty"`
-	OwnerName         string `json:"owner_name,omitempty"`
-	Visibility        string `json:"visibility"`
-	PublishedAt       string `json:"published_at,omitempty"`
-	PublishedUnixNano int64  `json:"published_unix_nano,omitempty"`
-	StorageBackend    string `json:"storage_backend,omitempty"`
-	ObjectKey         string `json:"object_key,omitempty"`
-	ObjectURL         string `json:"object_url,omitempty"`
-	OutputFormat      string `json:"output_format,omitempty"`
-	Width             int    `json:"width,omitempty"`
-	Height            int    `json:"height,omitempty"`
+	Path              string   `json:"path"`
+	Name              string   `json:"name"`
+	Date              string   `json:"date"`
+	Size              int64    `json:"size"`
+	CreatedAt         string   `json:"created_at"`
+	CreatedUnixNano   int64    `json:"created_unix_nano"`
+	ModifiedUnixNano  int64    `json:"modified_unix_nano"`
+	OwnerID           string   `json:"owner_id,omitempty"`
+	OwnerName         string   `json:"owner_name,omitempty"`
+	Visibility        string   `json:"visibility"`
+	PublishedAt       string   `json:"published_at,omitempty"`
+	PublishedUnixNano int64    `json:"published_unix_nano,omitempty"`
+	StorageBackend    string   `json:"storage_backend,omitempty"`
+	ObjectKey         string   `json:"object_key,omitempty"`
+	ObjectURL         string   `json:"object_url,omitempty"`
+	Tags              []string `json:"tags,omitempty"`
+	OutputFormat      string   `json:"output_format,omitempty"`
+	Width             int      `json:"width,omitempty"`
+	Height            int      `json:"height,omitempty"`
 }
 
 type imageListCursor struct {
@@ -525,6 +528,7 @@ func (s *ImageService) managedImageSummaryItem(baseURL string, entry imageIndexE
 		"preview_url": previewURLValue,
 		"created_at":  unixNanoTimeString(entry.CreatedUnixNano),
 		"visibility":  entry.Visibility,
+		"tags":        append([]string(nil), entry.Tags...),
 	}
 	if entry.OwnerName != "" {
 		item["owner_name"] = entry.OwnerName
@@ -769,6 +773,7 @@ func (s *ImageService) imageIndexEntryFromRef(ref imageFileRef) imageIndexEntry 
 		StorageBackend:    meta.StorageBackend,
 		ObjectKey:         meta.ObjectKey,
 		ObjectURL:         meta.ObjectURL,
+		Tags:              append([]string(nil), meta.Tags...),
 		OutputFormat:      outputFormat,
 		Width:             width,
 		Height:            height,
@@ -788,6 +793,7 @@ func (s *ImageService) managedImageItem(baseURL string, ref imageFileRef, info o
 		"url":        firstNonEmptyString(meta.ObjectURL, publicAssetURL(baseURL, "images", ref.rel)),
 		"created_at": info.ModTime().Format("2006-01-02 15:04:05"),
 		"visibility": meta.Visibility,
+		"tags":       append([]string(nil), meta.Tags...),
 	}
 	addImageMetadataFields(item, meta, imageMetadataFieldOptions{
 		BaseURL:                baseURL,
@@ -866,6 +872,9 @@ func imageIndexEntryMatchesOptions(entry imageIndexEntry, options ImageListOptio
 	if ratio := strings.TrimSpace(strings.ToLower(options.AspectRatio)); ratio != "" && ratio != "all" && imageIndexAspectRatioFilter(entry) != ratio {
 		return false
 	}
+	if len(options.Tags) > 0 && !imageTagsContainAll(entry.Tags, options.Tags) {
+		return false
+	}
 	keyword := strings.ToLower(strings.TrimSpace(options.Search))
 	if keyword != "" && !imageIndexEntryContainsKeyword(entry, keyword) {
 		return false
@@ -887,6 +896,7 @@ func imageIndexEntryContainsKeyword(entry imageIndexEntry, keyword string) bool 
 		entry.ObjectKey,
 		entry.ObjectURL,
 	}
+	values = append(values, entry.Tags...)
 	if entry.Width > 0 && entry.Height > 0 {
 		values = append(values, strconv.Itoa(entry.Width)+"x"+strconv.Itoa(entry.Height), simplifiedAspectRatio(entry.Width, entry.Height))
 	}
@@ -1743,6 +1753,7 @@ func normalizeImageMetadata(raw map[string]any) imageMetadata {
 		StorageBackend:    strings.TrimSpace(toString(raw["storage_backend"])),
 		ObjectKey:         strings.TrimSpace(toString(raw["object_key"])),
 		ObjectURL:         strings.TrimSpace(toString(raw["object_url"])),
+		Tags:              NormalizeImageTags(raw["tags"]),
 		Prompt:            strings.TrimSpace(toString(raw["prompt"])),
 		Model:             strings.TrimSpace(toString(raw["model"])),
 		Quality:           strings.TrimSpace(toString(raw["quality"])),
@@ -1864,6 +1875,91 @@ func (s *ImageService) writeUploadedImageMetadataForRef(ref imageFileRef, ownerI
 	return s.writeImageMetadata(ref.rel, meta)
 }
 
+func (s *ImageService) ListImageTags(scope ImageAccessScope) []string {
+	entries := s.imageIndexEntries()
+	seen := map[string]struct{}{}
+	for _, entry := range entries {
+		if !imageIndexEntryMatchesScope(entry, scope) {
+			continue
+		}
+		for _, tag := range entry.Tags {
+			tag = strings.TrimSpace(tag)
+			if tag != "" {
+				seen[tag] = struct{}{}
+			}
+		}
+	}
+	tags := make([]string, 0, len(seen))
+	for tag := range seen {
+		tags = append(tags, tag)
+	}
+	sort.Strings(tags)
+	return tags
+}
+
+func (s *ImageService) UpdateImageTags(value any, tags []string, scope ImageAccessScope) (map[string]any, error) {
+	rel, err := imageRelativePathFromValue(util.Clean(value))
+	if err != nil {
+		return nil, err
+	}
+	imageRoot, err := filepath.Abs(s.config.ImagesDir())
+	if err != nil {
+		return nil, err
+	}
+	ref, err := s.imageFileRef(imageRoot, rel)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, errors.New("image not found")
+		}
+		return nil, err
+	}
+	meta := s.imageMetadata(ref.rel)
+	if !scope.All && (scope.OwnerID == "" || meta.OwnerID != scope.OwnerID) {
+		return nil, errors.New("image not found")
+	}
+	meta.Tags = NormalizeImageTags(tags)
+	if err := s.writeImageMetadata(ref.rel, meta); err != nil {
+		return nil, err
+	}
+	s.upsertImageIndexEntry(ref)
+	return s.managedImageItem("", ref, ref.info, scope), nil
+}
+
+func (s *ImageService) DeleteImageTag(tag string, scope ImageAccessScope) (map[string]any, error) {
+	tag = normalizeImageTag(tag)
+	if tag == "" {
+		return nil, errors.New("tag is required")
+	}
+	imageRoot, err := filepath.Abs(s.config.ImagesDir())
+	if err != nil {
+		return nil, err
+	}
+	updated := 0
+	paths := make([]string, 0)
+	for _, entry := range s.imageIndexEntries() {
+		if !imageIndexEntryMatchesScope(entry, scope) || !imageTagContains(entry.Tags, tag) {
+			continue
+		}
+		ref, err := s.imageFileRef(imageRoot, entry.Path)
+		if err != nil {
+			continue
+		}
+		meta := s.imageMetadata(ref.rel)
+		nextTags := removeImageTag(meta.Tags, tag)
+		if len(nextTags) == len(meta.Tags) {
+			continue
+		}
+		meta.Tags = nextTags
+		if err := s.writeImageMetadata(ref.rel, meta); err != nil {
+			return nil, err
+		}
+		s.upsertImageIndexEntry(ref)
+		updated++
+		paths = append(paths, ref.rel)
+	}
+	return map[string]any{"deleted": updated, "tag": tag, "paths": paths}, nil
+}
+
 func (s *ImageService) uploadImageObject(rel string, data []byte, contentType string) imagestore.StoredObject {
 	ctx, cancel := imagestore.UploadTimeoutContext()
 	defer cancel()
@@ -1908,6 +2004,9 @@ func (s *ImageService) writeImageMetadata(rel string, meta imageMetadata) error 
 	}
 	if meta.ObjectURL != "" {
 		value["object_url"] = meta.ObjectURL
+	}
+	if len(meta.Tags) > 0 {
+		value["tags"] = append([]string(nil), meta.Tags...)
 	}
 	if meta.Prompt != "" {
 		value["prompt"] = meta.Prompt
@@ -2609,6 +2708,7 @@ func addImageMetadataFields(item map[string]any, meta imageMetadata, optionsValu
 	if len(optionsValues) > 0 {
 		options = optionsValues[0]
 	}
+	item["tags"] = append([]string(nil), meta.Tags...)
 	if meta.OwnerID != "" {
 		item["owner_id"] = meta.OwnerID
 	}
@@ -2710,6 +2810,89 @@ func NormalizeImageVisibility(value string) (string, error) {
 	default:
 		return "", errors.New("visibility must be private or public")
 	}
+}
+
+func NormalizeImageTags(value any) []string {
+	var raw []string
+	switch tags := value.(type) {
+	case []string:
+		raw = tags
+	case []any:
+		raw = make([]string, 0, len(tags))
+		for _, item := range tags {
+			raw = append(raw, toString(item))
+		}
+	case string:
+		raw = strings.FieldsFunc(tags, func(r rune) bool {
+			return r == ',' || r == '，' || r == '\n' || r == '\t'
+		})
+	default:
+		return nil
+	}
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(raw))
+	for _, tag := range raw {
+		tag = normalizeImageTag(tag)
+		if tag == "" {
+			continue
+		}
+		key := strings.ToLower(tag)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, tag)
+		if len(out) >= 20 {
+			break
+		}
+	}
+	return out
+}
+
+func normalizeImageTag(value string) string {
+	value = strings.TrimSpace(value)
+	value = strings.Join(strings.Fields(value), " ")
+	if len([]rune(value)) > 32 {
+		value = string([]rune(value)[:32])
+	}
+	return value
+}
+
+func imageTagsContainAll(tags []string, required []string) bool {
+	if len(required) == 0 {
+		return true
+	}
+	normalized := NormalizeImageTags(tags)
+	for _, tag := range NormalizeImageTags(required) {
+		if !imageTagContains(normalized, tag) {
+			return false
+		}
+	}
+	return true
+}
+
+func imageTagContains(tags []string, target string) bool {
+	target = strings.ToLower(normalizeImageTag(target))
+	if target == "" {
+		return false
+	}
+	for _, tag := range tags {
+		if strings.ToLower(normalizeImageTag(tag)) == target {
+			return true
+		}
+	}
+	return false
+}
+
+func removeImageTag(tags []string, target string) []string {
+	target = strings.ToLower(normalizeImageTag(target))
+	out := make([]string, 0, len(tags))
+	for _, tag := range NormalizeImageTags(tags) {
+		if strings.ToLower(normalizeImageTag(tag)) != target {
+			out = append(out, tag)
+		}
+	}
+	return out
 }
 
 func uploadedImageContentType(data []byte, value string) string {

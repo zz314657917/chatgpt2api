@@ -1712,8 +1712,15 @@ func mergeDefaultManagedRole(roles []ManagedRole) []ManagedRole {
 			if role.Description == "" {
 				role.Description = defaultRole.Description
 			}
+			role.MenuPaths = mergeNormalizedStrings(role.MenuPaths, []string{
+				"/image-manager",
+			})
 			role.APIPermissions = mergeNormalizedStrings(role.APIPermissions, []string{
 				APIPermissionKey("DELETE", "/api/images"),
+				APIPermissionKey("GET", "/api/images/tags"),
+				APIPermissionKey("PATCH", "/api/images/tags"),
+				APIPermissionKey("POST", "/api/images/tags"),
+				APIPermissionKey("DELETE", "/api/images/tags"),
 			})
 			out = append(out, role)
 			seenDefault = true

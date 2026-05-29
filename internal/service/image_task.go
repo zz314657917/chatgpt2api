@@ -19,14 +19,18 @@ const (
 	TaskStatusError     = "error"
 	TaskStatusCancelled = "cancelled"
 
-	defaultImageTaskTimeout = 5 * time.Minute
-	maxImageTaskCount       = 10
+	defaultImageTaskTimeout        = 5 * time.Minute
+	maxImageTaskCount              = 10
+	defaultImageTaskStaleThreshold = 10 * time.Minute
+	maxImageTaskStaleThreshold     = 7 * 24 * time.Hour
+	maxImageTaskDiagnosticsItems   = 20
 
 	imageOutputCallbackPayloadKey      = "image_output_callback"
 	imageOutputSlotAcquirerPayloadKey  = "image_output_slot_acquirer"
 	imageTaskBillingBillablePayloadKey = "billing_billable"
 	imageTaskBillingChargedAmountKey   = "billing_charged_amount"
 	imageTaskBillingChargeKey          = "billing_charge_key"
+	imageTaskBillingUnitAmountKey      = "billing_unit_amount"
 )
 
 type ImageTaskHandler func(context.Context, Identity, map[string]any) (map[string]any, error)
@@ -64,26 +68,44 @@ type ImageTaskService struct {
 	creationUnitCond    *sync.Cond
 }
 
+type ImageTaskDiagnosticsItem struct {
+	ID             string   `json:"id"`
+	OwnerID        string   `json:"owner_id"`
+	Status         string   `json:"status"`
+	Mode           string   `json:"mode"`
+	UpdatedAt      string   `json:"updated_at"`
+	Error          string   `json:"error,omitempty"`
+	OutputStatuses []string `json:"output_statuses,omitempty"`
+	AgeSeconds     int64    `json:"age_seconds"`
+	Stale          bool     `json:"stale"`
+	DirtyTerminal  bool     `json:"dirty_terminal"`
+}
+
 type ImageTaskDiagnosticsSummary struct {
-	TotalTasks                  int `json:"total_tasks"`
-	ActiveTasks                 int `json:"active_tasks"`
-	QueuedTasks                 int `json:"queued_tasks"`
-	RunningTasks                int `json:"running_tasks"`
-	TerminalTasks               int `json:"terminal_tasks"`
-	DirtyTerminalTasks          int `json:"dirty_terminal_tasks"`
-	DirtyTerminalOutputStatuses int `json:"dirty_terminal_output_statuses"`
-	ActiveOutputStatuses        int `json:"active_output_statuses"`
-	RunningOwners               int `json:"running_owners"`
-	RunningUnits                int `json:"running_units"`
+	TotalTasks                  int                        `json:"total_tasks"`
+	ActiveTasks                 int                        `json:"active_tasks"`
+	QueuedTasks                 int                        `json:"queued_tasks"`
+	RunningTasks                int                        `json:"running_tasks"`
+	TerminalTasks               int                        `json:"terminal_tasks"`
+	StaleActiveTasks            int                        `json:"stale_active_tasks"`
+	DirtyTerminalTasks          int                        `json:"dirty_terminal_tasks"`
+	DirtyTerminalOutputStatuses int                        `json:"dirty_terminal_output_statuses"`
+	ActiveOutputStatuses        int                        `json:"active_output_statuses"`
+	RunningOwners               int                        `json:"running_owners"`
+	RunningUnits                int                        `json:"running_units"`
+	StaleThresholdSeconds       int64                      `json:"stale_threshold_seconds"`
+	SuspiciousTasks             []ImageTaskDiagnosticsItem `json:"suspicious_tasks,omitempty"`
 }
 
 type ImageTaskRepairOptions struct {
 	FinalizeActive bool
+	StaleThreshold time.Duration
 }
 
 type ImageTaskRepairResult struct {
 	RepairedTerminalTasks int                         `json:"repaired_terminal_tasks"`
 	FinalizedActiveTasks  int                         `json:"finalized_active_tasks"`
+	SkippedActiveTasks    int                         `json:"skipped_active_tasks"`
 	CancelledHandlers     int                         `json:"cancelled_handlers"`
 	Before                ImageTaskDiagnosticsSummary `json:"before"`
 	After                 ImageTaskDiagnosticsSummary `json:"after"`
@@ -142,7 +164,11 @@ func (s *ImageTaskService) SetBillingService(billing *BillingService) {
 			continue
 		}
 		if _, ok := task["billing_consumed_amount"]; !ok && !isActiveTaskStatus(util.Clean(task["status"])) && isBillableImageTaskMode(util.Clean(task["mode"]), task) {
-			task["billing_consumed_amount"] = billableTaskOutputCount(task)
+			unitAmount := util.ToInt(task[imageTaskBillingUnitAmountKey], 1)
+			if unitAmount < 1 {
+				unitAmount = 1
+			}
+			task["billing_consumed_amount"] = billableTaskOutputCount(task) * unitAmount
 			taskChanged = true
 		}
 		if taskChanged {
@@ -361,12 +387,37 @@ func (s *ImageTaskService) CancelTask(identity Identity, clientTaskID string) (m
 	return result, nil
 }
 
-func (s *ImageTaskService) DiagnosticsSummary() ImageTaskDiagnosticsSummary {
+func NormalizeImageTaskStaleThreshold(threshold time.Duration) time.Duration {
+	if threshold <= 0 {
+		return defaultImageTaskStaleThreshold
+	}
+	if threshold > maxImageTaskStaleThreshold {
+		return maxImageTaskStaleThreshold
+	}
+	return threshold
+}
+
+func ImageTaskStaleThresholdFromSeconds(seconds int) time.Duration {
+	if seconds <= 0 {
+		return defaultImageTaskStaleThreshold
+	}
+	maxSeconds := int(maxImageTaskStaleThreshold / time.Second)
+	if seconds > maxSeconds {
+		return maxImageTaskStaleThreshold
+	}
+	return time.Duration(seconds) * time.Second
+}
+
+func (s *ImageTaskService) DiagnosticsSummary(staleThresholds ...time.Duration) ImageTaskDiagnosticsSummary {
+	staleThreshold := defaultImageTaskStaleThreshold
+	if len(staleThresholds) > 0 {
+		staleThreshold = NormalizeImageTaskStaleThreshold(staleThresholds[0])
+	}
 	s.mu.Lock()
 	if s.cleanupLocked() {
 		_ = s.saveLocked()
 	}
-	summary := s.diagnosticsSummaryLocked()
+	summary := s.diagnosticsSummaryLocked(staleThreshold, time.Now())
 	s.mu.Unlock()
 	return summary
 }
@@ -374,17 +425,23 @@ func (s *ImageTaskService) DiagnosticsSummary() ImageTaskDiagnosticsSummary {
 func (s *ImageTaskService) RepairDiagnostics(options ImageTaskRepairOptions) ImageTaskRepairResult {
 	var cancels []context.CancelFunc
 	var settleKeys []string
-	now := util.NowLocal()
+	now := time.Now()
+	nowText := util.NowLocal()
+	staleThreshold := NormalizeImageTaskStaleThreshold(options.StaleThreshold)
 	s.mu.Lock()
 	if s.cleanupLocked() {
 		_ = s.saveLocked()
 	}
-	result := ImageTaskRepairResult{Before: s.diagnosticsSummaryLocked()}
+	result := ImageTaskRepairResult{Before: s.diagnosticsSummaryLocked(staleThreshold, now)}
 	changed := false
 	for key, task := range s.tasks {
 		status := util.Clean(task["status"])
 		if isActiveTaskStatus(status) {
 			if !options.FinalizeActive {
+				continue
+			}
+			if !staleActiveImageTask(task, staleThreshold, now) {
+				result.SkippedActiveTasks++
 				continue
 			}
 			task["status"] = TaskStatusError
@@ -393,7 +450,7 @@ func (s *ImageTaskService) RepairDiagnostics(options ImageTaskRepairOptions) Ima
 				task["data"] = []any{}
 			}
 			applyTerminalImageOutputStatuses(task, TaskStatusError)
-			task["updated_at"] = now
+			task["updated_at"] = nowText
 			if cancel := s.cancels[key]; cancel != nil {
 				cancels = append(cancels, cancel)
 			}
@@ -405,7 +462,7 @@ func (s *ImageTaskService) RepairDiagnostics(options ImageTaskRepairOptions) Ima
 		}
 		if terminalTaskOutputStatusesDirty(task) {
 			if applyTerminalImageOutputStatuses(task, status) {
-				task["updated_at"] = now
+				task["updated_at"] = nowText
 				result.RepairedTerminalTasks++
 				changed = true
 			}
@@ -415,7 +472,7 @@ func (s *ImageTaskService) RepairDiagnostics(options ImageTaskRepairOptions) Ima
 		_ = s.saveLocked()
 	}
 	result.CancelledHandlers = len(cancels)
-	result.After = s.diagnosticsSummaryLocked()
+	result.After = s.diagnosticsSummaryLocked(staleThreshold, now)
 	s.mu.Unlock()
 	for _, cancel := range cancels {
 		cancel()
@@ -445,10 +502,12 @@ func (s *ImageTaskService) submit(ctx context.Context, identity Identity, client
 		return result, nil
 	}
 	count := taskCount(mode, payload)
+	billingUnitAmount := imageTaskBillingUnitAmount(payload)
+	billingChargeAmount := count * billingUnitAmount
 	billingUser := billingUserID(identity)
 	shouldPrechargeBilling := s.billing != nil && identity.Role == AuthRoleUser && identity.Provider != AuthProviderSub2API && billingUser != "" && isBillableImageTaskMode(mode, payload)
 	if shouldPrechargeBilling {
-		if err := s.billing.CheckAvailable(identity, count); err != nil {
+		if err := s.billing.CheckAvailable(identity, billingChargeAmount); err != nil {
 			if cleaned {
 				_ = s.saveLocked()
 			}
@@ -468,14 +527,14 @@ func (s *ImageTaskService) submit(ctx context.Context, identity Identity, client
 	if shouldPrechargeBilling {
 		billingChargeKey = imageTaskBillingChargeKeyFor(owner, taskID, "precharge")
 		model := firstNonEmpty(util.Clean(payload["model"]), util.ImageModelAuto)
-		if _, err := s.billing.ChargeUserID(billingUser, count, imageTaskBillingReference(mode, taskID, model, billingChargeKey)); err != nil {
+		if _, err := s.billing.ChargeUserID(billingUser, billingChargeAmount, imageTaskBillingReference(mode, taskID, model, billingChargeKey)); err != nil {
 			if cleaned {
 				_ = s.saveLocked()
 			}
 			s.mu.Unlock()
 			return nil, err
 		}
-		billingChargedAmount = count
+		billingChargedAmount = billingChargeAmount
 	}
 	taskCtx, cancel := context.WithCancel(context.Background())
 	outputFormat := NormalizeImageOutputFormat(util.Clean(payload["output_format"]))
@@ -483,6 +542,7 @@ func (s *ImageTaskService) submit(ctx context.Context, identity Identity, client
 	if billingChargedAmount > 0 {
 		task[imageTaskBillingChargedAmountKey] = billingChargedAmount
 		task[imageTaskBillingChargeKey] = billingChargeKey
+		task[imageTaskBillingUnitAmountKey] = billingUnitAmount
 	}
 	if util.ToBool(payload[imageTaskBillingBillablePayloadKey]) {
 		task[imageTaskBillingBillablePayloadKey] = true
@@ -882,6 +942,12 @@ func (s *ImageTaskService) pendingTaskBillingSettlement(key string) (imageTaskBi
 	if charged > 0 && consumed > charged {
 		consumed = charged
 	}
+	if unitAmount := util.ToInt(task[imageTaskBillingUnitAmountKey], 0); unitAmount > 0 {
+		consumed *= unitAmount
+		if charged > 0 && consumed > charged {
+			consumed = charged
+		}
+	}
 	owner := util.Clean(task["owner_id"])
 	taskID := util.Clean(task["id"])
 	chargeKey := util.Clean(task[imageTaskBillingChargeKey])
@@ -910,6 +976,7 @@ func (s *ImageTaskService) finishTaskBillingSettlement(key string, consumed int)
 	}
 	delete(task, imageTaskBillingChargedAmountKey)
 	delete(task, imageTaskBillingChargeKey)
+	delete(task, imageTaskBillingUnitAmountKey)
 	task["billing_consumed_amount"] = max(0, consumed)
 	task["updated_at"] = util.NowLocal()
 	_ = s.saveLocked()
@@ -980,6 +1047,9 @@ func (s *ImageTaskService) loadLocked() map[string]map[string]any {
 		if chargeKey := util.Clean(task[imageTaskBillingChargeKey]); chargeKey != "" {
 			normalized[imageTaskBillingChargeKey] = chargeKey
 		}
+		if unitAmount := util.ToInt(task[imageTaskBillingUnitAmountKey], 0); unitAmount > 0 {
+			normalized[imageTaskBillingUnitAmountKey] = unitAmount
+		}
 		if consumed := util.ToInt(task["billing_consumed_amount"], -1); consumed >= 0 {
 			normalized["billing_consumed_amount"] = consumed
 		}
@@ -1015,23 +1085,33 @@ func (s *ImageTaskService) recoverUnfinishedLocked() bool {
 	return changed
 }
 
-func (s *ImageTaskService) diagnosticsSummaryLocked() ImageTaskDiagnosticsSummary {
-	summary := ImageTaskDiagnosticsSummary{TotalTasks: len(s.tasks), RunningOwners: len(s.ownerRunningUnits)}
+func (s *ImageTaskService) diagnosticsSummaryLocked(staleThreshold time.Duration, now time.Time) ImageTaskDiagnosticsSummary {
+	staleThreshold = NormalizeImageTaskStaleThreshold(staleThreshold)
+	summary := ImageTaskDiagnosticsSummary{
+		TotalTasks:            len(s.tasks),
+		RunningOwners:         len(s.ownerRunningUnits),
+		StaleThresholdSeconds: int64(staleThreshold / time.Second),
+	}
 	for _, units := range s.ownerRunningUnits {
 		summary.RunningUnits += units
 	}
 	for _, task := range s.tasks {
 		status := util.Clean(task["status"])
+		dirtyTerminal := false
+		stale := false
 		switch status {
 		case TaskStatusQueued:
 			summary.ActiveTasks++
 			summary.QueuedTasks++
+			stale = staleActiveImageTask(task, staleThreshold, now)
 		case TaskStatusRunning:
 			summary.ActiveTasks++
 			summary.RunningTasks++
+			stale = staleActiveImageTask(task, staleThreshold, now)
 		case TaskStatusSuccess, TaskStatusError, TaskStatusCancelled:
 			summary.TerminalTasks++
 			if terminalTaskOutputStatusesDirty(task) {
+				dirtyTerminal = true
 				summary.DirtyTerminalTasks++
 				for _, outputStatus := range util.AsStringSlice(task["output_statuses"]) {
 					if isActiveTaskStatus(outputStatus) {
@@ -1045,8 +1125,65 @@ func (s *ImageTaskService) diagnosticsSummaryLocked() ImageTaskDiagnosticsSummar
 				summary.ActiveOutputStatuses++
 			}
 		}
+		if stale {
+			summary.StaleActiveTasks++
+		}
+		if stale || dirtyTerminal {
+			summary.SuspiciousTasks = append(summary.SuspiciousTasks, imageTaskDiagnosticsItem(task, stale, dirtyTerminal, now))
+		}
+	}
+	sort.SliceStable(summary.SuspiciousTasks, func(i, j int) bool {
+		left := summary.SuspiciousTasks[i]
+		right := summary.SuspiciousTasks[j]
+		if left.Stale != right.Stale {
+			return left.Stale
+		}
+		if left.DirtyTerminal != right.DirtyTerminal {
+			return left.DirtyTerminal
+		}
+		if left.AgeSeconds != right.AgeSeconds {
+			return left.AgeSeconds > right.AgeSeconds
+		}
+		return left.ID < right.ID
+	})
+	if len(summary.SuspiciousTasks) > maxImageTaskDiagnosticsItems {
+		summary.SuspiciousTasks = summary.SuspiciousTasks[:maxImageTaskDiagnosticsItems]
 	}
 	return summary
+}
+
+func imageTaskDiagnosticsItem(task map[string]any, stale, dirtyTerminal bool, now time.Time) ImageTaskDiagnosticsItem {
+	updatedAt := util.Clean(task["updated_at"])
+	ageSeconds := int64(0)
+	if updated := parseTaskTime(updatedAt); !updated.IsZero() {
+		ageSeconds = int64(now.Sub(updated).Seconds())
+		if ageSeconds < 0 {
+			ageSeconds = 0
+		}
+	}
+	return ImageTaskDiagnosticsItem{
+		ID:             util.Clean(task["id"]),
+		OwnerID:        util.Clean(task["owner_id"]),
+		Status:         util.Clean(task["status"]),
+		Mode:           util.Clean(task["mode"]),
+		UpdatedAt:      updatedAt,
+		Error:          util.Clean(task["error"]),
+		OutputStatuses: util.AsStringSlice(task["output_statuses"]),
+		AgeSeconds:     ageSeconds,
+		Stale:          stale,
+		DirtyTerminal:  dirtyTerminal,
+	}
+}
+
+func staleActiveImageTask(task map[string]any, staleThreshold time.Duration, now time.Time) bool {
+	if !isActiveTaskStatus(util.Clean(task["status"])) {
+		return false
+	}
+	updatedAt := parseTaskTime(task["updated_at"])
+	if updatedAt.IsZero() {
+		return true
+	}
+	return now.Sub(updatedAt) >= NormalizeImageTaskStaleThreshold(staleThreshold)
 }
 
 func terminalTaskOutputStatusesDirty(task map[string]any) bool {
@@ -1119,6 +1256,9 @@ func publicTask(task map[string]any) map[string]any {
 	if consumed := util.ToInt(task["billing_consumed_amount"], -1); consumed >= 0 {
 		item["billing_consumed_amount"] = consumed
 	}
+	if unitAmount := util.ToInt(task[imageTaskBillingUnitAmountKey], 0); unitAmount > 0 {
+		item[imageTaskBillingUnitAmountKey] = unitAmount
+	}
 	if visibility := util.Clean(task["visibility"]); visibility != "" {
 		item["visibility"] = visibility
 	}
@@ -1165,6 +1305,24 @@ func imageTaskCount(payload map[string]any) int {
 
 func taskCount(mode string, payload map[string]any) int {
 	return imageTaskCount(payload)
+}
+
+func imageTaskBillingUnitAmount(payload map[string]any) int {
+	model := firstNonEmpty(util.Clean(payload["model"]), util.ImageModelAuto)
+	size := ""
+	switch NormalizeImageResolutionPreset(util.Clean(payload["image_resolution"])) {
+	case "2k":
+		size = "2K"
+	case "4k":
+		size = "4K"
+	}
+	if size == "" {
+		size = util.Clean(payload["requested_size"])
+	}
+	if size == "" {
+		size = util.Clean(payload["size"])
+	}
+	return EstimateImageBillingUnitAmount(model, size, util.Clean(payload["quality"]))
 }
 
 func storedImageOutputCount(task map[string]any) int {
@@ -1388,7 +1546,7 @@ func mergeImageToolOptions(payload map[string]any, options ImageToolOptions) {
 }
 
 func mergePublicImageToolTaskFields(target, source map[string]any) {
-	for _, key := range []string{"background", "moderation", "style", "input_image_mask"} {
+	for _, key := range []string{"background", "moderation", "style", "input_image_mask", "image_resolution", "requested_size"} {
 		if value := util.Clean(source[key]); value != "" {
 			target[key] = value
 		}
@@ -1464,7 +1622,12 @@ func isActiveTaskStatus(status string) bool {
 
 func parseTaskTime(value any) time.Time {
 	text := util.Clean(value)
-	for _, layout := range []string{"2006-01-02 15:04:05", "2006-01-02T15:04:05.999999", "2006-01-02T15:04:05", time.RFC3339Nano} {
+	for _, layout := range []string{"2006-01-02 15:04:05", "2006-01-02T15:04:05.999999", "2006-01-02T15:04:05"} {
+		if t, err := time.ParseInLocation(layout, text, time.Local); err == nil {
+			return t
+		}
+	}
+	for _, layout := range []string{time.RFC3339Nano} {
 		if t, err := time.Parse(layout, text); err == nil {
 			return t
 		}

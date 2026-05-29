@@ -819,6 +819,17 @@ func TestSub2APIImagePayloadPassesModelAndResolution(t *testing.T) {
 	}
 }
 
+func TestProtocolImageBillingUnitAmountResolutionOverridesSize(t *testing.T) {
+	got := protocolImageBillingUnitAmount("gpt-image-2", map[string]any{
+		"size":             "16:9",
+		"image_resolution": "4k",
+		"quality":          "high",
+	})
+	if got != 152 {
+		t.Fatalf("protocolImageBillingUnitAmount() = %d, want 152", got)
+	}
+}
+
 func TestWriteSub2APIImagePartUsesImageContentType(t *testing.T) {
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
@@ -957,6 +968,159 @@ func TestDirectImageGenerationRejectsBlockedPrompt(t *testing.T) {
 	errorBody := util.StringMap(body["error"])
 	if errorBody["code"] != "content_policy_violation" || errorBody["type"] != "invalid_request_error" {
 		t.Fatalf("blocked response = %#v", body)
+	}
+}
+
+func TestDirectImageEditAcceptsJSONImageURLInputs(t *testing.T) {
+	app := newTestApp(t)
+	defer app.Close()
+	var png bytes.Buffer
+	if err := encodeHTTPTestPNG(&png); err != nil {
+		t.Fatalf("encode png: %v", err)
+	}
+	installHTTPTestImageStreamFunc(t, app, func(ctx context.Context, client *backend.Client, request protocol.ConversationRequest, index, total int) (<-chan protocol.ImageOutput, <-chan error) {
+		if len(request.Images) != 1 {
+			t.Fatalf("request images = %d, want 1", len(request.Images))
+		}
+		for _, encoded := range request.Images {
+			if data, err := base64.StdEncoding.DecodeString(encoded); err != nil || len(data) == 0 {
+				t.Fatalf("encoded request image invalid: len=%d err=%v", len(data), err)
+			}
+		}
+		return httpTestImageOutputStream(request, index)
+	})
+	_, rawKey, err := app.auth.CreateAPIKey(service.AuthRoleUser, "json-image-edit", service.AuthOwner{})
+	if err != nil {
+		t.Fatalf("CreateAPIKey() error = %v", err)
+	}
+	payload := map[string]any{
+		"prompt": "edit this",
+		"model":  "gpt-image-2",
+		"n":      1,
+		"images": []map[string]any{
+			{"image_url": "data:image/png;base64," + base64.StdEncoding.EncodeToString(png.Bytes())},
+		},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/v1/images/edits", strings.NewReader(jsonString(payload)))
+	req.Header.Set("Authorization", "Bearer "+rawKey)
+	req.Header.Set("Content-Type", "application/json")
+	res := httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("json image edit status = %d body = %s", res.Code, res.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &body); err != nil {
+		t.Fatalf("json image edit response json: %v", err)
+	}
+	usage := util.StringMap(body["usage"])
+	if util.ToInt(usage["input_tokens"], 0) <= 0 || util.ToInt(usage["output_tokens"], 0) <= 0 {
+		t.Fatalf("usage = %#v", usage)
+	}
+}
+
+func TestDirectImageEditRejectsLoopbackJSONImageURL(t *testing.T) {
+	app := newTestApp(t)
+	defer app.Close()
+
+	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write([]byte("png"))
+	}))
+	defer remote.Close()
+
+	_, rawKey, err := app.auth.CreateAPIKey(service.AuthRoleUser, "json-image-edit", service.AuthOwner{})
+	if err != nil {
+		t.Fatalf("CreateAPIKey() error = %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/v1/images/edits", strings.NewReader(jsonString(map[string]any{
+		"prompt": "edit",
+		"model":  "gpt-image-2",
+		"images": []map[string]any{
+			{"image_url": remote.URL + "/input.png"},
+		},
+	})))
+	req.Header.Set("Authorization", "Bearer "+rawKey)
+	req.Header.Set("Content-Type", "application/json")
+	res := httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("loopback image_url status = %d body = %s", res.Code, res.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &body); err != nil {
+		t.Fatalf("loopback response json: %v", err)
+	}
+	errorBody := util.StringMap(body["error"])
+	if !strings.Contains(util.Clean(errorBody["message"]), "private or local network addresses") {
+		t.Fatalf("loopback response = %#v", body)
+	}
+}
+
+func TestDirectImageEditRejectsJSONFileIDReference(t *testing.T) {
+	app := newTestApp(t)
+	defer app.Close()
+	_, rawKey, err := app.auth.CreateAPIKey(service.AuthRoleUser, "json-image-edit", service.AuthOwner{})
+	if err != nil {
+		t.Fatalf("CreateAPIKey() error = %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/v1/images/edits", strings.NewReader(`{"prompt":"edit","model":"gpt-image-2","images":[{"file_id":"file-abc"}]}`))
+	req.Header.Set("Authorization", "Bearer "+rawKey)
+	req.Header.Set("Content-Type", "application/json")
+	res := httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("file_id edit status = %d body = %s", res.Code, res.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &body); err != nil {
+		t.Fatalf("file_id response json: %v", err)
+	}
+	errorBody := util.StringMap(body["error"])
+	if errorBody["type"] != "invalid_request_error" || !strings.Contains(util.Clean(errorBody["message"]), "file_id") {
+		t.Fatalf("file_id response = %#v", body)
+	}
+}
+
+func TestV1ErrorsUseOpenAIEnvelope(t *testing.T) {
+	app := newTestApp(t)
+	defer app.Close()
+	cases := []struct {
+		name   string
+		method string
+		path   string
+		auth   string
+		body   string
+		status int
+	}{
+		{name: "unauthorized", method: http.MethodGet, path: "/v1/models", status: http.StatusUnauthorized},
+		{name: "bad request", method: http.MethodPost, path: "/v1/images/generations", auth: "admin", body: `{`, status: http.StatusBadRequest},
+		{name: "not found", method: http.MethodPost, path: "/v1/not-found", auth: "admin", body: `{}`, status: http.StatusNotFound},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body))
+			if tc.auth != "" {
+				auth := tc.auth
+				if auth == "admin" {
+					auth = adminAuthHeader(t, app)
+				}
+				req.Header.Set("Authorization", auth)
+			}
+			res := httptest.NewRecorder()
+			app.Handler().ServeHTTP(res, req)
+			if res.Code != tc.status {
+				t.Fatalf("status = %d body = %s", res.Code, res.Body.String())
+			}
+			var body map[string]any
+			if err := json.Unmarshal(res.Body.Bytes(), &body); err != nil {
+				t.Fatalf("response json: %v", err)
+			}
+			errorBody := util.StringMap(body["error"])
+			if util.Clean(errorBody["message"]) == "" || util.Clean(errorBody["type"]) == "" {
+				t.Fatalf("response = %#v", body)
+			}
+		})
 	}
 }
 
@@ -1231,7 +1395,7 @@ func TestProtocolBillableUnitsBoundaryAndEquivalenceClasses(t *testing.T) {
 }
 
 func TestProtocolImageBillingStandardBalanceBoundary(t *testing.T) {
-	app := newTestAppWithBillingDefaults(t, service.BillingTypeStandard, "4", "0", service.BillingPeriodMonthly)
+	app := newTestAppWithBillingDefaults(t, service.BillingTypeStandard, "204", "0", service.BillingPeriodMonthly)
 	defer app.Close()
 	_, rawKey, err := app.auth.CreateAPIKey(service.AuthRoleUser, "billing-user", service.AuthOwner{})
 	if err != nil {
@@ -1248,7 +1412,7 @@ func TestProtocolImageBillingStandardBalanceBoundary(t *testing.T) {
 	}
 	state := profileBillingState(t, app, rawKey)
 	standard := util.StringMap(state["standard"])
-	if util.ToInt(standard["balance"], -1) != 0 || util.ToInt(standard["lifetime_consumed"], -1) != 4 || util.ToInt(state["available"], -1) != 0 {
+	if util.ToInt(standard["balance"], -1) != 0 || util.ToInt(standard["lifetime_consumed"], -1) != 204 || util.ToInt(state["available"], -1) != 0 {
 		t.Fatalf("billing after exact-balance image generation = %#v", state)
 	}
 
@@ -1262,7 +1426,7 @@ func TestProtocolImageBillingStandardBalanceBoundary(t *testing.T) {
 }
 
 func TestProtocolImageBillingRejectsBeforeUpstream(t *testing.T) {
-	app := newTestAppWithBillingDefaults(t, service.BillingTypeStandard, "3", "0", service.BillingPeriodMonthly)
+	app := newTestAppWithBillingDefaults(t, service.BillingTypeStandard, "150", "0", service.BillingPeriodMonthly)
 	defer app.Close()
 	_, rawKey, err := app.auth.CreateAPIKey(service.AuthRoleUser, "billing-user", service.AuthOwner{})
 	if err != nil {
@@ -1286,14 +1450,14 @@ func TestProtocolImageBillingRejectsBeforeUpstream(t *testing.T) {
 	}
 	state := profileBillingState(t, app, rawKey)
 	standard := util.StringMap(state["standard"])
-	if util.ToInt(standard["balance"], -1) != 3 || util.ToInt(standard["lifetime_consumed"], -1) != 0 || util.ToInt(state["available"], -1) != 3 {
+	if util.ToInt(standard["balance"], -1) != 150 || util.ToInt(standard["lifetime_consumed"], -1) != 0 || util.ToInt(state["available"], -1) != 150 {
 		t.Fatalf("billing after rejected image generation = %#v", state)
 	}
 }
 
 func TestProtocolImageBillingChargesBeforeDelivery(t *testing.T) {
 	t.Run("non-stream does not return generated image when delivery charge fails", func(t *testing.T) {
-		app := newTestAppWithBillingDefaults(t, service.BillingTypeStandard, "1", "0", service.BillingPeriodMonthly)
+		app := newTestAppWithBillingDefaults(t, service.BillingTypeStandard, "51", "0", service.BillingPeriodMonthly)
 		defer app.Close()
 		user, rawKey, err := app.auth.CreateAPIKey(service.AuthRoleUser, "billing-user", service.AuthOwner{})
 		if err != nil {
@@ -1301,7 +1465,7 @@ func TestProtocolImageBillingChargesBeforeDelivery(t *testing.T) {
 		}
 		userID := util.Clean(user["id"])
 		installHTTPTestImageStreamFunc(t, app, func(ctx context.Context, client *backend.Client, request protocol.ConversationRequest, index, total int) (<-chan protocol.ImageOutput, <-chan error) {
-			if _, err := app.billing.ChargeUserID(userID, 1, service.BillingReference{ChargeKey: "external:protocol:non-stream-drain"}); err != nil {
+			if _, err := app.billing.ChargeUserID(userID, 51, service.BillingReference{ChargeKey: "external:protocol:non-stream-drain"}); err != nil {
 				t.Errorf("external ChargeUserID() error = %v", err)
 			}
 			return httpTestImageOutputStream(request, index)
@@ -1319,13 +1483,13 @@ func TestProtocolImageBillingChargesBeforeDelivery(t *testing.T) {
 		}
 		state := profileBillingState(t, app, rawKey)
 		standard := util.StringMap(state["standard"])
-		if util.ToInt(standard["balance"], -1) != 0 || util.ToInt(standard["lifetime_consumed"], -1) != 1 || util.ToInt(state["available"], -1) != 0 {
+		if util.ToInt(standard["balance"], -1) != 0 || util.ToInt(standard["lifetime_consumed"], -1) != 51 || util.ToInt(state["available"], -1) != 0 {
 			t.Fatalf("billing after failed delivery charge = %#v", state)
 		}
 	})
 
 	t.Run("stream stops before unpaid image event", func(t *testing.T) {
-		app := newTestAppWithBillingDefaults(t, service.BillingTypeStandard, "1", "0", service.BillingPeriodMonthly)
+		app := newTestAppWithBillingDefaults(t, service.BillingTypeStandard, "51", "0", service.BillingPeriodMonthly)
 		defer app.Close()
 		user, rawKey, err := app.auth.CreateAPIKey(service.AuthRoleUser, "billing-user", service.AuthOwner{})
 		if err != nil {
@@ -1333,7 +1497,7 @@ func TestProtocolImageBillingChargesBeforeDelivery(t *testing.T) {
 		}
 		userID := util.Clean(user["id"])
 		installHTTPTestImageStreamFunc(t, app, func(ctx context.Context, client *backend.Client, request protocol.ConversationRequest, index, total int) (<-chan protocol.ImageOutput, <-chan error) {
-			if _, err := app.billing.ChargeUserID(userID, 1, service.BillingReference{ChargeKey: "external:protocol:stream-drain"}); err != nil {
+			if _, err := app.billing.ChargeUserID(userID, 51, service.BillingReference{ChargeKey: "external:protocol:stream-drain"}); err != nil {
 				t.Errorf("external ChargeUserID() error = %v", err)
 			}
 			return httpTestImageOutputStream(request, index)
@@ -1355,7 +1519,7 @@ func TestProtocolImageBillingChargesBeforeDelivery(t *testing.T) {
 		}
 		state := profileBillingState(t, app, rawKey)
 		standard := util.StringMap(state["standard"])
-		if util.ToInt(standard["balance"], -1) != 0 || util.ToInt(standard["lifetime_consumed"], -1) != 1 || util.ToInt(state["available"], -1) != 0 {
+		if util.ToInt(standard["balance"], -1) != 0 || util.ToInt(standard["lifetime_consumed"], -1) != 51 || util.ToInt(state["available"], -1) != 0 {
 			t.Fatalf("billing after failed stream delivery charge = %#v", state)
 		}
 	})
@@ -1385,7 +1549,7 @@ func TestProtocolBillingChatAndResponsesEquivalenceClasses(t *testing.T) {
 	})
 
 	t.Run("image chat consumes actual outputs", func(t *testing.T) {
-		app := newTestAppWithBillingDefaults(t, service.BillingTypeStandard, "2", "0", service.BillingPeriodMonthly)
+		app := newTestAppWithBillingDefaults(t, service.BillingTypeStandard, "102", "0", service.BillingPeriodMonthly)
 		defer app.Close()
 		_, rawKey, err := app.auth.CreateAPIKey(service.AuthRoleUser, "billing-user", service.AuthOwner{})
 		if err != nil {
@@ -1407,7 +1571,7 @@ func TestProtocolBillingChatAndResponsesEquivalenceClasses(t *testing.T) {
 		}
 		state := profileBillingState(t, app, rawKey)
 		standard := util.StringMap(state["standard"])
-		if util.ToInt(standard["balance"], -1) != 1 || util.ToInt(standard["lifetime_consumed"], -1) != 1 || util.ToInt(state["available"], -1) != 1 {
+		if util.ToInt(standard["balance"], -1) != 51 || util.ToInt(standard["lifetime_consumed"], -1) != 51 || util.ToInt(state["available"], -1) != 51 {
 			t.Fatalf("billing after partial image chat = %#v", state)
 		}
 	})
@@ -2362,6 +2526,7 @@ func TestSub2APIChatCreationTaskUsesGateway(t *testing.T) {
 	if err := app.sub2Bindings.Save(service.Sub2APIBinding{
 		OwnerID:        owner.ID,
 		Sub2APIUserID:  "chat-user",
+		SessionToken:   "session-chat-user",
 		APIKey:         "sub2-key",
 		GatewayBaseURL: gateway.URL,
 	}); err != nil {
@@ -2464,6 +2629,7 @@ func TestSub2APIImageCreationTaskUsesOfficialFallbackAndPollsTask(t *testing.T) 
 	if err := app.sub2Bindings.Save(service.Sub2APIBinding{
 		OwnerID:        owner.ID,
 		Sub2APIUserID:  "image-user",
+		SessionToken:   "session-image-user",
 		APIKey:         "sub2-key",
 		GatewayBaseURL: gateway.URL,
 	}); err != nil {
@@ -2534,6 +2700,7 @@ func TestCanvasModelsUseSub2APIGatewayForBoundUser(t *testing.T) {
 	if err := app.sub2Bindings.Save(service.Sub2APIBinding{
 		OwnerID:        owner.ID,
 		Sub2APIUserID:  "canvas-user",
+		SessionToken:   "session-canvas-user",
 		APIKey:         "sub2-key",
 		GatewayBaseURL: gateway.URL,
 	}); err != nil {
@@ -2612,6 +2779,7 @@ func TestCanvasModelsFallbackToSub2APIModelsForBoundUser(t *testing.T) {
 	if err := app.sub2Bindings.Save(service.Sub2APIBinding{
 		OwnerID:        owner.ID,
 		Sub2APIUserID:  "canvas-fallback-user",
+		SessionToken:   "session-canvas-fallback-user",
 		APIKey:         "sub2-key",
 		GatewayBaseURL: gateway.URL,
 	}); err != nil {
@@ -2728,8 +2896,32 @@ func TestAdminCreationTaskDiagnosticsAndRepair(t *testing.T) {
 		t.Fatalf("finalize diagnostics json: %v", err)
 	}
 	diagnostics, _ = payload["diagnostics"].(map[string]any)
+	if diagnostics["active_tasks"] != float64(1) || diagnostics["stale_active_tasks"] != float64(0) {
+		t.Fatalf("fresh finalize diagnostics = %#v", diagnostics)
+	}
+	repair, _ := payload["repair"].(map[string]any)
+	if repair["finalized_active_tasks"] != float64(0) || repair["skipped_active_tasks"] != float64(1) {
+		t.Fatalf("fresh finalize repair = %#v", repair)
+	}
+
+	time.Sleep(1100 * time.Millisecond)
+	req = httptest.NewRequest(http.MethodPost, "/api/admin/creation-tasks/diagnostics", strings.NewReader(`{"finalize_active":true,"stale_seconds":1}`))
+	req.Header.Set("Authorization", adminAuthHeader(t, app))
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("finalize stale diagnostics status = %d body = %s", res.Code, res.Body.String())
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("finalize stale diagnostics json: %v", err)
+	}
+	diagnostics, _ = payload["diagnostics"].(map[string]any)
 	if diagnostics["active_tasks"] != float64(0) || diagnostics["dirty_terminal_tasks"] != float64(0) {
-		t.Fatalf("finalize diagnostics = %#v", diagnostics)
+		t.Fatalf("finalize stale diagnostics = %#v", diagnostics)
+	}
+	repair, _ = payload["repair"].(map[string]any)
+	if repair["finalized_active_tasks"] != float64(1) || repair["skipped_active_tasks"] != float64(0) {
+		t.Fatalf("finalize stale repair = %#v", repair)
 	}
 }
 
@@ -2928,6 +3120,79 @@ func TestManagedImageUploadsRejectInvalidInput(t *testing.T) {
 	app.Handler().ServeHTTP(res, req)
 	if res.Code != http.StatusUnauthorized {
 		t.Fatalf("anonymous upload status = %d body = %s", res.Code, res.Body.String())
+	}
+}
+
+func TestManagedImageTagsEndpointUpdatesAndFilters(t *testing.T) {
+	app := newTestApp(t)
+	defer app.Close()
+	_, rawKey, err := app.auth.CreateAPIKey(service.AuthRoleUser, "tag-user", service.AuthOwner{ID: "linuxdo:tag-user", Name: "tag-user", Provider: service.AuthProviderLinuxDo})
+	if err != nil {
+		t.Fatalf("CreateAPIKey() error = %v", err)
+	}
+	rel := "2026/04/29/tagged.png"
+	imagePath := filepath.Join(app.config.ImagesDir(), filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(imagePath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := writeHTTPTestPNG(imagePath); err != nil {
+		t.Fatalf("writeHTTPTestPNG() error = %v", err)
+	}
+	app.images.RecordGeneratedImages([]string{rel}, "linuxdo:tag-user", "tag-user", service.ImageVisibilityPrivate)
+
+	req := httptest.NewRequest(http.MethodPatch, "/api/images/tags", strings.NewReader(jsonString(map[string]any{"path": rel, "tags": []string{"avatar", "hero"}})))
+	req.Header.Set("Authorization", "Bearer "+rawKey)
+	res := httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("update tags status = %d body = %s", res.Code, res.Body.String())
+	}
+	var updatePayload map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &updatePayload); err != nil {
+		t.Fatalf("update tags json: %v", err)
+	}
+	item := util.StringMap(updatePayload["item"])
+	if got := util.AsStringSlice(item["tags"]); len(got) != 2 || got[0] != "avatar" || got[1] != "hero" {
+		t.Fatalf("updated tags = %#v", item["tags"])
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/images?tags=avatar", nil)
+	req.Header.Set("Authorization", "Bearer "+rawKey)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("filter tags status = %d body = %s", res.Code, res.Body.String())
+	}
+	var listPayload map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &listPayload); err != nil {
+		t.Fatalf("filter tags json: %v", err)
+	}
+	items := util.AsMapSlice(listPayload["items"])
+	if len(items) != 1 || util.Clean(items[0]["path"]) != rel {
+		t.Fatalf("filtered items = %#v", listPayload)
+	}
+
+	req = httptest.NewRequest(http.MethodDelete, "/api/images/tags", strings.NewReader(`{"tag":"hero"}`))
+	req.Header.Set("Authorization", "Bearer "+rawKey)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("delete tag status = %d body = %s", res.Code, res.Body.String())
+	}
+	req = httptest.NewRequest(http.MethodGet, "/api/images/tags", nil)
+	req.Header.Set("Authorization", "Bearer "+rawKey)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("list tags status = %d body = %s", res.Code, res.Body.String())
+	}
+	var tagsPayload map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &tagsPayload); err != nil {
+		t.Fatalf("list tags json: %v", err)
+	}
+	tags := util.AsStringSlice(tagsPayload["tags"])
+	if len(tags) != 1 || tags[0] != "avatar" {
+		t.Fatalf("tags = %#v", tagsPayload)
 	}
 }
 
