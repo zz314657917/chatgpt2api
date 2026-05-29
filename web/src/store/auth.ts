@@ -33,6 +33,7 @@ export type StoredAuthSession = {
 };
 
 export const AUTH_SESSION_STORAGE_KEY = "chatgpt2api_auth_session";
+export const AUTH_SESSION_SESSION_STORAGE_KEY = `${AUTH_SESSION_STORAGE_KEY}:tab`;
 
 const authStorage = localforage.createInstance({
   name: "chatgpt2api",
@@ -91,7 +92,7 @@ function normalizeSession(value: unknown, fallbackKey = ""): StoredAuthSession |
   const role = candidate.role === "admin" || candidate.role === "user" ? candidate.role : null;
   const creationConcurrentLimit = Number(candidate.creationConcurrentLimit);
   const creationRpmLimit = Number(candidate.creationRpmLimit ?? 0);
-  if (!key || !role || !Number.isFinite(creationConcurrentLimit) || creationConcurrentLimit < 0) {
+  if (!role || !Number.isFinite(creationConcurrentLimit) || creationConcurrentLimit < 0) {
     return null;
   }
 
@@ -194,7 +195,15 @@ export async function getStoredAuthSession() {
     return null;
   }
 
-  return normalizeSession(await authStorage.getItem<StoredAuthSession>(AUTH_SESSION_STORAGE_KEY));
+  const tabSession = readSessionStorageAuthSession();
+  if (tabSession) {
+    return tabSession;
+  }
+  try {
+    return normalizeSession(await authStorage.getItem<StoredAuthSession>(AUTH_SESSION_STORAGE_KEY));
+  } catch {
+    return null;
+  }
 }
 
 export async function getStoredSessionToken() {
@@ -204,17 +213,62 @@ export async function getStoredSessionToken() {
 
 export async function setStoredAuthSession(session: StoredAuthSession) {
   const normalizedSession = normalizeSession(session);
-  if (!normalizedSession) {
+  if (!normalizedSession || !normalizedSession.key) {
     await clearStoredAuthSession();
     return;
   }
 
-  await authStorage.setItem(AUTH_SESSION_STORAGE_KEY, normalizedSession);
+  writeSessionStorageAuthSession(normalizedSession);
+  try {
+    await authStorage.setItem(AUTH_SESSION_STORAGE_KEY, normalizedSession);
+  } catch {
+    // Third-party iframe contexts can block IndexedDB/localforage; sessionStorage keeps the embedded tab usable.
+  }
 }
 
 export async function clearStoredAuthSession() {
   if (typeof window === "undefined") {
     return;
   }
-  await authStorage.removeItem(AUTH_SESSION_STORAGE_KEY);
+  clearSessionStorageAuthSession();
+  try {
+    await authStorage.removeItem(AUTH_SESSION_STORAGE_KEY);
+  } catch {
+    // Ignore storage cleanup failures in restricted embedded contexts.
+  }
+}
+
+function readSessionStorageAuthSession(): StoredAuthSession | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  try {
+    const rawSession = window.sessionStorage.getItem(AUTH_SESSION_SESSION_STORAGE_KEY);
+    return normalizeSession(rawSession ? JSON.parse(rawSession) : null);
+  } catch {
+    clearSessionStorageAuthSession();
+    return null;
+  }
+}
+
+function writeSessionStorageAuthSession(session: StoredAuthSession) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  try {
+    window.sessionStorage.setItem(AUTH_SESSION_SESSION_STORAGE_KEY, JSON.stringify(session));
+  } catch {
+    // Best-effort fallback only.
+  }
+}
+
+function clearSessionStorageAuthSession() {
+  if (typeof window === "undefined") {
+    return;
+  }
+  try {
+    window.sessionStorage.removeItem(AUTH_SESSION_SESSION_STORAGE_KEY);
+  } catch {
+    // Best-effort cleanup only.
+  }
 }

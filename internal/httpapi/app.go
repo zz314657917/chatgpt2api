@@ -15,8 +15,8 @@ import (
 	"mime/multipart"
 	"net"
 	"net/http"
-	"net/url"
 	"net/netip"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -1604,27 +1604,47 @@ func setAuthSessionCookie(w http.ResponseWriter, r *http.Request, token string) 
 	if token == "" {
 		return
 	}
+	secure, sameSite := authSessionCookiePolicy(r)
 	http.SetCookie(w, &http.Cookie{
 		Name:     authSessionCookieName,
 		Value:    token,
 		Path:     "/",
 		MaxAge:   30 * 24 * 60 * 60,
 		HttpOnly: true,
-		Secure:   isHTTPSRequest(r),
-		SameSite: http.SameSiteLaxMode,
+		Secure:   secure,
+		SameSite: sameSite,
 	})
 }
 
 func clearAuthSessionCookie(w http.ResponseWriter, r *http.Request) {
+	secure, sameSite := authSessionCookiePolicy(r)
 	http.SetCookie(w, &http.Cookie{
 		Name:     authSessionCookieName,
 		Value:    "",
 		Path:     "/",
 		MaxAge:   -1,
 		HttpOnly: true,
-		Secure:   isHTTPSRequest(r),
-		SameSite: http.SameSiteLaxMode,
+		Secure:   secure,
+		SameSite: sameSite,
 	})
+}
+
+func authSessionCookiePolicy(r *http.Request) (bool, http.SameSite) {
+	if isSub2APIEmbeddedAuthRequest(r) {
+		return true, http.SameSiteNoneMode
+	}
+	return isHTTPSRequest(r), http.SameSiteLaxMode
+}
+
+func isSub2APIEmbeddedAuthRequest(r *http.Request) bool {
+	if r == nil || r.URL == nil {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("ui_mode")), "embedded") {
+		return true
+	}
+	path := strings.TrimRight(r.URL.Path, "/")
+	return path == "/auth/sub2api/launch" || path == "/api/v1/auths/sub2api/launch"
 }
 
 func (a *App) resolveImageBaseURL(r *http.Request) string {
