@@ -4037,6 +4037,43 @@ func TestAuthSessionCookieLifecycle(t *testing.T) {
 	}
 }
 
+func TestSub2APIEmbeddedSessionCookieUsesIframeCompatiblePolicy(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/auth/sub2api/launch", nil)
+	res := httptest.NewRecorder()
+
+	setAuthSessionCookie(res, req, "session-token")
+
+	cookie := findResponseCookie(res.Result(), authSessionCookieName)
+	if cookie == nil || cookie.Value != "session-token" || cookie.Path != "/" || !cookie.HttpOnly {
+		t.Fatalf("embedded cookie = %#v", cookie)
+	}
+	if !cookie.Secure {
+		t.Fatalf("embedded cookie Secure = false, want true")
+	}
+	if got := cookie.SameSite; got != http.SameSiteNoneMode {
+		t.Fatalf("embedded cookie SameSite = %v, want None", got)
+	}
+}
+
+func TestAuthSessionCookieReadsForwardedProtoList(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/auth/login", nil)
+	req.Header.Set("X-Forwarded-Proto", "https,http")
+	res := httptest.NewRecorder()
+
+	setAuthSessionCookie(res, req, "session-token")
+
+	cookie := findResponseCookie(res.Result(), authSessionCookieName)
+	if cookie == nil {
+		t.Fatalf("login cookie missing")
+	}
+	if !cookie.Secure {
+		t.Fatalf("login cookie Secure = false, want true")
+	}
+	if got := cookie.SameSite; got != http.SameSiteLaxMode {
+		t.Fatalf("login cookie SameSite = %v, want Lax", got)
+	}
+}
+
 func TestLoginAllowsCredentialedLoopbackFrontend(t *testing.T) {
 	app := newTestApp(t)
 	defer app.Close()

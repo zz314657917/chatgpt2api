@@ -54,11 +54,13 @@ export async function getVerifiedAuthSession(): Promise<StoredAuthSession | null
     const verifiedSession = await verifyAuthSessionPromise;
     if (verifyStartedAtVersion === authSessionVersion) {
       cachedAuthSession = verifiedSession;
-      if (verifiedSession) {
+      if (verifiedSession?.key) {
         await setStoredAuthSession(verifiedSession);
       } else {
         clearAuthenticatedImageCache();
-        await clearStoredAuthSession();
+        if (!verifiedSession) {
+          await clearStoredAuthSession();
+        }
       }
       return verifiedSession;
     }
@@ -91,7 +93,12 @@ export async function clearVerifiedAuthSession() {
 async function verifyStoredAuthSession(): Promise<StoredAuthSession | null> {
   const storedSession = await getStoredAuthSession();
   if (!storedSession) {
-    return null;
+    try {
+      const data = await verifySession("");
+      return authSessionFromLoginResponse(data, "");
+    } catch {
+      return null;
+    }
   }
 
   try {

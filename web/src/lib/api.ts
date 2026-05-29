@@ -1350,12 +1350,12 @@ export async function registerAccount(username: string, password: string, name?:
 }
 
 export async function verifySession(token: string) {
+  const authorization = String(token || "").trim();
   return httpRequest<LoginResponse>("/auth/session", {
     method: "GET",
-    headers: {
-      Authorization: `Bearer ${String(token || "").trim()}`,
-    },
+    headers: authorization ? { Authorization: `Bearer ${authorization}` } : undefined,
     redirectOnUnauthorized: false,
+    skipStoredAuthorization: !authorization,
   });
 }
 

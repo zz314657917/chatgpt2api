@@ -6,6 +6,7 @@ import {clearStoredAuthSession, getStoredSessionToken} from "@/store/auth";
 
 type RequestConfig = AxiosRequestConfig & {
     redirectOnUnauthorized?: boolean;
+    skipStoredAuthorization?: boolean;
 };
 
 type ErrorPayload = {
@@ -109,7 +110,8 @@ const request = axios.create({
 
 request.interceptors.request.use(async (config) => {
     const nextConfig = {...config};
-    const sessionToken = await getStoredSessionToken();
+    const skipStoredAuthorization = Boolean((nextConfig as RequestConfig).skipStoredAuthorization);
+    const sessionToken = skipStoredAuthorization ? "" : await getStoredSessionToken();
     const headers = {...nextConfig.headers} as Record<string, string>;
     if (sessionToken && !headers.Authorization) {
         headers.Authorization = `Bearer ${sessionToken}`;
@@ -153,17 +155,19 @@ type RequestOptions = {
     body?: unknown;
     headers?: Record<string, string>;
     redirectOnUnauthorized?: boolean;
+    skipStoredAuthorization?: boolean;
     signal?: AbortSignal;
 };
 
 export async function httpRequest<T>(path: string, options: RequestOptions = {}) {
-    const {method = "GET", body, headers, redirectOnUnauthorized = true, signal} = options;
+    const {method = "GET", body, headers, redirectOnUnauthorized = true, skipStoredAuthorization = false, signal} = options;
     const config: RequestConfig = {
         url: path,
         method,
         data: body,
         headers,
         redirectOnUnauthorized,
+        skipStoredAuthorization,
         signal,
     };
     const response = await request.request<T>(config);
