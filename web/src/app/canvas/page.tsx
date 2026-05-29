@@ -5,7 +5,9 @@ import { LoaderCircle } from "lucide-react";
 import {
   SmartCanvasAssetSidebar,
   SmartCanvasBoard,
+  SmartCanvasHelpPanel,
   SmartCanvasLeftRail,
+  SmartCanvasOnboardingDialog,
   SmartCanvasOperationHistoryPanel,
   SmartCanvasPickerDialog,
   SmartCanvasRunHistoryPanel,
@@ -50,15 +52,16 @@ export default function CanvasPage() {
             running={canvas.running}
             runCount={smartCanvasRuns(canvas.canvas).slice(0, 30).length}
             operationCount={canvas.historyEntries.slice(0, 30).length}
+            blankNodeCount={canvas.blankNodeCount}
             canUndo={canvas.canUndo}
-            canRedo={canvas.canRedo}
             onSave={() => void canvas.saveNow()}
             onAddNode={canvas.addNodeAt}
             onUploadClick={canvas.openUploadDialog}
+            onCleanupBlankNodes={canvas.cleanupBlankNodes}
+            onHelpClick={() => canvas.openCanvasHelp()}
             onRunHistoryToggle={() => canvas.setRunHistoryOpen(!canvas.runHistoryOpen)}
             onOperationHistoryToggle={() => canvas.setOperationHistoryOpen(!canvas.operationHistoryOpen)}
             onUndo={canvas.undoCanvas}
-            onRedo={canvas.redoCanvas}
           />
 
           <SmartCanvasBoard
@@ -75,6 +78,7 @@ export default function CanvasPage() {
             running={canvas.running}
             mentionOpen={canvas.mentionOpen}
             mentionItems={canvas.mentionItems}
+            portMenuRequest={canvas.portMenuRequest}
             onPointerDown={canvas.handleBoardPointerDown}
             onPointerMove={canvas.handlePointerMove}
             onPointerUp={canvas.handlePointerUp}
@@ -100,6 +104,10 @@ export default function CanvasPage() {
             onUpdateItemData={canvas.updateItemData}
             onRunGenerator={canvas.runGeneratorNode}
             onRunLlm={canvas.runLlmNode}
+            onStopLoop={canvas.stopLoopNode}
+            onOpenNodeHelp={canvas.openNodeHelp}
+            onConnectLlmImagesToGenerator={canvas.connectLlmImagesToGenerator}
+            onConnectLlmImagesToLoop={canvas.connectLlmImagesToLoop}
             onDeleteItem={canvas.deleteItem}
             onStartConnect={canvas.startConnect}
             onFinishConnect={canvas.finishConnect}
@@ -107,6 +115,8 @@ export default function CanvasPage() {
             onMentionToggle={canvas.toggleMention}
             onAddMentionToPrompt={canvas.addMentionImageToPrompt}
             onCreateNodeAt={canvas.addNodeAt}
+            onCreateNodeFromPort={canvas.addNodeFromPort}
+            onCreateNodeHelpTemplate={canvas.createNodeHelpTemplate}
             onUploadAt={canvas.openUploadDialogAt}
           />
 
@@ -121,6 +131,17 @@ export default function CanvasPage() {
             onAddAssetToComposer={canvas.addAssetToComposer}
           />
 
+          <SmartCanvasHelpPanel
+            open={canvas.helpOpen}
+            topic={canvas.helpTopic}
+            onOpenChange={canvas.setHelpOpen}
+            onTopicChange={canvas.setHelpTopic}
+            onInsertTemplate={(templateId) => {
+              canvas.insertFlowTemplate(templateId);
+              canvas.setHelpOpen(false);
+            }}
+          />
+
           <SmartCanvasRunHistoryPanel
             canvas={canvas.canvas}
             open={canvas.runHistoryOpen}
@@ -131,7 +152,11 @@ export default function CanvasPage() {
           <SmartCanvasOperationHistoryPanel
             entries={canvas.historyEntries}
             open={canvas.operationHistoryOpen}
+            canUndo={canvas.canUndo}
+            canRedo={canvas.canRedo}
             onOpenChange={canvas.setOperationHistoryOpen}
+            onUndo={canvas.undoCanvas}
+            onRedo={canvas.redoCanvas}
             onRestore={(entry) => {
               canvas.restoreHistoryEntry(entry);
               canvas.setOperationHistoryOpen(false);
@@ -164,6 +189,19 @@ export default function CanvasPage() {
             canvas.setImageEditorImage(null);
             canvas.setImageEditorSourceItemId("");
           }
+        }}
+      />
+
+      <SmartCanvasOnboardingDialog
+        open={canvas.onboardingOpen}
+        onDismiss={canvas.dismissOnboarding}
+        onOpenHelp={() => {
+          canvas.dismissOnboarding();
+          canvas.openCanvasHelp();
+        }}
+        onInsertBasicTemplate={() => {
+          canvas.dismissOnboarding();
+          canvas.insertFlowTemplate("basic-text");
         }}
       />
 

@@ -68,9 +68,9 @@ export const IMAGE_SIZE_PRESET_DETAILS = [
 ] as const;
 
 export const IMAGE_QUALITY_OPTIONS = [
-  { value: "low", label: "Low", description: "低质量，速度更快，适合草稿测试" },
-  { value: "medium", label: "Medium", description: "均衡质量与速度，适合日常生成" },
-  { value: "high", label: "High", description: "高质量，耗时更长，适合最终出图" },
+  { value: "low", label: "速度优先", description: "优先速度和成本，适合草稿测试" },
+  { value: "medium", label: "标准", description: "兼顾速度与细节，适合日常生成" },
+  { value: "high", label: "高品质", description: "优先细节效果，适合最终出图" },
 ] as const;
 
 function roundToMultiple(value: number, multiple: number) {

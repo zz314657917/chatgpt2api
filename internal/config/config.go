@@ -185,7 +185,7 @@ func (s *Store) RefreshAccountIntervalMinute() int {
 }
 
 func (s *Store) ImageRetentionDays() int {
-	value := intSetting(s.settingValue("image_retention_days", 30), 30)
+	value := intSetting(s.settingValue("image_retention_days", 7), 7)
 	if value < 1 {
 		return 1
 	}
@@ -325,7 +325,7 @@ func (s *Store) Sub2APIBrandName() string {
 	if value := strings.TrimSpace(os.Getenv("CHATGPT2API_SUB2API_BRAND_NAME")); value != "" {
 		return value
 	}
-	return "落叶网络"
+	return "落叶AI"
 }
 
 func (s *Store) Proxy() string {
@@ -427,6 +427,12 @@ func (s *Store) ImagesDir() string {
 
 func (s *Store) ImageThumbnailsDir() string {
 	path := filepath.Join(s.DataDir, "image_thumbnails")
+	_ = os.MkdirAll(path, 0o755)
+	return path
+}
+
+func (s *Store) ImagePreviewsDir() string {
+	path := filepath.Join(s.DataDir, "image_previews")
 	_ = os.MkdirAll(path, 0o755)
 	return path
 }
@@ -570,7 +576,7 @@ func (s *Store) Update(data map[string]any) (map[string]any, error) {
 func (s *Store) CleanupOldImages() int {
 	cutoff := time.Now().Add(-time.Duration(s.ImageRetentionDays()) * 24 * time.Hour)
 	removed := 0
-	for _, dir := range []string{s.ImagesDir(), s.ImageThumbnailsDir(), s.ImageMetadataDir()} {
+	for _, dir := range []string{s.ImagesDir(), s.ImageThumbnailsDir(), s.ImagePreviewsDir(), s.ImageMetadataDir()} {
 		_ = filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
 			if err != nil || d.IsDir() {
 				return nil

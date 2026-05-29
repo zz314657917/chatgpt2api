@@ -1,13 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useLocation } from "react-router-dom";
 import { Globe2, History, ImagePlus, LoaderCircle, Plus, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { ImageComposer } from "@/app/image/components/image-composer";
-import { ImagePromptMarket } from "@/app/image/components/image-prompt-market";
 import { ImageResults, type ImageLightboxItem } from "@/app/image/components/image-results";
-import type { BananaPrompt } from "@/app/image/banana-prompts";
 import {
   CUSTOM_IMAGE_ASPECT_RATIO,
   DEFAULT_IMAGE_CUSTOM_HEIGHT,
@@ -34,6 +33,7 @@ import { IMAGE_PROMPT_PRESETS, type ImagePromptPreset } from "@/app/image/image-
 import { consumeSimilarImageIntent } from "@/app/image/similar-image-intent";
 import { ImageSidebar } from "@/app/image/components/image-sidebar";
 import { ImageLightbox } from "@/components/image-lightbox";
+import { Sub2APIKeyRequiredDialog } from "@/components/sub2api-key-picker";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -56,30 +56,35 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import {
   cancelCreationTask,
+  canvasModelHasCapability,
   CHAT_MODEL_OPTIONS,
   createChatCompletionTask,
   createImageEditTaskFromReferenceIds,
   createImageGenerationTask,
   DEFAULT_CHAT_MODEL,
   DEFAULT_IMAGE_MODEL,
+  estimateImageBillingUnits,
   estimateImageDisplayPriceUSD,
+  fetchCanvasModels,
   fetchCreationTasks,
   fetchProfile,
-  formatImageDisplayPriceUSD,
+  formatImageDisplayPriceCNY,
   IMAGE_CREATION_MODEL_OPTIONS,
   IMAGE_MODEL_ROUTE_DETAILS,
   IMAGE_OUTPUT_FORMAT_OPTIONS,
-  isChatModel,
-  isImageCreationModel,
   isImageModel,
   isImageOutputFormat,
+  isImageQuality,
+  modelIDLooksImageCapable,
   supportsImageOutputCompression,
   supportsImageOutputControls,
   supportsStructuredImageParameters,
+  type CanvasModelOption,
   uploadCreationTaskReferenceImage,
   updateManagedImageVisibility,
   type ImageModel,
   type ImageOutputFormat,
+  type ImageQuality,
   type CreationTask,
   type CreationTaskMessage,
   type FallbackReferenceImage,
@@ -131,6 +136,10 @@ const IMAGE_CUSTOM_WIDTH_STORAGE_KEY = "chatgpt2api:image_last_custom_width";
 const IMAGE_CUSTOM_HEIGHT_STORAGE_KEY = "chatgpt2api:image_last_custom_height";
 const IMAGE_OUTPUT_FORMAT_STORAGE_KEY = "chatgpt2api:image_last_output_format";
 const IMAGE_OUTPUT_COMPRESSION_STORAGE_KEY = "chatgpt2api:image_last_output_compression";
+const IMAGE_QUALITY_STORAGE_KEY = "chatgpt2api:image_last_quality";
+const IMAGE_BACKGROUND_STORAGE_KEY = "chatgpt2api:image_last_background";
+const IMAGE_MODERATION_STORAGE_KEY = "chatgpt2api:image_last_moderation";
+const IMAGE_PARTIAL_IMAGES_STORAGE_KEY = "chatgpt2api:image_last_partial_images";
 const QUOTA_REFRESH_EVENT = "chatgpt2api:quota-refresh";
 const DEFAULT_IMAGE_OUTPUT_FORMAT: ImageOutputFormat = "png";
 const REFERENCE_IMAGE_MAX_SIDE = 2048;
@@ -138,6 +147,7 @@ const REFERENCE_IMAGE_JPEG_QUALITY = 0.86;
 const activeConversationQueueIds = new Set<string>();
 const EMPTY_IMAGE_ASPECT_RATIO_SELECT_VALUE = "__empty_aspect_ratio__";
 const MISSING_RECOVERABLE_TASK_ID_ERROR = "页面刷新或任务中断，未找到可恢复的任务 ID";
+const HIDDEN_IMAGE_MODEL_VALUES = new Set(["codex-gpt-image-2"]);
 
 type ComposerMode = "chat" | "image";
 
@@ -154,6 +164,10 @@ type EditingTurnDraft = {
   customRatio: string;
   customWidth: string;
   customHeight: string;
+  quality: "auto" | ImageQuality;
+  background: string;
+  moderation: string;
+  partialImages: string;
   outputFormat: ImageOutputFormat;
   outputCompression: string;
   visibility: ImageVisibility;
@@ -170,6 +184,8 @@ type PublishRecipeOptions = {
   sharePromptParameters: boolean;
   shareReferenceImages: boolean;
 };
+
+type ImageModelMenuOption = { value: ImageModel; label: string };
 
 type CreationTaskDataItem = NonNullable<CreationTask["data"]>[number];
 
@@ -369,11 +385,6 @@ async function buildReferenceImageFromUrl(
   };
 }
 
-function getPromptReferenceImageUrls(prompt: BananaPrompt) {
-  const urls = prompt.referenceImageUrls.length > 0 ? prompt.referenceImageUrls : [prompt.preview];
-  return Array.from(new Set(urls.map((url) => url.trim()).filter(Boolean)));
-}
-
 function reusableOutputCompressionValue(value: unknown, outputFormat: ImageOutputFormat) {
   if (!supportsImageOutputCompression(outputFormat)) {
     return "";
@@ -429,7 +440,7 @@ async function buildReferenceImageFromStoredImage(
   };
 }
 
-const IMAGE_TASK_IMAGE_COUNT = 1;
+const IMAGE_TASK_IMAGE_COUNT = 10;
 
 function normalizeRequestedImageCount(value: string | number) {
   return Math.max(1, Math.min(10, Number(value) || 1));
@@ -493,6 +504,19 @@ function imageOutputCompressionForModel(model: ImageModel, format: ImageOutputFo
   return imageOutputCompressionForFormat(format, value);
 }
 
+function imageQualityForTask(value: "auto" | ImageQuality | undefined): ImageQuality | undefined {
+  return isImageQuality(value) ? value : undefined;
+}
+
+function imageToolOptionsForTask(turn: Pick<ImageTurn, "background" | "moderation" | "partialImages">) {
+  const partialImages = normalizePositiveImageParameter(turn.partialImages);
+  return {
+    ...(turn.background && turn.background !== "auto" ? { background: turn.background } : {}),
+    ...(turn.moderation && turn.moderation !== "auto" ? { moderation: turn.moderation } : {}),
+    ...(partialImages ? { partialImages } : {}),
+  };
+}
+
 function positiveDimension(value: unknown) {
   const dimension = Number(value);
   return Number.isFinite(dimension) && dimension > 0 ? Math.round(dimension) : undefined;
@@ -507,6 +531,17 @@ function normalizeOutputCompressionValue(value: unknown): number | undefined {
     return undefined;
   }
   return Math.min(100, Math.round(numeric));
+}
+
+function normalizePositiveImageParameter(value: unknown): number | undefined {
+  if (value === undefined || value === null || String(value).trim() === "") {
+    return undefined;
+  }
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return undefined;
+  }
+  return Math.round(numeric);
 }
 
 function imageOutputCompressionForFormat(format: ImageOutputFormat, value: unknown) {
@@ -789,7 +824,7 @@ function getStoredImageModel(): ImageModel {
     return DEFAULT_IMAGE_MODEL;
   }
   const storedModel = window.localStorage.getItem(IMAGE_MODEL_STORAGE_KEY);
-  return isImageCreationModel(storedModel) ? storedModel : DEFAULT_IMAGE_MODEL;
+  return isImageModel(storedModel) && !HIDDEN_IMAGE_MODEL_VALUES.has(storedModel) ? storedModel : DEFAULT_IMAGE_MODEL;
 }
 
 function getStoredComposerMode(): ComposerMode {
@@ -837,6 +872,30 @@ function getStoredImageOutputCompression(): string {
   }
   const normalized = normalizeOutputCompressionValue(window.localStorage.getItem(IMAGE_OUTPUT_COMPRESSION_STORAGE_KEY));
   return normalized === undefined ? "" : String(normalized);
+}
+
+function getStoredImageQuality(): "auto" | ImageQuality {
+  if (typeof window === "undefined") {
+    return "auto";
+  }
+  const storedQuality = window.localStorage.getItem(IMAGE_QUALITY_STORAGE_KEY);
+  return isImageQuality(storedQuality) ? storedQuality : "auto";
+}
+
+function getStoredOptionalImageParameter(key: string, allowed: Set<string>) {
+  if (typeof window === "undefined") {
+    return "auto";
+  }
+  const value = window.localStorage.getItem(key) || "auto";
+  return allowed.has(value) ? value : "auto";
+}
+
+function getStoredImagePartialImages() {
+  if (typeof window === "undefined") {
+    return "";
+  }
+  const value = normalizePositiveImageParameter(window.localStorage.getItem(IMAGE_PARTIAL_IMAGES_STORAGE_KEY));
+  return value === undefined ? "" : String(value);
 }
 
 function serializeImageSizeSelection(selection: ImageSizeSelection): StoredImageSizeSelection {
@@ -924,6 +983,14 @@ function hasEnoughBilling(session: NonNullable<ReturnType<typeof useAuthGuard>["
   return !billing || billing.unlimited || Math.max(0, Number(billing.available) || 0) >= estimated;
 }
 
+function imageBillingEstimate(model: ImageModel, count: number, sizeOrResolution: string, quality: "auto" | ImageQuality) {
+  const estimatedPrice = estimateImageDisplayPriceUSD(model, count, sizeOrResolution, quality);
+  return {
+    price: estimatedPrice,
+    units: estimateImageBillingUnits(model, count, sizeOrResolution, quality),
+  };
+}
+
 function deriveTurnStatus(turn: ImageTurn): Pick<ImageTurn, "status" | "error"> {
   const loadingCounts = getImageTurnLoadingCounts(turn);
   const failedCount = turn.images.filter((image) => image.status === "error").length;
@@ -983,6 +1050,45 @@ function getComposerConversationMode(composerMode: ComposerMode, referenceImages
     return "generate";
   }
   return referenceImages.some((image) => image.source === "conversation") ? "edit" : "image";
+}
+
+function modelMenuOption(model: CanvasModelOption): ImageModelMenuOption {
+  return { value: model.id, label: model.name || model.id };
+}
+
+function hasMenuOption(options: readonly ImageModelMenuOption[], value: string) {
+  return options.some((option) => option.value === value);
+}
+
+function mergeImageModelOptions(
+  remoteOptions: ImageModelMenuOption[],
+  localOptions: readonly ImageModelMenuOption[],
+  selectedModel: ImageModel,
+) {
+  const seen = new Set<string>();
+  const merged: ImageModelMenuOption[] = [];
+  for (const option of [...remoteOptions, ...localOptions]) {
+    if (!option.value || seen.has(option.value) || HIDDEN_IMAGE_MODEL_VALUES.has(option.value)) {
+      continue;
+    }
+    seen.add(option.value);
+    merged.push(option);
+  }
+  if (selectedModel && !seen.has(selectedModel) && !HIDDEN_IMAGE_MODEL_VALUES.has(selectedModel)) {
+    merged.unshift({ value: selectedModel, label: selectedModel });
+  }
+  return merged;
+}
+
+function canvasModelsByCapability(models: CanvasModelOption[], capability: "chat" | "image") {
+  return models
+    .filter((model) => model.enabled !== false)
+    .filter((model) =>
+      canvasModelHasCapability(model, capability) ||
+      (capability === "chat" && (model.kind === "text" || model.kind === "both")) ||
+      (capability === "image" && (model.kind === "image" || model.kind === "both"))
+    )
+    .map(modelMenuOption);
 }
 
 function buildCreationTaskMessages(conversation: ImageConversation, activeTurnId: string): CreationTaskMessage[] {
@@ -1210,6 +1316,8 @@ async function recoverConversationHistory(items: ImageConversation[]) {
 
 
 function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof useAuthGuard>["session"]> }) {
+  const location = useLocation();
+  const isEmbeddedMode = useMemo(() => new URLSearchParams(location.search).get("ui_mode") === "embedded", [location.search]);
   const isSubmitDispatchingRef = useRef(false);
   const retryingImageIdsRef = useRef(new Set<string>());
   const cancelledTurnIdsRef = useRef(new Set<string>());
@@ -1232,15 +1340,19 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
   const [imageCustomRatio, setImageCustomRatio] = useState(() => getStoredImageSizeSelection().customRatio);
   const [imageCustomWidth, setImageCustomWidth] = useState(() => getStoredImageSizeSelection().customWidth);
   const [imageCustomHeight, setImageCustomHeight] = useState(() => getStoredImageSizeSelection().customHeight);
+  const [imageQuality, setImageQuality] = useState<"auto" | ImageQuality>(getStoredImageQuality);
+  const [imageBackground, setImageBackground] = useState(() => getStoredOptionalImageParameter(IMAGE_BACKGROUND_STORAGE_KEY, new Set(["auto", "transparent", "opaque"])));
+  const [imageModeration, setImageModeration] = useState(() => getStoredOptionalImageParameter(IMAGE_MODERATION_STORAGE_KEY, new Set(["auto", "low"])));
+  const [imagePartialImages, setImagePartialImages] = useState(getStoredImagePartialImages);
   const [imageOutputFormat, setImageOutputFormat] = useState<ImageOutputFormat>(getStoredImageOutputFormat);
   const [imageOutputCompression, setImageOutputCompression] = useState(getStoredImageOutputCompression);
   const [defaultImageVisibility, setDefaultImageVisibility] = useState<ImageVisibility>("private");
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
-  const [isPromptMarketOpen, setIsPromptMarketOpen] = useState(false);
   const [referenceImages, setReferenceImages] = useState<StoredReferenceImage[]>([]);
   const [conversations, setConversations] = useState<ImageConversation[]>([]);
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
+  const [remoteCanvasModels, setRemoteCanvasModels] = useState<CanvasModelOption[]>([]);
   const [lightboxImages, setLightboxImages] = useState<ImageLightboxItem[]>([]);
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [lightboxIndex, setLightboxIndex] = useState(0);
@@ -1334,7 +1446,15 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
   const editingDraftSizeIsHighResolution = Boolean(
     editingDraftStructuredParameters && editingDraftImageSize && isHighResolutionImageSize(editingDraftImageSize),
   );
-  const composerModelOptions = composerMode === "chat" ? CHAT_MODEL_OPTIONS : IMAGE_CREATION_MODEL_OPTIONS;
+  const chatModelOptions = useMemo(
+    () => mergeImageModelOptions(canvasModelsByCapability(remoteCanvasModels, "chat"), CHAT_MODEL_OPTIONS, imageModel),
+    [imageModel, remoteCanvasModels],
+  );
+  const imageCreationModelOptions = useMemo(
+    () => mergeImageModelOptions(canvasModelsByCapability(remoteCanvasModels, "image"), IMAGE_CREATION_MODEL_OPTIONS, imageModel),
+    [imageModel, remoteCanvasModels],
+  );
+  const composerModelOptions = composerMode === "chat" ? chatModelOptions : imageCreationModelOptions;
   const selectedConversation = useMemo(
     () => conversations.find((item) => item.id === selectedConversationId) ?? null,
     [conversations, selectedConversationId],
@@ -1347,11 +1467,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
       }, 0),
     [conversations],
   );
-  const estimatedBillingUnits = composerMode === "chat" ? 1 : parsedCount;
-  const estimatedImagePrice = useMemo(() => {
-    if (composerMode === "chat") {
-      return null;
-    }
+  const estimatedImageBilling = useMemo(() => {
     const estimateSizeRequest = buildEffectiveImageSizeRequest(imageModel, {
       mode: imageSizeMode,
       aspectRatio: imageAspectRatio,
@@ -1361,10 +1477,10 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
       customHeight: imageCustomHeight,
     });
     const estimateResolution =
-      imageModel === "gpt-image-2"
+      imageModel === "auto" || imageModel === "gpt-image-2"
         ? "1K"
         : imagePriceSizeFromRequest(estimateSizeRequest.size);
-    return estimateImageDisplayPriceUSD(imageModel, parsedCount, estimateResolution);
+    return imageBillingEstimate(imageModel, composerMode === "chat" ? 1 : parsedCount, estimateResolution, imageQuality);
   }, [
     composerMode,
     imageAspectRatio,
@@ -1372,11 +1488,13 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     imageCustomRatio,
     imageCustomWidth,
     imageModel,
+    imageQuality,
     imageResolution,
     imageSizeMode,
     parsedCount,
   ]);
-  const estimatedImagePriceLabel = formatImageDisplayPriceUSD(estimatedImagePrice);
+  const estimatedBillingUnits = estimatedImageBilling.units;
+  const estimatedImagePriceLabel = composerMode === "chat" ? "" : formatImageDisplayPriceCNY(estimatedImageBilling.price);
   const billingBlocked = !hasEnoughBilling(session, estimatedBillingUnits);
   const deleteConfirmTitle = deleteConfirm?.type === "all" ? "清空历史记录" : deleteConfirm?.type === "one" ? "删除对话" : "";
   const deleteConfirmDescription =
@@ -1393,6 +1511,28 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
   useEffect(() => {
     conversationsRef.current = conversations;
   }, [conversations]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadModelCatalog = async () => {
+      try {
+        const models = await fetchCanvasModels();
+        if (!cancelled) {
+          setRemoteCanvasModels(models);
+        }
+      } catch {
+        if (!cancelled) {
+          setRemoteCanvasModels([]);
+        }
+      }
+    };
+
+    void loadModelCatalog();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     const node = composerDockRef.current;
@@ -1474,6 +1614,10 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         setImageCustomRatio(storedSelection.customRatio);
         setImageCustomWidth(storedSelection.customWidth);
         setImageCustomHeight(storedSelection.customHeight);
+        setImageQuality(getStoredImageQuality());
+        setImageBackground(getStoredOptionalImageParameter(IMAGE_BACKGROUND_STORAGE_KEY, new Set(["auto", "transparent", "opaque"])));
+        setImageModeration(getStoredOptionalImageParameter(IMAGE_MODERATION_STORAGE_KEY, new Set(["auto", "low"])));
+        setImagePartialImages(getStoredImagePartialImages());
         setImageOutputFormat(getStoredImageOutputFormat());
         setImageOutputCompression(getStoredImageOutputCompression());
 
@@ -1529,7 +1673,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     setComposerMode("image");
     setImagePrompt(prompt);
     setImageCount("1");
-    setImageModel(isImageCreationModel(intent.model) ? intent.model : DEFAULT_IMAGE_MODEL);
+    setImageModel(isImageModel(intent.model) && modelIDLooksImageCapable(intent.model) ? intent.model : imageCreationModelOptions[0]?.value || DEFAULT_IMAGE_MODEL);
     setImageSizeMode(sizeSelection.mode);
     setImageAspectRatio(sizeSelection.aspectRatio);
     setImageResolution(isImageResolution(intent.resolutionPreset) ? intent.resolutionPreset : sizeSelection.resolution);
@@ -1585,7 +1729,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
       .finally(() => {
         toast.dismiss(toastId);
       });
-  }, [isLoadingHistory]);
+  }, [imageCreationModelOptions, isLoadingHistory]);
 
   useEffect(() => {
     if (!selectedConversationId) {
@@ -1634,16 +1778,16 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
 
   useEffect(() => {
     if (composerMode === "chat") {
-      if (!isChatModel(imageModel)) {
-        setImageModel(DEFAULT_CHAT_MODEL);
+      if (!hasMenuOption(chatModelOptions, imageModel)) {
+        setImageModel(chatModelOptions[0]?.value || DEFAULT_CHAT_MODEL);
       }
       return;
     }
 
-    if (!isImageCreationModel(imageModel)) {
-      setImageModel(DEFAULT_IMAGE_MODEL);
+    if (!hasMenuOption(imageCreationModelOptions, imageModel)) {
+      setImageModel(imageCreationModelOptions[0]?.value || DEFAULT_IMAGE_MODEL);
     }
-  }, [composerMode, imageModel]);
+  }, [chatModelOptions, composerMode, imageCreationModelOptions, imageModel]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -1680,6 +1824,27 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
       return;
     }
 
+    if (imageQuality === "auto") {
+      window.localStorage.removeItem(IMAGE_QUALITY_STORAGE_KEY);
+    } else {
+      window.localStorage.setItem(IMAGE_QUALITY_STORAGE_KEY, imageQuality);
+    }
+    if (imageBackground === "auto") {
+      window.localStorage.removeItem(IMAGE_BACKGROUND_STORAGE_KEY);
+    } else {
+      window.localStorage.setItem(IMAGE_BACKGROUND_STORAGE_KEY, imageBackground);
+    }
+    if (imageModeration === "auto") {
+      window.localStorage.removeItem(IMAGE_MODERATION_STORAGE_KEY);
+    } else {
+      window.localStorage.setItem(IMAGE_MODERATION_STORAGE_KEY, imageModeration);
+    }
+    const normalizedPartialImages = normalizePositiveImageParameter(imagePartialImages);
+    if (normalizedPartialImages === undefined) {
+      window.localStorage.removeItem(IMAGE_PARTIAL_IMAGES_STORAGE_KEY);
+    } else {
+      window.localStorage.setItem(IMAGE_PARTIAL_IMAGES_STORAGE_KEY, String(normalizedPartialImages));
+    }
     window.localStorage.setItem(IMAGE_OUTPUT_FORMAT_STORAGE_KEY, imageOutputFormat);
     const normalizedCompression = normalizeOutputCompressionValue(imageOutputCompression);
     if (normalizedCompression === undefined || !supportsImageOutputCompression(imageOutputFormat)) {
@@ -1687,7 +1852,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
       return;
     }
     window.localStorage.setItem(IMAGE_OUTPUT_COMPRESSION_STORAGE_KEY, String(normalizedCompression));
-  }, [imageOutputCompression, imageOutputFormat]);
+  }, [imageBackground, imageModeration, imageOutputCompression, imageOutputFormat, imagePartialImages, imageQuality]);
 
   useEffect(() => {
     if (selectedConversationId && !conversations.some((conversation) => conversation.id === selectedConversationId)) {
@@ -1877,6 +2042,10 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     promptApplyRequestIdRef.current += 1;
     setImagePrompt("");
     setImageCount("1");
+    setImageQuality("auto");
+    setImageBackground("auto");
+    setImageModeration("auto");
+    setImagePartialImages("");
     setImageOutputFormat(DEFAULT_IMAGE_OUTPUT_FORMAT);
     setImageOutputCompression("");
     setDefaultImageVisibility("private");
@@ -1917,6 +2086,10 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     setImageCustomRatio(presetSizeSelection.customRatio);
     setImageCustomWidth(presetSizeSelection.customWidth);
     setImageCustomHeight(presetSizeSelection.customHeight);
+    setImageQuality("auto");
+    setImageBackground("auto");
+    setImageModeration("auto");
+    setImagePartialImages("");
     setImageOutputFormat(DEFAULT_IMAGE_OUTPUT_FORMAT);
     setImageOutputCompression("");
     setDefaultImageVisibility("private");
@@ -1942,58 +2115,6 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         return;
       }
       toast.dismiss(toastId);
-      toast.error("已套用提示词，但参考图读取失败");
-    }
-  }, []);
-
-  const handleApplyMarketPrompt = useCallback(async (prompt: BananaPrompt) => {
-    const referenceImageUrls = getPromptReferenceImageUrls(prompt);
-    const requestId = promptApplyRequestIdRef.current + 1;
-    promptApplyRequestIdRef.current = requestId;
-
-    setSelectedConversationId(null);
-    setComposerMode("image");
-    setImagePrompt(prompt.prompt);
-    setImageCount("1");
-    setImageSizeMode("auto");
-    setImageAspectRatio("");
-    setImageResolution("auto");
-    setImageCustomRatio(DEFAULT_IMAGE_CUSTOM_RATIO);
-    setImageCustomWidth(DEFAULT_IMAGE_CUSTOM_WIDTH);
-    setImageCustomHeight(DEFAULT_IMAGE_CUSTOM_HEIGHT);
-    setImageOutputFormat(DEFAULT_IMAGE_OUTPUT_FORMAT);
-    setImageOutputCompression("");
-    setDefaultImageVisibility("private");
-    setReferenceImages([]);
-    setIsPromptMarketOpen(false);
-    if (fileInputRef.current) {
-      fileInputRef.current.value = "";
-    }
-    textareaRef.current?.focus();
-
-    if (referenceImageUrls.length === 0) {
-      toast.success("已套用提示词");
-      return;
-    }
-
-    const toastId = toast.loading(`正在读取 ${referenceImageUrls.length} 张参考图`);
-    const results = await Promise.allSettled(
-      referenceImageUrls.map((url, index) => buildReferenceImageFromUrl(url, index, "prompt-reference")),
-    );
-    const loadedReferences = results.flatMap((result) => (result.status === "fulfilled" ? [result.value] : []));
-
-    toast.dismiss(toastId);
-    if (promptApplyRequestIdRef.current !== requestId) {
-      return;
-    }
-    if (loadedReferences.length > 0) {
-      setReferenceImages(loadedReferences);
-    }
-    if (loadedReferences.length === referenceImageUrls.length) {
-      toast.success("已套用提示词和参考图");
-    } else if (loadedReferences.length > 0) {
-      toast.error(`已套用提示词，${referenceImageUrls.length - loadedReferences.length} 张参考图读取失败`);
-    } else {
       toast.error("已套用提示词，但参考图读取失败");
     }
   }, []);
@@ -2338,14 +2459,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
       conversationId,
       turnId,
       prompt: targetTurn.prompt,
-      model:
-        targetTurn.mode === "chat"
-          ? isChatModel(targetTurn.model)
-            ? targetTurn.model
-            : DEFAULT_CHAT_MODEL
-          : isImageCreationModel(targetTurn.model)
-            ? targetTurn.model
-            : DEFAULT_IMAGE_MODEL,
+      model: targetTurn.model || (targetTurn.mode === "chat" ? chatModelOptions[0]?.value || DEFAULT_CHAT_MODEL : imageCreationModelOptions[0]?.value || DEFAULT_IMAGE_MODEL),
       mode: targetTurn.mode,
       count: targetTurn.mode === "chat" ? "1" : String(normalizeRequestedImageCount(targetTurn.count || targetTurn.images.length || 1)),
       sizeMode: targetTurn.mode === "chat" ? "auto" : sizeSelection.mode,
@@ -2354,6 +2468,13 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
       customRatio: targetTurn.mode === "chat" ? DEFAULT_IMAGE_CUSTOM_RATIO : sizeSelection.customRatio,
       customWidth: targetTurn.mode === "chat" ? DEFAULT_IMAGE_CUSTOM_WIDTH : sizeSelection.customWidth,
       customHeight: targetTurn.mode === "chat" ? DEFAULT_IMAGE_CUSTOM_HEIGHT : sizeSelection.customHeight,
+      quality: targetTurn.quality || "auto",
+      background: targetTurn.background || "auto",
+      moderation: targetTurn.moderation || "auto",
+      partialImages:
+        targetTurn.partialImages === undefined || targetTurn.partialImages === null
+          ? ""
+          : String(targetTurn.partialImages),
       outputFormat: targetTurn.outputFormat || DEFAULT_IMAGE_OUTPUT_FORMAT,
       outputCompression:
         targetTurn.outputCompression === undefined || targetTurn.outputCompression === null
@@ -2362,7 +2483,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
       visibility: targetTurn.visibility || "private",
       referenceImages: targetTurn.mode === "chat" ? [] : targetTurn.referenceImages,
     });
-  }, []);
+  }, [chatModelOptions, imageCreationModelOptions]);
 
   const handleEditReferenceImageChange = useCallback(async (files: File[]) => {
     if (files.length === 0) {
@@ -2533,6 +2654,8 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
           taskOutputFormat === undefined
             ? undefined
             : imageOutputCompressionForModel(activeTurn.model, taskOutputFormat, activeTurn.outputCompression);
+        const taskImageQuality = imageQualityForTask(activeTurn.quality);
+        const taskToolOptions = imageToolOptionsForTask(activeTurn);
         const taskImageResolution =
           supportsStructuredImageParameters(activeTurn.model) && activeTurnSizeRequest.selection?.resolution !== "auto"
             ? activeTurnSizeRequest.selection?.resolution
@@ -2574,14 +2697,14 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
               activeTurn.prompt,
               activeTurn.model,
               activeTurnSizeRequest.size,
-              undefined,
+              taskImageQuality,
               group.count,
               taskMessages,
               activeTurn.visibility || "private",
               taskImageResolution,
               taskOutputFormat,
               taskOutputCompression,
-              undefined,
+              taskToolOptions,
               conversationId,
               fallbackReferenceImage,
             );
@@ -2591,14 +2714,14 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
             activeTurn.prompt,
             activeTurn.model,
             activeTurnSizeRequest.size,
-            undefined,
+            taskImageQuality,
             group.count,
             taskMessages,
             activeTurn.visibility || "private",
             taskImageResolution,
             taskOutputFormat,
             taskOutputCompression,
-            undefined,
+            taskToolOptions,
             conversationId,
             fallbackReferenceImage,
           );
@@ -3021,6 +3144,14 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
 
       const imageCount = draft.mode === "chat" ? 1 : normalizeRequestedImageCount(draft.count);
       const mode = draft.mode === "chat" ? "chat" : getComposerConversationMode("image", draft.referenceImages);
+      const effectiveDraftModel =
+        mode === "chat"
+          ? hasMenuOption(chatModelOptions, draft.model)
+            ? draft.model
+            : chatModelOptions[0]?.value || DEFAULT_CHAT_MODEL
+          : hasMenuOption(imageCreationModelOptions, draft.model)
+            ? draft.model
+            : imageCreationModelOptions[0]?.value || DEFAULT_IMAGE_MODEL;
       const referenceImages = usesReferenceImages(mode) ? draft.referenceImages : [];
       const rawDraftSizeSelection = {
         mode: draft.sizeMode,
@@ -3033,7 +3164,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
       const draftSizeRequest =
         mode === "chat"
           ? null
-          : buildEffectiveImageSizeRequest(draft.model, rawDraftSizeSelection);
+          : buildEffectiveImageSizeRequest(effectiveDraftModel, rawDraftSizeSelection);
       if (
         mode !== "chat" &&
         draftSizeRequest &&
@@ -3057,12 +3188,14 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         return;
       }
       const draftOutputFormat =
-        mode === "chat" ? undefined : imageOutputFormatForModel(draft.model, draft.outputFormat);
+        mode === "chat" ? undefined : imageOutputFormatForModel(effectiveDraftModel, draft.outputFormat);
       const draftOutputCompression =
         draftOutputFormat === undefined
           ? undefined
           : imageOutputCompressionForModel(draft.model, draftOutputFormat, draft.outputCompression);
-      if (mode !== "chat" && supportsStructuredImageParameters(draft.model) && isHighResolutionImageSize(draftImageSize)) {
+      const draftQuality = imageQualityForTask(draft.quality);
+      const draftPartialImages = normalizePositiveImageParameter(draft.partialImages);
+      if (mode !== "chat" && supportsStructuredImageParameters(effectiveDraftModel) && isHighResolutionImageSize(draftImageSize)) {
         const sizeLabel = formatImageSizeDisplay(draftImageSize);
         if (regenerate) {
           toast.message(`${sizeLabel} 属于 Codex 结构化高分辨率任务，会直接提交给上游判断。`);
@@ -3085,15 +3218,18 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
             const baseTurn = {
               ...turn,
               prompt,
-              model: draft.model,
+              model: effectiveDraftModel,
               mode,
               referenceImages: resetReferenceUploads(referenceImages),
               count: imageCount,
               size: draftImageSize,
               sizeSelection: mode === "chat" ? undefined : draftStoredSizeSelection,
-              quality: undefined,
+              quality: mode === "chat" ? undefined : draftQuality,
               outputFormat: draftOutputFormat,
               outputCompression: draftOutputCompression,
+              background: mode !== "chat" && draft.background !== "auto" ? draft.background : undefined,
+              moderation: mode !== "chat" && draft.moderation !== "auto" ? draft.moderation : undefined,
+              partialImages: mode !== "chat" ? draftPartialImages : undefined,
               visibility: mode === "chat" ? "private" : draft.visibility,
             };
             if (!regenerate) {
@@ -3130,7 +3266,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         toast.success("已保存编辑设置");
       }
     },
-    [editingTurnDraft, resetReferenceUploads, runConversationQueue, updateConversation],
+    [chatModelOptions, editingTurnDraft, imageCreationModelOptions, resetReferenceUploads, runConversationQueue, updateConversation],
   );
 
   const handleSubmit = async () => {
@@ -3143,8 +3279,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
       toast.error("请输入提示词");
       return;
     }
-    const estimatedUnits = composerMode === "chat" ? 1 : parsedCount;
-    if (!hasEnoughBilling(session, estimatedUnits)) {
+    if (!hasEnoughBilling(session, estimatedBillingUnits)) {
       toast.error(session.billing?.type === "subscription" ? "用户配额不足" : "用户余额不足");
       return;
     }
@@ -3155,12 +3290,12 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
       const effectiveImageMode = getComposerConversationMode(composerMode, referenceImages);
       const effectiveModel =
         effectiveImageMode === "chat"
-          ? isChatModel(imageModel)
+          ? hasMenuOption(chatModelOptions, imageModel)
             ? imageModel
-            : DEFAULT_CHAT_MODEL
-          : isImageCreationModel(imageModel)
+            : chatModelOptions[0]?.value || DEFAULT_CHAT_MODEL
+          : hasMenuOption(imageCreationModelOptions, imageModel)
             ? imageModel
-            : DEFAULT_IMAGE_MODEL;
+            : imageCreationModelOptions[0]?.value || DEFAULT_IMAGE_MODEL;
       const requestedCount = effectiveImageMode === "chat" ? 1 : parsedCount;
       const rawImageSizeSelection = {
         mode: imageSizeMode,
@@ -3204,6 +3339,8 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         effectiveOutputFormat === undefined
           ? undefined
           : imageOutputCompressionForModel(effectiveModel, effectiveOutputFormat, imageOutputCompression);
+      const effectiveImageQuality = imageQualityForTask(imageQuality);
+      const effectivePartialImages = normalizePositiveImageParameter(imagePartialImages);
       const isHighResolutionRequest =
         effectiveImageMode !== "chat" &&
         supportsStructuredImageParameters(effectiveModel) &&
@@ -3227,9 +3364,12 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         count: requestedCount,
         size: effectiveImageMode === "chat" ? "" : currentImageSize,
         sizeSelection: effectiveImageMode === "chat" ? undefined : currentImageSizeSelection,
-        quality: undefined,
+        quality: effectiveImageMode === "chat" ? undefined : effectiveImageQuality,
         outputFormat: effectiveOutputFormat,
         outputCompression: effectiveImageMode === "chat" ? undefined : effectiveOutputCompression,
+        background: effectiveImageMode !== "chat" && imageBackground !== "auto" ? imageBackground : undefined,
+        moderation: effectiveImageMode !== "chat" && imageModeration !== "auto" ? imageModeration : undefined,
+        partialImages: effectiveImageMode !== "chat" ? effectivePartialImages : undefined,
         visibility: effectiveImageMode === "chat" ? "private" : defaultImageVisibility,
         images: Array.from({ length: requestedCount }, (_, index): StoredImage => {
           const imageId = `${turnId}-${index}`;
@@ -3291,8 +3431,14 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
 
   return (
     <>
-      <section className="grid h-full min-h-0 w-full grid-cols-1 gap-2 px-0 pb-[calc(env(safe-area-inset-bottom)+0.5rem)] sm:gap-3 sm:pb-3 lg:grid-cols-[280px_minmax(0,1fr)] xl:grid-cols-[300px_minmax(0,1fr)]">
-        <div className="hidden h-full min-h-0 border-r border-[#f2f3f5] pr-3 lg:block">
+      <Sub2APIKeyRequiredDialog />
+      <section
+        className={cn(
+          "grid h-full min-h-0 w-full grid-cols-1 gap-2 px-0 pb-[calc(env(safe-area-inset-bottom)+0.5rem)] sm:gap-3 sm:pb-3 lg:grid-cols-[280px_minmax(0,1fr)] xl:grid-cols-[300px_minmax(0,1fr)]",
+          isEmbeddedMode && "gap-1 pb-0 sm:gap-2 sm:pb-1 lg:grid-cols-[260px_minmax(0,1fr)] xl:grid-cols-[270px_minmax(0,1fr)]",
+        )}
+      >
+        <div className={cn("hidden h-full min-h-0 border-r border-[#f2f3f5] pr-3 lg:block", isEmbeddedMode && "pr-2")}>
           <ImageSidebar
             conversations={conversations}
             isLoadingHistory={isLoadingHistory}
@@ -3457,7 +3603,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                         </SelectTrigger>
                         <SelectContent>
                           <SelectGroup>
-                            {(editingTurnDraft.mode === "chat" ? CHAT_MODEL_OPTIONS : IMAGE_CREATION_MODEL_OPTIONS).map((option) => (
+                            {(editingTurnDraft.mode === "chat" ? chatModelOptions : imageCreationModelOptions).map((option) => (
                               <SelectItem key={option.value} value={option.value}>
                                 {option.label}
                               </SelectItem>
@@ -3618,6 +3764,101 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                         {editingDraftOutputControls ? (
                           <>
                             <label className="flex flex-col gap-2 text-sm font-medium text-stone-700">
+                              质量
+                              <Select
+                                value={editingTurnDraft.quality}
+                                onValueChange={(value) =>
+                                  setEditingTurnDraft((current) =>
+                                    current && (value === "auto" || isImageQuality(value))
+                                      ? { ...current, quality: value }
+                                      : current,
+                                  )
+                                }
+                              >
+                                <SelectTrigger>
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectGroup>
+                                    <SelectItem value="auto">自动</SelectItem>
+                                    <SelectItem value="low">速度优先</SelectItem>
+                                    <SelectItem value="medium">标准</SelectItem>
+                                    <SelectItem value="high">高品质</SelectItem>
+                                  </SelectGroup>
+                                </SelectContent>
+                              </Select>
+                            </label>
+                            <label className="flex flex-col gap-2 text-sm font-medium text-stone-700">
+                              背景
+                              <Select
+                                value={editingTurnDraft.background}
+                                onValueChange={(value) =>
+                                  setEditingTurnDraft((current) =>
+                                    current && (value === "auto" || value === "transparent" || value === "opaque")
+                                      ? { ...current, background: value }
+                                      : current,
+                                  )
+                                }
+                              >
+                                <SelectTrigger>
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectGroup>
+                                    <SelectItem value="auto">Auto</SelectItem>
+                                    <SelectItem value="transparent">透明</SelectItem>
+                                    <SelectItem value="opaque">不透明</SelectItem>
+                                  </SelectGroup>
+                                </SelectContent>
+                              </Select>
+                            </label>
+                            <label className="flex flex-col gap-2 text-sm font-medium text-stone-700">
+                              审核
+                              <Select
+                                value={editingTurnDraft.moderation}
+                                onValueChange={(value) =>
+                                  setEditingTurnDraft((current) =>
+                                    current && (value === "auto" || value === "low")
+                                      ? { ...current, moderation: value }
+                                      : current,
+                                  )
+                                }
+                              >
+                                <SelectTrigger>
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectGroup>
+                                    <SelectItem value="auto">Auto</SelectItem>
+                                    <SelectItem value="low">Low</SelectItem>
+                                  </SelectGroup>
+                                </SelectContent>
+                              </Select>
+                            </label>
+                            <label className="flex flex-col gap-2 text-sm font-medium text-stone-700">
+                              预览帧
+                              <Select
+                                value={editingTurnDraft.partialImages || "off"}
+                                onValueChange={(value) =>
+                                  setEditingTurnDraft((current) =>
+                                    current ? { ...current, partialImages: value === "off" ? "" : value } : current,
+                                  )
+                                }
+                              >
+                                <SelectTrigger>
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectGroup>
+                                    <SelectItem value="off">关闭</SelectItem>
+                                    <SelectItem value="1">1 帧</SelectItem>
+                                    <SelectItem value="2">2 帧</SelectItem>
+                                    <SelectItem value="3">3 帧</SelectItem>
+                                  </SelectGroup>
+                                </SelectContent>
+                              </Select>
+                            </label>
+                            <label className="flex flex-col gap-2 text-sm font-medium text-stone-700">
                               格式
                               <Select
                                 value={editingTurnDraft.outputFormat}
@@ -3717,8 +3958,8 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
           </Dialog>
         ) : null}
 
-        <div className="relative flex min-h-0 min-w-0 flex-col gap-2 sm:gap-4">
-          <div className="flex items-center justify-between gap-2 px-1 sm:px-4">
+        <div className={cn("relative flex min-h-0 min-w-0 flex-col gap-2 sm:gap-4", isEmbeddedMode && "sm:gap-2")}>
+          <div className={cn("flex items-center justify-between gap-2 px-1 sm:px-4", isEmbeddedMode && "sm:px-2")}>
             <div className="flex min-w-0 flex-1 items-center gap-2 lg:hidden">
               <Button
                 variant="outline"
@@ -3748,8 +3989,11 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
 
           <div
             ref={resultsViewportRef}
-            className="hide-scrollbar min-h-0 flex-1 overflow-y-auto px-1 pt-2 pb-[14rem] sm:px-4 sm:pt-4 sm:pb-[15rem] xl:px-6"
-            style={composerDockHeight > 0 ? { paddingBottom: composerDockHeight + 24 } : undefined}
+            className={cn(
+              "hide-scrollbar min-h-0 flex-1 overflow-y-auto px-1 pt-2 pb-[14rem] sm:px-4 sm:pt-4 sm:pb-[15rem] xl:px-6",
+              isEmbeddedMode && "sm:px-2 sm:pt-2 xl:px-3",
+            )}
+            style={composerDockHeight > 0 ? { paddingBottom: composerDockHeight + (isEmbeddedMode ? 12 : 24) } : undefined}
           >
             <ImageResults
               selectedConversation={selectedConversation}
@@ -3773,14 +4017,17 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
 
           <div
             ref={composerDockRef}
-            className="pointer-events-none absolute inset-x-0 bottom-0 z-30 px-1 pb-[calc(env(safe-area-inset-bottom)+0.5rem)] sm:px-4 sm:pb-2"
+            className={cn(
+              "pointer-events-none absolute inset-x-0 bottom-0 z-30 px-1 pb-[calc(env(safe-area-inset-bottom)+0.5rem)] sm:px-4 sm:pb-2",
+              isEmbeddedMode && "sm:px-2 sm:pb-1",
+            )}
             style={
               {
                 "--image-composer-dock-height": `${composerDockHeight}px`,
               } as CSSProperties
             }
           >
-            <div className="pointer-events-auto mx-auto w-full max-w-[1120px]">
+            <div className={cn("pointer-events-auto mx-auto w-full", isEmbeddedMode ? "max-w-[1280px]" : "max-w-[1120px]")}>
               <ImageComposer
                 composerMode={composerMode}
                 prompt={imagePrompt}
@@ -3793,6 +4040,10 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                 imageCustomRatio={imageCustomRatio}
                 imageCustomWidth={imageCustomWidth}
                 imageCustomHeight={imageCustomHeight}
+                imageQuality={imageQuality}
+                imageBackground={imageBackground}
+                imageModeration={imageModeration}
+                imagePartialImages={imagePartialImages}
                 imageOutputFormat={imageOutputFormat}
                 imageOutputCompression={imageOutputCompression}
                 highResolutionHint={highResolutionHint}
@@ -3811,10 +4062,13 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                 onImageCustomRatioChange={setImageCustomRatio}
                 onImageCustomWidthChange={setImageCustomWidth}
                 onImageCustomHeightChange={setImageCustomHeight}
+                onImageQualityChange={setImageQuality}
+                onImageBackgroundChange={setImageBackground}
+                onImageModerationChange={setImageModeration}
+                onImagePartialImagesChange={setImagePartialImages}
                 onImageOutputFormatChange={setImageOutputFormat}
                 onImageOutputCompressionChange={setImageOutputCompression}
                 onSubmit={handleSubmit}
-                onOpenPromptMarket={() => setIsPromptMarketOpen(true)}
                 onReferenceImageChange={handleReferenceImageChange}
                 onImageResultDrop={handleImageResultDrop}
                 onRemoveReferenceImage={handleRemoveReferenceImage}
@@ -3823,12 +4077,6 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
           </div>
         </div>
       </section>
-
-      <ImagePromptMarket
-        open={isPromptMarketOpen}
-        onOpenChange={setIsPromptMarketOpen}
-        onApplyPrompt={handleApplyMarketPrompt}
-      />
 
       <ImageLightbox
         images={lightboxImages}

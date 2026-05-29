@@ -22,8 +22,8 @@ export type AppMeta = {
 };
 
 export const defaultAppMeta: AppMeta = {
-  app_title: "落叶网络",
-  project_name: "落叶网络",
+  app_title: "落叶AI",
+  project_name: "落叶AI",
   login_page_image_url: "",
   login_page_image_mode: "contain",
   login_page_image_zoom: LOGIN_PAGE_IMAGE_DEFAULT_TRANSFORM.zoom,

@@ -1,9 +1,9 @@
-import type { ManagedImage } from "@/lib/api";
+import type { ManagedImageSummary } from "@/lib/api";
 
-export type ImageGalleryView = "mine" | "public";
+export type ImageGalleryView = "mine" | "public" | "all";
 
 type ImageManagerCacheEntry = {
-  items: ManagedImage[];
+  items: ManagedImageSummary[];
   nextCursor: string;
   hasMore: boolean;
   updatedAt: number;
@@ -23,8 +23,9 @@ export function imageManagerCacheKey(
   orientation = "all",
   resolution = "all",
   aspectRatio = "all",
+  tags = "",
 ) {
-  return [cacheScope, view, startDate, endDate, searchKeyword.trim(), visibility, format, orientation, resolution, aspectRatio].join("|");
+  return [cacheScope, view, startDate, endDate, searchKeyword.trim(), visibility, format, orientation, resolution, aspectRatio, tags].join("|");
 }
 
 export function getImageManagerCache(cacheKey: string) {
@@ -35,7 +36,7 @@ export function isFreshImageManagerCache(entry: ImageManagerCacheEntry) {
   return Date.now() - entry.updatedAt < IMAGE_MANAGER_CACHE_TTL_MS;
 }
 
-export function updateImageManagerCache(cacheKey: string, items: ManagedImage[], nextCursor = "", hasMore = false) {
+export function updateImageManagerCache(cacheKey: string, items: ManagedImageSummary[], nextCursor = "", hasMore = false) {
   imageManagerCache.set(cacheKey, { items, nextCursor, hasMore, updatedAt: Date.now() });
 }
 

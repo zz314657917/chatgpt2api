@@ -25,6 +25,7 @@ import (
 	"chatgpt2api/internal/backend"
 	"chatgpt2api/internal/imagestore"
 	"chatgpt2api/internal/service"
+	"chatgpt2api/internal/util"
 )
 
 type testProtocolImageConfig struct {
@@ -303,6 +304,31 @@ func TestFormatImageResultStoresOwnerName(t *testing.T) {
 	}
 	if meta["owner_id"] != "linuxdo:41499" || meta["owner_name"] != "Cassianvale" {
 		t.Fatalf("metadata = %#v", meta)
+	}
+}
+
+func TestFormatImageResultReturnsImageDimensions(t *testing.T) {
+	config := testProtocolImageConfig{root: t.TempDir()}
+	engine := &Engine{Config: config}
+	imageDataURL := testPNGDataURL(t, 752, 1024)
+	imageData := strings.TrimPrefix(imageDataURL, "data:image/png;base64,")
+
+	result := engine.FormatImageResult(
+		[]map[string]any{{"b64_json": imageData}},
+		"draw",
+		"url",
+		"https://example.test",
+		"linuxdo:41499",
+		"Cassianvale",
+		123,
+		"",
+	)
+	items, _ := result["data"].([]map[string]any)
+	if len(items) != 1 {
+		t.Fatalf("FormatImageResult() data = %#v", result["data"])
+	}
+	if items[0]["width"] != 752 || items[0]["height"] != 1024 || items[0]["resolution"] != "752x1024" {
+		t.Fatalf("image dimensions = %#v", items[0])
 	}
 }
 
@@ -686,6 +712,51 @@ func TestHandleImageGenerationsReturnsArbitraryUpstreamImageText(t *testing.T) {
 	}
 	if result["output_type"] != "text" || result["message"] != upstreamText {
 		t.Fatalf("result = %#v, want arbitrary upstream text response", result)
+	}
+}
+
+func TestHandleImageResponsesIncludeImageUsage(t *testing.T) {
+	var pngBuf bytes.Buffer
+	img := image.NewRGBA(image.Rect(0, 0, 32, 24))
+	if err := png.Encode(&pngBuf, img); err != nil {
+		t.Fatalf("encode png: %v", err)
+	}
+	engine := &Engine{
+		ImageTokenProvider: func(context.Context) (string, error) { return "test-token", nil },
+		ImageClientFactory: func(string) *backend.Client { return nil },
+	}
+	engine.StreamImageOutputsFunc = func(ctx context.Context, client *backend.Client, request ConversationRequest, index, total int) (<-chan ImageOutput, <-chan error) {
+		out := make(chan ImageOutput, 1)
+		errCh := make(chan error, 1)
+		out <- ImageOutput{Kind: "result", Model: request.Model, Index: index, Total: total, Created: time.Now().Unix(), Data: []map[string]any{{"b64_json": base64.StdEncoding.EncodeToString(pngBuf.Bytes())}}}
+		close(out)
+		errCh <- nil
+		close(errCh)
+		return out, errCh
+	}
+	generation, _, err := engine.HandleImageGenerations(context.Background(), map[string]any{
+		"prompt": "draw a tile",
+		"model":  "gpt-image-2",
+		"n":      1,
+	})
+	if err != nil {
+		t.Fatalf("HandleImageGenerations() error = %v", err)
+	}
+	if usage := util.StringMap(generation["usage"]); util.ToInt(usage["input_tokens"], 0) <= 0 || util.ToInt(usage["output_tokens"], 0) <= 0 {
+		t.Fatalf("generation usage = %#v", generation["usage"])
+	}
+	edit, _, err := engine.HandleImageEdits(context.Background(), map[string]any{
+		"prompt": "edit a tile",
+		"model":  "gpt-image-2",
+		"n":      1,
+	}, []UploadedImage{{Filename: "input.png", ContentType: "image/png", Data: pngBuf.Bytes()}})
+	if err != nil {
+		t.Fatalf("HandleImageEdits() error = %v", err)
+	}
+	usage := util.StringMap(edit["usage"])
+	inputDetails := util.StringMap(usage["input_tokens_details"])
+	if util.ToInt(inputDetails["image_tokens"], 0) <= 0 || util.ToInt(usage["output_tokens"], 0) <= 0 {
+		t.Fatalf("edit usage = %#v", usage)
 	}
 }
 
@@ -1100,7 +1171,7 @@ func TestStreamImageOutputsWithPoolReleasesImageLeaseOnError(t *testing.T) {
 	lease.Release()
 }
 
-func TestStreamImageOutputsWithPoolPreferredImageLeaseFallsBackWhenBusy(t *testing.T) {
+func TestStreamImageOutputsWithPoolReusesPreferredImageLeaseWithCapacity(t *testing.T) {
 	engine, accounts := newImageLeaseTestEngine(t, "preferred-token", "fallback-token")
 	engine.ImageConversationSessions = service.NewImageConversationSessionService(filepath.Join(t.TempDir(), "sessions.json"))
 	engine.ImageConversationSessions.Bind(service.ImageConversationSession{
@@ -1114,7 +1185,60 @@ func TestStreamImageOutputsWithPoolPreferredImageLeaseFallsBackWhenBusy(t *testi
 	if err != nil {
 		t.Fatalf("AcquireTextAccessToken(preferred) error = %v", err)
 	}
-	defer preferredLease.Release()
+
+	usedToken := ""
+	engine.StreamImageOutputsFunc = func(ctx context.Context, client *backend.Client, request ConversationRequest, index, total int) (<-chan ImageOutput, <-chan error) {
+		usedToken = client.AccessToken
+		if request.UpstreamConversationID != "conv-1" || request.UpstreamParentMessageID != "msg-1" {
+			t.Errorf("preferred request session pointers = %q/%q, want conv-1/msg-1", request.UpstreamConversationID, request.UpstreamParentMessageID)
+		}
+		out := make(chan ImageOutput, 1)
+		errCh := make(chan error, 1)
+		out <- ImageOutput{Kind: "result", Model: request.Model, Index: index, Total: total, Created: time.Now().Unix(), Data: []map[string]any{{"url": imageURLForIndex(index)}}}
+		close(out)
+		errCh <- nil
+		close(errCh)
+		return out, errCh
+	}
+
+	outputs, errCh := engine.StreamImageOutputsWithPool(context.Background(), ConversationRequest{Model: "gpt-image-2", N: 1, OwnerID: "owner-1", FrontendConversationID: "front-1"})
+	for range outputs {
+	}
+	if err := <-errCh; err != nil {
+		t.Fatalf("StreamImageOutputsWithPool() err = %v", err)
+	}
+	if usedToken != "preferred-token" {
+		t.Fatalf("used token = %q, want preferred-token", usedToken)
+	}
+	preferredLease.Release()
+}
+
+func TestStreamImageOutputsWithPoolPreferredImageLeaseFallsBackWhenCapacityFull(t *testing.T) {
+	engine, accounts := newImageLeaseTestEngine(t, "preferred-token", "fallback-token")
+	engine.ImageConversationSessions = service.NewImageConversationSessionService(filepath.Join(t.TempDir(), "sessions.json"))
+	engine.ImageConversationSessions.Bind(service.ImageConversationSession{
+		OwnerID:                 "owner-1",
+		FrontendConversationID:  "front-1",
+		AccessToken:             "preferred-token",
+		UpstreamConversationID:  "conv-1",
+		UpstreamParentMessageID: "msg-1",
+	})
+	preferredLeases := make([]service.AccountLease, 0, 5)
+	for index := 0; index < 5; index++ {
+		preferredLease, err := accounts.GetAvailableImageAccessTokenFor(context.Background(), func(account map[string]any) bool {
+			return util.Clean(account["access_token"]) == "preferred-token"
+		})
+		if err != nil {
+			t.Fatalf("GetAvailableImageAccessTokenFor(preferred %d) error = %v", index+1, err)
+		}
+		preferredLeases = append(preferredLeases, preferredLease)
+	}
+	defer func() {
+		for _, preferredLease := range preferredLeases {
+			preferredLease.Release()
+			accounts.MarkImageResult("preferred-token", false)
+		}
+	}()
 
 	usedToken := ""
 	engine.StreamImageOutputsFunc = func(ctx context.Context, client *backend.Client, request ConversationRequest, index, total int) (<-chan ImageOutput, <-chan error) {

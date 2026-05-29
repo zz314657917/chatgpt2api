@@ -8,6 +8,7 @@ import {
   cleanupLogs,
   createCPAPool,
   deleteCPAPool,
+  fetchCreationTaskDiagnostics,
   fetchCPAPoolFiles,
   fetchCPAPools,
   fetchLogGovernance,
@@ -18,6 +19,7 @@ import {
   startRegister,
   startCPAImport,
   stopRegister,
+  repairCreationTaskDiagnostics,
   updateCPAPool,
   updateLoginPageImageSettings,
   updateRegisterConfig,
@@ -27,6 +29,8 @@ import {
   type BillingType,
   type CPAPool,
   type CPARemoteFile,
+  type CreationTaskDiagnosticsSummary,
+  type CreationTaskRepairResult,
   type ImageStorageCleanupResult,
   type ImageStorageGovernanceSummary,
   type LogCleanupResult,
@@ -105,7 +109,7 @@ function normalizeConfig(config: SettingsConfig): SettingsConfig {
     default_standard_balance: Math.max(0, Number(config.default_standard_balance) || 0),
     default_subscription_quota: Math.max(0, Number(config.default_subscription_quota) || 0),
     default_subscription_period: normalizeDefaultSubscriptionPeriod(config.default_subscription_period),
-    image_retention_days: Number(config.image_retention_days || 30),
+    image_retention_days: Number(config.image_retention_days || 7),
     image_storage_limit_mb: Math.max(0, Number(config.image_storage_limit_mb) || 0),
     image_max_saved_per_user: imageMaxSavedPerUserOrDefault(config.image_max_saved_per_user),
     log_retention_days: Number(config.log_retention_days || 7),
@@ -161,6 +165,10 @@ type SettingsStore = {
   lastLogCleanup: LogCleanupResult | null;
   isLoadingLogGovernance: boolean;
   isCleaningLogs: boolean;
+  creationTaskDiagnostics: CreationTaskDiagnosticsSummary | null;
+  lastCreationTaskRepair: CreationTaskRepairResult | null;
+  isLoadingCreationTaskDiagnostics: boolean;
+  isRepairingCreationTasks: boolean;
   imageStorageGovernance: ImageStorageGovernanceSummary | null;
   lastImageStorageCleanup: ImageStorageCleanupResult | null;
   isLoadingImageStorageGovernance: boolean;
@@ -230,6 +238,8 @@ type SettingsStore = {
   saveLoginPageImage: (options: { file?: File | null; action: "keep" | "replace" | "remove" }) => Promise<boolean>;
   loadLogGovernance: (silent?: boolean) => Promise<void>;
   cleanupLogsByRetention: () => Promise<void>;
+  loadCreationTaskDiagnostics: (silent?: boolean, staleSeconds?: number) => Promise<void>;
+  repairCreationTaskStatuses: (finalizeActive?: boolean, staleSeconds?: number) => Promise<void>;
   loadImageStorageGovernance: (silent?: boolean) => Promise<void>;
   cleanupImageStorageByRetention: () => Promise<void>;
   cleanupImageStorageByQuota: (includePublic?: boolean) => Promise<void>;
@@ -281,6 +291,10 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   lastLogCleanup: null,
   isLoadingLogGovernance: true,
   isCleaningLogs: false,
+  creationTaskDiagnostics: null,
+  lastCreationTaskRepair: null,
+  isLoadingCreationTaskDiagnostics: true,
+  isRepairingCreationTasks: false,
   imageStorageGovernance: null,
   lastImageStorageCleanup: null,
   isLoadingImageStorageGovernance: true,
@@ -313,7 +327,12 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   isStartingImport: false,
 
   initialize: async () => {
-    await Promise.allSettled([get().loadConfig(), get().loadPools(), get().loadLogGovernance(), get().loadImageStorageGovernance()]);
+    await Promise.allSettled([
+      get().loadConfig(),
+      get().loadPools(),
+      get().loadLogGovernance(),
+      get().loadImageStorageGovernance(),
+    ]);
   },
 
   loadConfig: async () => {
@@ -350,7 +369,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         default_standard_balance: Math.max(0, Number(config.default_standard_balance) || 0),
         default_subscription_quota: Math.max(0, Number(config.default_subscription_quota) || 0),
         default_subscription_period: normalizeDefaultSubscriptionPeriod(config.default_subscription_period),
-        image_retention_days: Math.max(1, Number(config.image_retention_days) || 30),
+        image_retention_days: Math.max(1, Number(config.image_retention_days) || 7),
         image_storage_limit_mb: Math.max(0, Number(config.image_storage_limit_mb) || 0),
         image_max_saved_per_user: imageMaxSavedPerUserOrDefault(config.image_max_saved_per_user),
         log_retention_days: Math.min(3650, Math.max(1, Number(config.log_retention_days) || 7)),
@@ -595,8 +614,8 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       const nextConfig = normalizeConfig(data.config);
       set({ config: nextConfig });
       dispatchAppMetaUpdated({
-        app_title: "落叶网络",
-        project_name: "落叶网络",
+        app_title: "落叶AI",
+        project_name: "落叶AI",
         login_page_image_url: String(nextConfig.login_page_image_url || ""),
         login_page_image_mode: normalizeLoginPageImageMode(nextConfig.login_page_image_mode),
         login_page_image_zoom: Number(nextConfig.login_page_image_zoom),
@@ -646,6 +665,41 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
     }
   },
 
+  loadCreationTaskDiagnostics: async (silent = false, staleSeconds = 600) => {
+    if (!silent) set({ isLoadingCreationTaskDiagnostics: true });
+    try {
+      const data = await fetchCreationTaskDiagnostics(staleSeconds);
+      set({ creationTaskDiagnostics: data.diagnostics });
+    } catch (error) {
+      if (!silent) toast.error(error instanceof Error ? error.message : "加载创作任务诊断失败");
+    } finally {
+      if (!silent) set({ isLoadingCreationTaskDiagnostics: false });
+    }
+  },
+
+  repairCreationTaskStatuses: async (finalizeActive = false, staleSeconds = 600) => {
+    set({ isRepairingCreationTasks: true });
+    try {
+      const data = await repairCreationTaskDiagnostics(finalizeActive, staleSeconds);
+      set({
+        creationTaskDiagnostics: data.diagnostics,
+        lastCreationTaskRepair: data.repair,
+      });
+      const repaired = data.repair.repaired_terminal_tasks;
+      const finalized = data.repair.finalized_active_tasks;
+      const skipped = data.repair.skipped_active_tasks;
+      toast.success(
+        finalizeActive
+          ? `已修复 ${repaired} 个终态任务，终止 ${finalized} 个卡住任务，跳过 ${skipped} 个未超时任务`
+          : `已修复 ${repaired} 个终态任务`,
+      );
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "修复创作任务状态失败");
+    } finally {
+      set({ isRepairingCreationTasks: false });
+    }
+  },
+
   loadImageStorageGovernance: async (silent = false) => {
     if (!silent) set({ isLoadingImageStorageGovernance: true });
     try {
@@ -661,7 +715,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   cleanupImageStorageByRetention: async () => {
     const { config } = get();
     if (!config) return;
-    const retentionDays = Math.max(1, Number(config.image_retention_days) || 30);
+    const retentionDays = Math.max(1, Number(config.image_retention_days) || 7);
     set({ isCleaningImageStorage: true });
     try {
       const data = await cleanupImageStorage({ action: "retention", retention_days: retentionDays });
@@ -699,9 +753,9 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
     try {
       const data = await cleanupImageStorage({ action: "thumbnails" });
       set({ lastImageStorageCleanup: data.cleanup, imageStorageGovernance: data.governance });
-      toast.success(`已清理 ${data.cleanup.deleted_thumbnails} 个缩略图缓存`);
+      toast.success(`已清理 ${(data.cleanup.deleted_thumbnails || 0) + (data.cleanup.deleted_previews || 0)} 个预览缓存`);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "清理缩略图失败");
+      toast.error(error instanceof Error ? error.message : "清理预览缓存失败");
     } finally {
       set({ isCleaningImageStorage: false });
     }

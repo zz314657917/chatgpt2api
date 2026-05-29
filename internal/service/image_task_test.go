@@ -163,7 +163,7 @@ func TestImageTaskServiceRejectsBlockedImagePromptBeforeQueueing(t *testing.T) {
 	}
 }
 
-func TestImageTaskServiceAllowsEightQueuedOutputs(t *testing.T) {
+func TestImageTaskServiceAllowsTenQueuedOutputs(t *testing.T) {
 	handlerCalls := make(chan map[string]any, 1)
 	handler := func(ctx context.Context, identity Identity, payload map[string]any) (map[string]any, error) {
 		handlerCalls <- payload
@@ -177,18 +177,18 @@ func TestImageTaskServiceAllowsEightQueuedOutputs(t *testing.T) {
 	svc := newTestImageTaskService(t, handler, handler, handler, func() int { return 30 })
 	identity := Identity{ID: "alice", Name: "Alice", Role: "user"}
 
-	task, err := svc.SubmitGeneration(context.Background(), identity, "task-1", "draw", "gpt-image-2", "1024x1024", "high", "https://base.test", 8, nil)
+	task, err := svc.SubmitGeneration(context.Background(), identity, "task-1", "draw", "gpt-image-2", "1024x1024", "high", "https://base.test", 10, nil)
 	if err != nil {
 		t.Fatalf("SubmitGeneration() error = %v", err)
 	}
 	statuses, ok := task["output_statuses"].([]string)
-	if !ok || len(statuses) != 8 {
-		t.Fatalf("initial output_statuses = %#v, want 8 queued statuses", task["output_statuses"])
+	if !ok || len(statuses) != 10 {
+		t.Fatalf("initial output_statuses = %#v, want 10 queued statuses", task["output_statuses"])
 	}
 	select {
 	case payload := <-handlerCalls:
-		if got := imageTaskCount(payload); got != 8 {
-			t.Fatalf("handler imageTaskCount = %d, want 8 in %#v", got, payload)
+		if got := imageTaskCount(payload); got != 10 {
+			t.Fatalf("handler imageTaskCount = %d, want 10 in %#v", got, payload)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for handler payload")
@@ -199,12 +199,12 @@ func TestImageTaskServiceAllowsEightQueuedOutputs(t *testing.T) {
 	if len(items) != 1 {
 		t.Fatalf("ListTasks items = %#v, want one task", got)
 	}
-	if data := util.AsMapSlice(items[0]["data"]); len(data) != 8 {
-		t.Fatalf("stored task data count = %d, want 8", len(data))
+	if data := util.AsMapSlice(items[0]["data"]); len(data) != 10 {
+		t.Fatalf("stored task data count = %d, want 10", len(data))
 	}
 }
 
-func TestImageTaskServiceClampsQueuedOutputsToEight(t *testing.T) {
+func TestImageTaskServiceClampsQueuedOutputsToTen(t *testing.T) {
 	handlerCalls := make(chan map[string]any, 1)
 	handler := func(ctx context.Context, identity Identity, payload map[string]any) (map[string]any, error) {
 		handlerCalls <- payload
@@ -218,13 +218,13 @@ func TestImageTaskServiceClampsQueuedOutputsToEight(t *testing.T) {
 		t.Fatalf("SubmitGeneration() error = %v", err)
 	}
 	statuses, ok := task["output_statuses"].([]string)
-	if !ok || len(statuses) != 8 {
-		t.Fatalf("initial output_statuses = %#v, want 8 queued statuses", task["output_statuses"])
+	if !ok || len(statuses) != 10 {
+		t.Fatalf("initial output_statuses = %#v, want 10 queued statuses", task["output_statuses"])
 	}
 	select {
 	case payload := <-handlerCalls:
-		if got := imageTaskCount(payload); got != 8 {
-			t.Fatalf("handler imageTaskCount = %d, want 8 in %#v", got, payload)
+		if got := imageTaskCount(payload); got != 10 {
+			t.Fatalf("handler imageTaskCount = %d, want 10 in %#v", got, payload)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for handler payload")
@@ -305,6 +305,18 @@ func TestImageTaskServicePassesImageRequestMetadataToHandler(t *testing.T) {
 		t.Fatal("timed out waiting for handler payload")
 	}
 	waitForTaskStatus(t, svc, identity, "task-1", TaskStatusSuccess)
+}
+
+func TestImageTaskBillingUnitAmountResolutionOverridesRequestedSize(t *testing.T) {
+	got := imageTaskBillingUnitAmount(map[string]any{
+		"model":            util.ImageModelGPT,
+		"requested_size":   "16:9",
+		"image_resolution": "4k",
+		"quality":          "high",
+	})
+	if got != 152 {
+		t.Fatalf("imageTaskBillingUnitAmount() = %d, want 152", got)
+	}
 }
 
 func TestImageTaskServicePassesImageToolOptionsToHandler(t *testing.T) {
@@ -604,6 +616,82 @@ func TestImageTaskServiceLimitsUserDefaultConcurrentCreationUnits(t *testing.T) 
 	waitForTaskStatus(t, svc, alice, "chat-1", TaskStatusSuccess)
 }
 
+func TestImageTaskServiceCancelQueuedTaskWaitingForCreationUnit(t *testing.T) {
+	enteredQueued := make(chan struct{})
+	queuedStarted := make(chan struct{}, 1)
+	firstStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	var queuedOnce sync.Once
+	var firstOnce sync.Once
+	handler := func(ctx context.Context, identity Identity, payload map[string]any) (map[string]any, error) {
+		acquire, ok := payload["image_output_slot_acquirer"].(func(context.Context, int) (func(), error))
+		if !ok {
+			return nil, errors.New("image output slot acquirer missing")
+		}
+		prompt := util.Clean(payload["prompt"])
+		if prompt == "queued" {
+			queuedOnce.Do(func() { close(enteredQueued) })
+		}
+		releaseSlot, err := acquire(ctx, 1)
+		if err != nil {
+			return nil, err
+		}
+		defer releaseSlot()
+		if prompt == "queued" {
+			queuedStarted <- struct{}{}
+			return map[string]any{"data": []map[string]any{{"url": "https://example.test/queued.png"}}}, nil
+		}
+		firstOnce.Do(func() { close(firstStarted) })
+		select {
+		case <-releaseFirst:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		return map[string]any{"data": []map[string]any{{"url": "https://example.test/first.png"}}}, nil
+	}
+	svc := newTestImageTaskService(t, handler, handler, handler, func() int { return 30 }, func() int { return 1 })
+	alice := Identity{ID: "alice", Name: "Alice", Role: AuthRoleUser}
+
+	if _, err := svc.SubmitGeneration(context.Background(), alice, "task-1", "first", "gpt-image-2", "1024x1024", "high", "https://base.test", 1, nil); err != nil {
+		t.Fatalf("SubmitGeneration(task-1) error = %v", err)
+	}
+	select {
+	case <-firstStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for first image output to hold creation unit")
+	}
+	if _, err := svc.SubmitGeneration(context.Background(), alice, "task-2", "queued", "gpt-image-2", "1024x1024", "high", "https://base.test", 1, nil); err != nil {
+		t.Fatalf("SubmitGeneration(task-2) error = %v", err)
+	}
+	select {
+	case <-enteredQueued:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for second task to wait for creation unit")
+	}
+
+	cancelled, err := svc.CancelTask(alice, "task-2")
+	if err != nil {
+		t.Fatalf("CancelTask(task-2) error = %v", err)
+	}
+	if cancelled["status"] != TaskStatusCancelled {
+		t.Fatalf("cancelled task status = %#v", cancelled)
+	}
+	waitForTaskStatus(t, svc, alice, "task-2", TaskStatusCancelled)
+	got := svc.ListTasks(alice, []string{"task-2"})
+	item := got["items"].([]map[string]any)[0]
+	statuses := util.AsStringSlice(item["output_statuses"])
+	if len(statuses) != 1 || statuses[0] != TaskStatusCancelled {
+		t.Fatalf("cancelled queued output_statuses = %#v, want cancelled", statuses)
+	}
+	close(releaseFirst)
+	waitForTaskStatus(t, svc, alice, "task-1", TaskStatusSuccess)
+	select {
+	case <-queuedStarted:
+		t.Fatal("cancelled queued task acquired a creation unit after the first task finished")
+	case <-time.After(150 * time.Millisecond):
+	}
+}
+
 func TestImageTaskServiceLimitsUserDefaultRPM(t *testing.T) {
 	handler := func(ctx context.Context, identity Identity, payload map[string]any) (map[string]any, error) {
 		return map[string]any{"data": []map[string]any{{"url": "https://example.test/image.png"}}}, nil
@@ -727,7 +815,7 @@ func TestImageTaskServiceBillingSuccessFailureCancelAndTextOutput(t *testing.T) 
 			failingImageTaskHandler,
 			func() int { return 30 },
 		)
-		billing := newBilling(t, testBillingDefaults{standardBalance: 4})
+		billing := newBilling(t, testBillingDefaults{standardBalance: 400})
 		svc.SetBillingService(billing)
 		if _, err := svc.SubmitGeneration(context.Background(), user, "success", "draw", "gpt-image-2", "1024x1024", "high", "https://base.test", 4, nil); err != nil {
 			t.Fatalf("SubmitGeneration() error = %v", err)
@@ -735,12 +823,12 @@ func TestImageTaskServiceBillingSuccessFailureCancelAndTextOutput(t *testing.T) 
 		waitForTaskStatus(t, svc, user, "success", TaskStatusSuccess)
 		got := svc.ListTasks(user, []string{"success"})
 		item := got["items"].([]map[string]any)[0]
-		if util.ToInt(item["billing_consumed_amount"], -1) != 2 {
+		if util.ToInt(item["billing_consumed_amount"], -1) != 102 {
 			t.Fatalf("task billing = %#v", item)
 		}
 		state := billing.Get("alice")
 		standard := util.StringMap(state["standard"])
-		if util.ToInt(standard["balance"], -1) != 2 || util.ToInt(standard["lifetime_consumed"], -1) != 2 || util.ToInt(state["available"], -1) != 2 {
+		if util.ToInt(standard["balance"], -1) != 298 || util.ToInt(standard["lifetime_consumed"], -1) != 102 || util.ToInt(state["available"], -1) != 298 {
 			t.Fatalf("billing state after partial success = %#v", state)
 		}
 	})
@@ -754,7 +842,7 @@ func TestImageTaskServiceBillingSuccessFailureCancelAndTextOutput(t *testing.T) 
 			failingImageTaskHandler,
 			func() int { return 30 },
 		)
-		billing := newBilling(t, testBillingDefaults{standardBalance: 2})
+		billing := newBilling(t, testBillingDefaults{standardBalance: 102})
 		svc.SetBillingService(billing)
 		if _, err := svc.SubmitGeneration(context.Background(), user, "failed", "draw", "gpt-image-2", "1024x1024", "high", "https://base.test", 2, nil); err != nil {
 			t.Fatalf("SubmitGeneration() error = %v", err)
@@ -762,7 +850,7 @@ func TestImageTaskServiceBillingSuccessFailureCancelAndTextOutput(t *testing.T) 
 		waitForTaskStatus(t, svc, user, "failed", TaskStatusError)
 		state := billing.Get("alice")
 		standard := util.StringMap(state["standard"])
-		if util.ToInt(standard["balance"], -1) != 2 || util.ToInt(standard["lifetime_consumed"], -1) != 0 {
+		if util.ToInt(standard["balance"], -1) != 102 || util.ToInt(standard["lifetime_consumed"], -1) != 0 {
 			t.Fatalf("billing state after failure = %#v", state)
 		}
 	})
@@ -784,7 +872,7 @@ func TestImageTaskServiceBillingSuccessFailureCancelAndTextOutput(t *testing.T) 
 			failingImageTaskHandler,
 			func() int { return 30 },
 		)
-		billing := newBilling(t, testBillingDefaults{standardBalance: 2})
+		billing := newBilling(t, testBillingDefaults{standardBalance: 102})
 		svc.SetBillingService(billing)
 		if _, err := svc.SubmitGeneration(context.Background(), user, "cancel", "draw", "gpt-image-2", "1024x1024", "high", "https://base.test", 2, nil); err != nil {
 			t.Fatalf("SubmitGeneration() error = %v", err)
@@ -809,8 +897,58 @@ func TestImageTaskServiceBillingSuccessFailureCancelAndTextOutput(t *testing.T) 
 		}
 		state := billing.Get("alice")
 		standard := util.StringMap(state["standard"])
-		if util.ToInt(standard["balance"], -1) != 2 || util.ToInt(standard["lifetime_consumed"], -1) != 0 {
+		if util.ToInt(standard["balance"], -1) != 102 || util.ToInt(standard["lifetime_consumed"], -1) != 0 {
 			t.Fatalf("billing state after cancel = %#v", state)
+		}
+	})
+
+	t.Run("diagnostics finalize refunds stale running task", func(t *testing.T) {
+		started := make(chan struct{})
+		svc := newTestImageTaskService(t,
+			func(ctx context.Context, identity Identity, payload map[string]any) (map[string]any, error) {
+				close(started)
+				<-ctx.Done()
+				return nil, ctx.Err()
+			},
+			failingImageTaskHandler,
+			failingImageTaskHandler,
+			func() int { return 30 },
+		)
+		billing := newBilling(t, testBillingDefaults{standardBalance: 102})
+		svc.SetBillingService(billing)
+		if _, err := svc.SubmitGeneration(context.Background(), user, "diagnostics-finalize", "draw", "gpt-image-2", "1024x1024", "high", "https://base.test", 2, nil); err != nil {
+			t.Fatalf("SubmitGeneration() error = %v", err)
+		}
+		select {
+		case <-started:
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for task start")
+		}
+		state := billing.Get("alice")
+		standard := util.StringMap(state["standard"])
+		if util.ToInt(standard["balance"], -1) != 0 || util.ToInt(standard["lifetime_consumed"], -1) != 102 {
+			t.Fatalf("billing state after precharge = %#v", state)
+		}
+
+		svc.mu.Lock()
+		task := svc.tasks[taskKey("alice", "diagnostics-finalize")]
+		task["updated_at"] = time.Now().Add(-20 * time.Minute).Format("2006-01-02 15:04:05")
+		_ = svc.saveLocked()
+		svc.mu.Unlock()
+
+		result := svc.RepairDiagnostics(ImageTaskRepairOptions{FinalizeActive: true, StaleThreshold: 10 * time.Minute})
+		if result.FinalizedActiveTasks != 1 || result.SkippedActiveTasks != 0 {
+			t.Fatalf("repair diagnostics result = %#v", result)
+		}
+		got := svc.ListTasks(user, []string{"diagnostics-finalize"})
+		item := got["items"].([]map[string]any)[0]
+		if item["status"] != TaskStatusError || util.ToInt(item["billing_consumed_amount"], -1) != 0 {
+			t.Fatalf("settled diagnostics task = %#v", item)
+		}
+		state = billing.Get("alice")
+		standard = util.StringMap(state["standard"])
+		if util.ToInt(standard["balance"], -1) != 102 || util.ToInt(standard["lifetime_consumed"], -1) != 0 {
+			t.Fatalf("billing state after diagnostics finalize = %#v", state)
 		}
 	})
 
@@ -823,7 +961,7 @@ func TestImageTaskServiceBillingSuccessFailureCancelAndTextOutput(t *testing.T) 
 			failingImageTaskHandler,
 			func() int { return 30 },
 		)
-		billing := newBilling(t, testBillingDefaults{standardBalance: 1})
+		billing := newBilling(t, testBillingDefaults{standardBalance: 51})
 		svc.SetBillingService(billing)
 		if _, err := svc.SubmitGeneration(context.Background(), user, "text", "who are you", "gpt-image-2", "1024x1024", "high", "https://base.test", 1, nil); err != nil {
 			t.Fatalf("SubmitGeneration() error = %v", err)
@@ -831,7 +969,7 @@ func TestImageTaskServiceBillingSuccessFailureCancelAndTextOutput(t *testing.T) 
 		waitForTaskStatus(t, svc, user, "text", TaskStatusSuccess)
 		state := billing.Get("alice")
 		standard := util.StringMap(state["standard"])
-		if util.ToInt(standard["balance"], -1) != 1 || util.ToInt(standard["lifetime_consumed"], -1) != 0 {
+		if util.ToInt(standard["balance"], -1) != 51 || util.ToInt(standard["lifetime_consumed"], -1) != 0 {
 			t.Fatalf("billing state after text output = %#v", state)
 		}
 	})
@@ -846,7 +984,7 @@ func TestImageTaskServiceBillingSuccessFailureCancelAndTextOutput(t *testing.T) 
 			func() int { return 30 },
 		)
 		billing := newBilling(t, testBillingDefaults{standardBalance: 0})
-		if _, err := billing.ApplyAdjustment("alice", operator, map[string]any{"type": "switch_to_subscription", "quota_limit": 2, "quota_period": BillingPeriodMonthly, "reason": "test"}); err != nil {
+		if _, err := billing.ApplyAdjustment("alice", operator, map[string]any{"type": "switch_to_subscription", "quota_limit": 102, "quota_period": BillingPeriodMonthly, "reason": "test"}); err != nil {
 			t.Fatalf("switch_to_subscription error = %v", err)
 		}
 		svc.SetBillingService(billing)
@@ -856,7 +994,7 @@ func TestImageTaskServiceBillingSuccessFailureCancelAndTextOutput(t *testing.T) 
 		waitForTaskStatus(t, svc, user, "subscription", TaskStatusSuccess)
 		state := billing.Get("alice")
 		sub := util.StringMap(state["subscription"])
-		if util.ToInt(sub["quota_used"], -1) != 1 || util.ToInt(state["available"], -1) != 1 {
+		if util.ToInt(sub["quota_used"], -1) != 51 || util.ToInt(state["available"], -1) != 51 {
 			t.Fatalf("billing state after subscription task = %#v", state)
 		}
 	})
@@ -881,7 +1019,7 @@ func TestImageTaskServiceBillingSuccessFailureCancelAndTextOutput(t *testing.T) 
 			failingImageTaskHandler,
 			func() int { return 30 },
 		)
-		billing := newBilling(t, testBillingDefaults{standardBalance: 3})
+		billing := newBilling(t, testBillingDefaults{standardBalance: 153})
 		svc.SetBillingService(billing)
 		if _, err := svc.SubmitGeneration(context.Background(), user, "delivery-drain-protected", "draw", "gpt-image-2", "1024x1024", "high", "https://base.test", 2, nil); err != nil {
 			t.Fatalf("SubmitGeneration() error = %v", err)
@@ -891,7 +1029,7 @@ func TestImageTaskServiceBillingSuccessFailureCancelAndTextOutput(t *testing.T) 
 		case <-time.After(2 * time.Second):
 			t.Fatal("timed out waiting for task start")
 		}
-		if err := billing.Charge(user, 1, BillingReference{ChargeKey: "external:drain:partial"}); err != nil {
+		if err := billing.Charge(user, 51, BillingReference{ChargeKey: "external:drain:partial"}); err != nil {
 			t.Fatalf("external Charge() error = %v", err)
 		}
 		close(release)
@@ -902,7 +1040,7 @@ func TestImageTaskServiceBillingSuccessFailureCancelAndTextOutput(t *testing.T) 
 		if len(data) != 2 || data[0]["url"] != "https://example.test/first.png" || data[1]["url"] != "https://example.test/second.png" {
 			t.Fatalf("task lost prepaid outputs = %#v", item)
 		}
-		if util.ToInt(item["billing_consumed_amount"], -1) != 2 {
+		if util.ToInt(item["billing_consumed_amount"], -1) != 102 {
 			t.Fatalf("task billing = %#v", item)
 		}
 		statuses := util.AsStringSlice(item["output_statuses"])
@@ -911,7 +1049,7 @@ func TestImageTaskServiceBillingSuccessFailureCancelAndTextOutput(t *testing.T) 
 		}
 		state := billing.Get("alice")
 		standard := util.StringMap(state["standard"])
-		if util.ToInt(standard["balance"], -1) != 0 || util.ToInt(standard["lifetime_consumed"], -1) != 3 || util.ToInt(state["available"], -1) != 0 {
+		if util.ToInt(standard["balance"], -1) != 0 || util.ToInt(standard["lifetime_consumed"], -1) != 153 || util.ToInt(state["available"], -1) != 0 {
 			t.Fatalf("billing state after delivery-time drain = %#v", state)
 		}
 	})
@@ -989,7 +1127,7 @@ func TestImageTaskServiceBillingChatEquivalenceClasses(t *testing.T) {
 			},
 			func() int { return 30 },
 		)
-		billing := newBilling(t, testBillingDefaults{standardBalance: 2})
+		billing := newBilling(t, testBillingDefaults{standardBalance: 102})
 		svc.SetBillingService(billing)
 		if _, err := svc.SubmitChat(context.Background(), user, "image-chat", "draw", "auto", messages, true, 2); err != nil {
 			t.Fatalf("SubmitChat() error = %v", err)
@@ -997,7 +1135,7 @@ func TestImageTaskServiceBillingChatEquivalenceClasses(t *testing.T) {
 		waitForTaskStatus(t, svc, user, "image-chat", TaskStatusSuccess)
 		state := billing.Get("alice")
 		standard := util.StringMap(state["standard"])
-		if util.ToInt(standard["balance"], -1) != 1 || util.ToInt(standard["lifetime_consumed"], -1) != 1 {
+		if util.ToInt(standard["balance"], -1) != 51 || util.ToInt(standard["lifetime_consumed"], -1) != 51 {
 			t.Fatalf("image chat billing = %#v", state)
 		}
 	})
@@ -1013,7 +1151,7 @@ func TestImageTaskServiceBillingChatEquivalenceClasses(t *testing.T) {
 			},
 			func() int { return 30 },
 		)
-		billing := newBilling(t, testBillingDefaults{standardBalance: 1})
+		billing := newBilling(t, testBillingDefaults{standardBalance: 51})
 		svc.SetBillingService(billing)
 		_, err := svc.SubmitChat(context.Background(), user, "image-chat-rejected", "draw", "auto", messages, true, 2)
 		var limitErr BillingLimitError
@@ -1160,6 +1298,113 @@ func TestImageTaskServiceRestoresUnfinishedTasksAsErrors(t *testing.T) {
 		case "running":
 			if len(statuses) != 3 || statuses[0] != TaskStatusSuccess || statuses[1] != TaskStatusError || statuses[2] != TaskStatusError {
 				t.Fatalf("restored running output_statuses = %#v, want success then errors", statuses)
+			}
+		}
+	}
+}
+
+func TestImageTaskServiceNormalizesTerminalOutputStatusesOnLoad(t *testing.T) {
+	backend := newTestStorageBackend(t)
+	now := util.NowLocal()
+	raw := map[string]any{"tasks": []map[string]any{
+		{"id": "error", "owner_id": "alice", "status": TaskStatusError, "mode": "generate", "count": 3, "data": []any{map[string]any{"url": "https://example.test/first.png"}}, "output_statuses": []any{TaskStatusSuccess, TaskStatusRunning, TaskStatusQueued}, "created_at": now, "updated_at": now},
+		{"id": "cancelled", "owner_id": "alice", "status": TaskStatusCancelled, "mode": "edit", "count": 2, "output_statuses": []any{TaskStatusRunning, TaskStatusQueued}, "created_at": now, "updated_at": now},
+		{"id": "success", "owner_id": "alice", "status": TaskStatusSuccess, "mode": "generate", "count": 2, "data": []any{map[string]any{"url": "https://example.test/first.png"}, map[string]any{"url": "https://example.test/second.png"}}, "output_statuses": []any{TaskStatusRunning, TaskStatusQueued}, "created_at": now, "updated_at": now},
+	}}
+	store, ok := backend.(storage.JSONDocumentBackend)
+	if !ok {
+		t.Fatalf("storage backend %T does not implement JSONDocumentBackend", backend)
+	}
+	if err := store.SaveJSONDocument("image_tasks.json", raw); err != nil {
+		t.Fatalf("SaveJSONDocument() error = %v", err)
+	}
+
+	svc := NewStoredImageTaskService(backend, failingImageTaskHandler, failingImageTaskHandler, failingImageTaskHandler, func() int { return 30 })
+	got := svc.ListTasks(Identity{ID: "alice"}, []string{"error", "cancelled", "success"})
+	items := got["items"].([]map[string]any)
+	if len(items) != 3 {
+		t.Fatalf("items = %#v", items)
+	}
+	for _, item := range items {
+		statuses := util.AsStringSlice(item["output_statuses"])
+		for _, status := range statuses {
+			if status == TaskStatusQueued || status == TaskStatusRunning {
+				t.Fatalf("terminal task kept active output status: %#v", item)
+			}
+		}
+		switch item["id"] {
+		case "error":
+			if len(statuses) != 3 || statuses[0] != TaskStatusSuccess || statuses[1] != TaskStatusError || statuses[2] != TaskStatusError {
+				t.Fatalf("error output_statuses = %#v, want success,error,error", statuses)
+			}
+		case "cancelled":
+			if len(statuses) != 2 || statuses[0] != TaskStatusCancelled || statuses[1] != TaskStatusCancelled {
+				t.Fatalf("cancelled output_statuses = %#v, want all cancelled", statuses)
+			}
+		case "success":
+			if len(statuses) != 2 || statuses[0] != TaskStatusSuccess || statuses[1] != TaskStatusSuccess {
+				t.Fatalf("success output_statuses = %#v, want all success", statuses)
+			}
+		}
+	}
+}
+
+func TestImageTaskServiceDiagnosticsAndRepair(t *testing.T) {
+	svc := newTestImageTaskService(t, failingImageTaskHandler, failingImageTaskHandler, failingImageTaskHandler, func() int { return 30 })
+	now := util.NowLocal()
+	stale := time.Now().Add(-20 * time.Minute).Format("2006-01-02 15:04:05")
+	svc.mu.Lock()
+	svc.tasks[taskKey("alice", "queued")] = map[string]any{"id": "queued", "owner_id": "alice", "status": TaskStatusQueued, "mode": "generate", "count": 1, "output_statuses": []string{TaskStatusQueued}, "created_at": now, "updated_at": now}
+	svc.tasks[taskKey("alice", "stale-running")] = map[string]any{"id": "stale-running", "owner_id": "alice", "status": TaskStatusRunning, "mode": "generate", "count": 1, "output_statuses": []string{TaskStatusRunning}, "created_at": stale, "updated_at": stale}
+	svc.tasks[taskKey("alice", "error")] = map[string]any{"id": "error", "owner_id": "alice", "status": TaskStatusError, "mode": "generate", "count": 2, "data": []map[string]any{{"url": "https://example.test/first.png"}}, "output_statuses": []string{TaskStatusSuccess, TaskStatusRunning}, "created_at": now, "updated_at": now}
+	svc.tasks[taskKey("alice", "success")] = map[string]any{"id": "success", "owner_id": "alice", "status": TaskStatusSuccess, "mode": "edit", "count": 1, "data": []map[string]any{{"url": "https://example.test/success.png"}}, "output_statuses": []string{TaskStatusSuccess}, "created_at": now, "updated_at": now}
+	_ = svc.saveLocked()
+	svc.mu.Unlock()
+
+	summary := svc.DiagnosticsSummary(10 * time.Minute)
+	if summary.TotalTasks != 4 || summary.ActiveTasks != 2 || summary.StaleActiveTasks != 1 || summary.DirtyTerminalTasks != 1 || summary.DirtyTerminalOutputStatuses != 1 {
+		t.Fatalf("diagnostics summary = %#v", summary)
+	}
+	if len(summary.SuspiciousTasks) != 2 || summary.SuspiciousTasks[0].ID != "stale-running" || !summary.SuspiciousTasks[0].Stale {
+		t.Fatalf("diagnostics suspicious tasks = %#v", summary.SuspiciousTasks)
+	}
+
+	result := svc.RepairDiagnostics(ImageTaskRepairOptions{})
+	if result.RepairedTerminalTasks != 1 || result.FinalizedActiveTasks != 0 {
+		t.Fatalf("repair result = %#v", result)
+	}
+	if result.After.ActiveTasks != 2 || result.After.StaleActiveTasks != 1 || result.After.DirtyTerminalTasks != 0 || result.After.DirtyTerminalOutputStatuses != 0 {
+		t.Fatalf("repair after = %#v", result.After)
+	}
+
+	result = svc.RepairDiagnostics(ImageTaskRepairOptions{FinalizeActive: true, StaleThreshold: 10 * time.Minute})
+	if result.FinalizedActiveTasks != 1 || result.SkippedActiveTasks != 1 || result.After.ActiveTasks != 1 || result.After.StaleActiveTasks != 0 {
+		t.Fatalf("finalize active result = %#v", result)
+	}
+	got := svc.ListTasks(Identity{ID: "alice"}, []string{"queued", "stale-running", "error"})
+	items := got["items"].([]map[string]any)
+	if len(items) != 3 {
+		t.Fatalf("items = %#v", items)
+	}
+	for _, item := range items {
+		switch item["id"] {
+		case "queued":
+			if item["status"] != TaskStatusQueued {
+				t.Fatalf("queued task = %#v, want queued", item)
+			}
+			if statuses := util.AsStringSlice(item["output_statuses"]); len(statuses) != 1 || statuses[0] != TaskStatusQueued {
+				t.Fatalf("queued output_statuses = %#v, want queued", statuses)
+			}
+		case "stale-running":
+			if item["status"] != TaskStatusError {
+				t.Fatalf("stale-running task = %#v, want error", item)
+			}
+			if statuses := util.AsStringSlice(item["output_statuses"]); len(statuses) != 1 || statuses[0] != TaskStatusError {
+				t.Fatalf("stale-running output_statuses = %#v, want error", statuses)
+			}
+		case "error":
+			if statuses := util.AsStringSlice(item["output_statuses"]); len(statuses) != 2 || statuses[0] != TaskStatusSuccess || statuses[1] != TaskStatusError {
+				t.Fatalf("error output_statuses = %#v, want success,error", statuses)
 			}
 		}
 	}

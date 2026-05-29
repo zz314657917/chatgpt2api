@@ -29,6 +29,7 @@ const (
 	ImageModelGPT54       = "gpt-5.4"
 	ImageModelGPT55       = "gpt-5.5"
 	ImageModelGPTMini     = "gpt-5-mini"
+	DefaultChatModel      = ImageModelGPT55
 )
 
 var ImageModels = map[string]struct{}{

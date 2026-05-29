@@ -17,12 +17,19 @@ type LightboxImage = {
   dimensions?: string;
 };
 
+type LightboxDownloadSource = {
+  src: string;
+  fileName?: string;
+  outputFormat?: string;
+};
+
 type ImageLightboxProps = {
   images: LightboxImage[];
   currentIndex: number;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onIndexChange: (index: number) => void;
+  resolveDownloadSource?: (image: LightboxImage, index: number) => Promise<LightboxDownloadSource | null> | LightboxDownloadSource | null;
 };
 
 const MIN_ZOOM = 1;
@@ -67,6 +74,7 @@ export function ImageLightbox({
   open,
   onOpenChange,
   onIndexChange,
+  resolveDownloadSource,
 }: ImageLightboxProps) {
   const current = images[currentIndex];
   const hasPrev = currentIndex > 0;
@@ -138,24 +146,26 @@ export function ImageLightbox({
   const handleDownload = useCallback(() => {
     if (!current) return;
     const download = async () => {
-      let href = current.src;
+      const resolved = await resolveDownloadSource?.(current, currentIndex);
+      const downloadImage = resolved ? { ...current, ...resolved } : current;
+      let href = downloadImage.src;
       let objectURL = "";
       let blobType = "";
 
-      if (shouldUseAuthenticatedImageFallback(current.src)) {
+      if (shouldUseAuthenticatedImageFallback(downloadImage.src)) {
         try {
-          const blob = await fetchAuthenticatedImageBlob(current.src);
+          const blob = await fetchAuthenticatedImageBlob(downloadImage.src);
           blobType = blob.type;
           objectURL = URL.createObjectURL(blob);
           href = objectURL;
         } catch {
-          href = current.src;
+          href = downloadImage.src;
         }
       }
 
       const link = document.createElement("a");
       link.href = href;
-      link.download = imageDownloadName(current, blobType);
+      link.download = imageDownloadName(downloadImage, blobType);
       link.click();
 
       if (objectURL) {
@@ -164,7 +174,7 @@ export function ImageLightbox({
     };
 
     void download();
-  }, [current]);
+  }, [current, currentIndex, resolveDownloadSource]);
 
   const handleImagePointerDown = useCallback(
     (event: React.PointerEvent<HTMLImageElement>) => {

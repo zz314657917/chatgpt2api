@@ -1,6 +1,6 @@
 "use client";
 
-import { forwardRef, memo, useCallback, useLayoutEffect, useMemo, useState, type HTMLAttributes, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { forwardRef, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type HTMLAttributes, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { VirtuosoGrid } from "react-virtuoso";
 import {
   Bot,
@@ -9,9 +9,11 @@ import {
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
+  CircleHelp,
   CircleAlert,
   CircleDot,
   Clock3,
+  Eraser,
   Repeat2,
   FileText,
   Grid2X2,
@@ -20,8 +22,10 @@ import {
   ImagePlus,
   Images,
   Layers3,
+  Link2,
   LoaderCircle,
   Maximize2,
+  MoreHorizontal,
   Minimize2,
   PanelRightOpen,
   Pencil,
@@ -44,30 +48,45 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import type { CanvasImageRef, CanvasModelOption, ImageVisibility, ManagedImage } from "@/lib/api";
+import type { CanvasImageRef, CanvasModelOption, CreationTask, ImageQuality, ImageVisibility, ManagedImageSummary } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 import {
+  CANVAS_FLOW_TEMPLATES,
+  CANVAS_NODE_HELP,
+  canvasFlowTemplateById,
+  canvasNodeHelpById,
+  type SmartCanvasFlowTemplateId,
+  type SmartCanvasHelpTopic,
+} from "./canvas-help";
+import {
+  canConnectSmartCanvasNodes,
   canvasImageKey,
   canvasImageLabel,
   canvasImagePreviewSource,
   canvasImageSource,
-  canvasImagesFromItem,
-  canvasPromptFromItem,
   dedupeCanvasImageRefs,
+  expandedCanvasImagesFromItem,
+  expandedCanvasPromptFromItem,
+  groupMemberItems,
   incomingItems,
   isActiveTask,
   saveStateLabel,
+  smartCanvasGroupCounts,
   smartCanvasRuns,
   statusLabel,
+  normalizeCanvasImageResolution,
 } from "./canvas-utils";
 import type {
   SmartCanvasConnectState,
   SmartCanvasDocument,
   SmartCanvasHistoryEntry,
   SmartCanvasItem,
+  SmartCanvasItemType,
+  SmartCanvasPortMenuRequest,
   SmartCanvasRunRecord,
   SmartCanvasSaveState,
   SmartCanvasTool,
@@ -79,12 +98,25 @@ const NODE_SIZE: Record<SmartCanvasItem["type"], { w: number; h: number }> = {
   prompt: { w: 310, h: 210 },
   llm: { w: 380, h: 420 },
   loop: { w: 340, h: 280 },
-  image_generation: { w: 390, h: 330 },
+  group: { w: 340, h: 230 },
+  image_generation: { w: 390, h: 370 },
   result: { w: 440, h: 245 },
 };
 const EMPTY_SMART_CANVAS_NODES: SmartCanvasItem[] = [];
 
 type SmartCanvasNodeSizeMap = Record<string, { w: number; h: number }>;
+type SmartCanvasNodeMenuState = { x: number; y: number; screen: { x: number; y: number }; sourceId?: string };
+type SmartCanvasNodeMenuItem = {
+  type: Exclude<SmartCanvasItem["type"], "image">;
+  label: string;
+  icon: ReactNode;
+};
+type SmartCanvasPortPress = {
+  sourceId: string;
+  pointerId: number;
+  clientX: number;
+  clientY: number;
+};
 
 const canvasPanelClass = "border-border bg-card/92 text-card-foreground shadow-[0_18px_46px_rgba(44,74,116,0.16)] backdrop-blur dark:border-zinc-800 dark:bg-[#181818]/92 dark:text-zinc-100 dark:shadow-[0_18px_46px_rgba(0,0,0,0.36)]";
 const canvasFieldClass = "border-border bg-background text-foreground placeholder:text-muted-foreground focus-visible:ring-sky-400 dark:border-slate-700 dark:bg-[#0c1220] dark:text-slate-100 dark:placeholder:text-slate-600";
@@ -93,6 +125,78 @@ const canvasLabelClass = "text-muted-foreground dark:text-slate-400";
 const canvasAccentTextClass = "text-sky-700 dark:text-sky-200";
 const canvasDashedClass = "border-dashed border-border bg-muted/50 text-muted-foreground dark:border-slate-700 dark:bg-slate-950/40 dark:text-slate-500";
 const canvasGhostButtonClass = "border-border bg-background/70 text-foreground hover:bg-accent dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800";
+const canvasImageResolutionOptions = [
+  { value: "1080p", label: "1K" },
+  { value: "2k", label: "2K" },
+  { value: "4k", label: "4K" },
+] as const;
+const canvasImageRatioOptions = [
+  { value: "1:1", label: "1:1" },
+  { value: "2:3", label: "2:3" },
+  { value: "3:2", label: "3:2" },
+  { value: "3:4", label: "3:4" },
+  { value: "4:3", label: "4:3" },
+  { value: "9:16", label: "9:16" },
+  { value: "16:9", label: "16:9" },
+] as const;
+const canvasImageQualityOptions = [
+  { value: "auto", label: "自动" },
+  { value: "low", label: "速度优先" },
+  { value: "medium", label: "标准" },
+  { value: "high", label: "高品质" },
+] as const satisfies ReadonlyArray<{ value: "auto" | ImageQuality; label: string }>;
+
+function nodeInputImagesForCanvas(canvas: SmartCanvasDocument, item: SmartCanvasItem) {
+  return expandedCanvasImagesFromItem(canvas, item);
+}
+
+function nodePromptForCanvas(canvas: SmartCanvasDocument, item: SmartCanvasItem) {
+  return expandedCanvasPromptFromItem(canvas, item);
+}
+
+function smartCanvasNodeMenuItems(): SmartCanvasNodeMenuItem[] {
+  return [
+    { type: "prompt", label: "提示词", icon: <FileText className="size-4" /> },
+    { type: "llm", label: "AI 提示词", icon: <Bot className="size-4" /> },
+    { type: "loop", label: "循环节点", icon: <Repeat2 className="size-4" /> },
+    { type: "group", label: "组", icon: <Layers3 className="size-4" /> },
+    { type: "image_generation", label: "API生成", icon: <WandSparkles className="size-4" /> },
+    { type: "result", label: "Output", icon: <CircleDot className="size-4" /> },
+  ];
+}
+
+function connectableNodeMenuItems(source?: SmartCanvasItem | null) {
+  const items = smartCanvasNodeMenuItems();
+  if (!source) {
+    return items;
+  }
+  return items.filter((item) => canConnectSmartCanvasNodes(source, { type: item.type }));
+}
+
+function canvasImageRatioValue(value?: string) {
+  const normalized = String(value || "").trim();
+  switch (normalized) {
+    case "1024x1024":
+      return "1:1";
+    case "1024x1536":
+      return "2:3";
+    case "1536x1024":
+      return "3:2";
+    case "1080x1440":
+    case "864x1152":
+      return "3:4";
+    case "1440x1080":
+    case "1152x864":
+      return "4:3";
+    case "864x1536":
+      return "9:16";
+    case "1536x864":
+      return "16:9";
+    default:
+      return canvasImageRatioOptions.some((option) => option.value === normalized) ? normalized : "1:1";
+  }
+}
+
 const canvasSelectClass = "h-9 rounded-xl border-border bg-background text-xs text-foreground dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200";
 const canvasIconButtonClass = "text-muted-foreground hover:bg-accent hover:text-foreground dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white";
 
@@ -360,15 +464,16 @@ type SmartCanvasTopBarProps = {
   running: boolean;
   runCount: number;
   operationCount: number;
+  blankNodeCount: number;
   canUndo: boolean;
-  canRedo: boolean;
   onSave: () => void;
   onAddNode: (type: SmartCanvasItem["type"]) => void;
   onUploadClick: () => void;
+  onCleanupBlankNodes: () => void;
+  onHelpClick: () => void;
   onRunHistoryToggle: () => void;
   onOperationHistoryToggle: () => void;
   onUndo: () => void;
-  onRedo: () => void;
 };
 
 export function SmartCanvasTopBar({
@@ -378,15 +483,16 @@ export function SmartCanvasTopBar({
   running,
   runCount,
   operationCount,
+  blankNodeCount,
   canUndo,
-  canRedo,
   onSave,
   onAddNode,
   onUploadClick,
+  onCleanupBlankNodes,
+  onHelpClick,
   onRunHistoryToggle,
   onOperationHistoryToggle,
   onUndo,
-  onRedo,
 }: SmartCanvasTopBarProps) {
   return (
     <div className="pointer-events-none absolute left-6 right-6 top-5 z-40 flex items-center justify-between gap-4">
@@ -394,19 +500,43 @@ export function SmartCanvasTopBar({
         <div className="truncate text-sm font-black text-slate-900 drop-shadow-none dark:text-zinc-100 dark:drop-shadow-[0_1px_2px_rgba(0,0,0,0.55)]">{canvasName || "未命名画布"}</div>
         <div className="mt-0.5 text-[11px] font-semibold text-slate-500 drop-shadow-none dark:text-zinc-400/90 dark:drop-shadow-[0_1px_2px_rgba(0,0,0,0.45)]">当前画布</div>
       </div>
-      <div className={cn("pointer-events-auto flex min-w-0 flex-wrap items-center justify-end gap-2 rounded-full border p-1.5", canvasPanelClass)}>
-        <ToolbarButton icon={<ImagePlus className="size-4" />} label="上传" onClick={onUploadClick} />
-        <ToolbarButton icon={<FileText className="size-4" />} label="提示词" onClick={() => onAddNode("prompt")} />
-        <ToolbarButton icon={<Sparkles className="size-4" />} label="AI 提示词" onClick={() => onAddNode("llm")} />
-        <ToolbarButton icon={<Repeat2 className="size-4" />} label="循环" onClick={() => onAddNode("loop")} />
-        <ToolbarButton icon={<WandSparkles className="size-4" />} label="API生成" onClick={() => onAddNode("image_generation")} />
-        <ToolbarButton icon={<CircleDot className="size-4" />} label="Output" onClick={() => onAddNode("result")} />
-        <ToolbarButton icon={<History className="size-4" />} label={`记录${runCount ? ` ${runCount}` : ""}`} onClick={onRunHistoryToggle} />
-        <ToolbarButton icon={<Clock3 className="size-4" />} label={`操作${operationCount ? ` ${operationCount}` : ""}`} onClick={onOperationHistoryToggle} />
-        <ToolbarButton icon={<RotateCcw className="size-4" />} label="撤销" onClick={onUndo} disabled={!canUndo} />
-        <ToolbarButton icon={<RotateCw className="size-4" />} label="重做" onClick={onRedo} disabled={!canRedo} />
-        <ToolbarButton icon={saving ? <LoaderCircle className="size-4 animate-spin" /> : <Save className="size-4" />} label={saveStateLabel(saveState)} onClick={onSave} />
-        {running ? <span className="ml-1 rounded-full bg-sky-500/15 px-3 py-2 text-xs font-bold text-sky-700 dark:text-sky-200">运行中</span> : null}
+      <div className="pointer-events-auto flex min-w-0 flex-wrap items-center justify-end gap-2">
+        <div className={cn("flex min-w-0 flex-wrap items-center justify-end gap-2 rounded-full border p-1.5", canvasPanelClass)}>
+          <ToolbarButton icon={<ImagePlus className="size-4" />} label="上传" onClick={onUploadClick} />
+          <ToolbarButton icon={<FileText className="size-4" />} label="提示词" onClick={() => onAddNode("prompt")} />
+          <ToolbarButton icon={<Sparkles className="size-4" />} label="AI提示词" onClick={() => onAddNode("llm")} />
+          <ToolbarButton icon={<Repeat2 className="size-4" />} label="循环" onClick={() => onAddNode("loop")} />
+          <ToolbarButton icon={<Layers3 className="size-4" />} label="组" onClick={() => onAddNode("group")} />
+          <ToolbarButton icon={<WandSparkles className="size-4" />} label="API生成" onClick={() => onAddNode("image_generation")} />
+          <ToolbarButton icon={<CircleDot className="size-4" />} label="Output" onClick={() => onAddNode("result")} />
+          <ToolbarButton icon={<CircleHelp className="size-4" />} label="帮助" onClick={onHelpClick} />
+          <Popover>
+            <PopoverTrigger asChild>
+              <button
+                type="button"
+                className={cn(
+                  "inline-flex h-9 items-center gap-2 rounded-full border px-3 text-xs font-bold transition",
+                  "border-border bg-background/70 text-foreground hover:bg-accent dark:border-slate-700 dark:bg-slate-950/35 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white",
+                )}
+              >
+                <MoreHorizontal className="size-4" />
+                更多
+              </button>
+            </PopoverTrigger>
+            <PopoverContent align="end" sideOffset={8} className={cn("w-44 rounded-2xl border p-2", canvasPanelClass)}>
+              <div className="space-y-1">
+                <ToolbarMenuButton icon={<Clock3 className="size-4" />} label={`最近操作${operationCount ? ` ${operationCount}` : ""}`} onClick={onOperationHistoryToggle} />
+                <ToolbarMenuButton icon={<Eraser className="size-4" />} label={`清理空白节点${blankNodeCount ? ` ${blankNodeCount}` : ""}`} onClick={onCleanupBlankNodes} disabled={blankNodeCount === 0} />
+              </div>
+            </PopoverContent>
+          </Popover>
+        </div>
+        <div className={cn("flex shrink-0 items-center gap-2 rounded-full border p-1.5", canvasPanelClass)}>
+          <ToolbarIconButton icon={<History className="size-4" />} label="生成记录" count={runCount} onClick={onRunHistoryToggle} />
+          <ToolbarButton icon={<RotateCcw className="size-4" />} label="上一步" onClick={onUndo} disabled={!canUndo} />
+          <ToolbarButton icon={saving ? <LoaderCircle className="size-4 animate-spin" /> : <Save className="size-4" />} label={saveStateLabel(saveState)} onClick={onSave} />
+          {running ? <span className="ml-1 rounded-full bg-sky-500/15 px-3 py-2 text-xs font-bold text-sky-700 dark:text-sky-200">运行中</span> : null}
+        </div>
       </div>
     </div>
   );
@@ -435,6 +565,62 @@ function ToolbarButton({
           : "border-border bg-background/70 text-foreground hover:bg-accent dark:border-slate-700 dark:bg-slate-950/35 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white",
         disabled ? "cursor-not-allowed opacity-45" : "",
       )}
+      onClick={onClick}
+      disabled={disabled}
+    >
+      {icon}
+      {label}
+    </button>
+  );
+}
+
+function ToolbarIconButton({
+  icon,
+  label,
+  count,
+  onClick,
+}: {
+  icon: ReactNode;
+  label: string;
+  count?: number;
+  onClick?: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      className={cn(
+        "relative inline-flex size-9 items-center justify-center rounded-full border transition",
+        "border-border bg-background/70 text-foreground hover:bg-accent dark:border-slate-700 dark:bg-slate-950/35 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white",
+      )}
+      onClick={onClick}
+      title={label}
+      aria-label={label}
+    >
+      {icon}
+      {count ? (
+        <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-sky-500 px-1 text-[10px] font-black leading-none text-white">
+          {count > 99 ? "99+" : count}
+        </span>
+      ) : null}
+    </button>
+  );
+}
+
+function ToolbarMenuButton({
+  icon,
+  label,
+  onClick,
+  disabled,
+}: {
+  icon: ReactNode;
+  label: string;
+  onClick?: () => void;
+  disabled?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      className="flex h-9 w-full items-center gap-2 rounded-xl px-3 text-left text-xs font-bold text-foreground transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-45 dark:text-slate-200 dark:hover:bg-slate-800"
       onClick={onClick}
       disabled={disabled}
     >
@@ -689,6 +875,7 @@ type SmartCanvasBoardProps = {
   running: boolean;
   mentionOpen: boolean;
   mentionItems: CanvasImageRef[];
+  portMenuRequest: SmartCanvasPortMenuRequest | null;
   onPointerDown: (event: ReactPointerEvent<HTMLDivElement>) => void;
   onPointerMove: (event: ReactPointerEvent<HTMLDivElement>) => void;
   onPointerUp: (event: ReactPointerEvent<HTMLDivElement>) => void;
@@ -709,6 +896,10 @@ type SmartCanvasBoardProps = {
   onUpdateItemData: (id: string, patch: Partial<SmartCanvasItem["data"]>) => void;
   onRunGenerator: (id: string) => void;
   onRunLlm: (id: string) => void;
+  onStopLoop: (id: string) => void;
+  onOpenNodeHelp: (nodeType: SmartCanvasItemType) => void;
+  onConnectLlmImagesToGenerator: (generatorId: string) => void;
+  onConnectLlmImagesToLoop: (loopId: string) => void;
   onDeleteItem: (id: string) => void;
   onStartConnect: (event: ReactPointerEvent<HTMLElement>, sourceId: string) => void;
   onFinishConnect: (event: ReactPointerEvent<HTMLElement>, targetId: string) => void;
@@ -716,6 +907,8 @@ type SmartCanvasBoardProps = {
   onMentionToggle: () => void;
   onAddMentionToPrompt: (nodeId: string, image: CanvasImageRef) => void;
   onCreateNodeAt: (type: SmartCanvasItem["type"], point: { x: number; y: number }) => void;
+  onCreateNodeFromPort: (sourceId: string, type: SmartCanvasItem["type"], point?: { x: number; y: number }) => void;
+  onCreateNodeHelpTemplate: (nodeId: string) => void;
   onUploadAt: (point: { x: number; y: number }) => void;
 };
 
@@ -733,6 +926,7 @@ export function SmartCanvasBoard({
   running,
   mentionOpen,
   mentionItems,
+  portMenuRequest,
   onPointerDown,
   onPointerMove,
   onPointerUp,
@@ -753,6 +947,10 @@ export function SmartCanvasBoard({
   onUpdateItemData,
   onRunGenerator,
   onRunLlm,
+  onStopLoop,
+  onOpenNodeHelp,
+  onConnectLlmImagesToGenerator,
+  onConnectLlmImagesToLoop,
   onDeleteItem,
   onStartConnect,
   onFinishConnect,
@@ -760,10 +958,107 @@ export function SmartCanvasBoard({
   onMentionToggle,
   onAddMentionToPrompt,
   onCreateNodeAt,
+  onCreateNodeFromPort,
+  onCreateNodeHelpTemplate,
   onUploadAt,
 }: SmartCanvasBoardProps) {
   const [nodeSizes, setNodeSizes] = useState<SmartCanvasNodeSizeMap>({});
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; screen: { x: number; y: number } } | null>(null);
+  const [contextMenu, setContextMenu] = useState<SmartCanvasNodeMenuState | null>(null);
+  const outputPortPressRef = useRef<SmartCanvasPortPress | null>(null);
+  const outputPortCleanupRef = useRef<(() => void) | null>(null);
+  const ignoreNextBoardClickRef = useRef(false);
+  const openNodeMenu = useCallback((screen: { x: number; y: number }, sourceId?: string) => {
+    const rect = boardRef.current?.getBoundingClientRect();
+    if (!rect) {
+      return;
+    }
+    setContextMenu({
+      x: Math.min(screen.x - rect.left, rect.width - 236),
+      y: Math.min(screen.y - rect.top, rect.height - 330),
+      screen,
+      sourceId,
+    });
+  }, [boardRef]);
+  const handleOutputPortPointerDown = useCallback((event: ReactPointerEvent<HTMLElement>, sourceId: string) => {
+    outputPortCleanupRef.current?.();
+    const press: SmartCanvasPortPress = {
+      sourceId,
+      pointerId: event.pointerId,
+      clientX: event.clientX,
+      clientY: event.clientY,
+    };
+    outputPortPressRef.current = press;
+
+    const cleanup = () => {
+      window.removeEventListener("pointerup", handleWindowPointerUp, true);
+      window.removeEventListener("pointercancel", handleWindowPointerCancel, true);
+      if (outputPortPressRef.current?.pointerId === press.pointerId) {
+        outputPortPressRef.current = null;
+      }
+      if (outputPortCleanupRef.current === cleanup) {
+        outputPortCleanupRef.current = null;
+      }
+    };
+
+    const handleWindowPointerUp = (pointerEvent: PointerEvent) => {
+      if (pointerEvent.pointerId !== press.pointerId) {
+        return;
+      }
+      const currentPress = outputPortPressRef.current;
+      const targetInputId = document
+        .elementFromPoint(pointerEvent.clientX, pointerEvent.clientY)
+        ?.closest("[data-port='in']")
+        ?.closest("[data-canvas-node-id]")
+        ?.getAttribute("data-canvas-node-id") || "";
+      const shouldOpenMenu = Boolean(
+        currentPress &&
+        currentPress.sourceId === sourceId &&
+        !targetInputId,
+      );
+      cleanup();
+      if (shouldOpenMenu) {
+        ignoreNextBoardClickRef.current = true;
+        window.setTimeout(() => openNodeMenu({ x: pointerEvent.clientX, y: pointerEvent.clientY }, sourceId), 0);
+      }
+    };
+
+    const handleWindowPointerCancel = (pointerEvent: PointerEvent) => {
+      if (pointerEvent.pointerId === press.pointerId) {
+        cleanup();
+      }
+    };
+
+    outputPortCleanupRef.current = cleanup;
+    window.addEventListener("pointerup", handleWindowPointerUp, true);
+    window.addEventListener("pointercancel", handleWindowPointerCancel, true);
+    onStartConnect(event, sourceId);
+  }, [onStartConnect, openNodeMenu]);
+  const handleBoardPointerUp = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    const targetInputId = document
+      .elementFromPoint(event.clientX, event.clientY)
+      ?.closest("[data-port='in']")
+      ?.closest("[data-canvas-node-id]")
+      ?.getAttribute("data-canvas-node-id") || "";
+    const shouldOpenPortMenu = connectState.kind === "link" && connectState.pointerId === event.pointerId && !targetInputId;
+    onPointerUp(event);
+    if (shouldOpenPortMenu) {
+      ignoreNextBoardClickRef.current = true;
+      window.setTimeout(() => openNodeMenu({ x: event.clientX, y: event.clientY }, connectState.sourceId), 0);
+    }
+  }, [connectState, onPointerUp, openNodeMenu]);
+  const handleBoardPointerCancel = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    outputPortCleanupRef.current?.();
+    outputPortPressRef.current = null;
+    onPointerUp(event);
+  }, [onPointerUp]);
+  useEffect(() => () => outputPortCleanupRef.current?.(), []);
+  useEffect(() => {
+    if (!portMenuRequest) {
+      return;
+    }
+    ignoreNextBoardClickRef.current = true;
+    openNodeMenu(portMenuRequest.screen, portMenuRequest.sourceId);
+  }, [portMenuRequest, openNodeMenu]);
   const handleMeasureNode = useCallback((id: string, size: { w: number; h: number }) => {
     setNodeSizes((current) => {
       const previous = current[id];
@@ -793,8 +1088,8 @@ export function SmartCanvasBoard({
         )}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
-        onPointerUp={onPointerUp}
-        onPointerCancel={onPointerUp}
+        onPointerUp={handleBoardPointerUp}
+        onPointerCancel={handleBoardPointerCancel}
         onWheel={onWheel}
         onDrop={onDrop}
         onDragOver={onDragOver}
@@ -802,17 +1097,14 @@ export function SmartCanvasBoard({
         onContextMenu={(event) => {
           onContextMenu(event);
           if (event.defaultPrevented) {
-            const rect = boardRef.current?.getBoundingClientRect();
-            if (rect) {
-              setContextMenu({
-                x: Math.min(event.clientX - rect.left, rect.width - 236),
-                y: Math.min(event.clientY - rect.top, rect.height - 360),
-                screen: { x: event.clientX, y: event.clientY },
-              });
-            }
+            openNodeMenu({ x: event.clientX, y: event.clientY });
           }
         }}
         onClick={() => {
+          if (ignoreNextBoardClickRef.current) {
+            ignoreNextBoardClickRef.current = false;
+            return;
+          }
           if (contextMenu) {
             setContextMenu(null);
           }
@@ -868,11 +1160,17 @@ export function SmartCanvasBoard({
               onUpdateData={(patch) => onUpdateItemData(item.id, patch)}
               onRunGenerator={() => onRunGenerator(item.id)}
               onRunLlm={() => onRunLlm(item.id)}
+              onStopLoop={() => onStopLoop(item.id)}
+              onOpenNodeHelp={() => onOpenNodeHelp(item.type)}
+              onConnectLlmImagesToGenerator={() => onConnectLlmImagesToGenerator(item.id)}
+              onConnectLlmImagesToLoop={() => onConnectLlmImagesToLoop(item.id)}
               onDeleteItem={() => onDeleteItem(item.id)}
-              onStartConnect={(event) => onStartConnect(event, item.id)}
+              onStartConnect={(event) => handleOutputPortPointerDown(event, item.id)}
               onFinishConnect={(event) => onFinishConnect(event, item.id)}
               onMentionToggle={onMentionToggle}
               onAddMention={(image) => onAddMentionToPrompt(item.id, image)}
+              onCreateNodeFromPort={onCreateNodeFromPort}
+              onCreateNodeHelpTemplate={onCreateNodeHelpTemplate}
               onMeasure={handleMeasureNode}
             />
           ))}
@@ -891,12 +1189,19 @@ export function SmartCanvasBoard({
             x={contextMenu.x}
             y={contextMenu.y}
             onClose={() => setContextMenu(null)}
-            onUpload={() => {
-              onUploadAt(contextMenu.screen);
-              setContextMenu(null);
-            }}
+            sourceItem={contextMenu.sourceId ? canvas?.nodes.find((item) => item.id === contextMenu.sourceId) || null : null}
+            onUpload={contextMenu.sourceId
+              ? undefined
+              : () => {
+                  onUploadAt(contextMenu.screen);
+                  setContextMenu(null);
+                }}
             onCreate={(type) => {
-              onCreateNodeAt(type, contextMenu.screen);
+              if (contextMenu.sourceId) {
+                onCreateNodeFromPort(contextMenu.sourceId, type, contextMenu.screen);
+              } else {
+                onCreateNodeAt(type, contextMenu.screen);
+              }
               setContextMenu(null);
             }}
           />
@@ -925,17 +1230,237 @@ export function SmartCanvasBoard({
   );
 }
 
+export function SmartCanvasHelpPanel({
+  open,
+  topic,
+  onOpenChange,
+  onTopicChange,
+  onInsertTemplate,
+}: {
+  open: boolean;
+  topic: SmartCanvasHelpTopic;
+  onOpenChange: (open: boolean) => void;
+  onTopicChange: (topic: SmartCanvasHelpTopic) => void;
+  onInsertTemplate: (templateId: SmartCanvasFlowTemplateId) => void;
+}) {
+  const activeNode = topic.kind === "node" ? canvasNodeHelpById(topic.id) : null;
+  const activeFlow = topic.kind === "flow" ? canvasFlowTemplateById(topic.id) : null;
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent showCloseButton={false} className={cn("h-[min(82vh,720px)] w-[min(92vw,980px)] max-w-none gap-0 overflow-hidden rounded-3xl p-0", canvasPanelClass)}>
+        <div className="flex h-full min-h-0 flex-col">
+          <div className="flex items-center justify-between border-b border-border px-5 py-4 dark:border-slate-700/80">
+            <div>
+              <DialogTitle className="text-base font-black">画布帮助</DialogTitle>
+              <DialogDescription className={cn("mt-1 text-xs font-semibold", canvasSubtleTextClass)}>节点说明和常用流程</DialogDescription>
+            </div>
+            <button
+              type="button"
+              className={cn("flex size-9 items-center justify-center rounded-xl transition", canvasIconButtonClass)}
+              onClick={() => onOpenChange(false)}
+              title="关闭帮助"
+            >
+              <X className="size-4" />
+            </button>
+          </div>
+          <div className="flex min-h-0 flex-1">
+            <div className="w-44 shrink-0 overflow-y-auto border-r border-border p-3 dark:border-slate-700/80">
+              <div className={cn("px-2 pb-1 text-[10px] font-black uppercase tracking-[0.16em]", canvasLabelClass)}>节点</div>
+              <div className="space-y-1">
+                {CANVAS_NODE_HELP.map((item) => (
+                  <HelpNavButton
+                    key={item.id}
+                    active={topic.kind === "node" && topic.id === item.id}
+                    label={item.title}
+                    onClick={() => onTopicChange({ kind: "node", id: item.id })}
+                  />
+                ))}
+              </div>
+              <div className={cn("mt-4 px-2 pb-1 text-[10px] font-black uppercase tracking-[0.16em]", canvasLabelClass)}>流程</div>
+              <div className="space-y-1">
+                {CANVAS_FLOW_TEMPLATES.map((item) => (
+                  <HelpNavButton
+                    key={item.id}
+                    active={topic.kind === "flow" && topic.id === item.id}
+                    label={item.title}
+                    onClick={() => onTopicChange({ kind: "flow", id: item.id })}
+                  />
+                ))}
+              </div>
+            </div>
+            <div className="min-w-0 flex-1 overflow-y-auto p-6">
+              {activeNode ? <NodeHelpContent item={activeNode} /> : null}
+              {activeFlow ? <FlowHelpContent item={activeFlow} onInsert={() => onInsertTemplate(activeFlow.id)} /> : null}
+            </div>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function HelpNavButton({ active, label, onClick }: { active: boolean; label: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      className={cn(
+        "block w-full rounded-xl px-2 py-2 text-left text-xs font-bold transition",
+        active
+          ? "bg-sky-500/12 text-sky-700 dark:bg-sky-400/12 dark:text-sky-200"
+          : "text-muted-foreground hover:bg-accent hover:text-foreground dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white",
+      )}
+      onClick={onClick}
+    >
+      {label}
+    </button>
+  );
+}
+
+function NodeHelpContent({ item }: { item: (typeof CANVAS_NODE_HELP)[number] }) {
+  return (
+    <div className="space-y-4">
+      <div>
+        <div className={cn("text-[11px] font-black uppercase tracking-[0.16em]", canvasAccentTextClass)}>节点说明</div>
+        <h2 className="mt-1 text-xl font-black">{item.title}</h2>
+        <p className={cn("mt-2 text-sm leading-6", canvasSubtleTextClass)}>{item.summary}</p>
+      </div>
+      <HelpInfoBlock title="上游输入" text={item.upstream} />
+      <HelpInfoBlock title="下游连接" text={item.downstream} />
+      <HelpListBlock title="关键控件" items={item.controls} />
+      <HelpListBlock title="使用提醒" items={item.reminders} />
+    </div>
+  );
+}
+
+function FlowHelpContent({ item, onInsert }: { item: (typeof CANVAS_FLOW_TEMPLATES)[number]; onInsert: () => void }) {
+  return (
+    <div className="space-y-4">
+      <div>
+        <div className={cn("text-[11px] font-black uppercase tracking-[0.16em]", canvasAccentTextClass)}>示例流程</div>
+        <h2 className="mt-1 text-xl font-black">{item.title}</h2>
+        <p className={cn("mt-2 text-sm leading-6", canvasSubtleTextClass)}>{item.summary}</p>
+      </div>
+      <div className="rounded-2xl border border-sky-500/20 bg-sky-500/8 p-3 text-sm font-black text-sky-800 dark:border-sky-400/20 dark:bg-sky-400/10 dark:text-sky-100">
+        {item.chain}
+      </div>
+      <Button
+        type="button"
+        className="h-10 w-full rounded-xl bg-primary font-bold text-primary-foreground hover:bg-primary/90"
+        onClick={onInsert}
+      >
+        <ImagePlus className="size-4" />
+        插入到当前画布
+      </Button>
+      <HelpListBlock
+        title="适合场景"
+        items={[
+          "想快速搭出一条能运行的链路。",
+          "不确定节点应该怎么连时，先插入模板再替换提示词或图片。",
+        ]}
+      />
+    </div>
+  );
+}
+
+function HelpInfoBlock({ title, text }: { title: string; text: string }) {
+  return (
+    <div className="rounded-2xl border border-border bg-background/65 p-3 dark:border-slate-700 dark:bg-slate-950/35">
+      <div className={cn("mb-1 text-[11px] font-black uppercase tracking-[0.14em]", canvasLabelClass)}>{title}</div>
+      <div className="text-sm leading-6">{text}</div>
+    </div>
+  );
+}
+
+function HelpListBlock({ title, items }: { title: string; items: string[] }) {
+  return (
+    <div>
+      <div className={cn("mb-2 text-[11px] font-black uppercase tracking-[0.14em]", canvasLabelClass)}>{title}</div>
+      <div className="space-y-2">
+        {items.map((item) => (
+          <div key={item} className="rounded-xl border border-border bg-background/65 px-3 py-2 text-sm leading-6 dark:border-slate-700 dark:bg-slate-950/35">
+            {item}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export function SmartCanvasOnboardingDialog({
+  open,
+  onInsertBasicTemplate,
+  onOpenHelp,
+  onDismiss,
+}: {
+  open: boolean;
+  onInsertBasicTemplate: () => void;
+  onOpenHelp: () => void;
+  onDismiss: () => void;
+}) {
+  return (
+    <Dialog open={open} onOpenChange={(next) => {
+      if (!next) {
+        onDismiss();
+      }
+    }}>
+      <DialogContent className={cn("max-w-xl rounded-3xl border p-0", canvasPanelClass)}>
+        <div className="space-y-5 p-6">
+          <div>
+            <DialogTitle className="text-xl font-black">快速认识无限画布</DialogTitle>
+            <DialogDescription className={cn("mt-2 text-sm leading-6", canvasSubtleTextClass)}>
+              画布由节点和连线组成。Prompt 写想法，API生成提交任务，Output 展示结果。
+            </DialogDescription>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <OnboardingStep title="1. 添加节点" text="用顶部工具栏或右键空白处添加 Prompt、API生成、Output。" />
+            <OnboardingStep title="2. 拖线连接" text="从右侧端口拖到下游节点左侧端口，形成工作流。" />
+            <OnboardingStep title="3. 点击生成" text="在 API生成 节点设置模型和比例，然后提交生成。" />
+          </div>
+          <div className="rounded-2xl border border-sky-500/20 bg-sky-500/8 p-4 text-sm font-black text-sky-800 dark:border-sky-400/20 dark:bg-sky-400/10 dark:text-sky-100">
+            {"基础链路：Prompt -> API生成 -> Output"}
+          </div>
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button type="button" variant="outline" className={cn("h-10 rounded-xl", canvasGhostButtonClass)} onClick={onDismiss}>
+              跳过
+            </Button>
+            <Button type="button" variant="outline" className={cn("h-10 rounded-xl", canvasGhostButtonClass)} onClick={onOpenHelp}>
+              <CircleHelp className="size-4" />
+              打开帮助
+            </Button>
+            <Button type="button" className="h-10 rounded-xl bg-primary font-bold text-primary-foreground hover:bg-primary/90" onClick={onInsertBasicTemplate}>
+              <ImagePlus className="size-4" />
+              插入基础示例
+            </Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function OnboardingStep({ title, text }: { title: string; text: string }) {
+  return (
+    <div className="rounded-2xl border border-border bg-background/65 p-3 dark:border-slate-700 dark:bg-slate-950/35">
+      <div className="text-sm font-black">{title}</div>
+      <div className={cn("mt-1 text-xs leading-5", canvasSubtleTextClass)}>{text}</div>
+    </div>
+  );
+}
+
 function SmartCanvasContextMenu({
   x,
   y,
   onClose,
+  sourceItem,
   onUpload,
   onCreate,
 }: {
   x: number;
   y: number;
   onClose: () => void;
-  onUpload: () => void;
+  sourceItem?: SmartCanvasItem | null;
+  onUpload?: () => void;
   onCreate: (type: SmartCanvasItem["type"]) => void;
 }) {
   const items: Array<{
@@ -944,12 +1469,12 @@ function SmartCanvasContextMenu({
     action?: () => void;
     disabled?: boolean;
   }> = [
-    { label: "上传卡片", icon: <ImagePlus className="size-4" />, action: onUpload },
-    { label: "提示词", icon: <FileText className="size-4" />, action: () => onCreate("prompt") },
-    { label: "AI 提示词", icon: <Bot className="size-4" />, action: () => onCreate("llm") },
-    { label: "循环节点", icon: <Repeat2 className="size-4" />, action: () => onCreate("loop") },
-    { label: "API生成", icon: <WandSparkles className="size-4" />, action: () => onCreate("image_generation") },
-    { label: "Output", icon: <CircleDot className="size-4" />, action: () => onCreate("result") },
+    ...(onUpload ? [{ label: "上传卡片", icon: <ImagePlus className="size-4" />, action: onUpload }] : []),
+    ...connectableNodeMenuItems(sourceItem).map((item) => ({
+      label: item.label,
+      icon: item.icon,
+      action: () => onCreate(item.type),
+    })),
   ];
 
   return (
@@ -980,6 +1505,11 @@ function SmartCanvasContextMenu({
           <span className="truncate">{item.label}</span>
         </button>
       ))}
+      {items.length === 0 ? (
+        <div className="px-3 py-4 text-center text-xs font-semibold text-muted-foreground dark:text-slate-500">
+          当前节点没有可连接的下游节点
+        </div>
+      ) : null}
       <div className="mt-2 border-t border-border pt-2 dark:border-slate-700">
         <button
           type="button"
@@ -1228,11 +1758,17 @@ type SmartCanvasNodeProps = {
   onUpdateData: (patch: Partial<SmartCanvasItem["data"]>) => void;
   onRunGenerator: () => void;
   onRunLlm: () => void;
+  onStopLoop: () => void;
+  onOpenNodeHelp: () => void;
+  onConnectLlmImagesToGenerator: () => void;
+  onConnectLlmImagesToLoop: () => void;
   onDeleteItem: () => void;
   onStartConnect: (event: ReactPointerEvent<HTMLElement>) => void;
   onFinishConnect: (event: ReactPointerEvent<HTMLElement>) => void;
   onMentionToggle: () => void;
   onAddMention: (image: CanvasImageRef) => void;
+  onCreateNodeFromPort: (sourceId: string, type: SmartCanvasItem["type"], point?: { x: number; y: number }) => void;
+  onCreateNodeHelpTemplate: (nodeId: string) => void;
   onMeasure: (id: string, size: { w: number; h: number }) => void;
 };
 
@@ -1253,18 +1789,26 @@ export const SmartCanvasNode = memo(function SmartCanvasNode({
   onUpdateData,
   onRunGenerator,
   onRunLlm,
+  onStopLoop,
+  onOpenNodeHelp,
+  onConnectLlmImagesToGenerator,
+  onConnectLlmImagesToLoop,
   onDeleteItem,
   onStartConnect,
   onFinishConnect,
   onMentionToggle,
   onAddMention,
+  onCreateNodeFromPort,
+  onCreateNodeHelpTemplate,
   onMeasure,
 }: SmartCanvasNodeProps) {
   const size = NODE_SIZE[item.type];
-  const width = item.type === "image" ? Number(item.data?.width || size.w) : size.w;
-  const minHeight = item.type === "image" ? Number(item.data?.height || size.h) : size.h;
-  const canInput = item.type === "llm" || item.type === "loop" || item.type === "image_generation" || item.type === "result";
-  const canOutput = item.type !== "result";
+  const resizable = item.type === "image" || item.type === "group";
+  const width = resizable ? Number(item.data?.width || size.w) : size.w;
+  const minHeight = resizable ? Number(item.data?.height || size.h) : size.h;
+  const canInput = item.type === "llm" || item.type === "loop" || item.type === "group" || item.type === "image_generation" || item.type === "result";
+  const canOutput = true;
+  const zIndex = item.type === "group" ? 1 : selected ? 35 : 10;
   const measureRef = (node: HTMLDivElement | null) => {
     if (!node) {
       return;
@@ -1302,7 +1846,7 @@ export const SmartCanvasNode = memo(function SmartCanvasNode({
         transform: `translate3d(${Number(item.position?.x || 0)}px, ${Number(item.position?.y || 0)}px, 0)`,
         width,
         minHeight,
-        zIndex: selected ? 35 : 10,
+        zIndex,
       }}
       onPointerDown={onPointerDown}
       onClick={(event) => {
@@ -1316,7 +1860,11 @@ export const SmartCanvasNode = memo(function SmartCanvasNode({
     >
       {canInput ? <Port side="in" onPointerUp={onFinishConnect} /> : null}
       {canOutput ? <Port side="out" onPointerDown={onStartConnect} /> : null}
-      <NodeHeader item={item} onDelete={onDeleteItem} />
+      <NodeHeader
+        item={item}
+        onOpenHelp={onOpenNodeHelp}
+        onDelete={onDeleteItem}
+      />
       {item.type === "image" ? (
         <>
           <ImageNodeBody
@@ -1336,6 +1884,15 @@ export const SmartCanvasNode = memo(function SmartCanvasNode({
           onMentionToggle={onMentionToggle}
           onAddMention={onAddMention}
         />
+      ) : item.type === "group" ? (
+        <>
+          <GroupNodeBody
+            canvas={canvas}
+            item={item}
+            onOpenImage={onOpenImage}
+          />
+          <ResizeHandle onPointerDown={onResizePointerDown} />
+        </>
       ) : item.type === "llm" ? (
         <LlmNodeBody
           canvas={canvas}
@@ -1349,6 +1906,8 @@ export const SmartCanvasNode = memo(function SmartCanvasNode({
         <LoopNodeBody
           canvas={canvas}
           item={item}
+          onConnectLlmImagesToLoop={onConnectLlmImagesToLoop}
+          onStopLoop={onStopLoop}
           onUpdateData={onUpdateData}
         />
       ) : item.type === "image_generation" ? (
@@ -1359,6 +1918,7 @@ export const SmartCanvasNode = memo(function SmartCanvasNode({
           running={running}
           onUpdateData={onUpdateData}
           onRunGenerator={onRunGenerator}
+          onConnectLlmImagesToGenerator={onConnectLlmImagesToGenerator}
           onOpenImage={onOpenImage}
           onDeleteDirectImage={onDeleteImage}
         />
@@ -1369,7 +1929,64 @@ export const SmartCanvasNode = memo(function SmartCanvasNode({
   );
 });
 
-function NodeHeader({ item, onDelete }: { item: SmartCanvasItem; onDelete: () => void }) {
+function suggestedNodeTypeForItem(item: SmartCanvasItem): Exclude<SmartCanvasItem["type"], "image"> {
+  if (item.type === "llm") {
+    return "prompt";
+  }
+  if (item.type === "image_generation") {
+    return "result";
+  }
+  return "image_generation";
+}
+
+function suggestedNodeName(type: SmartCanvasItem["type"]) {
+  switch (type) {
+    case "prompt":
+      return "Prompt";
+    case "llm":
+      return "AI 提示词";
+    case "loop":
+      return "循环";
+    case "group":
+      return "组";
+    case "image_generation":
+      return "API生成";
+    case "result":
+      return "Output";
+    default:
+      return "图片";
+  }
+}
+
+function nodeUsageHint(item: SmartCanvasItem) {
+  switch (item.type) {
+    case "image":
+      return "图片节点保存参考图。连接到 AI 提示词可先看图提词，连接到 API生成可做图生图。";
+    case "prompt":
+      return "Prompt 节点写生图文本，可直接连接 API生成，也可先连接 AI 提示词优化。";
+    case "llm":
+      return "AI 提示词节点会把上游文本和图片整理成可用提示词，运行后连接 API生成。";
+    case "loop":
+      return "循环节点的重复模式会一次生成多张，最多 10 张；逐图模式会按上游图片逐张生成。";
+    case "group":
+      return "组节点会汇总组内文本和图片，连接到 API生成、AI 提示词或循环时会自动展开。";
+    case "image_generation":
+      return "API生成节点是真正提交生图的节点。上游接 Prompt/图片/循环，下游接 Output 展示结果。";
+    case "result":
+      return "Output 节点展示生成结果，也可以把结果继续连接到 API生成做二次创作。";
+  }
+}
+
+function NodeHeader({
+  item,
+  onOpenHelp,
+  onDelete,
+}: {
+  item: SmartCanvasItem;
+  onOpenHelp: () => void;
+  onDelete: () => void;
+}) {
+  const title = `${nodeUsageHint(item)} 点击查看完整用法。`;
   return (
     <div className="flex h-10 cursor-move items-center justify-between border-b border-border px-3 dark:border-slate-700/80" data-canvas-drag-handle="true">
       <div className="flex min-w-0 items-center gap-2">
@@ -1378,6 +1995,20 @@ function NodeHeader({ item, onDelete }: { item: SmartCanvasItem; onDelete: () =>
       </div>
       <div className="flex items-center gap-1">
         {item.data?.status ? <StatusBadge status={item.data.status} /> : null}
+        <button
+          type="button"
+          className="flex size-6 items-center justify-center rounded-md bg-sky-500/10 text-[13px] font-black leading-none text-sky-700 hover:bg-sky-500/18 hover:text-sky-800 dark:bg-sky-400/10 dark:text-sky-200 dark:hover:bg-sky-400/18 dark:hover:text-sky-100"
+          data-node-interactive="true"
+          title={title}
+          aria-label={title}
+          onPointerDown={stopNodeInteraction}
+          onClick={(event) => {
+            event.stopPropagation();
+            onOpenHelp();
+          }}
+        >
+          ?
+        </button>
         <button
           type="button"
           className="flex size-6 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground dark:text-slate-500 dark:hover:bg-slate-800 dark:hover:text-white"
@@ -1440,6 +2071,63 @@ function ResizeHandle({ onPointerDown }: { onPointerDown: (event: ReactPointerEv
   );
 }
 
+function GroupNodeBody({
+  canvas,
+  item,
+  onOpenImage,
+}: {
+  canvas: SmartCanvasDocument;
+  item: SmartCanvasItem;
+  onOpenImage: (image: CanvasImageRef) => void;
+}) {
+  const members = groupMemberItems(canvas, item);
+  const counts = smartCanvasGroupCounts(canvas, item);
+  const images = expandedCanvasImagesFromItem(canvas, item);
+  const prompts = members
+    .map((member) => ({
+      id: member.id,
+      name: nodeTitle(member),
+      text: nodePromptForCanvas(canvas, member).trim(),
+    }))
+    .filter((entry) => entry.text);
+
+  return (
+    <div className="space-y-3 p-3 pb-8" data-node-interactive="true" onPointerDown={stopNodeInteraction}>
+      <div className={cn("rounded-xl border p-3 text-xs", canvasDashedClass)}>
+        <div className="grid grid-cols-3 gap-2 text-center">
+          <div>
+            <div className="text-lg font-black text-foreground dark:text-slate-100">{counts.total}</div>
+            <div>成员</div>
+          </div>
+          <div>
+            <div className="text-lg font-black text-foreground dark:text-slate-100">{counts.images}</div>
+            <div>图片</div>
+          </div>
+          <div>
+            <div className="text-lg font-black text-foreground dark:text-slate-100">{counts.prompts}</div>
+            <div>文本</div>
+          </div>
+        </div>
+        <div className="mt-2 leading-5">把节点拖进组框会自动加入；连接到 API生成、AI 提示词或循环时，会展开组内图片和文本。</div>
+      </div>
+
+      {images.length > 0 ? <CanvasImageStrip images={images} limit={4} onOpen={onOpenImage} className="grid-cols-4" /> : null}
+
+      {prompts.length > 0 ? (
+        <div className="space-y-1">
+          {prompts.slice(0, 2).map((entry) => (
+            <div key={entry.id} className="rounded-xl border border-sky-500/20 bg-sky-500/8 px-3 py-2 text-xs font-semibold text-foreground dark:border-sky-400/20 dark:bg-sky-400/10 dark:text-slate-100" title={`${entry.name}: ${entry.text}`}>
+              <div className={cn("mb-1 truncate text-[10px] font-black uppercase tracking-[0.12em]", canvasAccentTextClass)}>{entry.name}</div>
+              <div className="line-clamp-2 whitespace-pre-wrap break-words">{entry.text}</div>
+            </div>
+          ))}
+          {prompts.length > 2 ? <div className={cn("rounded-xl border px-3 py-2 text-xs font-bold", canvasDashedClass)}>还有 {prompts.length - 2} 个文本成员</div> : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function PromptNodeBody({
   item,
   mentionOpen,
@@ -1498,13 +2186,13 @@ function LlmNodeBody({
     .map((node) => ({
       id: node.id,
       name: nodeTitle(node),
-      text: String(canvasPromptFromItem(node)).trim(),
+      text: nodePromptForCanvas(canvas, node).trim(),
     }))
     .filter((entry) => entry.text);
-  const upstreamImages = dedupeCanvasImageRefs(upstream.flatMap((node) => canvasImagesFromItem(node)));
+  const upstreamImages = dedupeCanvasImageRefs(upstream.flatMap((node) => nodeInputImagesForCanvas(canvas, node)));
   const outputText = item.data?.output?.text || "";
   const nodeRunning = isActiveTask(item.data?.status);
-  const availableModels = models.filter((model) => model.kind === "text" || model.kind === "both" || model.id === "auto");
+  const availableModels = models.filter((model) => canvasModelHasCapability(model, "chat") || model.kind === "text" || model.kind === "both" || model.id === "auto");
   const hasInput = upstreamTexts.length > 0 || upstreamImages.length > 0 || Boolean((item.data?.prompt || "").trim());
 
   return (
@@ -1600,26 +2288,65 @@ function LlmNodeBody({
   );
 }
 
+function canvasModelHasCapability(model: CanvasModelOption, capability: "chat" | "image" | "video") {
+  return Array.isArray(model.capabilities) && model.capabilities.includes(capability);
+}
+
+function loopPromptPreviewForCanvas(canvas: SmartCanvasDocument, loop: SmartCanvasItem) {
+  return [
+    ...incomingItems(canvas, loop.id).map((node) => nodePromptForCanvas(canvas, node)),
+    loop.data?.prompt || "",
+  ].map((value) => String(value || "").trim()).filter(Boolean).join("\n\n");
+}
+
 function LoopNodeBody({
   canvas,
   item,
+  onConnectLlmImagesToLoop,
+  onStopLoop,
   onUpdateData,
 }: {
   canvas: SmartCanvasDocument;
   item: SmartCanvasItem;
+  onConnectLlmImagesToLoop: () => void;
+  onStopLoop: () => void;
   onUpdateData: (patch: Partial<SmartCanvasItem["data"]>) => void;
 }) {
   const upstream = incomingItems(canvas, item.id);
-  const inputImages = dedupeCanvasImageRefs(upstream.flatMap((node) => canvasImagesFromItem(node)));
-  const inputTexts = upstream.map((node) => String(canvasPromptFromItem(node)).trim()).filter(Boolean);
+  const inputImages = dedupeCanvasImageRefs(upstream.flatMap((node) => nodeInputImagesForCanvas(canvas, node)));
+  const inputTexts = upstream.map((node) => nodePromptForCanvas(canvas, node).trim()).filter(Boolean);
+  const llmReferenceImageSources = upstream
+    .filter((node) => node.type === "llm")
+    .map((node) => {
+      const imagesFromNode = dedupeCanvasImageRefs(incomingItems(canvas, node.id).flatMap((source) => nodeInputImagesForCanvas(canvas, source)));
+      return {
+        id: node.id,
+        name: node.name || "AI 提示词",
+        images: imagesFromNode,
+      };
+    })
+    .filter((source) => source.images.length > 0);
+  const inputImageKeys = new Set(inputImages.map(canvasImageKey));
+  const missingLlmReferenceImages = dedupeCanvasImageRefs(llmReferenceImageSources.flatMap((source) => source.images))
+    .filter((image) => !inputImageKeys.has(canvasImageKey(image)));
+  const llmReferenceImageCountLabel = missingLlmReferenceImages.length === 1 ? "一张图" : `${missingLlmReferenceImages.length} 张图`;
   const downstreamGenerators = canvas.edges
     .filter((edge) => edge.source === item.id)
     .map((edge) => canvas.nodes.find((node) => node.id === edge.target))
     .filter((node): node is SmartCanvasItem => node?.type === "image_generation");
   const mode = item.data?.loop_mode === "images" ? "images" : "repeat";
-  const count = Math.max(1, Math.min(20, Number(item.data?.loop_count || 3)));
+  const count = Math.max(1, Math.min(10, Number(item.data?.loop_count || 3)));
   const total = mode === "images" ? Math.max(1, inputImages.length) : count;
-  const progress = item.data?.loop_progress;
+  const savedProgress = item.data?.loop_progress;
+  const loopRaw = item.data?.output?.raw?.mode === "loop" ? item.data.output.raw : null;
+  const progress = loopRaw
+    ? {
+        total: loopRawNumber(loopRaw, "total", savedProgress?.total || total),
+        current: loopRawNumber(loopRaw, "current", savedProgress?.current || 0),
+        completed: loopRawNumber(loopRaw, "completed", savedProgress?.completed || 0),
+        failed: loopRawNumber(loopRaw, "failed", savedProgress?.failed || 0),
+      }
+    : savedProgress;
   const outputImages = item.data?.output?.images || [];
   const nodeRunning = isActiveTask(item.data?.status);
 
@@ -1638,10 +2365,10 @@ function LoopNodeBody({
         <Input
           type="number"
           min={1}
-          max={20}
+          max={10}
           value={count}
           disabled={mode === "images"}
-          onChange={(event) => onUpdateData({ loop_count: Math.max(1, Math.min(20, Number(event.target.value) || 1)) })}
+          onChange={(event) => onUpdateData({ loop_count: Math.max(1, Math.min(10, Number(event.target.value) || 1)) })}
           className={cn("h-9 rounded-xl text-center text-xs", canvasFieldClass)}
         />
       </div>
@@ -1662,16 +2389,42 @@ function LoopNodeBody({
           </div>
         </div>
         <div className="mt-2 leading-5">
-          {mode === "images" ? "按上游图片逐张提交到下游 API生成。" : "按相同输入重复提交到下游 API生成。"}
+          {mode === "images" ? "按上游图片逐张提交到下游 API生成，最多 10 张。" : `按相同输入一次生成 ${count} 张。`}
         </div>
       </div>
 
       {inputImages.length > 0 ? <CanvasImageStrip images={inputImages} limit={4} className="grid-cols-5" /> : null}
+      {missingLlmReferenceImages.length > 0 ? (
+        <div className="rounded-xl border border-amber-400/35 bg-amber-400/10 px-3 py-2 text-xs text-amber-800 dark:border-amber-300/25 dark:bg-amber-300/10 dark:text-amber-100">
+          <div className="font-semibold">上游引用了 {llmReferenceImageCountLabel}，是否点击连线这些图片？</div>
+          <Button
+            type="button"
+            size="sm"
+            className="mt-2 h-8 rounded-lg bg-amber-400 px-3 text-xs font-black text-amber-950 shadow-sm shadow-amber-950/10 hover:bg-amber-300 dark:bg-amber-300 dark:text-amber-950 dark:hover:bg-amber-200"
+            onClick={onConnectLlmImagesToLoop}
+          >
+            <Link2 className="mr-1.5 size-3.5" />
+            连接这些图片
+          </Button>
+        </div>
+      ) : null}
 
       {nodeRunning ? (
-        <div className="rounded-xl border border-sky-500/20 bg-sky-500/10 px-3 py-2 text-xs font-bold text-sky-700 dark:text-sky-200">
-          <LoaderCircle className="mr-2 inline size-4 animate-spin" />
-          循环中 {progress?.current || 0}/{progress?.total || total}，成功 {progress?.completed || 0}，失败 {progress?.failed || 0}
+        <div className="flex items-center justify-between gap-2 rounded-xl border border-sky-500/20 bg-sky-500/10 px-3 py-2 text-xs font-bold text-sky-700 dark:text-sky-200">
+          <div className="min-w-0 truncate">
+            <LoaderCircle className="mr-2 inline size-4 animate-spin" />
+            循环中 {progress?.current || 0}/{progress?.total || total}，成功 {progress?.completed || 0}，失败 {progress?.failed || 0}
+          </div>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="h-7 shrink-0 rounded-lg border-sky-300/70 bg-white/80 px-2 text-xs font-black text-sky-700 hover:bg-sky-50 dark:border-sky-400/30 dark:bg-slate-950/50 dark:text-sky-100"
+            onClick={onStopLoop}
+          >
+            <X className="mr-1 size-3.5" />
+            中断
+          </Button>
         </div>
       ) : progress?.total ? (
         <div className="rounded-xl border border-border bg-background/70 px-3 py-2 text-xs font-semibold text-muted-foreground dark:border-slate-700 dark:bg-slate-950/45">
@@ -1692,6 +2445,7 @@ function GeneratorNodeBody({
   running,
   onUpdateData,
   onRunGenerator,
+  onConnectLlmImagesToGenerator,
   onOpenImage,
   onDeleteDirectImage,
 }: {
@@ -1701,38 +2455,50 @@ function GeneratorNodeBody({
   running: boolean;
   onUpdateData: (patch: Partial<SmartCanvasItem["data"]>) => void;
   onRunGenerator: () => void;
+  onConnectLlmImagesToGenerator: () => void;
   onOpenImage: (image: CanvasImageRef) => void;
   onDeleteDirectImage: (image: CanvasImageRef) => void;
 }) {
   const upstream = incomingItems(canvas, item.id);
   const upstreamPrompts = upstream
-    .filter((node) => node.type === "prompt" || node.type === "llm")
+    .filter((node) => node.type === "prompt" || node.type === "llm" || node.type === "loop" || node.type === "group")
     .map((node) => ({
       id: node.id,
-      name: node.type === "llm" ? "AI 提示词" : node.name || "Prompt",
-      text: String(canvasPromptFromItem(node)).trim(),
+      name: nodeTitle(node),
+      text: (node.type === "loop" ? loopPromptPreviewForCanvas(canvas, node) : nodePromptForCanvas(canvas, node)).trim(),
     }))
     .filter((entry) => entry.text);
   const mergedPromptPreview = [
     ...upstreamPrompts.map((entry) => entry.text),
     item.data?.prompt || "",
   ].map((value) => value.trim()).filter(Boolean).join("\n\n");
-  const upstreamImages = upstream.flatMap((node) => {
-    if (node.type === "prompt") {
-      return node.data?.input_images || [];
-    }
-    if (node.type === "result") {
-      return node.data?.output?.images || node.data?.images || [];
-    }
-    return node.data?.images || [];
-  });
+  const upstreamImages = upstream.flatMap((node) => nodeInputImagesForCanvas(canvas, node));
   const upstreamImageKeys = new Set(dedupeCanvasImageRefs(upstreamImages).map(canvasImageKey));
   const images = dedupeCanvasImageRefs([
     ...(item.data?.input_images || []).filter((image) => !upstreamImageKeys.has(canvasImageKey(image))),
     ...upstreamImages,
   ]);
+  const llmReferenceImageSources = upstream
+    .filter((node) => node.type === "llm")
+    .map((node) => {
+      const imagesFromNode = dedupeCanvasImageRefs(incomingItems(canvas, node.id).flatMap((source) => nodeInputImagesForCanvas(canvas, source)))
+        .filter((image) => !upstreamImageKeys.has(canvasImageKey(image)));
+      return {
+        id: node.id,
+        name: node.name || "AI 提示词",
+        images: imagesFromNode,
+      };
+    })
+    .filter((source) => source.images.length > 0);
+  const llmReferenceImages = dedupeCanvasImageRefs(llmReferenceImageSources.flatMap((source) => source.images));
+  const missingLlmReferenceImages = llmReferenceImages.filter((image) => !upstreamImageKeys.has(canvasImageKey(image)));
+  const llmReferenceImageCountLabel = missingLlmReferenceImages.length === 1 ? "一张图" : `${missingLlmReferenceImages.length} 张图`;
   const outputImages = item.data?.output?.images || [];
   const nodeRunning = isActiveTask(item.data?.status);
+  const imageCount = Math.max(1, Math.min(10, Number(item.data?.n || 1)));
+  const ratioValue = canvasImageRatioValue(item.data?.size);
+  const imageResolutionValue = normalizeCanvasImageResolution(item.data?.image_resolution);
+  const setImageCount = (next: number) => onUpdateData({ n: Math.max(1, Math.min(10, Math.round(next) || 1)) });
 
   return (
     <div className="space-y-3 p-3" data-node-interactive="true" onPointerDown={stopNodeInteraction}>
@@ -1783,6 +2549,20 @@ function GeneratorNodeBody({
         ) : (
           <div className={cn("rounded-xl border px-3 py-3 text-xs", canvasDashedClass)}>连接图片节点后自动作为图生图输入</div>
         )}
+        {missingLlmReferenceImages.length > 0 ? (
+          <div className="mt-2 rounded-xl border border-amber-400/35 bg-amber-400/10 px-3 py-2 text-xs text-amber-800 dark:border-amber-300/25 dark:bg-amber-300/10 dark:text-amber-100">
+            <div className="font-semibold">上游引用了 {llmReferenceImageCountLabel}，是否连接这些图片？</div>
+            <Button
+              type="button"
+              size="sm"
+              className="mt-2 h-8 rounded-lg bg-amber-400 px-3 text-xs font-black text-amber-950 shadow-sm shadow-amber-950/10 hover:bg-amber-300 dark:bg-amber-300 dark:text-amber-950 dark:hover:bg-amber-200"
+              onClick={onConnectLlmImagesToGenerator}
+            >
+              <Link2 className="mr-1.5 size-3.5" />
+              连接这些图片
+            </Button>
+          </div>
+        ) : null}
       </div>
       <div className="grid grid-cols-[76px_1fr] gap-2">
         <Select value="api" disabled>
@@ -1804,17 +2584,67 @@ function GeneratorNodeBody({
           </SelectContent>
         </Select>
       </div>
-      <div className="grid grid-cols-[1fr_1fr_1fr] gap-2">
-        <Select value={String(item.data?.size || "1024x1024")} onValueChange={(size) => onUpdateData({ size })}>
+      <div className="grid grid-cols-[82px_minmax(0,1fr)_90px_100px] gap-2">
+        <Select value={imageResolutionValue} onValueChange={(imageResolution) => onUpdateData({ image_resolution: imageResolution })}>
           <SelectTrigger className={canvasSelectClass}>
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="1024x1024">1:1</SelectItem>
-            <SelectItem value="1024x1536">2:3</SelectItem>
-            <SelectItem value="1536x1024">3:2</SelectItem>
+            {canvasImageResolutionOptions.map((option) => (
+              <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+            ))}
           </SelectContent>
         </Select>
+        <Select value={ratioValue} onValueChange={(size) => onUpdateData({ size })}>
+          <SelectTrigger className={canvasSelectClass}>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {canvasImageRatioOptions.map((option) => (
+              <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Select value={String(item.data?.quality || "auto")} onValueChange={(quality) => onUpdateData({ quality })}>
+          <SelectTrigger className={canvasSelectClass}>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {canvasImageQualityOptions.map((option) => (
+              <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <div className={cn("grid h-9 grid-cols-[28px_1fr_28px] overflow-hidden rounded-xl border", canvasFieldClass)}>
+          <button
+            type="button"
+            className="flex items-center justify-center border-r border-border text-muted-foreground transition hover:bg-accent hover:text-foreground disabled:opacity-40 dark:border-slate-700"
+            disabled={imageCount <= 1}
+            onClick={() => setImageCount(imageCount - 1)}
+            aria-label="减少张数"
+          >
+            <ChevronLeft className="size-3.5" />
+          </button>
+          <Input
+            type="number"
+            min={1}
+            max={10}
+            value={imageCount}
+            onChange={(event) => setImageCount(Number(event.target.value) || 1)}
+            className="h-9 rounded-none border-0 bg-transparent p-0 text-center text-xs font-bold shadow-none focus-visible:ring-0"
+          />
+          <button
+            type="button"
+            className="flex items-center justify-center border-l border-border text-muted-foreground transition hover:bg-accent hover:text-foreground disabled:opacity-40 dark:border-slate-700"
+            disabled={imageCount >= 10}
+            onClick={() => setImageCount(imageCount + 1)}
+            aria-label="增加张数"
+          >
+            <ChevronRight className="size-3.5" />
+          </button>
+        </div>
+      </div>
+      <div className="grid grid-cols-[1fr_1fr] gap-2">
         <Select value={String(item.data?.visibility || "private")} onValueChange={(visibility) => onUpdateData({ visibility: visibility as ImageVisibility })}>
           <SelectTrigger className={canvasSelectClass}>
             <SelectValue />
@@ -1824,14 +2654,6 @@ function GeneratorNodeBody({
             <SelectItem value="public">公开</SelectItem>
           </SelectContent>
         </Select>
-        <Input
-          type="number"
-          min={1}
-          max={4}
-          value={Number(item.data?.n || 1)}
-          onChange={(event) => onUpdateData({ n: Math.max(1, Math.min(4, Number(event.target.value) || 1)) })}
-          className={cn("h-9 rounded-xl text-center text-xs", canvasFieldClass)}
-        />
       </div>
       {outputImages.length > 0 ? <CanvasImageStrip images={outputImages} limit={3} onOpen={onOpenImage} className="grid-cols-3" /> : null}
       {item.data?.error ? <div className="rounded-lg bg-rose-500/10 px-2 py-1.5 text-xs text-rose-200">{item.data.error}</div> : null}
@@ -1850,21 +2672,244 @@ function GeneratorNodeBody({
 
 function OutputNodeBody({ item, onOpenImage, onDeleteImage }: { item: SmartCanvasItem; onOpenImage: (image: CanvasImageRef) => void; onDeleteImage: (image: CanvasImageRef) => void }) {
   const images = item.data?.output?.images || item.data?.images || [];
+  const loading = item.data?.status === "running" || item.data?.status === "queued";
+  const loopRaw = item.data?.output?.raw?.mode === "loop" ? item.data.output.raw : null;
+  const startedAt = item.data?.started_at || item.data?.created_at || "";
+  const [showAllImages, setShowAllImages] = useState(false);
   return (
     <div className="p-3">
-      {images.length > 0 ? (
-        <CanvasImageStrip images={images} limit={4} onOpen={onOpenImage} onDelete={onDeleteImage} className="grid-cols-4" large />
-      ) : item.data?.status === "running" || item.data?.status === "queued" ? (
-        <div className="flex h-36 items-center justify-center rounded-xl border border-border bg-muted/50 text-sm text-muted-foreground dark:border-slate-700 dark:bg-slate-950/40 dark:text-slate-400">
-          <LoaderCircle className="mr-2 size-4 animate-spin" />
-          生成中
-        </div>
+      {loopRaw ? (
+        <LoopOutputSlots
+          images={images}
+          raw={loopRaw}
+          status={item.data?.status}
+          startedAt={startedAt}
+          onOpenImage={onOpenImage}
+        />
+      ) : images.length > 0 ? (
+        <CanvasImageStrip images={images} limit={4} onOpen={onOpenImage} onOpenAll={() => setShowAllImages(true)} onDelete={onDeleteImage} className="grid-cols-4" large />
+      ) : loading ? (
+        <CanvasGenerationLoading status={item.data?.status} />
       ) : (
         <div className={cn("flex h-36 items-center justify-center rounded-xl border text-xs", canvasDashedClass)}>
           连接 API生成 节点后显示输出
         </div>
       )}
       {item.data?.error ? <div className="mt-2 rounded-lg bg-rose-500/10 px-2 py-1.5 text-xs text-rose-200">{item.data.error}</div> : null}
+      <Dialog open={showAllImages} onOpenChange={setShowAllImages}>
+        <DialogContent className={cn("w-[min(92vw,780px)] max-w-none rounded-2xl p-0", canvasPanelClass)}>
+          <DialogTitle className="sr-only">全部输出图片</DialogTitle>
+          <DialogDescription className="sr-only">查看当前 Output 节点中的全部输出图片。</DialogDescription>
+          <div className="border-b border-border px-4 py-3 text-sm font-black dark:border-slate-800">
+            Output 图片
+          </div>
+          <div className="max-h-[68vh] overflow-auto p-4">
+            <CanvasImageStrip images={images} onOpen={onOpenImage} onDelete={onDeleteImage} className="grid-cols-2 sm:grid-cols-3 md:grid-cols-4" />
+          </div>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+function loopRawNumber(raw: Record<string, unknown>, key: string, fallback = 0) {
+  const value = Number(raw[key]);
+  return Number.isFinite(value) ? value : fallback;
+}
+
+function loopSlotStatus(raw: Record<string, unknown>, index: number, status?: CreationTask["status"]): CreationTask["status"] {
+  const slots = Array.isArray(raw.slots) ? raw.slots : [];
+  const slot = slots[index];
+  if (slot && typeof slot === "object" && "status" in slot) {
+    const value = String((slot as { status?: unknown }).status || "");
+    if (value === "success" || value === "running" || value === "queued" || value === "error" || value === "cancelled") {
+      return value;
+    }
+  }
+  const completed = loopRawNumber(raw, "completed", 0);
+  const failed = loopRawNumber(raw, "failed", 0);
+  const runningSlot = loopRawNumber(raw, "running_slot", -1);
+  if (index < completed) {
+    return "success";
+  }
+  if (status === "running" && index === runningSlot) {
+    return "running";
+  }
+  if (status === "cancelled") {
+    return "cancelled";
+  }
+  if (status === "error" && index >= completed && index < completed + failed) {
+    return "error";
+  }
+  return status === "running" ? "queued" : status || "queued";
+}
+
+function formatElapsedDuration(ms: number) {
+  const seconds = Math.max(0, Math.floor(ms / 1000));
+  const minutes = Math.floor(seconds / 60);
+  const restSeconds = seconds % 60;
+  if (minutes < 60) {
+    return `${String(minutes).padStart(2, "0")}:${String(restSeconds).padStart(2, "0")}`;
+  }
+  const hours = Math.floor(minutes / 60);
+  const restMinutes = minutes % 60;
+  return `${hours}:${String(restMinutes).padStart(2, "0")}:${String(restSeconds).padStart(2, "0")}`;
+}
+
+function useElapsedLabel(startedAt?: string) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!startedAt) {
+      return;
+    }
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [startedAt]);
+  if (!startedAt) {
+    return "";
+  }
+  const started = new Date(startedAt).getTime();
+  if (!Number.isFinite(started)) {
+    return "";
+  }
+  return formatElapsedDuration(now - started);
+}
+
+function LoopOutputSlots({
+  images,
+  raw,
+  status,
+  startedAt,
+  onOpenImage,
+}: {
+  images: CanvasImageRef[];
+  raw: Record<string, unknown>;
+  status?: CreationTask["status"];
+  startedAt?: string;
+  onOpenImage: (image: CanvasImageRef) => void;
+}) {
+  const total = Math.max(1, Math.min(40, loopRawNumber(raw, "total", images.length || 1)));
+  const current = loopRawNumber(raw, "current", 0);
+  const completed = loopRawNumber(raw, "completed", images.length);
+  const failed = loopRawNumber(raw, "failed", 0);
+  const elapsedLabel = useElapsedLabel(startedAt);
+  const slots = Array.from({ length: total }, (_, index) => {
+    const image = images[index];
+    return {
+      index,
+      image,
+      status: image ? "success" as const : loopSlotStatus(raw, index, status),
+    };
+  });
+  return (
+    <div className="space-y-3">
+      <div className="grid grid-cols-4 gap-2">
+        {slots.map((slot) => (
+          <LoopOutputSlot
+            key={slot.index}
+            index={slot.index}
+            image={slot.image}
+            status={slot.status}
+            elapsedLabel={slot.status === "running" ? elapsedLabel : ""}
+            onOpenImage={onOpenImage}
+          />
+        ))}
+      </div>
+      <div className="flex items-center justify-between gap-2 rounded-xl border border-sky-500/15 bg-sky-500/8 px-3 py-2 text-[11px] font-semibold text-sky-700 dark:border-sky-400/20 dark:bg-sky-400/10 dark:text-sky-100">
+        <span className="truncate">循环进度 {Math.min(current, total)}/{total}</span>
+        <span className="shrink-0">成功 {completed}，失败 {failed}</span>
+      </div>
+    </div>
+  );
+}
+
+function LoopOutputSlot({
+  index,
+  image,
+  status,
+  elapsedLabel,
+  onOpenImage,
+}: {
+  index: number;
+  image?: CanvasImageRef;
+  status?: CreationTask["status"];
+  elapsedLabel?: string;
+  onOpenImage: (image: CanvasImageRef) => void;
+}) {
+  if (image) {
+    return (
+      <button
+        type="button"
+        className="relative aspect-square overflow-hidden rounded-xl border border-border bg-muted"
+        onClick={() => onOpenImage(image)}
+      >
+        <AuthenticatedImage src={canvasImagePreviewSource(image)} alt={canvasImageLabel(image, index)} className="h-full w-full object-cover" />
+        <span className="absolute left-1.5 top-1.5 rounded-md bg-black/55 px-1.5 py-0.5 text-[10px] font-black text-white">{index + 1}</span>
+      </button>
+    );
+  }
+  const running = status === "running";
+  const failed = status === "error" || status === "cancelled";
+  return (
+    <div
+      className={cn(
+        "relative flex aspect-square items-center justify-center overflow-hidden rounded-xl border bg-white text-[10px] font-black text-muted-foreground shadow-[0_3px_8px_rgba(15,23,42,0.05)] dark:bg-slate-950/45",
+        running ? "border-sky-300 text-sky-700 dark:border-sky-400/40 dark:text-sky-100" : failed ? "border-rose-300 text-rose-600 dark:border-rose-400/40 dark:text-rose-200" : "border-border",
+      )}
+    >
+      {running ? (
+        <div className="flex flex-col items-center gap-1.5">
+          <span className="flex size-7 items-center justify-center rounded-full bg-sky-50 text-sky-600 ring-1 ring-sky-100 dark:bg-sky-950/40 dark:text-sky-200 dark:ring-sky-800">
+            <LoaderCircle className="size-4 animate-spin" />
+          </span>
+          <span>生成中</span>
+          {elapsedLabel ? <span className="font-mono text-[9px] font-bold tabular-nums text-sky-500 dark:text-sky-200">{elapsedLabel}</span> : null}
+        </div>
+      ) : failed ? (
+        <span>{status === "cancelled" ? "已中断" : "失败"}</span>
+      ) : (
+        <span>等待 {index + 1}</span>
+      )}
+    </div>
+  );
+}
+
+function CanvasGenerationLoading({ status }: { status?: CreationTask["status"] }) {
+  const queued = status === "queued";
+  const progressPercent = queued ? 0 : 8;
+  return (
+    <div className="flex h-36 items-center justify-center px-5">
+      <div className="w-full max-w-[250px]">
+        <div className="flex items-center gap-3">
+          <span
+            className={cn(
+              "flex size-8 shrink-0 items-center justify-center rounded-full",
+              queued
+                ? "text-amber-600 dark:text-amber-300"
+                : "text-[#1456f0] dark:text-sky-300",
+            )}
+          >
+            {queued ? <Clock3 className="size-4" /> : <LoaderCircle className="size-4 animate-spin" />}
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center justify-between gap-2 text-[11px] text-[#45515e] dark:text-muted-foreground">
+              <span className="truncate font-medium text-[#222222] dark:text-foreground">
+                {queued ? "等待创作并发额度" : "等待图片处理"}
+              </span>
+              <span className="shrink-0 font-mono tabular-nums">{progressPercent}%</span>
+            </div>
+            <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-[#edf2f7] dark:bg-muted">
+              <div
+                className="h-full rounded-full bg-[#1456f0] transition-[width] duration-300"
+                style={{ width: `${progressPercent}%` }}
+              />
+            </div>
+          </div>
+        </div>
+        <div className="mt-2 pl-11 text-[11px] text-[#8e8e93] dark:text-muted-foreground">
+          {queued ? "画布任务排队中" : "画布任务处理中"}
+        </div>
+      </div>
     </div>
   );
 }
@@ -1897,6 +2942,7 @@ export function CanvasImageStrip({
   images,
   limit = images.length,
   onOpen,
+  onOpenAll,
   onDelete,
   className,
   large,
@@ -1904,6 +2950,7 @@ export function CanvasImageStrip({
   images: CanvasImageRef[];
   limit?: number;
   onOpen?: (image: CanvasImageRef) => void;
+  onOpenAll?: () => void;
   onDelete?: (image: CanvasImageRef) => void;
   className?: string;
   large?: boolean;
@@ -1945,7 +2992,30 @@ export function CanvasImageStrip({
               </span>
             )}
             {overflow > 0 && index === visible.length - 1 ? (
-              <span className="absolute inset-0 flex items-center justify-center bg-background/75 text-sm font-bold text-foreground backdrop-blur-sm dark:bg-slate-950/75 dark:text-white">+{overflow}</span>
+              <span
+                role={onOpenAll ? "button" : undefined}
+                tabIndex={onOpenAll ? 0 : undefined}
+                className="absolute inset-0 z-10 flex items-center justify-center bg-background/75 text-sm font-bold text-foreground backdrop-blur-sm dark:bg-slate-950/75 dark:text-white"
+                title={onOpenAll ? `查看全部 ${images.length} 张图片` : undefined}
+                aria-label={onOpenAll ? `查看全部 ${images.length} 张图片` : undefined}
+                onClick={(event) => {
+                  if (!onOpenAll) {
+                    return;
+                  }
+                  event.stopPropagation();
+                  onOpenAll();
+                }}
+                onKeyDown={(event) => {
+                  if (!onOpenAll || (event.key !== "Enter" && event.key !== " ")) {
+                    return;
+                  }
+                  event.preventDefault();
+                  event.stopPropagation();
+                  onOpenAll();
+                }}
+              >
+                +{overflow}
+              </span>
             ) : null}
             {onDelete ? (
               <span
@@ -1987,14 +3057,14 @@ export function SmartCanvasAssetSidebar({
   onAddAssetToCanvas,
   onAddAssetToComposer,
 }: {
-  assets: ManagedImage[];
+  assets: ManagedImageSummary[];
   loadingAssets: boolean;
   loadingMoreAssets: boolean;
   hasMoreAssets: boolean;
   onRefreshAssets: () => void;
   onLoadMoreAssets: () => void;
-  onAddAssetToCanvas: (asset: ManagedImage) => void;
-  onAddAssetToComposer: (asset: ManagedImage) => void;
+  onAddAssetToCanvas: (asset: ManagedImageSummary) => void;
+  onAddAssetToComposer: (asset: ManagedImageSummary) => void;
 }) {
   const [hoverExpanded, setHoverExpanded] = useState(false);
   const [pinned, setPinned] = useState(() => {
@@ -2210,7 +3280,7 @@ function AssetTile({
   onAddToCanvas,
   onAddToComposer,
 }: {
-  asset: ManagedImage;
+  asset: ManagedImageSummary;
   onDragStart: (event: React.DragEvent<HTMLDivElement>) => void;
   onDragEnd: () => void;
   onAddToCanvas: () => void;
@@ -2220,7 +3290,7 @@ function AssetTile({
     <div className="group overflow-hidden rounded-xl border border-border bg-background dark:border-slate-800 dark:bg-slate-950" draggable onDragStart={onDragStart} onDragEnd={onDragEnd}>
       <button type="button" className="block w-full" onClick={onAddToComposer} title="加入输入">
         <AuthenticatedImage
-          src={asset.thumbnail_url || asset.preview_url || asset.url}
+          src={asset.thumbnail_url || asset.preview_url || ""}
           alt={asset.name}
           loading="lazy"
           decoding="async"
@@ -2242,12 +3312,20 @@ function AssetTile({
 export function SmartCanvasOperationHistoryPanel({
   entries,
   open,
+  canUndo,
+  canRedo,
   onOpenChange,
+  onUndo,
+  onRedo,
   onRestore,
 }: {
   entries: SmartCanvasHistoryEntry[];
   open: boolean;
+  canUndo: boolean;
+  canRedo: boolean;
   onOpenChange: (open: boolean) => void;
+  onUndo: () => void;
+  onRedo: () => void;
   onRestore: (entry: SmartCanvasHistoryEntry) => void;
 }) {
   const visibleEntries = entries.slice(0, 30);
@@ -2270,6 +3348,30 @@ export function SmartCanvasOperationHistoryPanel({
           >
             <X className="size-4" />
           </button>
+        </div>
+        <div className="mb-3 grid grid-cols-2 gap-2">
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            className={cn("h-8 rounded-lg text-xs font-black", canvasIconButtonClass)}
+            disabled={!canUndo}
+            onClick={onUndo}
+          >
+            <RotateCcw className="mr-1.5 size-3.5" />
+            撤销
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            className={cn("h-8 rounded-lg text-xs font-black", canvasIconButtonClass)}
+            disabled={!canRedo}
+            onClick={onRedo}
+          >
+            <RotateCw className="mr-1.5 size-3.5" />
+            重做
+          </Button>
         </div>
         <div className="max-h-[420px] space-y-2 overflow-auto pr-1">
           {visibleEntries.length > 0 ? visibleEntries.map((entry) => (
@@ -2368,6 +3470,12 @@ function ItemTypeIcon({ type }: { type: SmartCanvasItem["type"] }) {
   if (type === "llm") {
     return <Bot className="size-4 text-sky-700 dark:text-sky-200" />;
   }
+  if (type === "loop") {
+    return <Repeat2 className="size-4 text-sky-700 dark:text-sky-200" />;
+  }
+  if (type === "group") {
+    return <Layers3 className="size-4 text-sky-700 dark:text-sky-200" />;
+  }
   if (type === "image_generation") {
     return <WandSparkles className="size-4 text-sky-700 dark:text-sky-200" />;
   }
@@ -2386,6 +3494,8 @@ function nodeTitle(item: SmartCanvasItem) {
   if (item.type === "image") return "Image";
   if (item.type === "prompt") return "Prompt";
   if (item.type === "llm") return "AI 提示词";
+  if (item.type === "loop") return "循环";
+  if (item.type === "group") return "Group";
   if (item.type === "image_generation") return "API生成";
   return "Output";
 }

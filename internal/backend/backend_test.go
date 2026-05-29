@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"chatgpt2api/internal/util"
 )
 
 func ptrInt(value int) *int {
@@ -176,6 +178,22 @@ func TestOfficialImageModelSlug(t *testing.T) {
 	} {
 		if got := officialImageModelSlug(tt.model); got != tt.want {
 			t.Fatalf("officialImageModelSlug(%q) = %q, want %q", tt.model, got, tt.want)
+		}
+	}
+}
+
+func TestTextModelSlugRoutesAutoToDefaultChatModel(t *testing.T) {
+	for _, tt := range []struct {
+		model string
+		want  string
+	}{
+		{model: "", want: util.DefaultChatModel},
+		{model: "auto", want: util.DefaultChatModel},
+		{model: "gpt-5", want: "gpt-5"},
+		{model: "gpt-5.5", want: "gpt-5.5"},
+	} {
+		if got := textModelSlug(tt.model); got != tt.want {
+			t.Fatalf("textModelSlug(%q) = %q, want %q", tt.model, got, tt.want)
 		}
 	}
 }
@@ -1506,6 +1524,9 @@ func TestConversationPayloadKeepsSingleUserMessagePrompt(t *testing.T) {
 		{"role": "user", "content": "hello"},
 	}, "auto", "Asia/Shanghai")
 
+	if payload["model"] != util.DefaultChatModel {
+		t.Fatalf("model = %q, want %q", payload["model"], util.DefaultChatModel)
+	}
 	messages := payload["messages"].([]map[string]any)
 	content := messages[0]["content"].(map[string]any)
 	parts := content["parts"].([]any)
