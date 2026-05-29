@@ -238,8 +238,8 @@ type SettingsStore = {
   saveLoginPageImage: (options: { file?: File | null; action: "keep" | "replace" | "remove" }) => Promise<boolean>;
   loadLogGovernance: (silent?: boolean) => Promise<void>;
   cleanupLogsByRetention: () => Promise<void>;
-  loadCreationTaskDiagnostics: (silent?: boolean) => Promise<void>;
-  repairCreationTaskStatuses: (finalizeActive?: boolean) => Promise<void>;
+  loadCreationTaskDiagnostics: (silent?: boolean, staleSeconds?: number) => Promise<void>;
+  repairCreationTaskStatuses: (finalizeActive?: boolean, staleSeconds?: number) => Promise<void>;
   loadImageStorageGovernance: (silent?: boolean) => Promise<void>;
   cleanupImageStorageByRetention: () => Promise<void>;
   cleanupImageStorageByQuota: (includePublic?: boolean) => Promise<void>;
@@ -665,10 +665,10 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
     }
   },
 
-  loadCreationTaskDiagnostics: async (silent = false) => {
+  loadCreationTaskDiagnostics: async (silent = false, staleSeconds = 600) => {
     if (!silent) set({ isLoadingCreationTaskDiagnostics: true });
     try {
-      const data = await fetchCreationTaskDiagnostics();
+      const data = await fetchCreationTaskDiagnostics(staleSeconds);
       set({ creationTaskDiagnostics: data.diagnostics });
     } catch (error) {
       if (!silent) toast.error(error instanceof Error ? error.message : "加载创作任务诊断失败");
@@ -677,19 +677,20 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
     }
   },
 
-  repairCreationTaskStatuses: async (finalizeActive = false) => {
+  repairCreationTaskStatuses: async (finalizeActive = false, staleSeconds = 600) => {
     set({ isRepairingCreationTasks: true });
     try {
-      const data = await repairCreationTaskDiagnostics(finalizeActive);
+      const data = await repairCreationTaskDiagnostics(finalizeActive, staleSeconds);
       set({
         creationTaskDiagnostics: data.diagnostics,
         lastCreationTaskRepair: data.repair,
       });
       const repaired = data.repair.repaired_terminal_tasks;
       const finalized = data.repair.finalized_active_tasks;
+      const skipped = data.repair.skipped_active_tasks;
       toast.success(
         finalizeActive
-          ? `已修复 ${repaired} 个终态任务，并终止 ${finalized} 个卡住任务`
+          ? `已修复 ${repaired} 个终态任务，终止 ${finalized} 个卡住任务，跳过 ${skipped} 个未超时任务`
           : `已修复 ${repaired} 个终态任务`,
       );
     } catch (error) {

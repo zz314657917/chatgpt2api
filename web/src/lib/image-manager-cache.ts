@@ -23,8 +23,9 @@ export function imageManagerCacheKey(
   orientation = "all",
   resolution = "all",
   aspectRatio = "all",
+  tags = "",
 ) {
-  return [cacheScope, view, startDate, endDate, searchKeyword.trim(), visibility, format, orientation, resolution, aspectRatio].join("|");
+  return [cacheScope, view, startDate, endDate, searchKeyword.trim(), visibility, format, orientation, resolution, aspectRatio, tags].join("|");
 }
 
 export function getImageManagerCache(cacheKey: string) {

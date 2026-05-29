@@ -415,6 +415,11 @@ function billingPeriodLabel(period?: string) {
   }
 }
 
+function formatBillingAmount(value: unknown) {
+  const amount = Math.max(0, Number(value) || 0) / 1000;
+  return `¥${amount.toFixed(3)}`;
+}
+
 function billingSummary(user: ManagedUser) {
   const billing = user.billing;
   if (!billing) {
@@ -426,14 +431,14 @@ function billingSummary(user: ManagedUser) {
   if (billing.type === "subscription") {
     const sub = billing.subscription;
     return {
-      title: `${billing.available} / ${sub?.quota_limit ?? 0}`,
-      detail: `已用 ${sub?.quota_used ?? 0} · ${billingPeriodLabel(sub?.quota_period)}`,
+      title: `${formatBillingAmount(billing.available)} / ${formatBillingAmount(sub?.quota_limit)}`,
+      detail: `已用 ${formatBillingAmount(sub?.quota_used)} · ${billingPeriodLabel(sub?.quota_period)}`,
     };
   }
   const standard = billing.standard;
   return {
-    title: String(standard?.available_balance ?? billing.available),
-    detail: `余额 ${standard?.balance ?? 0}`,
+    title: formatBillingAmount(standard?.available_balance ?? billing.available),
+    detail: `余额 ${formatBillingAmount(standard?.balance)}`,
   };
 }
 
@@ -1575,7 +1580,7 @@ function UsersContent() {
               {(bulkBillingForm.operation === "switch_type" || !isBulkAdjustmentNoAmount(normalizeBillingAdjustmentType(bulkBillingForm.billingType, bulkBillingForm.adjustmentType))) ? (
                 <div className="space-y-2">
                   <label className="text-sm font-medium text-stone-700 dark:text-foreground">
-                    {bulkBillingForm.billingType === "subscription" ? "配额上限" : "标准余额"}
+                    {bulkBillingForm.billingType === "subscription" ? "配额上限（厘，1000 = ¥1）" : "标准余额（厘，1000 = ¥1）"}
                   </label>
                   <Input
                     type="number"
@@ -1760,7 +1765,7 @@ function UsersContent() {
                 </div>
                 {billingForm.billingType === "standard" ? (
                   <div className="space-y-2">
-                    <label className="text-sm font-medium text-stone-700 dark:text-foreground">当前余额</label>
+                    <label className="text-sm font-medium text-stone-700 dark:text-foreground">当前余额（厘，1000 = ¥1）</label>
                     <Input
                       type="number"
                       min="0"
@@ -1773,7 +1778,7 @@ function UsersContent() {
                 ) : (
                   <>
                     <div className="space-y-2">
-                      <label className="text-sm font-medium text-stone-700 dark:text-foreground">配额上限</label>
+                      <label className="text-sm font-medium text-stone-700 dark:text-foreground">配额上限（厘，1000 = ¥1）</label>
                       <Input
                         type="number"
                         min="0"

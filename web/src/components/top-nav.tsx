@@ -6,6 +6,7 @@ import { motion, useReducedMotion, type Transition } from "motion/react";
 import { Link, NavLink, useLocation, useNavigate } from "react-router-dom";
 
 import { ImageTaskQueue } from "@/components/image-task-queue";
+import { Sub2APIKeyMenu } from "@/components/sub2api-key-picker";
 import webConfig from "@/constants/common-env";
 import {
   AUTH_SESSION_CHANGE_EVENT,
@@ -98,17 +99,25 @@ type NavItem = {
   label: string;
 };
 
+function buildNavTarget(href: string, search: string) {
+  const params = new URLSearchParams(search);
+  if (params.get("ui_mode") !== "embedded") {
+    return href;
+  }
+  return `${href}?ui_mode=embedded`;
+}
+
 function isActivePath(pathname: string, href: string) {
   return pathname === href || pathname.startsWith(`${href}/`);
 }
 
-function NavPill({ item, pathname }: { item: NavItem; pathname: string }) {
+function NavPill({ item, pathname, search }: { item: NavItem; pathname: string; search: string }) {
   const active = isActivePath(pathname, item.href);
   const prefersReducedMotion = useReducedMotion();
 
   return (
     <NavLink
-      to={item.href}
+      to={buildNavTarget(item.href, search)}
       className={() =>
         cn(
           "relative isolate shrink-0 whitespace-nowrap rounded-full px-3 py-1.5 text-[13px] font-medium transition-colors sm:text-sm",
@@ -349,13 +358,17 @@ export function TopNav() {
           <div className="ml-auto flex shrink-0 items-center gap-1 lg:hidden">
             {canAccessImageTasks ? <ImageTaskQueue className="size-8 px-0" /> : null}
             <ThemeToggleButton theme={theme} onToggle={handleThemeToggle} />
-            <AccountMenu
-              session={session}
-              roleLabel={roleLabel}
-              availableQuota={availableQuota}
-              pathname={pathname}
-              onLogout={handleLogout}
-            />
+            {session.provider === "sub2api" ? (
+              <Sub2APIKeyMenu session={session} />
+            ) : (
+              <AccountMenu
+                session={session}
+                roleLabel={roleLabel}
+                availableQuota={availableQuota}
+                pathname={pathname}
+                onLogout={handleLogout}
+              />
+            )}
           </div>
         </div>
         <nav
@@ -367,19 +380,23 @@ export function TopNav() {
           )}
         >
           {visibleNavItems.map((item) => (
-            <NavPill key={item.href} item={item} pathname={pathname} />
+            <NavPill key={item.href} item={item} pathname={pathname} search={location.search} />
           ))}
         </nav>
         <div className="hidden items-center justify-end gap-1.5 lg:flex">
           {canAccessImageTasks ? <ImageTaskQueue /> : null}
           <ThemeToggleButton theme={theme} onToggle={handleThemeToggle} />
-          <AccountMenu
-            session={session}
-            roleLabel={roleLabel}
-            availableQuota={availableQuota}
-            pathname={pathname}
-            onLogout={handleLogout}
-          />
+          {session.provider === "sub2api" ? (
+            <Sub2APIKeyMenu session={session} />
+          ) : (
+            <AccountMenu
+              session={session}
+              roleLabel={roleLabel}
+              availableQuota={availableQuota}
+              pathname={pathname}
+              onLogout={handleLogout}
+            />
+          )}
         </div>
       </div>
     </header>

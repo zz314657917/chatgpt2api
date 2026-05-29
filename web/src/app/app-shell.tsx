@@ -7,13 +7,17 @@ export function AppShell() {
   const location = useLocation();
   const pathname = location.pathname.replace(/\/+$/, "") || "/";
   const isCanvasPage = pathname === "/canvas";
+  const isEmbeddedMode = new URLSearchParams(location.search).get("ui_mode") === "embedded";
   const isViewportWorkspacePage = pathname === "/canvas" || pathname === "/image" || pathname === "/image-manager" || pathname === "/social";
 
   return (
     <main className={cn("bg-background text-foreground", isViewportWorkspacePage ? "h-dvh overflow-hidden" : "min-h-screen")}>
       <div
         className={cn(
-          "flex w-full flex-col px-3 pt-2 pb-3 sm:px-5 lg:px-6",
+          "flex w-full flex-col",
+          isEmbeddedMode && isViewportWorkspacePage
+            ? "px-2 pt-2 pb-2 sm:px-2 lg:px-3"
+            : "px-3 pt-2 pb-3 sm:px-5 lg:px-6",
           isCanvasPage ? "gap-3" : "gap-2",
           isViewportWorkspacePage
             ? "h-full min-h-0 max-w-none overflow-hidden"

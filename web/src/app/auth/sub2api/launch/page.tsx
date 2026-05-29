@@ -54,7 +54,13 @@ export default function Sub2APILaunchPage() {
         const session = authSessionFromLoginResponse(data, sessionToken);
         await setVerifiedAuthSession(session);
         toast.success("已进入生图工作台");
-        navigate("/image", { replace: true });
+        const params = searchParams();
+        const query = new URLSearchParams();
+        if (params.get("ui_mode") === "embedded") {
+          query.set("ui_mode", "embedded");
+        }
+        const target = query.toString() ? `/image?${query.toString()}` : "/image";
+        navigate(target, { replace: true });
       } catch (error) {
         await clearVerifiedAuthSession();
         if (active) {

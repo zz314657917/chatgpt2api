@@ -421,7 +421,7 @@ export function ConfigCard() {
             {defaultBillingType === "standard" ? (
               <Field className={configFieldClassName}>
                 <ConfigFieldLabel htmlFor="settings-default-standard-balance">
-                  默认标准余额
+                  默认标准余额（厘，1000 = ¥1）
                 </ConfigFieldLabel>
                 <NumberInputWithUnit
                   id="settings-default-standard-balance"
@@ -429,14 +429,14 @@ export function ConfigCard() {
                   value={config?.default_standard_balance ?? ""}
                   onChange={setDefaultStandardBalance}
                   placeholder="0"
-                  unit="点"
+                  unit="厘"
                 />
               </Field>
             ) : (
               <>
                 <Field className={configFieldClassName}>
                   <ConfigFieldLabel htmlFor="settings-default-subscription-quota">
-                    默认订阅配额
+                    默认订阅配额（厘，1000 = ¥1）
                   </ConfigFieldLabel>
                   <NumberInputWithUnit
                     id="settings-default-subscription-quota"
@@ -444,7 +444,7 @@ export function ConfigCard() {
                     value={config?.default_subscription_quota ?? ""}
                     onChange={setDefaultSubscriptionQuota}
                     placeholder="0"
-                    unit="点"
+                  unit="厘"
                   />
                 </Field>
                 <Field className={configFieldClassName}>

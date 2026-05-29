@@ -16,7 +16,7 @@ const (
 	BillingTypeStandard     = "standard"
 	BillingTypeSubscription = "subscription"
 
-	BillingUnitImage = "image"
+	BillingUnitImage = ImageBillingUnitCNYMilli
 
 	BillingPeriodDaily   = "daily"
 	BillingPeriodWeekly  = "weekly"

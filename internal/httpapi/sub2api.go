@@ -46,11 +46,82 @@ func (a *App) handleSub2APILaunch(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (a *App) handleSub2APIKeys(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	identity, ok := a.requireSub2APIIdentity(w, r)
+	if !ok {
+		return
+	}
+	items, err := a.sub2Launch.ListAPIKeys(r.Context(), identity)
+	if err != nil {
+		util.WriteError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	var binding any
+	if current, ok := a.sub2APIBindingForIdentity(identity); ok {
+		binding = current.PublicMap()
+	}
+	util.WriteJSON(w, http.StatusOK, map[string]any{"items": items, "binding": binding})
+}
+
+func (a *App) handleSub2APIBinding(w http.ResponseWriter, r *http.Request) {
+	identity, ok := a.requireSub2APIIdentity(w, r)
+	if !ok {
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		var binding any
+		if current, ok := a.sub2APIBindingForIdentity(identity); ok {
+			binding = current.PublicMap()
+		}
+		util.WriteJSON(w, http.StatusOK, map[string]any{"binding": binding})
+	case http.MethodPost:
+		body, err := readJSONMap(r)
+		if err != nil {
+			util.WriteError(w, http.StatusBadRequest, "invalid json body")
+			return
+		}
+		binding, err := a.sub2Launch.BindAPIKey(r.Context(), identity, util.Clean(body["api_key_id"]))
+		if err != nil {
+			util.WriteError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		util.WriteJSON(w, http.StatusOK, map[string]any{"binding": binding.PublicMap()})
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func (a *App) requireSub2APIIdentity(w http.ResponseWriter, r *http.Request) (service.Identity, bool) {
+	identity, ok := a.requireIdentity(w, r, "")
+	if !ok {
+		return service.Identity{}, false
+	}
+	if identity.Provider != service.AuthProviderSub2API {
+		util.WriteError(w, http.StatusForbidden, "sub2api session is required")
+		return service.Identity{}, false
+	}
+	if a == nil || a.sub2Launch == nil {
+		util.WriteError(w, http.StatusServiceUnavailable, "sub2api launch is not configured")
+		return service.Identity{}, false
+	}
+	return identity, true
+}
+
 func (a *App) sub2APIBindingForIdentity(identity service.Identity) (service.Sub2APIBinding, bool) {
 	if a == nil || a.sub2Bindings == nil || identity.Provider != service.AuthProviderSub2API {
 		return service.Sub2APIBinding{}, false
 	}
-	return a.sub2Bindings.Get(identityScope(identity))
+	binding, ok := a.sub2Bindings.Get(identityScope(identity))
+	return binding, ok && binding.HasAPIKey()
+}
+
+func sub2APIKeyBindingRequiredError() error {
+	return protocol.HTTPError{Status: http.StatusPreconditionRequired, Message: "请先选择 Sub2API API Key 后再开始创作"}
 }
 
 func (a *App) runLoggedSub2APIImageGenerationTask(ctx context.Context, identity service.Identity, payload map[string]any, binding service.Sub2APIBinding) (map[string]any, error) {

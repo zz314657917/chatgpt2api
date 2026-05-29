@@ -1,13 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useLocation } from "react-router-dom";
 import { Globe2, History, ImagePlus, LoaderCircle, Plus, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { ImageComposer } from "@/app/image/components/image-composer";
-import { ImagePromptMarket } from "@/app/image/components/image-prompt-market";
 import { ImageResults, type ImageLightboxItem } from "@/app/image/components/image-results";
-import type { BananaPrompt } from "@/app/image/banana-prompts";
 import {
   CUSTOM_IMAGE_ASPECT_RATIO,
   DEFAULT_IMAGE_CUSTOM_HEIGHT,
@@ -34,6 +33,7 @@ import { IMAGE_PROMPT_PRESETS, type ImagePromptPreset } from "@/app/image/image-
 import { consumeSimilarImageIntent } from "@/app/image/similar-image-intent";
 import { ImageSidebar } from "@/app/image/components/image-sidebar";
 import { ImageLightbox } from "@/components/image-lightbox";
+import { Sub2APIKeyRequiredDialog } from "@/components/sub2api-key-picker";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -63,11 +63,12 @@ import {
   createImageGenerationTask,
   DEFAULT_CHAT_MODEL,
   DEFAULT_IMAGE_MODEL,
+  estimateImageBillingUnits,
   estimateImageDisplayPriceUSD,
   fetchCanvasModels,
   fetchCreationTasks,
   fetchProfile,
-  formatImageDisplayPriceUSD,
+  formatImageDisplayPriceCNY,
   IMAGE_CREATION_MODEL_OPTIONS,
   IMAGE_MODEL_ROUTE_DETAILS,
   IMAGE_OUTPUT_FORMAT_OPTIONS,
@@ -146,6 +147,7 @@ const REFERENCE_IMAGE_JPEG_QUALITY = 0.86;
 const activeConversationQueueIds = new Set<string>();
 const EMPTY_IMAGE_ASPECT_RATIO_SELECT_VALUE = "__empty_aspect_ratio__";
 const MISSING_RECOVERABLE_TASK_ID_ERROR = "页面刷新或任务中断，未找到可恢复的任务 ID";
+const HIDDEN_IMAGE_MODEL_VALUES = new Set(["codex-gpt-image-2"]);
 
 type ComposerMode = "chat" | "image";
 
@@ -381,11 +383,6 @@ async function buildReferenceImageFromUrl(
     originalSize: file.size,
     compressedSize: file.size,
   };
-}
-
-function getPromptReferenceImageUrls(prompt: BananaPrompt) {
-  const urls = prompt.referenceImageUrls.length > 0 ? prompt.referenceImageUrls : [prompt.preview];
-  return Array.from(new Set(urls.map((url) => url.trim()).filter(Boolean)));
 }
 
 function reusableOutputCompressionValue(value: unknown, outputFormat: ImageOutputFormat) {
@@ -827,7 +824,7 @@ function getStoredImageModel(): ImageModel {
     return DEFAULT_IMAGE_MODEL;
   }
   const storedModel = window.localStorage.getItem(IMAGE_MODEL_STORAGE_KEY);
-  return isImageModel(storedModel) ? storedModel : DEFAULT_IMAGE_MODEL;
+  return isImageModel(storedModel) && !HIDDEN_IMAGE_MODEL_VALUES.has(storedModel) ? storedModel : DEFAULT_IMAGE_MODEL;
 }
 
 function getStoredComposerMode(): ComposerMode {
@@ -986,6 +983,14 @@ function hasEnoughBilling(session: NonNullable<ReturnType<typeof useAuthGuard>["
   return !billing || billing.unlimited || Math.max(0, Number(billing.available) || 0) >= estimated;
 }
 
+function imageBillingEstimate(model: ImageModel, count: number, sizeOrResolution: string, quality: "auto" | ImageQuality) {
+  const estimatedPrice = estimateImageDisplayPriceUSD(model, count, sizeOrResolution, quality);
+  return {
+    price: estimatedPrice,
+    units: estimateImageBillingUnits(model, count, sizeOrResolution, quality),
+  };
+}
+
 function deriveTurnStatus(turn: ImageTurn): Pick<ImageTurn, "status" | "error"> {
   const loadingCounts = getImageTurnLoadingCounts(turn);
   const failedCount = turn.images.filter((image) => image.status === "error").length;
@@ -1063,13 +1068,13 @@ function mergeImageModelOptions(
   const seen = new Set<string>();
   const merged: ImageModelMenuOption[] = [];
   for (const option of [...remoteOptions, ...localOptions]) {
-    if (!option.value || seen.has(option.value)) {
+    if (!option.value || seen.has(option.value) || HIDDEN_IMAGE_MODEL_VALUES.has(option.value)) {
       continue;
     }
     seen.add(option.value);
     merged.push(option);
   }
-  if (selectedModel && !seen.has(selectedModel)) {
+  if (selectedModel && !seen.has(selectedModel) && !HIDDEN_IMAGE_MODEL_VALUES.has(selectedModel)) {
     merged.unshift({ value: selectedModel, label: selectedModel });
   }
   return merged;
@@ -1311,6 +1316,8 @@ async function recoverConversationHistory(items: ImageConversation[]) {
 
 
 function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof useAuthGuard>["session"]> }) {
+  const location = useLocation();
+  const isEmbeddedMode = useMemo(() => new URLSearchParams(location.search).get("ui_mode") === "embedded", [location.search]);
   const isSubmitDispatchingRef = useRef(false);
   const retryingImageIdsRef = useRef(new Set<string>());
   const cancelledTurnIdsRef = useRef(new Set<string>());
@@ -1341,7 +1348,6 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
   const [imageOutputCompression, setImageOutputCompression] = useState(getStoredImageOutputCompression);
   const [defaultImageVisibility, setDefaultImageVisibility] = useState<ImageVisibility>("private");
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
-  const [isPromptMarketOpen, setIsPromptMarketOpen] = useState(false);
   const [referenceImages, setReferenceImages] = useState<StoredReferenceImage[]>([]);
   const [conversations, setConversations] = useState<ImageConversation[]>([]);
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
@@ -1461,11 +1467,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
       }, 0),
     [conversations],
   );
-  const estimatedBillingUnits = composerMode === "chat" ? 1 : parsedCount;
-  const estimatedImagePrice = useMemo(() => {
-    if (composerMode === "chat") {
-      return null;
-    }
+  const estimatedImageBilling = useMemo(() => {
     const estimateSizeRequest = buildEffectiveImageSizeRequest(imageModel, {
       mode: imageSizeMode,
       aspectRatio: imageAspectRatio,
@@ -1475,10 +1477,10 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
       customHeight: imageCustomHeight,
     });
     const estimateResolution =
-      imageModel === "gpt-image-2"
+      imageModel === "auto" || imageModel === "gpt-image-2"
         ? "1K"
         : imagePriceSizeFromRequest(estimateSizeRequest.size);
-    return estimateImageDisplayPriceUSD(imageModel, parsedCount, estimateResolution, imageQuality);
+    return imageBillingEstimate(imageModel, composerMode === "chat" ? 1 : parsedCount, estimateResolution, imageQuality);
   }, [
     composerMode,
     imageAspectRatio,
@@ -1491,7 +1493,8 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     imageSizeMode,
     parsedCount,
   ]);
-  const estimatedImagePriceLabel = formatImageDisplayPriceUSD(estimatedImagePrice);
+  const estimatedBillingUnits = estimatedImageBilling.units;
+  const estimatedImagePriceLabel = composerMode === "chat" ? "" : formatImageDisplayPriceCNY(estimatedImageBilling.price);
   const billingBlocked = !hasEnoughBilling(session, estimatedBillingUnits);
   const deleteConfirmTitle = deleteConfirm?.type === "all" ? "清空历史记录" : deleteConfirm?.type === "one" ? "删除对话" : "";
   const deleteConfirmDescription =
@@ -2112,62 +2115,6 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         return;
       }
       toast.dismiss(toastId);
-      toast.error("已套用提示词，但参考图读取失败");
-    }
-  }, []);
-
-  const handleApplyMarketPrompt = useCallback(async (prompt: BananaPrompt) => {
-    const referenceImageUrls = getPromptReferenceImageUrls(prompt);
-    const requestId = promptApplyRequestIdRef.current + 1;
-    promptApplyRequestIdRef.current = requestId;
-
-    setSelectedConversationId(null);
-    setComposerMode("image");
-    setImagePrompt(prompt.prompt);
-    setImageCount("1");
-    setImageSizeMode("auto");
-    setImageAspectRatio("");
-    setImageResolution("auto");
-    setImageCustomRatio(DEFAULT_IMAGE_CUSTOM_RATIO);
-    setImageCustomWidth(DEFAULT_IMAGE_CUSTOM_WIDTH);
-    setImageCustomHeight(DEFAULT_IMAGE_CUSTOM_HEIGHT);
-    setImageQuality("auto");
-    setImageBackground("auto");
-    setImageModeration("auto");
-    setImagePartialImages("");
-    setImageOutputFormat(DEFAULT_IMAGE_OUTPUT_FORMAT);
-    setImageOutputCompression("");
-    setDefaultImageVisibility("private");
-    setReferenceImages([]);
-    setIsPromptMarketOpen(false);
-    if (fileInputRef.current) {
-      fileInputRef.current.value = "";
-    }
-    textareaRef.current?.focus();
-
-    if (referenceImageUrls.length === 0) {
-      toast.success("已套用提示词");
-      return;
-    }
-
-    const toastId = toast.loading(`正在读取 ${referenceImageUrls.length} 张参考图`);
-    const results = await Promise.allSettled(
-      referenceImageUrls.map((url, index) => buildReferenceImageFromUrl(url, index, "prompt-reference")),
-    );
-    const loadedReferences = results.flatMap((result) => (result.status === "fulfilled" ? [result.value] : []));
-
-    toast.dismiss(toastId);
-    if (promptApplyRequestIdRef.current !== requestId) {
-      return;
-    }
-    if (loadedReferences.length > 0) {
-      setReferenceImages(loadedReferences);
-    }
-    if (loadedReferences.length === referenceImageUrls.length) {
-      toast.success("已套用提示词和参考图");
-    } else if (loadedReferences.length > 0) {
-      toast.error(`已套用提示词，${referenceImageUrls.length - loadedReferences.length} 张参考图读取失败`);
-    } else {
       toast.error("已套用提示词，但参考图读取失败");
     }
   }, []);
@@ -3332,8 +3279,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
       toast.error("请输入提示词");
       return;
     }
-    const estimatedUnits = composerMode === "chat" ? 1 : parsedCount;
-    if (!hasEnoughBilling(session, estimatedUnits)) {
+    if (!hasEnoughBilling(session, estimatedBillingUnits)) {
       toast.error(session.billing?.type === "subscription" ? "用户配额不足" : "用户余额不足");
       return;
     }
@@ -3485,8 +3431,14 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
 
   return (
     <>
-      <section className="grid h-full min-h-0 w-full grid-cols-1 gap-2 px-0 pb-[calc(env(safe-area-inset-bottom)+0.5rem)] sm:gap-3 sm:pb-3 lg:grid-cols-[280px_minmax(0,1fr)] xl:grid-cols-[300px_minmax(0,1fr)]">
-        <div className="hidden h-full min-h-0 border-r border-[#f2f3f5] pr-3 lg:block">
+      <Sub2APIKeyRequiredDialog />
+      <section
+        className={cn(
+          "grid h-full min-h-0 w-full grid-cols-1 gap-2 px-0 pb-[calc(env(safe-area-inset-bottom)+0.5rem)] sm:gap-3 sm:pb-3 lg:grid-cols-[280px_minmax(0,1fr)] xl:grid-cols-[300px_minmax(0,1fr)]",
+          isEmbeddedMode && "gap-1 pb-0 sm:gap-2 sm:pb-1 lg:grid-cols-[260px_minmax(0,1fr)] xl:grid-cols-[270px_minmax(0,1fr)]",
+        )}
+      >
+        <div className={cn("hidden h-full min-h-0 border-r border-[#f2f3f5] pr-3 lg:block", isEmbeddedMode && "pr-2")}>
           <ImageSidebar
             conversations={conversations}
             isLoadingHistory={isLoadingHistory}
@@ -3829,9 +3781,9 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                                 <SelectContent>
                                   <SelectGroup>
                                     <SelectItem value="auto">自动</SelectItem>
-                                    <SelectItem value="low">低质量</SelectItem>
-                                    <SelectItem value="medium">中质量</SelectItem>
-                                    <SelectItem value="high">高质量</SelectItem>
+                                    <SelectItem value="low">速度优先</SelectItem>
+                                    <SelectItem value="medium">标准</SelectItem>
+                                    <SelectItem value="high">高品质</SelectItem>
                                   </SelectGroup>
                                 </SelectContent>
                               </Select>
@@ -4006,8 +3958,8 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
           </Dialog>
         ) : null}
 
-        <div className="relative flex min-h-0 min-w-0 flex-col gap-2 sm:gap-4">
-          <div className="flex items-center justify-between gap-2 px-1 sm:px-4">
+        <div className={cn("relative flex min-h-0 min-w-0 flex-col gap-2 sm:gap-4", isEmbeddedMode && "sm:gap-2")}>
+          <div className={cn("flex items-center justify-between gap-2 px-1 sm:px-4", isEmbeddedMode && "sm:px-2")}>
             <div className="flex min-w-0 flex-1 items-center gap-2 lg:hidden">
               <Button
                 variant="outline"
@@ -4037,8 +3989,11 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
 
           <div
             ref={resultsViewportRef}
-            className="hide-scrollbar min-h-0 flex-1 overflow-y-auto px-1 pt-2 pb-[14rem] sm:px-4 sm:pt-4 sm:pb-[15rem] xl:px-6"
-            style={composerDockHeight > 0 ? { paddingBottom: composerDockHeight + 24 } : undefined}
+            className={cn(
+              "hide-scrollbar min-h-0 flex-1 overflow-y-auto px-1 pt-2 pb-[14rem] sm:px-4 sm:pt-4 sm:pb-[15rem] xl:px-6",
+              isEmbeddedMode && "sm:px-2 sm:pt-2 xl:px-3",
+            )}
+            style={composerDockHeight > 0 ? { paddingBottom: composerDockHeight + (isEmbeddedMode ? 12 : 24) } : undefined}
           >
             <ImageResults
               selectedConversation={selectedConversation}
@@ -4062,14 +4017,17 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
 
           <div
             ref={composerDockRef}
-            className="pointer-events-none absolute inset-x-0 bottom-0 z-30 px-1 pb-[calc(env(safe-area-inset-bottom)+0.5rem)] sm:px-4 sm:pb-2"
+            className={cn(
+              "pointer-events-none absolute inset-x-0 bottom-0 z-30 px-1 pb-[calc(env(safe-area-inset-bottom)+0.5rem)] sm:px-4 sm:pb-2",
+              isEmbeddedMode && "sm:px-2 sm:pb-1",
+            )}
             style={
               {
                 "--image-composer-dock-height": `${composerDockHeight}px`,
               } as CSSProperties
             }
           >
-            <div className="pointer-events-auto mx-auto w-full max-w-[1120px]">
+            <div className={cn("pointer-events-auto mx-auto w-full", isEmbeddedMode ? "max-w-[1280px]" : "max-w-[1120px]")}>
               <ImageComposer
                 composerMode={composerMode}
                 prompt={imagePrompt}
@@ -4111,7 +4069,6 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                 onImageOutputFormatChange={setImageOutputFormat}
                 onImageOutputCompressionChange={setImageOutputCompression}
                 onSubmit={handleSubmit}
-                onOpenPromptMarket={() => setIsPromptMarketOpen(true)}
                 onReferenceImageChange={handleReferenceImageChange}
                 onImageResultDrop={handleImageResultDrop}
                 onRemoveReferenceImage={handleRemoveReferenceImage}
@@ -4120,12 +4077,6 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
           </div>
         </div>
       </section>
-
-      <ImagePromptMarket
-        open={isPromptMarketOpen}
-        onOpenChange={setIsPromptMarketOpen}
-        onApplyPrompt={handleApplyMarketPrompt}
-      />
 
       <ImageLightbox
         images={lightboxImages}

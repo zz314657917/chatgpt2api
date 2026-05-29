@@ -899,6 +899,50 @@ func TestImageServiceRebuildsImageIndexWhenIndexIsCorrupt(t *testing.T) {
 	}
 }
 
+func TestImageServiceTagsPersistFilterAndDelete(t *testing.T) {
+	root := t.TempDir()
+	config := testImageConfig{root: root}
+	rels := []string{"2026/04/29/one.png", "2026/04/29/two.png"}
+	for _, rel := range rels {
+		path := filepath.Join(config.ImagesDir(), filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("MkdirAll() error = %v", err)
+		}
+		if err := writeTestPNG(path); err != nil {
+			t.Fatalf("writeTestPNG(%s) error = %v", rel, err)
+		}
+	}
+	service := NewImageService(config)
+	service.RecordGeneratedImages(rels, "linuxdo:123", "alice", ImageVisibilityPrivate)
+	item, err := service.UpdateImageTags(rels[0], []string{"Avatar", "hero", "avatar"}, ImageAccessScope{OwnerID: "linuxdo:123"})
+	if err != nil {
+		t.Fatalf("UpdateImageTags() error = %v", err)
+	}
+	if got := item["tags"].([]string); len(got) != 2 || got[0] != "Avatar" || got[1] != "hero" {
+		t.Fatalf("item tags = %#v", item["tags"])
+	}
+	list := service.ListImagesPage("http://127.0.0.1:8000", ImageListOptions{Tags: []string{"hero"}}, ImageAccessScope{OwnerID: "linuxdo:123"})
+	items := list["items"].([]map[string]any)
+	if len(items) != 1 || items[0]["path"] != rels[0] {
+		t.Fatalf("filtered list = %#v", list)
+	}
+	tags := service.ListImageTags(ImageAccessScope{OwnerID: "linuxdo:123"})
+	if len(tags) != 2 || tags[0] != "Avatar" || tags[1] != "hero" {
+		t.Fatalf("ListImageTags() = %#v", tags)
+	}
+	result, err := service.DeleteImageTag("hero", ImageAccessScope{OwnerID: "linuxdo:123"})
+	if err != nil {
+		t.Fatalf("DeleteImageTag() error = %v", err)
+	}
+	if result["deleted"] != 1 {
+		t.Fatalf("DeleteImageTag() = %#v", result)
+	}
+	tags = service.ListImageTags(ImageAccessScope{OwnerID: "linuxdo:123"})
+	if len(tags) != 1 || tags[0] != "Avatar" {
+		t.Fatalf("tags after delete = %#v", tags)
+	}
+}
+
 func TestImageServiceCleanupStorageClearsThumbnailCacheOnly(t *testing.T) {
 	root := t.TempDir()
 	config := testImageConfig{root: root}
