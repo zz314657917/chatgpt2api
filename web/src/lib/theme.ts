@@ -42,6 +42,9 @@ function applyColorThemeToRoot(theme: ColorTheme) {
 }
 
 function shouldAnimateThemeTransition() {
+  if (isEmbeddedMode()) {
+    return false;
+  }
   const startViewTransition = (document as ViewTransitionDocument).startViewTransition;
   if (typeof startViewTransition !== "function") {
     return false;
@@ -51,6 +54,17 @@ function shouldAnimateThemeTransition() {
   const elementCount = root?.getElementsByTagName("*").length ?? document.getElementsByTagName("*").length;
   const tableRowCount = root?.querySelectorAll('[data-slot="table-row"]').length ?? 0;
   return elementCount <= THEME_TRANSITION_MAX_ELEMENTS && tableRowCount <= THEME_TRANSITION_MAX_TABLE_ROWS;
+}
+
+function isEmbeddedMode() {
+  if (typeof window === "undefined") {
+    return false;
+  }
+  try {
+    return new URLSearchParams(window.location.search).get("ui_mode") === "embedded" || window.self !== window.top;
+  } catch {
+    return false;
+  }
 }
 
 function getThemeTransitionRadius(x: number, y: number) {
@@ -65,7 +79,7 @@ export function applyColorTheme(theme: ColorTheme, options: ThemeTransitionOptio
   }
 
   const origin = options.origin;
-  if (origin && (options.force || shouldAnimateThemeTransition())) {
+  if (origin && !isEmbeddedMode() && (options.force || shouldAnimateThemeTransition())) {
     const root = document.documentElement;
     const radius = getThemeTransitionRadius(origin.x, origin.y);
     root.style.setProperty("--theme-transition-x", `${origin.x}px`);
