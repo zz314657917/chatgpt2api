@@ -93,17 +93,21 @@ export async function clearVerifiedAuthSession() {
 async function verifyStoredAuthSession(): Promise<StoredAuthSession | null> {
   const storedSession = await getStoredAuthSession();
   if (!storedSession) {
-    try {
-      const data = await verifySession("");
-      return authSessionFromLoginResponse(data, "");
-    } catch {
-      return null;
-    }
+    return verifyCookieAuthSession();
   }
 
   try {
     const data = await verifySession(storedSession.key);
     return authSessionFromLoginResponse(data, storedSession.key);
+  } catch {
+    return verifyCookieAuthSession();
+  }
+}
+
+async function verifyCookieAuthSession(): Promise<StoredAuthSession | null> {
+  try {
+    const data = await verifySession("");
+    return authSessionFromLoginResponse(data, "");
   } catch {
     return null;
   }
