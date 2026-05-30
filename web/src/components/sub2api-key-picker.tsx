@@ -42,7 +42,7 @@ const initialState: PickerState = {
 };
 
 function bindingHasKey(binding: Sub2APIBinding | null | undefined) {
-  return Boolean(binding?.has_bound_api_key && binding.api_key_id);
+  return Boolean(binding?.has_bound_api_key);
 }
 
 function keyLabelFromBinding(binding: Sub2APIBinding | null | undefined) {
