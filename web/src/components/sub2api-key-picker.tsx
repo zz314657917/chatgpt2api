@@ -195,7 +195,7 @@ function KeyList({
             </span>
             <span className="min-w-0 flex-1">
               <span className="block truncate text-sm font-semibold">{keyLabel(item)}</span>
-              <span className="block truncate text-xs text-muted-foreground">{keyMeta(item) || "Sub2API Key"}</span>
+              <span className="block truncate text-xs text-muted-foreground">{keyMeta(item) || "API Key"}</span>
             </span>
             {active ? <Check className="size-4 shrink-0" /> : null}
           </button>
@@ -230,7 +230,7 @@ export function Sub2APIKeyMenu({ session }: { session: StoredAuthSession }) {
         <div className="flex items-center justify-between gap-2">
           <div>
             <div className="text-sm font-semibold text-foreground">API Key</div>
-            <div className="text-xs text-muted-foreground">当前 Sub2API 用户绑定</div>
+            <div className="text-xs text-muted-foreground">当前账号绑定</div>
           </div>
           <Button type="button" variant="ghost" size="icon" className="size-8" onClick={() => void load()}>
             <RefreshCcw className="size-4" />
@@ -282,7 +282,7 @@ export function Sub2APIKeyRequiredDialog() {
         <DialogHeader>
           <DialogTitle>选择 API Key</DialogTitle>
           <DialogDescription>
-            当前 Sub2API 用户还没有绑定用于生图的 API Key。选择后会保存到服务端，后续进入将自动沿用。
+            当前账号还没有绑定用于生图的 API Key。选择后会保存到服务端，后续进入将自动沿用。
           </DialogDescription>
         </DialogHeader>
         {state.error ? (
@@ -294,7 +294,7 @@ export function Sub2APIKeyRequiredDialog() {
         <KeyList items={state.items} binding={state.binding} bindingKeyID={bindingKeyID} onSelect={(id) => void bind(id)} />
         <DialogFooter className="sm:justify-between">
           <Button type="button" variant="outline" onClick={() => window.open(sub2APIKeysURL(), "_top")}>
-            返回 sub2api
+            返回控制台
           </Button>
           <Button type="button" variant="ghost" onClick={() => void load()}>
             <RefreshCcw className="size-4" />
