@@ -120,6 +120,25 @@ func (s *Sub2APIBindingStore) Save(binding Sub2APIBinding) error {
 	return s.saveLocked()
 }
 
+func preserveSub2APIKeyBinding(store *Sub2APIBindingStore, binding Sub2APIBinding) Sub2APIBinding {
+	binding = normalizeSub2APIBinding(binding)
+	if store == nil || binding.HasAPIKey() {
+		return binding
+	}
+	existing, ok := store.Get(binding.OwnerID)
+	if !ok || !existing.HasAPIKey() {
+		return binding
+	}
+	binding.APIKeyID = existing.APIKeyID
+	binding.APIKey = existing.APIKey
+	binding.APIKeyName = existing.APIKeyName
+	binding.APIKeyLast4 = existing.APIKeyLast4
+	binding.GroupID = existing.GroupID
+	binding.GroupName = existing.GroupName
+	binding.GroupPlatform = existing.GroupPlatform
+	return normalizeSub2APIBinding(binding)
+}
+
 func (s *Sub2APIBindingStore) load() map[string]Sub2APIBinding {
 	out := map[string]Sub2APIBinding{}
 	raw := loadStoredJSON(s.store, sub2APIBindingsDocumentName)
@@ -282,6 +301,7 @@ func (s *Sub2APILaunchService) Redeem(ctx context.Context, token string) (*Sub2A
 		return nil, fmt.Errorf("sub2api session was not created")
 	}
 	if binding.Valid() {
+		binding = preserveSub2APIKeyBinding(s.bindings, binding)
 		if err := s.bindings.Save(binding); err != nil {
 			return nil, err
 		}
