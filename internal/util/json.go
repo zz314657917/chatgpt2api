@@ -84,7 +84,11 @@ var ResponsesImageToolModels = map[string]struct{}{
 }
 
 func Clean(v any) string {
-	return strings.TrimSpace(fmt.Sprint(ValueOr(v, "")))
+	text := strings.TrimSpace(fmt.Sprint(ValueOr(v, "")))
+	if text == "<nil>" {
+		return ""
+	}
+	return text
 }
 
 func ValueOr(v any, fallback any) any {
