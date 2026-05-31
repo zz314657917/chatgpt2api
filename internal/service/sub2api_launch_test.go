@@ -107,3 +107,22 @@ func TestSub2APIBindingStoreReplacesAPIKeyWhenLaunchIncludesAPIKey(t *testing.T)
 		t.Fatalf("api key fields were not replaced: %#v", got)
 	}
 }
+
+func TestSub2APIBindingStoreIgnoresNilStringSessionToken(t *testing.T) {
+	store := newTestSub2APIBindingStore(t)
+
+	if err := store.Save(Sub2APIBinding{
+		OwnerID:        "sub2api:42",
+		Sub2APIUserID:  "42",
+		SessionToken:   "<nil>",
+		APIKeyID:       "7",
+		APIKey:         "sk-test-old",
+		GatewayBaseURL: "https://gateway.example.com/v1",
+	}); err == nil {
+		t.Fatal("Save() succeeded with <nil> session token, want error")
+	}
+
+	if _, ok := store.Get("sub2api:42"); ok {
+		t.Fatal("Get() returned binding with <nil> session token")
+	}
+}
