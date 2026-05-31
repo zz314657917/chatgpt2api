@@ -33,6 +33,7 @@ import { IMAGE_PROMPT_PRESETS, type ImagePromptPreset } from "@/app/image/image-
 import { consumeSimilarImageIntent } from "@/app/image/similar-image-intent";
 import { ImageSidebar } from "@/app/image/components/image-sidebar";
 import { ImageLightbox } from "@/components/image-lightbox";
+import { ManagedImageAssetSidebar } from "@/components/managed-image-asset-sidebar";
 import { Sub2APIKeyRequiredDialog } from "@/components/sub2api-key-picker";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -67,6 +68,7 @@ import {
   estimateImageDisplayPriceUSD,
   fetchCanvasModels,
   fetchCreationTasks,
+  fetchManagedImages,
   fetchProfile,
   formatImageDisplayPriceCNY,
   IMAGE_CREATION_MODEL_OPTIONS,
@@ -89,10 +91,11 @@ import {
   type CreationTaskMessage,
   type FallbackReferenceImage,
   type ImageVisibility,
+  type ManagedImageSummary,
 } from "@/lib/api";
 import { fetchAuthenticatedImageBlob } from "@/lib/authenticated-image";
 import { clearImageManagerCache } from "@/lib/image-manager-cache";
-import { getManagedImagePathFromUrl } from "@/lib/image-path";
+import { getManagedImagePathFromUrl, getManagedImageUrlFromPath } from "@/lib/image-path";
 import { authSessionFromLoginResponse, setVerifiedAuthSession } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import { useAuthGuard } from "@/lib/use-auth-guard";
@@ -115,6 +118,7 @@ import {
   type StoredImage,
   type StoredReferenceImage,
 } from "@/store/image-conversations";
+import { hasAPIPermission } from "@/store/auth";
 import {
   clearImageTurnProgress,
   getImageTurnProgressSnapshot,
@@ -144,6 +148,7 @@ const QUOTA_REFRESH_EVENT = "chatgpt2api:quota-refresh";
 const DEFAULT_IMAGE_OUTPUT_FORMAT: ImageOutputFormat = "png";
 const REFERENCE_IMAGE_MAX_SIDE = 2048;
 const REFERENCE_IMAGE_JPEG_QUALITY = 0.86;
+const IMAGE_ASSET_PAGE_SIZE = 50;
 const activeConversationQueueIds = new Set<string>();
 const EMPTY_IMAGE_ASPECT_RATIO_SELECT_VALUE = "__empty_aspect_ratio__";
 const MISSING_RECOVERABLE_TASK_ID_ERROR = "页面刷新或任务中断，未找到可恢复的任务 ID";
@@ -514,6 +519,40 @@ function imageToolOptionsForTask(turn: Pick<ImageTurn, "background" | "moderatio
     ...(turn.background && turn.background !== "auto" ? { background: turn.background } : {}),
     ...(turn.moderation && turn.moderation !== "auto" ? { moderation: turn.moderation } : {}),
     ...(partialImages ? { partialImages } : {}),
+  };
+}
+
+function managedImageReferenceUrl(item: ManagedImageSummary) {
+  return item.path ? getManagedImageUrlFromPath(item.path) : item.preview_url || item.thumbnail_url || "";
+}
+
+function managedImageFileName(item: ManagedImageSummary) {
+  if (item.name) {
+    return item.name;
+  }
+  const rawName = item.path.split("/").filter(Boolean).pop() || "";
+  try {
+    return decodeURIComponent(rawName) || "library-reference.png";
+  } catch {
+    return rawName || "library-reference.png";
+  }
+}
+
+async function buildReferenceImageFromManagedImage(item: ManagedImageSummary): Promise<StoredReferenceImage> {
+  const url = managedImageReferenceUrl(item);
+  if (!url) {
+    throw new Error("未找到可读取的图片地址");
+  }
+  const file = await fetchImageAsFile(url, managedImageFileName(item));
+  return {
+    name: file.name,
+    type: file.type || "image/png",
+    dataUrl: await readFileAsDataUrl(file),
+    source: "upload",
+    clientReferenceId: createId(),
+    uploadStatus: "pending",
+    originalSize: file.size,
+    compressedSize: file.size,
   };
 }
 
@@ -1369,7 +1408,13 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     sharePromptParameters: false,
     shareReferenceImages: false,
   });
+  const [assets, setAssets] = useState<ManagedImageSummary[]>([]);
+  const [assetNextCursor, setAssetNextCursor] = useState("");
+  const [hasMoreAssets, setHasMoreAssets] = useState(false);
+  const [loadingAssets, setLoadingAssets] = useState(false);
+  const [loadingMoreAssets, setLoadingMoreAssets] = useState(false);
   const canInspectAccounts = session.role === "admin" || session.apiPermissions.includes("get/api/accounts");
+  const canUseImageAssets = hasAPIPermission(session, "GET", "/api/images");
 
   const parsedCount = useMemo(() => normalizeRequestedImageCount(imageCount), [imageCount]);
   const imageSize = useMemo(
@@ -2119,6 +2164,54 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     }
   }, []);
 
+  const loadAssets = useCallback(async () => {
+    if (!canUseImageAssets) {
+      setAssets([]);
+      setAssetNextCursor("");
+      setHasMoreAssets(false);
+      return;
+    }
+    setLoadingAssets(true);
+    try {
+      const result = await fetchManagedImages({ scope: "mine", page_size: IMAGE_ASSET_PAGE_SIZE });
+      setAssets(result.items);
+      setAssetNextCursor(result.next_cursor);
+      setHasMoreAssets(result.has_more);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "加载图片库失败");
+    } finally {
+      setLoadingAssets(false);
+    }
+  }, [canUseImageAssets]);
+
+  const loadMoreAssets = useCallback(async () => {
+    if (!canUseImageAssets || loadingAssets || loadingMoreAssets || !hasMoreAssets || !assetNextCursor) {
+      return;
+    }
+    setLoadingMoreAssets(true);
+    try {
+      const result = await fetchManagedImages({
+        scope: "mine",
+        page_size: IMAGE_ASSET_PAGE_SIZE,
+        cursor: assetNextCursor,
+      });
+      setAssets((current) => {
+        const seen = new Set(current.map((asset) => asset.path));
+        return [...current, ...result.items.filter((asset) => !seen.has(asset.path))];
+      });
+      setAssetNextCursor(result.next_cursor);
+      setHasMoreAssets(result.has_more);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "加载更多图片失败");
+    } finally {
+      setLoadingMoreAssets(false);
+    }
+  }, [assetNextCursor, canUseImageAssets, hasMoreAssets, loadingAssets, loadingMoreAssets]);
+
+  useEffect(() => {
+    void loadAssets();
+  }, [loadAssets]);
+
   const handleDeleteConversation = async (id: string) => {
     const nextConversations = conversations.filter((item) => item.id !== id);
     conversationsRef.current = nextConversations;
@@ -2248,6 +2341,40 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     }
     textareaRef.current?.focus();
   }, []);
+
+  const appendLibraryReferenceImages = useCallback((images: StoredReferenceImage[]) => {
+    if (images.length === 0) {
+      return;
+    }
+    promptApplyRequestIdRef.current += 1;
+    setSelectedConversationId(null);
+    setComposerMode("image");
+    setReferenceImages((prev) => [
+      ...prev,
+      ...images.map((image) => ({
+        ...image,
+        source: image.source || "upload" as const,
+        clientReferenceId: createId(),
+        uploadStatus: "pending" as const,
+        serverReferenceId: undefined,
+        uploadError: undefined,
+      })),
+    ]);
+    textareaRef.current?.focus();
+  }, []);
+
+  const handleManagedImageReference = useCallback(async (asset: ManagedImageSummary) => {
+    const toastId = toast.loading("正在读取图库图片...");
+    try {
+      const referenceImage = await buildReferenceImageFromManagedImage(asset);
+      appendLibraryReferenceImages([referenceImage]);
+      toast.success("已加入参考图，可继续输入描述");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "读取图库图片失败");
+    } finally {
+      toast.dismiss(toastId);
+    }
+  }, [appendLibraryReferenceImages]);
 
   const handleContinueEdit = useCallback(
     async (conversationId: string, image: StoredImage | StoredReferenceImage) => {
@@ -3434,9 +3561,14 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
       <Sub2APIKeyRequiredDialog />
       <section
         className={cn(
-          "grid h-full min-h-0 w-full grid-cols-1 gap-2 px-0 pb-[calc(env(safe-area-inset-bottom)+0.5rem)] sm:gap-3 sm:pb-3 lg:grid-cols-[280px_minmax(0,1fr)] xl:grid-cols-[300px_minmax(0,1fr)]",
+          "relative grid h-full min-h-0 w-full grid-cols-1 gap-2 px-0 pb-[calc(env(safe-area-inset-bottom)+0.5rem)] sm:gap-3 sm:pb-3 lg:grid-cols-[280px_minmax(0,1fr)] xl:grid-cols-[300px_minmax(0,1fr)]",
           isEmbeddedMode && "gap-1 pb-0 sm:gap-2 sm:pb-1 lg:grid-cols-[260px_minmax(0,1fr)] xl:grid-cols-[270px_minmax(0,1fr)]",
         )}
+        style={
+          {
+            "--image-composer-dock-height": `${composerDockHeight}px`,
+          } as CSSProperties
+        }
       >
         <div className={cn("hidden h-full min-h-0 border-r border-[#f2f3f5] pr-3 lg:block", isEmbeddedMode && "pr-2")}>
           <ImageSidebar
@@ -4071,11 +4203,33 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                 onSubmit={handleSubmit}
                 onReferenceImageChange={handleReferenceImageChange}
                 onImageResultDrop={handleImageResultDrop}
+                onManagedImageDrop={handleManagedImageReference}
                 onRemoveReferenceImage={handleRemoveReferenceImage}
               />
             </div>
           </div>
         </div>
+
+        {canUseImageAssets ? (
+          <ManagedImageAssetSidebar
+            assets={assets}
+            loadingAssets={loadingAssets}
+            loadingMoreAssets={loadingMoreAssets}
+            hasMoreAssets={hasMoreAssets}
+            onRefreshAssets={() => void loadAssets()}
+            onLoadMoreAssets={() => void loadMoreAssets()}
+            onAddAssetToComposer={(asset) => void handleManagedImageReference(asset)}
+            storagePrefix="image-composer-asset-sidebar"
+            sideOffsetClassName="bottom-[calc(var(--image-composer-dock-height,0px)+1.25rem)] right-0 top-5 rounded-l-2xl border-y border-l"
+            collapsedClassName="w-[52px] translate-x-0 p-2"
+            expandedClassName="w-[360px] translate-x-0 p-3"
+            wideClassName="w-[560px] translate-x-0 p-3"
+            title="图片库"
+            subtitle={`${assets.length} 张素材 · 拖到输入框`}
+            emptyLabel="图片库暂无图片"
+            collapsedTitle="展开图片库"
+          />
+        ) : null}
       </section>
 
       <ImageLightbox

@@ -1,7 +1,6 @@
 "use client";
 
-import { forwardRef, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type HTMLAttributes, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
-import { VirtuosoGrid } from "react-virtuoso";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import {
   Bot,
   BoxSelect,
@@ -24,12 +23,8 @@ import {
   Layers3,
   Link2,
   LoaderCircle,
-  Maximize2,
   MoreHorizontal,
-  Minimize2,
-  PanelRightOpen,
   Pencil,
-  Pin,
   RefreshCw,
   RotateCcw,
   RotateCw,
@@ -44,6 +39,7 @@ import {
 } from "lucide-react";
 
 import { AuthenticatedImage } from "@/components/authenticated-image";
+import { ManagedImageAssetSidebar, type ManagedImageAssetSidebarProps } from "@/components/managed-image-asset-sidebar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
@@ -51,7 +47,7 @@ import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import type { CanvasImageRef, CanvasModelOption, CreationTask, ImageQuality, ImageVisibility, ManagedImageSummary } from "@/lib/api";
+import type { CanvasImageRef, CanvasModelOption, CreationTask, ImageQuality, ImageVisibility } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 import {
@@ -3047,186 +3043,8 @@ export function CanvasImageStrip({
   );
 }
 
-export function SmartCanvasAssetSidebar({
-  assets,
-  loadingAssets,
-  loadingMoreAssets,
-  hasMoreAssets,
-  onRefreshAssets,
-  onLoadMoreAssets,
-  onAddAssetToCanvas,
-  onAddAssetToComposer,
-}: {
-  assets: ManagedImageSummary[];
-  loadingAssets: boolean;
-  loadingMoreAssets: boolean;
-  hasMoreAssets: boolean;
-  onRefreshAssets: () => void;
-  onLoadMoreAssets: () => void;
-  onAddAssetToCanvas: (asset: ManagedImageSummary) => void;
-  onAddAssetToComposer: (asset: ManagedImageSummary) => void;
-}) {
-  const [hoverExpanded, setHoverExpanded] = useState(false);
-  const [pinned, setPinned] = useState(() => {
-    if (typeof window === "undefined") {
-      return false;
-    }
-    return window.localStorage.getItem("smart-canvas-asset-sidebar-pinned") === "1";
-  });
-  const [draggingAsset, setDraggingAsset] = useState(false);
-  const [wide, setWide] = useState(() => {
-    if (typeof window === "undefined") {
-      return false;
-    }
-    return window.localStorage.getItem("smart-canvas-asset-sidebar-wide") === "1";
-  });
-  const expanded = pinned || hoverExpanded || draggingAsset;
-  const assetGridComponents = useMemo(
-    () => ({
-      List: forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivElement>>(function CanvasAssetGridList(props, ref) {
-        return <div {...props} ref={ref} className={cn(props.className, "grid gap-3", wide ? "grid-cols-3" : "grid-cols-2")} />;
-      }),
-      Footer: () =>
-        hasMoreAssets || loadingMoreAssets ? (
-          <div className="col-span-full flex min-h-14 items-center justify-center py-3">
-            <div className={cn("inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs", canvasDashedClass)}>
-              <LoaderCircle className={cn("size-3.5", loadingMoreAssets && "animate-spin")} />
-              {loadingMoreAssets ? "加载中..." : "继续下滑加载"}
-            </div>
-          </div>
-        ) : assets.length > 0 ? (
-          <div className={cn("col-span-full py-3 text-center text-[11px]", canvasSubtleTextClass)}>已显示全部素材</div>
-        ) : null,
-    }),
-    [assets.length, hasMoreAssets, loadingMoreAssets, wide],
-  );
-
-  const setPinnedState = useCallback((next: boolean) => {
-    setPinned(next);
-    if (typeof window !== "undefined") {
-      window.localStorage.setItem("smart-canvas-asset-sidebar-pinned", next ? "1" : "0");
-    }
-    if (next) {
-      setHoverExpanded(true);
-    }
-  }, []);
-
-  const setWideState = useCallback((next: boolean) => {
-    setWide(next);
-    if (typeof window !== "undefined") {
-      window.localStorage.setItem("smart-canvas-asset-sidebar-wide", next ? "1" : "0");
-    }
-    if (next) {
-      setHoverExpanded(true);
-    }
-  }, []);
-
-  return (
-    <aside
-      className={cn(
-        "absolute bottom-5 right-0 top-24 z-40 flex overflow-hidden rounded-l-2xl border-y border-l max-lg:hidden",
-        "transition-[width,transform,background-color,border-color] duration-300 ease-out",
-        canvasPanelClass,
-        expanded ? wide ? "w-[680px] translate-x-0 p-3" : "w-[420px] translate-x-0 p-3" : "w-[56px] translate-x-0 p-2",
-      )}
-      onMouseEnter={() => setHoverExpanded(true)}
-      onMouseLeave={() => {
-        if (!pinned && !draggingAsset) {
-          setHoverExpanded(false);
-        }
-      }}
-    >
-      <div className={cn("flex h-full shrink-0 flex-col items-center gap-3 border-r border-border pr-2 transition-colors dark:border-zinc-800", expanded ? "w-12" : "w-full border-r-0 pr-0")}>
-        <button
-          type="button"
-          className={cn("mt-1 flex size-10 items-center justify-center rounded-2xl text-sky-600 transition dark:text-sky-300", expanded ? "bg-sky-500/10" : "bg-sky-500/10 hover:bg-sky-500/15")}
-          onClick={() => {
-            if (!expanded) {
-              setHoverExpanded(true);
-            } else {
-              setPinnedState(!pinned);
-            }
-          }}
-          title={pinned ? "取消固定图片库" : expanded ? "固定图片库" : "展开图片库"}
-        >
-          {expanded ? <Pin className={cn("size-4", pinned && "fill-current")} /> : <Images className="size-5" />}
-        </button>
-        <div className="rounded-full bg-sky-500/15 px-2 py-1 text-[11px] font-black text-sky-600 dark:bg-sky-400/15 dark:text-sky-300">{assets.length}</div>
-        {!expanded ? (
-          <button
-            type="button"
-            className={cn("mt-1 flex size-9 items-center justify-center rounded-2xl", canvasIconButtonClass)}
-            onClick={() => setHoverExpanded(true)}
-            title="展开素材库"
-          >
-            <PanelRightOpen className="size-4" />
-          </button>
-        ) : null}
-      </div>
-
-      <div className={cn("flex min-h-0 min-w-0 flex-1 flex-col transition-all duration-300", expanded ? "translate-x-0 opacity-100" : "pointer-events-none translate-x-4 opacity-0")}>
-        <div className="flex items-center justify-between gap-2">
-          <div className="min-w-0">
-            <div className="text-sm font-bold text-foreground dark:text-slate-100">图片库</div>
-            <div className={cn("text-xs", canvasSubtleTextClass)}>{assets.length} 张素材 · 点击加入输入</div>
-          </div>
-          <div className="flex gap-1">
-            <Button
-              type="button"
-              size="icon"
-              variant="ghost"
-              className={cn("size-8 rounded-lg", canvasIconButtonClass)}
-              onClick={() => setWideState(!wide)}
-              title={wide ? "收回图片库宽度" : "扩大图片库显示范围"}
-            >
-              {wide ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />}
-            </Button>
-            <Button
-              type="button"
-              size="icon"
-              variant="ghost"
-              className={cn("size-8 rounded-lg", canvasIconButtonClass)}
-              onClick={() => setPinnedState(!pinned)}
-              title={pinned ? "取消固定图片库" : "固定图片库"}
-            >
-              <Pin className={cn("size-4", pinned && "fill-current")} />
-            </Button>
-            <Button type="button" size="icon" variant="ghost" className={cn("size-8 rounded-lg", canvasIconButtonClass)} onClick={onRefreshAssets}>
-              {loadingAssets ? <LoaderCircle className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
-            </Button>
-          </div>
-        </div>
-        <div className="mt-3 min-h-0 flex-1 overflow-auto pr-1">
-          {assets.length > 0 ? (
-            <VirtuosoGrid
-              data={assets}
-              overscan={400}
-              components={assetGridComponents}
-              itemClassName="min-w-0"
-              style={{ height: "100%" }}
-              endReached={onLoadMoreAssets}
-              itemContent={(index, asset) => (
-                <AssetTile
-                  key={`${asset.path}-${index}`}
-                  asset={asset}
-                  onDragStart={(event) => {
-                    setDraggingAsset(true);
-                    event.dataTransfer.setData("application/x-chatgpt2api-managed-image", JSON.stringify(asset));
-                    event.dataTransfer.effectAllowed = "copy";
-                  }}
-                  onDragEnd={() => setDraggingAsset(false)}
-                  onAddToCanvas={() => onAddAssetToCanvas(asset)}
-                  onAddToComposer={() => onAddAssetToComposer(asset)}
-                />
-              )}
-            />
-          ) : (
-            <div className={cn("rounded-xl border p-4 text-center text-xs", canvasDashedClass)}>图片库暂无图片</div>
-          )}
-        </div>
-      </div>
-    </aside>
-  );
+export function SmartCanvasAssetSidebar(props: Omit<ManagedImageAssetSidebarProps, "storagePrefix">) {
+  return <ManagedImageAssetSidebar {...props} storagePrefix="smart-canvas-asset-sidebar" />;
 }
 
 export function SmartCanvasRunHistoryPanel({
@@ -3270,42 +3088,6 @@ export function SmartCanvasRunHistoryPanel({
         </div>
       </div>
     </aside>
-  );
-}
-
-function AssetTile({
-  asset,
-  onDragStart,
-  onDragEnd,
-  onAddToCanvas,
-  onAddToComposer,
-}: {
-  asset: ManagedImageSummary;
-  onDragStart: (event: React.DragEvent<HTMLDivElement>) => void;
-  onDragEnd: () => void;
-  onAddToCanvas: () => void;
-  onAddToComposer: () => void;
-}) {
-  return (
-    <div className="group overflow-hidden rounded-xl border border-border bg-background dark:border-slate-800 dark:bg-slate-950" draggable onDragStart={onDragStart} onDragEnd={onDragEnd}>
-      <button type="button" className="block w-full" onClick={onAddToComposer} title="加入输入">
-        <AuthenticatedImage
-          src={asset.thumbnail_url || asset.preview_url || ""}
-          alt={asset.name}
-          loading="lazy"
-          decoding="async"
-          className="aspect-square w-full object-cover transition duration-150 group-hover:scale-[1.03]"
-          placeholderClassName="min-h-0 aspect-square bg-muted dark:bg-slate-900"
-        />
-      </button>
-      <div className="space-y-1 px-2 py-2">
-        <div className="truncate text-[11px] font-medium text-foreground dark:text-slate-300">{asset.name}</div>
-        <div className="grid grid-cols-2 gap-1">
-          <Button type="button" size="sm" variant="ghost" className={cn("h-7 rounded-md px-1 text-[11px]", canvasIconButtonClass)} onClick={onAddToComposer}>输入</Button>
-          <Button type="button" size="sm" variant="ghost" className={cn("h-7 rounded-md px-1 text-[11px]", canvasIconButtonClass)} onClick={onAddToCanvas}>画布</Button>
-        </div>
-      </div>
-    </div>
   );
 }
 

@@ -30,6 +30,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { hasImageResultDragPayload, parseImageResultDragPayload } from "@/app/image/image-result-drag";
+import { hasManagedImageDragPayload, parseManagedImageDragPayload } from "@/components/managed-image-drag";
 import {
   CUSTOM_IMAGE_ASPECT_RATIO,
   IMAGE_ASPECT_RATIO_OPTIONS,
@@ -54,6 +55,7 @@ import {
   type ImageModel,
   type ImageOutputFormat,
   type ImageQuality,
+  type ManagedImageSummary,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
@@ -100,6 +102,7 @@ type ImageComposerProps = {
   onSubmit: () => void | Promise<void>;
   onReferenceImageChange: (files: File[]) => void | Promise<void>;
   onImageResultDrop: (imageIds: string[]) => void | Promise<void>;
+  onManagedImageDrop: (asset: ManagedImageSummary) => void | Promise<void>;
   onRemoveReferenceImage: (index: number) => void;
 };
 
@@ -133,7 +136,7 @@ function hasDraggedFiles(dataTransfer: DataTransfer) {
 }
 
 function hasDraggedImage(dataTransfer: DataTransfer) {
-  if (hasImageResultDragPayload(dataTransfer)) {
+  if (hasImageResultDragPayload(dataTransfer) || hasManagedImageDragPayload(dataTransfer)) {
     return true;
   }
   if (!hasDraggedFiles(dataTransfer)) {
@@ -354,6 +357,7 @@ export function ImageComposer({
   onSubmit,
   onReferenceImageChange,
   onImageResultDrop,
+  onManagedImageDrop,
   onRemoveReferenceImage,
 }: ImageComposerProps) {
   const [lightboxOpen, setLightboxOpen] = useState(false);
@@ -561,7 +565,8 @@ export function ImageComposer({
 
   const handleReferenceImageDrop = (event: DragEvent<HTMLDivElement>) => {
     const imageResultPayload = parseImageResultDragPayload(event.dataTransfer);
-    if (!imageResultPayload && !hasDraggedFiles(event.dataTransfer)) {
+    const managedImagePayload = parseManagedImageDragPayload(event.dataTransfer);
+    if (!imageResultPayload && !managedImagePayload && !hasDraggedFiles(event.dataTransfer)) {
       return;
     }
 
@@ -569,6 +574,10 @@ export function ImageComposer({
     resetReferenceImageDragState();
     if (imageResultPayload) {
       void onImageResultDrop(imageResultPayload.items.map((item) => item.imageId));
+      return;
+    }
+    if (managedImagePayload) {
+      void onManagedImageDrop(managedImagePayload);
       return;
     }
     addReferenceImages(Array.from(event.dataTransfer.files));
@@ -717,7 +726,7 @@ export function ImageComposer({
           <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center rounded-[30px] border-2 border-dashed border-[#1456f0]/70 bg-white/70 text-sm font-medium text-[#1456f0] backdrop-blur-sm dark:border-sky-400/70 dark:bg-background/70 dark:text-sky-300 sm:rounded-[24px]">
             <span className="inline-flex items-center gap-2 rounded-full bg-white/90 px-4 py-2 shadow-[0_10px_30px_-18px_rgba(15,23,42,0.5)] dark:bg-card/90">
               <ImagePlus className="size-4" />
-              松开上传图片
+              松开添加参考图
             </span>
           </div>
         ) : null}
