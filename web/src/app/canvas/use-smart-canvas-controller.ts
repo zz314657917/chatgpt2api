@@ -43,6 +43,7 @@ import {
   type SmartCanvasHelpTopic,
 } from "./canvas-help";
 import { dispatchSmartCanvasQueueChanged } from "./canvas-events";
+import { createSmartCanvasFromPreset, type SmartCanvasPresetId } from "./canvas-presets";
 import {
   DEFAULT_SMART_VIEWPORT,
   blankSmartCanvasItemIds,
@@ -257,6 +258,58 @@ function isLoopDrivenGenerator(canvas: SmartCanvasDocument | null | undefined, g
     return false;
   }
   return canvas.edges.some((edge) => edge.target === generatorId && canvas.nodes.some((item) => item.id === edge.source && item.type === "loop"));
+}
+
+function nodeStopScope(canvas: SmartCanvasDocument, node: SmartCanvasItem) {
+  const ids = new Set<string>([node.id]);
+  if (node.type === "loop") {
+    canvas.edges
+      .filter((edge) => edge.source === node.id)
+      .map((edge) => canvas.nodes.find((item) => item.id === edge.target))
+      .filter((item): item is SmartCanvasItem => item?.type === "image_generation")
+      .forEach((generator) => {
+        ids.add(generator.id);
+        canvas.edges
+          .filter((edge) => edge.source === generator.id)
+          .map((edge) => canvas.nodes.find((item) => item.id === edge.target))
+          .filter((item): item is SmartCanvasItem => item?.type === "result")
+          .forEach((output) => ids.add(output.id));
+      });
+  } else if (node.type === "image_generation") {
+    canvas.edges
+      .filter((edge) => edge.source === node.id)
+      .map((edge) => canvas.nodes.find((item) => item.id === edge.target))
+      .filter((item): item is SmartCanvasItem => item?.type === "result" && item.data?.task_id === node.data?.task_id)
+      .forEach((output) => ids.add(output.id));
+  } else if (node.type === "result" && node.data?.task_id) {
+    canvas.edges
+      .filter((edge) => edge.target === node.id)
+      .map((edge) => canvas.nodes.find((item) => item.id === edge.source))
+      .filter((item): item is SmartCanvasItem => item?.type === "image_generation" && item.data?.task_id === node.data?.task_id)
+      .forEach((generator) => ids.add(generator.id));
+  }
+  if (node.data?.task_id) {
+    canvas.nodes
+      .filter((item) => item.data?.task_id === node.data?.task_id)
+      .forEach((item) => ids.add(item.id));
+  }
+  return ids;
+}
+
+function nodeStopLabel(node: SmartCanvasItem) {
+  if (node.type === "llm") {
+    return "AI 提示词";
+  }
+  if (node.type === "loop") {
+    return "循环";
+  }
+  if (node.type === "image_generation") {
+    return "API 生成";
+  }
+  if (node.type === "result") {
+    return node.data?.tool_type ? imageToolLabel(node.data.tool_type) : "输出任务";
+  }
+  return "节点任务";
 }
 
 function mergeLoopSlotStatuses(
@@ -656,6 +709,7 @@ export function useSmartCanvasController() {
   const [tool, setTool] = useState<SmartCanvasTool>("pan");
   const [dragState, setDragState] = useState<SmartCanvasDragState>({ kind: "none" });
   const [connectState, setConnectState] = useState<SmartCanvasConnectState>({ kind: "none" });
+  const [lightweightCanvasMedia, setLightweightCanvasMedia] = useState(false);
   const [saveState, setSaveState] = useState<SmartCanvasSaveState>("saved");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -670,6 +724,7 @@ export function useSmartCanvasController() {
   const [angleControlValues, setAngleControlValues] = useState<SmartCanvasAngleControlValues>(DEFAULT_ANGLE_CONTROL_VALUES);
   const [angleControlResultItemId, setAngleControlResultItemId] = useState("");
   const [canvasPickerOpen, setCanvasPickerOpen] = useState(false);
+  const [canvasPresetPickerOpen, setCanvasPresetPickerOpen] = useState(false);
   const [leftRailCollapsed, setLeftRailCollapsed] = useState(() => {
     if (typeof window === "undefined") {
       return true;
@@ -749,11 +804,13 @@ export function useSmartCanvasController() {
   const setActiveDragState = useCallback((next: SmartCanvasDragState) => {
     dragStateRef.current = next;
     setDragState(next);
+    setLightweightCanvasMedia(next.kind !== "none");
   }, []);
 
   const setActiveConnectState = useCallback((next: SmartCanvasConnectState) => {
     connectStateRef.current = next;
     setConnectState(next);
+    setLightweightCanvasMedia(next.kind !== "none" || dragStateRef.current.kind !== "none");
   }, []);
 
   const selectSingleItem = useCallback((id: string) => {
@@ -1953,6 +2010,32 @@ export function useSmartCanvasController() {
     viewportRef.current = next;
   }, [selectSingleItem]);
 
+  const moveItemToScreenPoint = useCallback((itemId: string, point: { x: number; y: number }) => {
+    const rect = boardRef.current?.getBoundingClientRect();
+    const current = canvasRef.current;
+    const item = current?.nodes.find((node) => node.id === itemId);
+    if (!rect || !item) {
+      return;
+    }
+    const world = screenToWorld(point, rect, viewportRef.current);
+    const size = nodeSizeForType(item.type);
+    const width = Number(item.data?.width || size.w);
+    const height = Number(item.data?.height || size.h);
+    selectSingleItem(itemId);
+    updateCanvas((doc) => ({
+      ...doc,
+      nodes: doc.nodes.map((node) => node.id === itemId
+        ? {
+            ...node,
+            position: {
+              x: world.x - width / 2,
+              y: world.y - height / 2,
+            },
+          }
+        : node),
+    }), true, "移动节点");
+  }, [selectSingleItem, updateCanvas]);
+
   const restoreHistoryEntry = useCallback((entry: SmartCanvasHistoryEntry) => {
     const snapshot = normalizeSmartCanvas(entry.snapshot);
     if (!snapshot) {
@@ -2898,6 +2981,49 @@ export function useSmartCanvasController() {
     toast.info("已请求中断循环");
   }, [updateCanvas]);
 
+  const stopRunningNode = useCallback(async (nodeId: string) => {
+    const current = canvasRef.current;
+    const node = current?.nodes.find((item) => item.id === nodeId);
+    if (!current || !node) {
+      return;
+    }
+    if (node.type === "loop") {
+      await stopLoopNode(nodeId);
+      return;
+    }
+    if (!isActiveTask(node.data?.status)) {
+      toast.info("当前节点没有运行中的任务");
+      return;
+    }
+    const scopeIds = nodeStopScope(current, node);
+    const taskIds = new Set<string>();
+    for (const item of current.nodes) {
+      if (scopeIds.has(item.id) && item.data?.task_id) {
+        taskIds.add(item.data.task_id);
+      }
+    }
+    const label = nodeStopLabel(node);
+    updateCanvas((doc) => ({
+      ...doc,
+      nodes: doc.nodes.map((item) => scopeIds.has(item.id)
+        ? {
+            ...item,
+            data: {
+              ...item.data,
+              status: "cancelled",
+              error: `${label}已中断`,
+              stop_requested: true,
+              updated_at: new Date().toISOString(),
+            },
+          }
+        : item),
+    }), true, `中断${label}`);
+    if (taskIds.size > 0) {
+      await Promise.allSettled(Array.from(taskIds).map((taskId) => cancelCreationTask(taskId)));
+    }
+    toast.info(`已请求中断${label}`);
+  }, [stopLoopNode, updateCanvas]);
+
   useEffect(() => {
     const current = canvasRef.current;
     if (!current?.id) {
@@ -2939,15 +3065,16 @@ export function useSmartCanvasController() {
     }
   }, [applyCanvas, canvases, flushSave]);
 
-  const createNewCanvas = useCallback(async () => {
+  const createNewCanvas = useCallback(async (presetId: SmartCanvasPresetId = "text-to-image") => {
     if (saveStateRef.current === "dirty" || saveStateRef.current === "error" || saveStateRef.current === "saving") {
       const saved = await flushSave();
       if (!saved && !window.confirm("当前画布保存失败，仍然新建吗？")) {
         return;
       }
     }
-    applyCanvas(createEmptySmartCanvas());
+    applyCanvas(createSmartCanvasFromPreset(presetId));
     setCanvasPickerOpen(false);
+    setCanvasPresetPickerOpen(false);
   }, [applyCanvas, flushSave]);
 
   const deleteCanvasById = useCallback(async (id: string) => {
@@ -3266,6 +3393,7 @@ export function useSmartCanvasController() {
     viewport,
     tool,
     connectState,
+    lightweightCanvasMedia,
     saveState,
     loading,
     saving,
@@ -3284,6 +3412,7 @@ export function useSmartCanvasController() {
     angleControlResultItem,
     selectedImageToolDisabledReason,
     canvasPickerOpen,
+    canvasPresetPickerOpen,
     runHistoryOpen,
     operationHistoryOpen,
     helpOpen,
@@ -3300,6 +3429,7 @@ export function useSmartCanvasController() {
     setSelectedItemId,
     selectItem,
     setCanvasPickerOpen,
+    setCanvasPresetPickerOpen,
     setRunHistoryOpen,
     setOperationHistoryOpen,
     setHelpOpen,
@@ -3339,6 +3469,7 @@ export function useSmartCanvasController() {
     zoomBy,
     fitContent,
     focusItem,
+    moveItemToScreenPoint,
     openImage,
     applyEditedImageFiles,
     setImageEditorImage,
@@ -3352,6 +3483,7 @@ export function useSmartCanvasController() {
     runLlmNode,
     runGeneratorNode,
     stopLoopNode,
+    stopRunningNode,
     connectLlmImagesToGenerator,
     connectLlmImagesToLoop,
     selectCanvas,

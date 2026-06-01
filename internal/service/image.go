@@ -276,6 +276,7 @@ type imageStorageRemovalStats struct {
 	previews       int
 	metadataFiles  int
 	referenceFiles int
+	imagePaths     []string
 }
 
 type imageIndexDocument struct {
@@ -377,6 +378,7 @@ func (s *ImageService) CleanupStorage(options ImageStorageCleanupOptions) (Image
 			result.Action = "retention"
 		}
 		result.addRemovalStats(stats)
+		s.removeImageIndexEntries(stats.imagePaths)
 		result.PreservedPublicImages += preserved
 	}
 	if options.MaxImagesPerUser > 0 {
@@ -388,6 +390,7 @@ func (s *ImageService) CleanupStorage(options ImageStorageCleanupOptions) (Image
 			result.Action = "user-limit"
 		}
 		result.addRemovalStats(stats)
+		s.removeImageIndexEntries(stats.imagePaths)
 		result.PreservedPublicImages += preserved
 	}
 	if options.MaxBytes > 0 {
@@ -399,10 +402,8 @@ func (s *ImageService) CleanupStorage(options ImageStorageCleanupOptions) (Image
 			result.Action = "quota"
 		}
 		result.addRemovalStats(stats)
+		s.removeImageIndexEntries(stats.imagePaths)
 		result.PreservedPublicImages += preserved
-	}
-	if result.DeletedImages > 0 {
-		s.resetImageIndex()
 	}
 	summary := s.StorageGovernance()
 	result.RemainingBytes = summary.TotalBytes
@@ -427,6 +428,7 @@ func (s *ImageService) ListImagesPage(baseURL string, options ImageListOptions, 
 	pageSize := normalizedImagePageSize(options.PageSize)
 	cursor, hasCursor := decodeImageListCursor(options.Cursor)
 	entries := s.imageIndexEntries()
+	imageRoot, imageRootErr := filepath.Abs(s.config.ImagesDir())
 	sort.Slice(entries, func(i, j int) bool {
 		left := imageIndexSortUnixNano(entries[i], scope)
 		right := imageIndexSortUnixNano(entries[j], scope)
@@ -439,6 +441,7 @@ func (s *ImageService) ListImagesPage(baseURL string, options ImageListOptions, 
 	nextCursor := ""
 	lastCursor := imageListCursor{}
 	hasMore := false
+	missingIndexPaths := make([]string, 0)
 	for _, entry := range entries {
 		if !imageIndexEntryMatchesScope(entry, scope) || !imageIndexEntryMatchesOptions(entry, options) {
 			continue
@@ -452,6 +455,12 @@ func (s *ImageService) ListImagesPage(baseURL string, options ImageListOptions, 
 				continue
 			}
 		}
+		if imageRootErr == nil {
+			if _, err := s.imageFileRef(imageRoot, entry.Path); err != nil {
+				missingIndexPaths = append(missingIndexPaths, entry.Path)
+				continue
+			}
+		}
 		if len(items) >= pageSize {
 			hasMore = true
 			nextCursor = encodeImageListCursor(lastCursor)
@@ -460,6 +469,7 @@ func (s *ImageService) ListImagesPage(baseURL string, options ImageListOptions, 
 		items = append(items, s.managedImageSummaryItem(baseURL, entry))
 		lastCursor = imageListCursor{SortUnixNano: sortValue, Path: entry.Path}
 	}
+	s.removeImageIndexEntries(missingIndexPaths)
 	groupMap := map[string][]map[string]any{}
 	var order []string
 	for _, item := range items {
@@ -2479,6 +2489,7 @@ func (s *ImageService) removeImageGroup(rel string) (imageStorageRemovalStats, e
 		return stats, err
 	} else if removed {
 		stats.images++
+		stats.imagePaths = append(stats.imagePaths, rel)
 		stats.bytes += bytes
 	}
 	removeEmptyParentDirs(imageRoot, filepath.Dir(imagePath))
@@ -3274,6 +3285,7 @@ func (s *imageStorageRemovalStats) add(next imageStorageRemovalStats) {
 	s.previews += next.previews
 	s.metadataFiles += next.metadataFiles
 	s.referenceFiles += next.referenceFiles
+	s.imagePaths = append(s.imagePaths, next.imagePaths...)
 }
 
 func removeFileWithStats(path string) (bool, int64, error) {

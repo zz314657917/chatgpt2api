@@ -6,6 +6,7 @@ import { Globe2, History, ImagePlus, LoaderCircle, Plus, Trash2, X } from "lucid
 import { toast } from "sonner";
 
 import { ImageComposer } from "@/app/image/components/image-composer";
+import { ImagePromptMarket } from "@/app/image/components/image-prompt-market";
 import { ImageResults, type ImageLightboxItem } from "@/app/image/components/image-results";
 import {
   CUSTOM_IMAGE_ASPECT_RATIO,
@@ -30,6 +31,7 @@ import {
   type ImageSizeSelection,
 } from "@/app/image/image-options";
 import { IMAGE_PROMPT_PRESETS, type ImagePromptPreset } from "@/app/image/image-presets";
+import type { BananaPrompt } from "@/app/image/banana-prompts";
 import { consumeSimilarImageIntent } from "@/app/image/similar-image-intent";
 import { ImageSidebar } from "@/app/image/components/image-sidebar";
 import { ImageLightbox } from "@/components/image-lightbox";
@@ -149,6 +151,7 @@ const DEFAULT_IMAGE_OUTPUT_FORMAT: ImageOutputFormat = "png";
 const REFERENCE_IMAGE_MAX_SIDE = 2048;
 const REFERENCE_IMAGE_JPEG_QUALITY = 0.86;
 const IMAGE_ASSET_PAGE_SIZE = 50;
+const PROMPT_MARKET_REFERENCE_IMAGE_LIMIT = 4;
 const activeConversationQueueIds = new Set<string>();
 const EMPTY_IMAGE_ASPECT_RATIO_SELECT_VALUE = "__empty_aspect_ratio__";
 const MISSING_RECOVERABLE_TASK_ID_ERROR = "页面刷新或任务中断，未找到可恢复的任务 ID";
@@ -1408,6 +1411,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     sharePromptParameters: false,
     shareReferenceImages: false,
   });
+  const [isPromptMarketOpen, setIsPromptMarketOpen] = useState(false);
   const [assets, setAssets] = useState<ManagedImageSummary[]>([]);
   const [assetNextCursor, setAssetNextCursor] = useState("");
   const [hasMoreAssets, setHasMoreAssets] = useState(false);
@@ -2161,6 +2165,67 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
       }
       toast.dismiss(toastId);
       toast.error("已套用提示词，但参考图读取失败");
+    }
+  }, []);
+
+  const handleApplyMarketPrompt = useCallback(async (prompt: BananaPrompt) => {
+    const requestId = promptApplyRequestIdRef.current + 1;
+    promptApplyRequestIdRef.current = requestId;
+    setSelectedConversationId(null);
+    setComposerMode("image");
+    setImagePrompt(prompt.prompt);
+    setImageCount("1");
+    setImageQuality("auto");
+    setImageBackground("auto");
+    setImageModeration("auto");
+    setImagePartialImages("");
+    setImageOutputFormat(DEFAULT_IMAGE_OUTPUT_FORMAT);
+    setImageOutputCompression("");
+    setDefaultImageVisibility("private");
+    setReferenceImages([]);
+    setIsPromptMarketOpen(false);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+    textareaRef.current?.focus();
+
+    const referenceUrls = Array.from(
+      new Set([prompt.preview, ...prompt.referenceImageUrls].map((url) => url.trim()).filter(Boolean)),
+    ).slice(0, PROMPT_MARKET_REFERENCE_IMAGE_LIMIT);
+    if (referenceUrls.length === 0) {
+      toast.success("已套用提示词");
+      return;
+    }
+
+    const toastId = toast.loading("正在读取市场参考图");
+    const referenceImages: StoredReferenceImage[] = [];
+    try {
+      for (let index = 0; index < referenceUrls.length; index += 1) {
+        try {
+          referenceImages.push(await buildReferenceImageFromUrl(referenceUrls[index], index, "market-reference"));
+        } catch {
+          // Keep applying the prompt even when a remote reference image blocks browser access.
+        }
+      }
+      if (promptApplyRequestIdRef.current !== requestId) {
+        toast.dismiss(toastId);
+        return;
+      }
+      if (referenceImages.length > 0) {
+        setReferenceImages(referenceImages);
+        toast.dismiss(toastId);
+        toast.success(`已套用提示词和 ${referenceImages.length} 张参考图`);
+        return;
+      }
+      toast.dismiss(toastId);
+      toast.success("已套用提示词，参考图读取失败");
+    } catch {
+      if (promptApplyRequestIdRef.current !== requestId) {
+        toast.dismiss(toastId);
+        return;
+      }
+      toast.dismiss(toastId);
+      toast.success("已套用提示词，参考图读取失败");
     }
   }, []);
 
@@ -4200,6 +4265,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                 onImagePartialImagesChange={setImagePartialImages}
                 onImageOutputFormatChange={setImageOutputFormat}
                 onImageOutputCompressionChange={setImageOutputCompression}
+                onOpenPromptMarket={() => setIsPromptMarketOpen(true)}
                 onSubmit={handleSubmit}
                 onReferenceImageChange={handleReferenceImageChange}
                 onImageResultDrop={handleImageResultDrop}
@@ -4238,6 +4304,12 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         open={lightboxOpen}
         onOpenChange={setLightboxOpen}
         onIndexChange={setLightboxIndex}
+      />
+
+      <ImagePromptMarket
+        open={isPromptMarketOpen}
+        onOpenChange={setIsPromptMarketOpen}
+        onApplyPrompt={handleApplyMarketPrompt}
       />
 
       {publishImageTarget ? (

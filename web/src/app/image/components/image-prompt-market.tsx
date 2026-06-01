@@ -9,6 +9,7 @@ import {
   BANANA_PROMPTS_SOURCE_URL,
   PROMPT_MARKET_SOURCE_OPTIONS,
   fetchPromptMarketPrompts,
+  isSafePromptMarketPrompt,
   type BananaPrompt,
   type BananaPromptMode,
   type PromptMarketLanguage,
@@ -45,7 +46,6 @@ import {
 import { cn } from "@/lib/utils";
 
 type PromptMarketModeFilter = "all" | BananaPromptMode;
-type PromptMarketNsfwFilter = "safe" | "include" | "only";
 type PromptMarketSourceFilter = "all" | PromptMarketSourceId;
 type PromptMarketFavoriteFilter = "all" | "favorites";
 
@@ -159,7 +159,6 @@ export function ImagePromptMarket({ open, onOpenChange, onApplyPrompt }: ImagePr
   const [promptLanguage, setPromptLanguage] = useState<PromptMarketLanguage>("zh-CN");
   const [category, setCategory] = useState(ALL_CATEGORY_VALUE);
   const [mode, setMode] = useState<PromptMarketModeFilter>("all");
-  const [nsfwFilter, setNsfwFilter] = useState<PromptMarketNsfwFilter>("safe");
   const [isMobileFiltersOpen, setIsMobileFiltersOpen] = useState(false);
   const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE_COUNT);
   const [favoriteBusyIds, setFavoriteBusyIds] = useState<Set<string>>(() => new Set());
@@ -264,7 +263,7 @@ export function ImagePromptMarket({ open, onOpenChange, onApplyPrompt }: ImagePr
   useEffect(() => {
     setVisibleCount(INITIAL_VISIBLE_COUNT);
     scrollAreaRef.current?.scrollTo({ top: 0 });
-  }, [keyword, source, promptLanguage, category, mode, nsfwFilter, favoriteFilter]);
+  }, [keyword, source, promptLanguage, category, mode, favoriteFilter]);
 
   useEffect(() => {
     if (open) {
@@ -274,20 +273,28 @@ export function ImagePromptMarket({ open, onOpenChange, onApplyPrompt }: ImagePr
     setIsMobileFiltersOpen(false);
   }, [open]);
 
-  const favoritePrompts = useMemo(
-    () => favoriteItems.map((item) => promptFavoriteToBananaPrompt(item)),
+  const safeFavoriteItems = useMemo(
+    () => favoriteItems.filter((item) => isSafePromptMarketPrompt(promptFavoriteToBananaPrompt(item))),
     [favoriteItems],
   );
 
-  const favoriteIds = useMemo(() => new Set(favoriteItems.map((item) => promptFavoriteRecordKey(item))), [favoriteItems]);
+  const favoritePrompts = useMemo(
+    () => safeFavoriteItems.map((item) => promptFavoriteToBananaPrompt(item)),
+    [safeFavoriteItems],
+  );
+
+  const favoriteIds = useMemo(
+    () => new Set(safeFavoriteItems.map((item) => promptFavoriteRecordKey(item))),
+    [safeFavoriteItems],
+  );
 
   const favoriteByPromptKey = useMemo(() => {
     const items = new Map<string, PromptFavorite>();
-    favoriteItems.forEach((item) => {
+    safeFavoriteItems.forEach((item) => {
       items.set(promptFavoriteRecordKey(item), item);
     });
     return items;
-  }, [favoriteItems]);
+  }, [safeFavoriteItems]);
 
   const promptPool = favoriteFilter === "favorites" ? favoritePrompts : prompts;
 
@@ -317,10 +324,7 @@ export function ImagePromptMarket({ open, onOpenChange, onApplyPrompt }: ImagePr
 
     return sourceFilteredPrompts.filter((prompt) => {
       const localizedPrompt = getLocalizedPrompt(prompt, promptLanguage);
-      if (nsfwFilter === "safe" && prompt.isNsfw) {
-        return false;
-      }
-      if (nsfwFilter === "only" && !prompt.isNsfw) {
+      if (!isSafePromptMarketPrompt(prompt)) {
         return false;
       }
       if (category !== ALL_CATEGORY_VALUE && localizedPrompt.category !== category) {
@@ -342,7 +346,7 @@ export function ImagePromptMarket({ open, onOpenChange, onApplyPrompt }: ImagePr
         includesKeyword(localizedPrompt.sourceLabel, normalizedKeyword)
       );
     });
-  }, [category, keyword, mode, nsfwFilter, promptLanguage, sourceFilteredPrompts]);
+  }, [category, keyword, mode, promptLanguage, sourceFilteredPrompts]);
 
   const visiblePrompts = filteredPrompts.slice(0, visibleCount);
   const hasMore = visiblePrompts.length < filteredPrompts.length;
@@ -351,8 +355,6 @@ export function ImagePromptMarket({ open, onOpenChange, onApplyPrompt }: ImagePr
   const selectedLanguageLabel = promptLanguage === "zh-CN" ? "" : "English";
   const selectedCategoryLabel = category === ALL_CATEGORY_VALUE ? "" : category;
   const selectedModeLabel = mode === "all" ? "" : mode === "edit" ? "编辑" : "文生图";
-  const selectedNsfwLabel =
-    nsfwFilter === "safe" ? "" : nsfwFilter === "include" ? "包含 NSFW" : "仅 NSFW";
   const selectedFavoriteLabel = favoriteFilter === "favorites" ? "已收藏" : "";
   const activeFilterLabels = [
     selectedFavoriteLabel,
@@ -360,7 +362,6 @@ export function ImagePromptMarket({ open, onOpenChange, onApplyPrompt }: ImagePr
     selectedLanguageLabel,
     selectedCategoryLabel,
     selectedModeLabel,
-    selectedNsfwLabel,
   ].filter(Boolean);
   const activeFilterCount = activeFilterLabels.length;
 
@@ -370,7 +371,6 @@ export function ImagePromptMarket({ open, onOpenChange, onApplyPrompt }: ImagePr
     setPromptLanguage("zh-CN");
     setCategory(ALL_CATEGORY_VALUE);
     setMode("all");
-    setNsfwFilter("safe");
   };
 
   const setFavoriteBusy = (id: string, busy: boolean) => {
@@ -440,7 +440,7 @@ export function ImagePromptMarket({ open, onOpenChange, onApplyPrompt }: ImagePr
         onClick={() => setFavoriteFilter("favorites")}
       >
         <Star className={cn("size-3.5", favoriteFilter === "favorites" && "fill-current")} />
-        {favoriteItems.length > 0 ? `收藏 ${favoriteItems.length}` : "收藏"}
+        {safeFavoriteItems.length > 0 ? `收藏 ${safeFavoriteItems.length}` : "收藏"}
       </button>
     </div>
   );
@@ -506,21 +506,6 @@ export function ImagePromptMarket({ open, onOpenChange, onApplyPrompt }: ImagePr
           </SelectGroup>
         </SelectContent>
       </Select>
-      <Select
-        value={nsfwFilter}
-        onValueChange={(value) => setNsfwFilter(value as PromptMarketNsfwFilter)}
-      >
-        <SelectTrigger className={triggerClassName}>
-          <SelectValue placeholder="NSFW" />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectGroup>
-            <SelectItem value="safe">隐藏 NSFW</SelectItem>
-            <SelectItem value="include">包含 NSFW</SelectItem>
-            <SelectItem value="only">仅 NSFW</SelectItem>
-          </SelectGroup>
-        </SelectContent>
-      </Select>
     </>
   );
 
@@ -561,7 +546,7 @@ export function ImagePromptMarket({ open, onOpenChange, onApplyPrompt }: ImagePr
                     : `已收藏 ${filteredPrompts.length}`
                   : prompts.length > 0
                     ? `${filteredPrompts.length} / ${sourceFilteredPrompts.length}`
-                    : "远程市场"}
+                  : "安全市场"}
               </span>
             </div>
           </div>
@@ -649,7 +634,7 @@ export function ImagePromptMarket({ open, onOpenChange, onApplyPrompt }: ImagePr
               </div>
               {renderFavoriteTabs("w-[168px] shrink-0")}
             </div>
-            <div className="grid gap-2 md:grid-cols-[minmax(180px,1fr)_120px_minmax(160px,1fr)_130px_140px]">
+            <div className="grid gap-2 md:grid-cols-[minmax(180px,1fr)_120px_minmax(160px,1fr)_130px]">
               {renderFilterControls("min-w-0")}
             </div>
           </div>
@@ -690,7 +675,7 @@ export function ImagePromptMarket({ open, onOpenChange, onApplyPrompt }: ImagePr
           ) : visiblePrompts.length === 0 ? (
             <div className="flex h-full min-h-[320px] items-center justify-center text-sm text-[#8e8e93]">
               {favoriteFilter === "favorites"
-                ? favoriteItems.length === 0
+                ? safeFavoriteItems.length === 0
                   ? "还没有收藏提示词"
                   : "没有匹配的收藏提示词"
                 : "没有找到匹配的提示词"}
@@ -731,11 +716,6 @@ export function ImagePromptMarket({ open, onOpenChange, onApplyPrompt }: ImagePr
                           <Badge className="bg-white/18 text-white shadow-sm backdrop-blur">
                             {localizedPrompt.category}
                           </Badge>
-                          {prompt.isNsfw ? (
-                            <Badge className="bg-white/18 text-white shadow-sm backdrop-blur">
-                              NSFW
-                            </Badge>
-                          ) : null}
                           {prompt.referenceImageUrls.length > 0 ? (
                             <Badge className="bg-white/18 text-white shadow-sm backdrop-blur">
                               {prompt.referenceImageUrls.length} 张参考图

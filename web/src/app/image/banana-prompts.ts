@@ -73,7 +73,7 @@ const MARKDOWN_PROMPT_PATTERN =
   /\*{2,}\s*(?:Prompt|提示词)\s*[:：]\s*\*{2,}\s*\n\s*```(?:\w+)?\n([\s\S]*?)\n```/i;
 const IGNORED_MARKET_README_HEADINGS = new Set(["简介", "最新动态", "Menu", "致谢", "Star History"]);
 const NSFW_TEXT_PATTERN =
-  /\b(nsfw|nude|naked|lingerie|erotic|seductive|sexy|cleavage|underwear|panties|bra|bikini|ahegao|explicit|sensual|fetish|nipples?|genitals?|buttocks?|thong|topless)\b|裸|色情|情色|性感|诱惑|内衣|内裤|乳|胸|臀|私处|泳衣|比基尼|情趣|丁字裤|翻白眼|吐舌|妩媚|暧昧/i;
+  /\b(nsfw|mfsw|nude|naked|lingerie|erotic|seductive|sexy|cleavage|underwear|panties|bra|bikini|ahegao|explicit|sensual|fetish|nipples?|genitals?|buttocks?|thong|topless)\b|裸|色情|情色|性感|诱惑|内衣|内裤|乳|胸|臀|私处|泳衣|比基尼|情趣|丁字裤|翻白眼|吐舌|妩媚|暧昧/i;
 
 type AwesomePromptDraft = BananaPrompt & {
   language: PromptMarketLanguage;
@@ -99,7 +99,14 @@ function normalizeReferenceImageUrls(value: unknown) {
 }
 
 function isNsfwPrompt(category: string, title: string, prompt: string) {
-  return category === "NSFW" || NSFW_TEXT_PATTERN.test(`${category}\n${title}\n${prompt}`);
+  return category.trim().toUpperCase() === "NSFW" || NSFW_TEXT_PATTERN.test(`${category}\n${title}\n${prompt}`);
+}
+
+export function isSafePromptMarketPrompt(prompt: BananaPrompt) {
+  const localizedText = Object.values(prompt.localizations || {})
+    .map((item) => `${item?.category || ""}\n${item?.title || ""}\n${item?.prompt || ""}\n${item?.subCategory || ""}`)
+    .join("\n");
+  return !prompt.isNsfw && !NSFW_TEXT_PATTERN.test(`${prompt.category}\n${prompt.title}\n${prompt.prompt}\n${prompt.subCategory || ""}\n${localizedText}`);
 }
 
 function normalizePrompt(item: BananaPromptSourceItem, index: number): BananaPrompt | null {
@@ -136,7 +143,7 @@ function normalizePrompt(item: BananaPromptSourceItem, index: number): BananaPro
     created: typeof item.created === "string" && item.created.trim() ? item.created.trim() : undefined,
     source: "banana-prompt-quicker",
     sourceLabel: "banana-prompt-quicker",
-    isNsfw: category === "NSFW",
+    isNsfw: isNsfwPrompt(category, title, prompt),
   };
 }
 
@@ -338,5 +345,5 @@ export async function fetchPromptMarketPrompts(signal?: AbortSignal) {
     fetchAwesomeGptImage2Prompts(signal),
   ]);
 
-  return [...bananaPrompts, ...awesomePrompts];
+  return [...bananaPrompts, ...awesomePrompts].filter(isSafePromptMarketPrompt);
 }

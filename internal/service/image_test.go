@@ -899,6 +899,40 @@ func TestImageServiceRebuildsImageIndexWhenIndexIsCorrupt(t *testing.T) {
 	}
 }
 
+func TestImageServiceListImagesPagePrunesStaleIndexEntries(t *testing.T) {
+	root := t.TempDir()
+	config := testImageConfig{root: root}
+	existingRel := "2026/04/29/existing.png"
+	missingRel := "2026/04/29/missing.png"
+	for _, rel := range []string{existingRel, missingRel} {
+		path := filepath.Join(config.ImagesDir(), filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("MkdirAll() error = %v", err)
+		}
+		if err := writeTestPNG(path); err != nil {
+			t.Fatalf("writeTestPNG(%s) error = %v", rel, err)
+		}
+	}
+	service := NewImageService(config)
+	service.RecordGeneratedImages([]string{existingRel, missingRel}, "linuxdo:123", "alice", ImageVisibilityPrivate)
+	if err := os.Remove(filepath.Join(config.ImagesDir(), filepath.FromSlash(missingRel))); err != nil {
+		t.Fatalf("remove missing image fixture: %v", err)
+	}
+
+	list := service.ListImagesPage("http://127.0.0.1:8000", ImageListOptions{PageSize: 50}, ImageAccessScope{OwnerID: "linuxdo:123"})
+	items := list["items"].([]map[string]any)
+	if len(items) != 1 || items[0]["path"] != existingRel {
+		t.Fatalf("ListImagesPage() = %#v", list)
+	}
+	data, err := os.ReadFile(filepath.Join(config.ImageMetadataDir(), imageIndexDocumentName))
+	if err != nil {
+		t.Fatalf("read pruned index: %v", err)
+	}
+	if strings.Contains(string(data), missingRel) {
+		t.Fatalf("stale image remained in index = %s", data)
+	}
+}
+
 func TestImageServiceTagsPersistFilterAndDelete(t *testing.T) {
 	root := t.TempDir()
 	config := testImageConfig{root: root}
@@ -1034,6 +1068,13 @@ func TestImageServiceCleanupStorageRetentionRemovesImageGroup(t *testing.T) {
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Fatalf("%s still exists or stat failed unexpectedly: %v", path, err)
 		}
+	}
+	indexData, err := os.ReadFile(filepath.Join(config.ImageMetadataDir(), imageIndexDocumentName))
+	if err != nil {
+		t.Fatalf("read image index: %v", err)
+	}
+	if strings.Contains(string(indexData), rel) {
+		t.Fatalf("deleted image remained in index = %s", indexData)
 	}
 }
 

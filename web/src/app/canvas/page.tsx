@@ -10,6 +10,7 @@ import {
   SmartCanvasOnboardingDialog,
   SmartCanvasOperationHistoryPanel,
   SmartCanvasPickerDialog,
+  SmartCanvasPresetDialog,
   SmartCanvasRunHistoryPanel,
   SmartCanvasShell,
   SmartCanvasTopBar,
@@ -39,13 +40,14 @@ export default function CanvasPage() {
           loading={canvas.loading}
           onCollapsedChange={canvas.setLeftRailCollapsed}
           onSelectCanvas={(id) => void canvas.selectCanvas(id)}
-          onCreateCanvas={() => void canvas.createNewCanvas()}
+          onCreateCanvas={() => canvas.setCanvasPresetPickerOpen(true)}
           onRefresh={() => void canvas.reloadCanvases()}
           onDeleteCanvas={(id) => void canvas.deleteCanvasById(id)}
           onRenameCanvas={(id, name) => void canvas.renameCanvasById(id, name)}
         />
         <div className="relative min-w-0 flex-1">
           <SmartCanvasTopBar
+            canvas={canvas.canvas}
             canvasName={canvas.canvas?.name || "未命名画布"}
             saveState={canvas.saveState}
             saving={canvas.saving}
@@ -62,6 +64,8 @@ export default function CanvasPage() {
             onRunHistoryToggle={() => canvas.setRunHistoryOpen(!canvas.runHistoryOpen)}
             onOperationHistoryToggle={() => canvas.setOperationHistoryOpen(!canvas.operationHistoryOpen)}
             onUndo={canvas.undoCanvas}
+            onFocusNode={canvas.focusItem}
+            onMoveNodeToScreenPoint={canvas.moveItemToScreenPoint}
           />
 
           <SmartCanvasBoard
@@ -71,6 +75,7 @@ export default function CanvasPage() {
             selectedItemIds={canvas.selectedItemIds}
             tool={canvas.tool}
             connectState={canvas.connectState}
+            lightweightMedia={canvas.lightweightCanvasMedia}
             draggingImages={canvas.draggingImages}
             boardRef={canvas.boardRef}
             imageModels={canvas.models.image}
@@ -105,6 +110,7 @@ export default function CanvasPage() {
             onRunGenerator={canvas.runGeneratorNode}
             onRunLlm={canvas.runLlmNode}
             onStopLoop={canvas.stopLoopNode}
+            onStopNode={canvas.stopRunningNode}
             onOpenNodeHelp={canvas.openNodeHelp}
             onConnectLlmImagesToGenerator={canvas.connectLlmImagesToGenerator}
             onConnectLlmImagesToLoop={canvas.connectLlmImagesToLoop}
@@ -212,10 +218,16 @@ export default function CanvasPage() {
         loading={canvas.loading}
         onOpenChange={canvas.setCanvasPickerOpen}
         onSelectCanvas={(id) => void canvas.selectCanvas(id)}
-        onCreateCanvas={() => void canvas.createNewCanvas()}
+        onCreateCanvas={() => canvas.setCanvasPresetPickerOpen(true)}
         onRefresh={() => void canvas.reloadCanvases()}
         onDeleteCanvas={(id) => void canvas.deleteCanvasById(id)}
         onRenameCanvas={(id, name) => void canvas.renameCanvasById(id, name)}
+      />
+
+      <SmartCanvasPresetDialog
+        open={canvas.canvasPresetPickerOpen}
+        onOpenChange={canvas.setCanvasPresetPickerOpen}
+        onCreateCanvas={(presetId) => void canvas.createNewCanvas(presetId)}
       />
     </div>
   );

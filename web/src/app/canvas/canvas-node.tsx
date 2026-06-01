@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import {
   Bot,
   BoxSelect,
@@ -21,6 +21,7 @@ import {
   ImagePlus,
   Images,
   Layers3,
+  ListTree,
   Link2,
   LoaderCircle,
   MoreHorizontal,
@@ -58,6 +59,7 @@ import {
   type SmartCanvasFlowTemplateId,
   type SmartCanvasHelpTopic,
 } from "./canvas-help";
+import { SMART_CANVAS_PRESETS, type SmartCanvasPreset, type SmartCanvasPresetId } from "./canvas-presets";
 import {
   canConnectSmartCanvasNodes,
   canvasImageKey,
@@ -102,6 +104,7 @@ const EMPTY_SMART_CANVAS_NODES: SmartCanvasItem[] = [];
 
 type SmartCanvasNodeSizeMap = Record<string, { w: number; h: number }>;
 type SmartCanvasNodeMenuState = { x: number; y: number; screen: { x: number; y: number }; sourceId?: string };
+type SmartCanvasViewBounds = { left: number; top: number; right: number; bottom: number };
 type SmartCanvasNodeMenuItem = {
   type: Exclude<SmartCanvasItem["type"], "image">;
   label: string;
@@ -141,6 +144,10 @@ const canvasImageQualityOptions = [
   { value: "medium", label: "标准" },
   { value: "high", label: "高品质" },
 ] as const satisfies ReadonlyArray<{ value: "auto" | ImageQuality; label: string }>;
+const imageNodeTileMinWidth = 108;
+const imageNodeTileMinHeight = 82;
+const imageNodeMaxColumns = 6;
+const imageNodeMaxRows = 6;
 
 function nodeInputImagesForCanvas(canvas: SmartCanvasDocument, item: SmartCanvasItem) {
   return expandedCanvasImagesFromItem(canvas, item);
@@ -191,6 +198,23 @@ function canvasImageRatioValue(value?: string) {
     default:
       return canvasImageRatioOptions.some((option) => option.value === normalized) ? normalized : "1:1";
   }
+}
+
+function imageNodeGridLayout(width: number, height: number, imageCount: number): { limit: number; style: CSSProperties } {
+  const contentWidth = Math.max(1, width - 24);
+  const maxColumns = Math.max(1, Math.min(imageNodeMaxColumns, Math.floor(contentWidth / imageNodeTileMinWidth)));
+  const maxRows = Math.max(1, Math.min(imageNodeMaxRows, Math.floor(height / imageNodeTileMinHeight)));
+  const columns = imageCount <= 1 ? 1 : imageCount === 2 ? Math.min(2, maxColumns) : Math.max(2, maxColumns);
+  const capacity = Math.max(1, columns * maxRows);
+  const limit = Math.min(imageCount, capacity);
+  const rows = Math.max(1, Math.min(maxRows, Math.ceil(limit / columns)));
+  return {
+    limit,
+    style: {
+      gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
+      gridTemplateRows: `repeat(${rows}, minmax(0, 1fr))`,
+    },
+  };
 }
 
 const canvasSelectClass = "h-9 rounded-xl border-border bg-background text-xs text-foreground dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200";
@@ -454,6 +478,7 @@ export function SmartCanvasLeftRail({
 }
 
 type SmartCanvasTopBarProps = {
+  canvas: SmartCanvasDocument | null;
   canvasName: string;
   saveState: SmartCanvasSaveState;
   saving: boolean;
@@ -470,9 +495,12 @@ type SmartCanvasTopBarProps = {
   onRunHistoryToggle: () => void;
   onOperationHistoryToggle: () => void;
   onUndo: () => void;
+  onFocusNode: (id: string) => void;
+  onMoveNodeToScreenPoint: (id: string, point: { x: number; y: number }) => void;
 };
 
 export function SmartCanvasTopBar({
+  canvas,
   canvasName,
   saveState,
   saving,
@@ -489,6 +517,8 @@ export function SmartCanvasTopBar({
   onRunHistoryToggle,
   onOperationHistoryToggle,
   onUndo,
+  onFocusNode,
+  onMoveNodeToScreenPoint,
 }: SmartCanvasTopBarProps) {
   return (
     <div className="pointer-events-none absolute left-6 right-6 top-5 z-40 flex items-center justify-between gap-4">
@@ -528,6 +558,11 @@ export function SmartCanvasTopBar({
           </Popover>
         </div>
         <div className={cn("flex shrink-0 items-center gap-2 rounded-full border p-1.5", canvasPanelClass)}>
+          <NodeListPopover
+            canvas={canvas}
+            onFocusNode={onFocusNode}
+            onMoveNodeToScreenPoint={onMoveNodeToScreenPoint}
+          />
           <ToolbarIconButton icon={<History className="size-4" />} label="生成记录" count={runCount} onClick={onRunHistoryToggle} />
           <ToolbarButton icon={<RotateCcw className="size-4" />} label="上一步" onClick={onUndo} disabled={!canUndo} />
           <ToolbarButton icon={saving ? <LoaderCircle className="size-4 animate-spin" /> : <Save className="size-4" />} label={saveStateLabel(saveState)} onClick={onSave} />
@@ -567,6 +602,120 @@ function ToolbarButton({
       {icon}
       {label}
     </button>
+  );
+}
+
+function NodeListPopover({
+  canvas,
+  onFocusNode,
+  onMoveNodeToScreenPoint,
+}: {
+  canvas: SmartCanvasDocument | null;
+  onFocusNode: (id: string) => void;
+  onMoveNodeToScreenPoint: (id: string, point: { x: number; y: number }) => void;
+}) {
+  const nodes = canvas?.nodes || EMPTY_SMART_CANVAS_NODES;
+  const [open, setOpen] = useState(false);
+  const [draggingNodeId, setDraggingNodeId] = useState("");
+
+  useEffect(() => {
+    if (!draggingNodeId) {
+      return;
+    }
+    const handleDragEnd = () => setDraggingNodeId("");
+    window.addEventListener("dragend", handleDragEnd, true);
+    return () => window.removeEventListener("dragend", handleDragEnd, true);
+  }, [draggingNodeId]);
+
+  return (
+    <>
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger asChild>
+          <button
+            type="button"
+            className={cn(
+              "relative flex size-9 items-center justify-center rounded-full border transition",
+              "border-border bg-background/70 text-foreground hover:bg-accent dark:border-slate-700 dark:bg-slate-950/35 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white",
+            )}
+            title="节点列表"
+            aria-label="节点列表"
+          >
+            <ListTree className="size-4" />
+            {nodes.length > 0 ? (
+              <span className="absolute -right-1 -top-1 min-w-4 rounded-full bg-sky-500 px-1 text-[10px] font-black leading-4 text-white">
+                {nodes.length}
+              </span>
+            ) : null}
+          </button>
+        </PopoverTrigger>
+        <PopoverContent align="start" sideOffset={8} className={cn("w-80 rounded-2xl border p-2", canvasPanelClass)}>
+          <div className="flex items-center justify-between gap-3 px-2 pb-2">
+            <div>
+              <div className="text-xs font-black uppercase tracking-[0.14em] text-foreground dark:text-zinc-100">节点列表</div>
+              <div className={cn("mt-0.5 text-[11px] font-semibold", canvasSubtleTextClass)}>拖到画布可移动节点</div>
+            </div>
+            <Badge variant="secondary" className="rounded-full px-2 py-0.5 text-[11px]">
+              {nodes.length}/100
+            </Badge>
+          </div>
+          <div className="max-h-[360px] space-y-1 overflow-auto pr-1">
+            {nodes.length > 0 ? nodes.map((node) => (
+              <button
+                key={node.id}
+                type="button"
+                draggable
+                className={cn(
+                  "flex w-full items-center gap-2 rounded-xl border px-2.5 py-2 text-left transition",
+                  "border-border bg-background/80 hover:bg-accent dark:border-slate-800 dark:bg-slate-950/45 dark:hover:bg-slate-900",
+                  draggingNodeId === node.id ? "ring-2 ring-sky-400" : "",
+                )}
+                onClick={() => {
+                  onFocusNode(node.id);
+                  setOpen(false);
+                }}
+                onDragStart={(event) => {
+                  setDraggingNodeId(node.id);
+                  event.dataTransfer.effectAllowed = "move";
+                  event.dataTransfer.setData("application/x-smart-canvas-node-id", node.id);
+                  event.dataTransfer.setData("text/plain", nodeTitle(node));
+                }}
+                title="点击聚焦，拖到画布移动"
+              >
+                <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-sky-500/10 text-sky-700 dark:bg-sky-400/10 dark:text-sky-200">
+                  <ItemTypeIcon type={node.type} />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-xs font-bold text-foreground dark:text-zinc-100">{nodeTitle(node)}</span>
+                  <span className={cn("mt-0.5 block truncate text-[11px]", canvasSubtleTextClass)}>
+                    {nodeTypeLabel(node.type)} · x {Math.round(Number(node.position?.x || 0))}, y {Math.round(Number(node.position?.y || 0))}
+                  </span>
+                </span>
+              </button>
+            )) : (
+              <div className={cn("rounded-xl border border-dashed p-4 text-center text-xs", canvasDashedClass)}>当前画布暂无节点</div>
+            )}
+          </div>
+        </PopoverContent>
+      </Popover>
+      {draggingNodeId ? (
+        <div
+          className="pointer-events-auto fixed inset-0 z-[70]"
+          onDragOver={(event) => {
+            event.preventDefault();
+            event.dataTransfer.dropEffect = "move";
+          }}
+          onDrop={(event) => {
+            event.preventDefault();
+            const nodeId = event.dataTransfer.getData("application/x-smart-canvas-node-id") || draggingNodeId;
+            if (nodeId) {
+              onMoveNodeToScreenPoint(nodeId, { x: event.clientX, y: event.clientY });
+              setOpen(false);
+            }
+            setDraggingNodeId("");
+          }}
+        />
+      ) : null}
+    </>
   );
 }
 
@@ -857,6 +1006,123 @@ export function SmartCanvasPickerDialog({
   );
 }
 
+export function SmartCanvasPresetDialog({
+  open,
+  onOpenChange,
+  onCreateCanvas,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onCreateCanvas: (presetId: SmartCanvasPresetId) => void;
+}) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className={cn("flex h-[min(88dvh,720px)] w-[min(96vw,980px)] max-w-none flex-col overflow-hidden rounded-[28px] border p-0", canvasPanelClass)}>
+        <div className="border-b border-border px-5 pt-5 pr-12 pb-4 dark:border-slate-800 sm:px-6 sm:pt-6 sm:pr-14">
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0">
+              <DialogTitle className="text-xl font-black leading-tight sm:text-2xl">新建画布</DialogTitle>
+              <DialogDescription className={cn("mt-2 text-sm leading-6", canvasSubtleTextClass)}>
+                选择一个起始结构，创建后仍可自由添加、删除和连接节点。
+              </DialogDescription>
+            </div>
+            <span className={cn("shrink-0 rounded-full border px-3 py-1 text-xs font-black", canvasDashedClass)}>
+              {SMART_CANVAS_PRESETS.length} 个预设
+            </span>
+          </div>
+        </div>
+
+        <div className="min-h-0 flex-1 overflow-y-auto bg-background/65 px-4 py-4 dark:bg-slate-950/25 sm:px-6">
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+            {SMART_CANVAS_PRESETS.map((preset) => (
+              <button
+                key={preset.id}
+                type="button"
+                className="group flex min-h-[230px] flex-col overflow-hidden rounded-2xl border border-border bg-card text-left shadow-[0_4px_6px_rgba(0,0,0,0.06)] transition hover:-translate-y-0.5 hover:border-sky-400 hover:shadow-[0_18px_38px_rgba(14,165,233,0.16)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 dark:border-slate-800 dark:bg-slate-900/80 dark:hover:border-sky-400/80"
+                onClick={() => onCreateCanvas(preset.id)}
+              >
+                <div className="flex min-h-[94px] items-center justify-center border-b border-border bg-muted/35 px-4 py-4 dark:border-slate-800 dark:bg-slate-950/35">
+                  <PresetFlowPreview preset={preset} />
+                </div>
+                <div className="flex flex-1 flex-col p-4">
+                  <div className="flex items-start gap-3">
+                    <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-sky-500/10 text-sky-700 transition group-hover:bg-sky-500/15 dark:text-sky-200">
+                      <PresetIcon presetId={preset.id} />
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <h3 className="truncate text-base font-black text-foreground dark:text-slate-100">{preset.title}</h3>
+                      <p className={cn("mt-1 text-xs font-semibold", canvasAccentTextClass)}>{preset.summary}</p>
+                    </div>
+                  </div>
+                  <p className={cn("mt-3 line-clamp-2 text-sm leading-6", canvasSubtleTextClass)}>{preset.description}</p>
+                  <div className="mt-auto flex flex-wrap gap-1.5 pt-4">
+                    {preset.tags.map((tag) => (
+                      <span
+                        key={tag}
+                        className="rounded-full bg-muted px-2.5 py-1 text-[11px] font-bold text-muted-foreground dark:bg-slate-800 dark:text-slate-300"
+                      >
+                        {tag}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function PresetIcon({ presetId }: { presetId: SmartCanvasPresetId }) {
+  if (presetId === "blank") {
+    return <Grid2X2 className="size-4" />;
+  }
+  if (presetId === "image-to-image") {
+    return <Images className="size-4" />;
+  }
+  if (presetId === "ai-prompt") {
+    return <Bot className="size-4" />;
+  }
+  if (presetId === "batch-variants") {
+    return <Repeat2 className="size-4" />;
+  }
+  return <WandSparkles className="size-4" />;
+}
+
+function PresetFlowPreview({ preset }: { preset: SmartCanvasPreset }) {
+  if (preset.nodeTypes.length === 0) {
+    return (
+      <div className="grid h-16 w-full grid-cols-4 gap-2 opacity-70">
+        {Array.from({ length: 8 }).map((_, index) => (
+          <span key={index} className="rounded-lg border border-dashed border-border bg-background/80 dark:border-slate-700 dark:bg-slate-900/70" />
+        ))}
+      </div>
+    );
+  }
+  return (
+    <div className="flex w-full items-center justify-center gap-2">
+      {preset.nodeTypes.map((type, index) => (
+        <FragmentWithConnector key={`${preset.id}-${type}-${index}`} showConnector={index < preset.nodeTypes.length - 1}>
+          <span className="flex size-11 items-center justify-center rounded-xl border border-border bg-background text-sky-700 shadow-sm dark:border-slate-700 dark:bg-slate-900 dark:text-sky-200">
+            <ItemTypeIcon type={type} />
+          </span>
+        </FragmentWithConnector>
+      ))}
+    </div>
+  );
+}
+
+function FragmentWithConnector({ children, showConnector }: { children: ReactNode; showConnector: boolean }) {
+  return (
+    <>
+      {children}
+      {showConnector ? <span className="h-px w-5 shrink-0 bg-border dark:bg-slate-700" /> : null}
+    </>
+  );
+}
+
 type SmartCanvasBoardProps = {
   canvas: SmartCanvasDocument | null;
   viewport: SmartCanvasViewport;
@@ -864,6 +1130,7 @@ type SmartCanvasBoardProps = {
   selectedItemIds: string[];
   tool: SmartCanvasTool;
   connectState: SmartCanvasConnectState;
+  lightweightMedia: boolean;
   draggingImages: boolean;
   boardRef: React.RefObject<HTMLDivElement | null>;
   imageModels: CanvasModelOption[];
@@ -893,6 +1160,7 @@ type SmartCanvasBoardProps = {
   onRunGenerator: (id: string) => void;
   onRunLlm: (id: string) => void;
   onStopLoop: (id: string) => void;
+  onStopNode: (id: string) => void;
   onOpenNodeHelp: (nodeType: SmartCanvasItemType) => void;
   onConnectLlmImagesToGenerator: (generatorId: string) => void;
   onConnectLlmImagesToLoop: (loopId: string) => void;
@@ -915,6 +1183,7 @@ export function SmartCanvasBoard({
   selectedItemIds,
   tool,
   connectState,
+  lightweightMedia,
   draggingImages,
   boardRef,
   imageModels,
@@ -944,6 +1213,7 @@ export function SmartCanvasBoard({
   onRunGenerator,
   onRunLlm,
   onStopLoop,
+  onStopNode,
   onOpenNodeHelp,
   onConnectLlmImagesToGenerator,
   onConnectLlmImagesToLoop,
@@ -1072,6 +1342,25 @@ export function SmartCanvasBoard({
         pointer: connectState.pointer,
       }
     : null;
+  const viewBounds = useMemo(() => {
+    const rect = boardRef.current?.getBoundingClientRect();
+    if (!rect) {
+      return null;
+    }
+    const margin = 640 / Math.max(0.25, viewport.zoom || 1);
+    return {
+      left: (-viewport.x / viewport.zoom) - margin,
+      top: (-viewport.y / viewport.zoom) - margin,
+      right: ((rect.width - viewport.x) / viewport.zoom) + margin,
+      bottom: ((rect.height - viewport.y) / viewport.zoom) + margin,
+    };
+  }, [boardRef, viewport]);
+  const renderNodes = useMemo(() => {
+    const nodes = canvas?.nodes || EMPTY_SMART_CANVAS_NODES;
+    return nodes.filter((item) => isNodeInViewBounds(item, nodeSizes, viewBounds) || selectedItemIds.includes(item.id) || item.id === selectedItemId);
+  }, [canvas?.nodes, nodeSizes, selectedItemId, selectedItemIds, viewBounds]);
+  const renderNodeIds = useMemo(() => new Set(renderNodes.map((item) => item.id)), [renderNodes]);
+  const renderEdges = useMemo(() => (canvas?.edges || []).filter((edge) => renderNodeIds.has(edge.source) || renderNodeIds.has(edge.target)), [canvas?.edges, renderNodeIds]);
 
   return (
     <section className="relative h-full min-h-0 flex-1 overflow-hidden bg-[#eef4fb] dark:bg-[#050505]">
@@ -1123,29 +1412,30 @@ export function SmartCanvasBoard({
                 </feMerge>
               </filter>
             </defs>
-            {canvas?.edges.map((edge) => (
+            {renderEdges.map((edge) => (
               <SmartCanvasEdgePath
                 key={edge.id}
                 edge={edge}
-                nodes={canvas.nodes}
+                nodes={canvas?.nodes || EMPTY_SMART_CANVAS_NODES}
                 nodeSizes={nodeSizes}
                 selected={selectedItemIds.includes(edge.source) || selectedItemIds.includes(edge.target) || edge.source === selectedItemId || edge.target === selectedItemId}
               />
             ))}
             {previewEdge ? <SmartCanvasPreviewEdge sourceId={previewEdge.source} pointer={previewEdge.pointer} nodes={canvas?.nodes || []} nodeSizes={nodeSizes} /> : null}
           </svg>
-          {canvas?.edges.map((edge) => (
-            <EdgeDeleteButton key={`${edge.id}-delete`} edge={edge} nodes={canvas.nodes} nodeSizes={nodeSizes} onDelete={onDeleteEdge} />
+          {renderEdges.map((edge) => (
+            <EdgeDeleteButton key={`${edge.id}-delete`} edge={edge} nodes={canvas?.nodes || EMPTY_SMART_CANVAS_NODES} nodeSizes={nodeSizes} onDelete={onDeleteEdge} />
           ))}
-          {canvas?.nodes.map((item) => (
+          {renderNodes.map((item) => (
             <SmartCanvasNode
               key={item.id}
-              canvas={canvas}
+              canvas={canvas as SmartCanvasDocument}
               item={item}
               selected={item.id === selectedItemId || selectedItemIds.includes(item.id)}
               imageModels={imageModels}
               textModels={textModels}
               running={running}
+              lightweightMedia={lightweightMedia}
               mentionOpen={mentionOpen && item.id === selectedItemId}
               mentionItems={mentionItems}
               onPointerDown={(event) => onItemPointerDown(event, item)}
@@ -1157,6 +1447,7 @@ export function SmartCanvasBoard({
               onRunGenerator={() => onRunGenerator(item.id)}
               onRunLlm={() => onRunLlm(item.id)}
               onStopLoop={() => onStopLoop(item.id)}
+              onStopNode={() => onStopNode(item.id)}
               onOpenNodeHelp={() => onOpenNodeHelp(item.type)}
               onConnectLlmImagesToGenerator={() => onConnectLlmImagesToGenerator(item.id)}
               onConnectLlmImagesToLoop={() => onConnectLlmImagesToLoop(item.id)}
@@ -1671,6 +1962,16 @@ function stopNodeInteraction(event: ReactPointerEvent<HTMLElement>) {
   event.stopPropagation();
 }
 
+function isNodeInViewBounds(item: SmartCanvasItem, nodeSizes: SmartCanvasNodeSizeMap, bounds: SmartCanvasViewBounds | null) {
+  if (!bounds) {
+    return true;
+  }
+  const size = nodeSizes[item.id] || NODE_SIZE[item.type];
+  const x = Number(item.position?.x || 0);
+  const y = Number(item.position?.y || 0);
+  return x + size.w >= bounds.left && x <= bounds.right && y + size.h >= bounds.top && y <= bounds.bottom;
+}
+
 function SmartCanvasEdgePath({
   edge,
   nodes,
@@ -1744,6 +2045,7 @@ type SmartCanvasNodeProps = {
   imageModels: CanvasModelOption[];
   textModels: CanvasModelOption[];
   running: boolean;
+  lightweightMedia: boolean;
   mentionOpen: boolean;
   mentionItems: CanvasImageRef[];
   onPointerDown: (event: ReactPointerEvent<HTMLDivElement>) => void;
@@ -1755,6 +2057,7 @@ type SmartCanvasNodeProps = {
   onRunGenerator: () => void;
   onRunLlm: () => void;
   onStopLoop: () => void;
+  onStopNode: () => void;
   onOpenNodeHelp: () => void;
   onConnectLlmImagesToGenerator: () => void;
   onConnectLlmImagesToLoop: () => void;
@@ -1775,6 +2078,7 @@ export const SmartCanvasNode = memo(function SmartCanvasNode({
   imageModels,
   textModels,
   running,
+  lightweightMedia,
   mentionOpen,
   mentionItems,
   onPointerDown,
@@ -1786,6 +2090,7 @@ export const SmartCanvasNode = memo(function SmartCanvasNode({
   onRunGenerator,
   onRunLlm,
   onStopLoop,
+  onStopNode,
   onOpenNodeHelp,
   onConnectLlmImagesToGenerator,
   onConnectLlmImagesToLoop,
@@ -1867,13 +2172,16 @@ export const SmartCanvasNode = memo(function SmartCanvasNode({
             item={item}
             onOpenImage={onOpenImage}
             onDeleteImage={onDeleteImage}
+            width={width}
             height={Math.max(100, minHeight - 88)}
+            lightweight={lightweightMedia}
           />
           <ResizeHandle onPointerDown={onResizePointerDown} />
         </>
       ) : item.type === "prompt" ? (
         <PromptNodeBody
           item={item}
+          lightweight={lightweightMedia}
           mentionOpen={mentionOpen}
           mentionItems={mentionItems}
           onUpdateData={onUpdateData}
@@ -1886,6 +2194,7 @@ export const SmartCanvasNode = memo(function SmartCanvasNode({
             canvas={canvas}
             item={item}
             onOpenImage={onOpenImage}
+            lightweight={lightweightMedia}
           />
           <ResizeHandle onPointerDown={onResizePointerDown} />
         </>
@@ -1895,13 +2204,16 @@ export const SmartCanvasNode = memo(function SmartCanvasNode({
           item={item}
           models={textModels}
           running={running}
+          lightweight={lightweightMedia}
           onUpdateData={onUpdateData}
           onRunLlm={onRunLlm}
+          onStopNode={onStopNode}
         />
       ) : item.type === "loop" ? (
         <LoopNodeBody
           canvas={canvas}
           item={item}
+          lightweight={lightweightMedia}
           onConnectLlmImagesToLoop={onConnectLlmImagesToLoop}
           onStopLoop={onStopLoop}
           onUpdateData={onUpdateData}
@@ -1914,12 +2226,14 @@ export const SmartCanvasNode = memo(function SmartCanvasNode({
           running={running}
           onUpdateData={onUpdateData}
           onRunGenerator={onRunGenerator}
+          onStopNode={onStopNode}
           onConnectLlmImagesToGenerator={onConnectLlmImagesToGenerator}
           onOpenImage={onOpenImage}
           onDeleteDirectImage={onDeleteImage}
+          lightweightMedia={lightweightMedia}
         />
       ) : (
-        <OutputNodeBody item={item} onOpenImage={onOpenImage} onDeleteImage={onDeleteImage} />
+        <OutputNodeBody item={item} onOpenImage={onOpenImage} onDeleteImage={onDeleteImage} onStopNode={onStopNode} lightweight={lightweightMedia} />
       )}
     </div>
   );
@@ -2025,19 +2339,35 @@ function ImageNodeBody({
   item,
   onOpenImage,
   onDeleteImage,
+  width,
   height,
+  lightweight,
 }: {
   item: SmartCanvasItem;
   onOpenImage: (image: CanvasImageRef) => void;
   onDeleteImage: (image: CanvasImageRef) => void;
+  width: number;
   height: number;
+  lightweight: boolean;
 }) {
   const images = item.data?.images || [];
+  const [showAllImages, setShowAllImages] = useState(false);
+  const imageGrid = imageNodeGridLayout(width, height, images.length);
   return (
     <div className="space-y-3 p-3 pb-4">
       {images.length > 0 ? (
         <div style={{ height }}>
-          <CanvasImageStrip images={images} limit={4} onOpen={onOpenImage} onDelete={onDeleteImage} className="h-full grid-cols-2" large />
+          <CanvasImageStrip
+            images={images}
+            limit={imageGrid.limit}
+            onOpen={onOpenImage}
+            onOpenAll={() => setShowAllImages(true)}
+            onDelete={onDeleteImage}
+            className="h-full"
+            large
+            lightweight={lightweight}
+            style={imageGrid.style}
+          />
         </div>
       ) : (
         <div className={cn("flex flex-col items-center justify-center rounded-xl border", canvasDashedClass)} style={{ height }}>
@@ -2048,6 +2378,18 @@ function ImageNodeBody({
       <div className={cn("min-w-0 truncate pr-8 text-xs", canvasLabelClass)} title={images[0]?.name || item.name || `${images.length} 张图片`}>
         {images[0]?.name || item.name || `${images.length} 张图片`}
       </div>
+      <Dialog open={showAllImages} onOpenChange={setShowAllImages}>
+        <DialogContent className={cn("w-[min(92vw,780px)] max-w-none rounded-2xl p-0", canvasPanelClass)}>
+          <DialogTitle className="sr-only">全部图片</DialogTitle>
+          <DialogDescription className="sr-only">查看当前 Image 节点中的全部图片。</DialogDescription>
+          <div className="border-b border-border px-4 py-3 text-sm font-black dark:border-slate-800">
+            Image 图片
+          </div>
+          <div className="max-h-[68vh] overflow-auto p-4">
+            <CanvasImageStrip images={images} onOpen={onOpenImage} onDelete={onDeleteImage} className="grid-cols-2 sm:grid-cols-3 md:grid-cols-4" />
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -2071,10 +2413,12 @@ function GroupNodeBody({
   canvas,
   item,
   onOpenImage,
+  lightweight,
 }: {
   canvas: SmartCanvasDocument;
   item: SmartCanvasItem;
   onOpenImage: (image: CanvasImageRef) => void;
+  lightweight: boolean;
 }) {
   const members = groupMemberItems(canvas, item);
   const counts = smartCanvasGroupCounts(canvas, item);
@@ -2107,7 +2451,7 @@ function GroupNodeBody({
         <div className="mt-2 leading-5">把节点拖进组框会自动加入；连接到 API生成、AI 提示词或循环时，会展开组内图片和文本。</div>
       </div>
 
-      {images.length > 0 ? <CanvasImageStrip images={images} limit={4} onOpen={onOpenImage} className="grid-cols-4" /> : null}
+      {images.length > 0 ? <CanvasImageStrip images={images} limit={4} onOpen={onOpenImage} className="grid-cols-4" lightweight={lightweight} /> : null}
 
       {prompts.length > 0 ? (
         <div className="space-y-1">
@@ -2126,6 +2470,7 @@ function GroupNodeBody({
 
 function PromptNodeBody({
   item,
+  lightweight,
   mentionOpen,
   mentionItems,
   onUpdateData,
@@ -2133,6 +2478,7 @@ function PromptNodeBody({
   onAddMention,
 }: {
   item: SmartCanvasItem;
+  lightweight: boolean;
   mentionOpen: boolean;
   mentionItems: CanvasImageRef[];
   onUpdateData: (patch: Partial<SmartCanvasItem["data"]>) => void;
@@ -2154,7 +2500,7 @@ function PromptNodeBody({
         </Button>
         <span className={cn("text-[11px] font-semibold", canvasAccentTextClass)}>{(item.data?.prompt || "").length} / 20,000</span>
       </div>
-      {inputImages.length > 0 ? <CanvasImageStrip images={inputImages} limit={4} className="mt-2 grid-cols-4" /> : null}
+      {inputImages.length > 0 ? <CanvasImageStrip images={inputImages} limit={4} className="mt-2 grid-cols-4" lightweight={lightweight} /> : null}
       {mentionOpen ? (
         <MentionPicker images={mentionItems} onAdd={onAddMention} />
       ) : null}
@@ -2167,15 +2513,19 @@ function LlmNodeBody({
   item,
   models,
   running,
+  lightweight,
   onUpdateData,
   onRunLlm,
+  onStopNode,
 }: {
   canvas: SmartCanvasDocument;
   item: SmartCanvasItem;
   models: CanvasModelOption[];
   running: boolean;
+  lightweight: boolean;
   onUpdateData: (patch: Partial<SmartCanvasItem["data"]>) => void;
   onRunLlm: () => void;
+  onStopNode: () => void;
 }) {
   const upstream = incomingItems(canvas, item.id);
   const upstreamTexts = upstream
@@ -2227,7 +2577,7 @@ function LlmNodeBody({
       <div>
         <div className={cn("mb-1 text-[11px] font-black uppercase tracking-[0.14em]", canvasLabelClass)}>Images</div>
         {upstreamImages.length > 0 ? (
-          <CanvasImageStrip images={upstreamImages} limit={4} className="grid-cols-5" />
+          <CanvasImageStrip images={upstreamImages} limit={4} className="grid-cols-5" lightweight={lightweight} />
         ) : (
           <div className={cn("rounded-xl border px-3 py-3 text-xs", canvasDashedClass)}>可连接图片节点，让 AI 先看图再输出提示词</div>
         )}
@@ -2258,10 +2608,22 @@ function LlmNodeBody({
         <div className={cn("mb-1 text-[11px] font-black uppercase tracking-[0.14em]", canvasLabelClass)}>Output</div>
         <div className={cn("min-h-24 rounded-xl border p-3 text-xs leading-relaxed", outputText ? "border-border bg-background/70 text-foreground dark:border-slate-700 dark:bg-slate-950/45 dark:text-slate-100" : canvasDashedClass)}>
           {nodeRunning ? (
-            <span className="inline-flex items-center gap-2">
-              <LoaderCircle className="size-4 animate-spin" />
-              运行中
-            </span>
+            <div className="flex items-center justify-between gap-2">
+              <span className="inline-flex min-w-0 items-center gap-2">
+                <LoaderCircle className="size-4 shrink-0 animate-spin" />
+                <span className="truncate">运行中</span>
+              </span>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="h-7 shrink-0 rounded-lg border-rose-300/70 bg-white/80 px-2 text-xs font-black text-rose-600 hover:bg-rose-50 dark:border-rose-400/30 dark:bg-slate-950/50 dark:text-rose-100"
+                onClick={onStopNode}
+              >
+                <X className="mr-1 size-3.5" />
+                中断
+              </Button>
+            </div>
           ) : outputText ? (
             <div className="line-clamp-5 whitespace-pre-wrap break-words">{outputText}</div>
           ) : (
@@ -2271,15 +2633,27 @@ function LlmNodeBody({
       </div>
 
       {item.data?.error ? <div className="rounded-lg bg-rose-500/10 px-2 py-1.5 text-xs text-rose-600 dark:text-rose-200">{item.data.error}</div> : null}
-      <Button
-        type="button"
-        className="h-10 w-full rounded-xl bg-primary font-bold text-primary-foreground hover:bg-primary/90 dark:bg-slate-100 dark:text-slate-950 dark:hover:bg-white"
-        disabled={running || nodeRunning || !hasInput}
-        onClick={onRunLlm}
-      >
-        {running || nodeRunning ? <LoaderCircle className="size-4 animate-spin" /> : <Bot className="size-4" />}
-        生成提示词
-      </Button>
+      {nodeRunning ? (
+        <Button
+          type="button"
+          variant="outline"
+          className="h-10 w-full rounded-xl border-rose-300/70 font-bold text-rose-600 hover:bg-rose-50 dark:border-rose-400/30 dark:text-rose-100 dark:hover:bg-rose-500/10"
+          onClick={onStopNode}
+        >
+          <X className="size-4" />
+          中断生成提示词
+        </Button>
+      ) : (
+        <Button
+          type="button"
+          className="h-10 w-full rounded-xl bg-primary font-bold text-primary-foreground hover:bg-primary/90 dark:bg-slate-100 dark:text-slate-950 dark:hover:bg-white"
+          disabled={running || !hasInput}
+          onClick={onRunLlm}
+        >
+          {running ? <LoaderCircle className="size-4 animate-spin" /> : <Bot className="size-4" />}
+          生成提示词
+        </Button>
+      )}
     </div>
   );
 }
@@ -2298,12 +2672,14 @@ function loopPromptPreviewForCanvas(canvas: SmartCanvasDocument, loop: SmartCanv
 function LoopNodeBody({
   canvas,
   item,
+  lightweight,
   onConnectLlmImagesToLoop,
   onStopLoop,
   onUpdateData,
 }: {
   canvas: SmartCanvasDocument;
   item: SmartCanvasItem;
+  lightweight: boolean;
   onConnectLlmImagesToLoop: () => void;
   onStopLoop: () => void;
   onUpdateData: (patch: Partial<SmartCanvasItem["data"]>) => void;
@@ -2389,7 +2765,7 @@ function LoopNodeBody({
         </div>
       </div>
 
-      {inputImages.length > 0 ? <CanvasImageStrip images={inputImages} limit={4} className="grid-cols-5" /> : null}
+      {inputImages.length > 0 ? <CanvasImageStrip images={inputImages} limit={4} className="grid-cols-5" lightweight={lightweight} /> : null}
       {missingLlmReferenceImages.length > 0 ? (
         <div className="rounded-xl border border-amber-400/35 bg-amber-400/10 px-3 py-2 text-xs text-amber-800 dark:border-amber-300/25 dark:bg-amber-300/10 dark:text-amber-100">
           <div className="font-semibold">上游引用了 {llmReferenceImageCountLabel}，是否点击连线这些图片？</div>
@@ -2428,7 +2804,7 @@ function LoopNodeBody({
         </div>
       ) : null}
 
-      {outputImages.length > 0 ? <CanvasImageStrip images={outputImages} limit={4} className="grid-cols-4" /> : null}
+      {outputImages.length > 0 ? <CanvasImageStrip images={outputImages} limit={4} className="grid-cols-4" lightweight={lightweight} /> : null}
       {item.data?.error ? <div className="rounded-lg bg-rose-500/10 px-2 py-1.5 text-xs text-rose-600 dark:text-rose-200">{item.data.error}</div> : null}
     </div>
   );
@@ -2439,8 +2815,10 @@ function GeneratorNodeBody({
   item,
   models,
   running,
+  lightweightMedia,
   onUpdateData,
   onRunGenerator,
+  onStopNode,
   onConnectLlmImagesToGenerator,
   onOpenImage,
   onDeleteDirectImage,
@@ -2449,8 +2827,10 @@ function GeneratorNodeBody({
   item: SmartCanvasItem;
   models: CanvasModelOption[];
   running: boolean;
+  lightweightMedia: boolean;
   onUpdateData: (patch: Partial<SmartCanvasItem["data"]>) => void;
   onRunGenerator: () => void;
+  onStopNode: () => void;
   onConnectLlmImagesToGenerator: () => void;
   onOpenImage: (image: CanvasImageRef) => void;
   onDeleteDirectImage: (image: CanvasImageRef) => void;
@@ -2541,6 +2921,7 @@ function GeneratorNodeBody({
               }
             }}
             className="grid-cols-5"
+            lightweight={lightweightMedia}
           />
         ) : (
           <div className={cn("rounded-xl border px-3 py-3 text-xs", canvasDashedClass)}>连接图片节点后自动作为图生图输入</div>
@@ -2651,22 +3032,46 @@ function GeneratorNodeBody({
           </SelectContent>
         </Select>
       </div>
-      {outputImages.length > 0 ? <CanvasImageStrip images={outputImages} limit={3} onOpen={onOpenImage} className="grid-cols-3" /> : null}
+      {outputImages.length > 0 ? <CanvasImageStrip images={outputImages} limit={3} onOpen={onOpenImage} className="grid-cols-3" lightweight={lightweightMedia} /> : null}
       {item.data?.error ? <div className="rounded-lg bg-rose-500/10 px-2 py-1.5 text-xs text-rose-200">{item.data.error}</div> : null}
-      <Button
-        type="button"
-        className="h-10 w-full rounded-xl bg-primary font-bold text-primary-foreground hover:bg-primary/90 dark:bg-slate-100 dark:text-slate-950 dark:hover:bg-white"
-        disabled={running || nodeRunning || !mergedPromptPreview}
-        onClick={onRunGenerator}
-      >
-        {running || nodeRunning ? <LoaderCircle className="size-4 animate-spin" /> : <Zap className="size-4" />}
-        API生成
-      </Button>
+      {nodeRunning ? (
+        <Button
+          type="button"
+          variant="outline"
+          className="h-10 w-full rounded-xl border-rose-300/70 font-bold text-rose-600 hover:bg-rose-50 dark:border-rose-400/30 dark:text-rose-100 dark:hover:bg-rose-500/10"
+          onClick={onStopNode}
+        >
+          <X className="size-4" />
+          中断 API生成
+        </Button>
+      ) : (
+        <Button
+          type="button"
+          className="h-10 w-full rounded-xl bg-primary font-bold text-primary-foreground hover:bg-primary/90 dark:bg-slate-100 dark:text-slate-950 dark:hover:bg-white"
+          disabled={running || !mergedPromptPreview}
+          onClick={onRunGenerator}
+        >
+          {running ? <LoaderCircle className="size-4 animate-spin" /> : <Zap className="size-4" />}
+          API生成
+        </Button>
+      )}
     </div>
   );
 }
 
-function OutputNodeBody({ item, onOpenImage, onDeleteImage }: { item: SmartCanvasItem; onOpenImage: (image: CanvasImageRef) => void; onDeleteImage: (image: CanvasImageRef) => void }) {
+function OutputNodeBody({
+  item,
+  onOpenImage,
+  onDeleteImage,
+  onStopNode,
+  lightweight,
+}: {
+  item: SmartCanvasItem;
+  onOpenImage: (image: CanvasImageRef) => void;
+  onDeleteImage: (image: CanvasImageRef) => void;
+  onStopNode: () => void;
+  lightweight: boolean;
+}) {
   const images = item.data?.output?.images || item.data?.images || [];
   const loading = item.data?.status === "running" || item.data?.status === "queued";
   const loopRaw = item.data?.output?.raw?.mode === "loop" ? item.data.output.raw : null;
@@ -2681,11 +3086,12 @@ function OutputNodeBody({ item, onOpenImage, onDeleteImage }: { item: SmartCanva
           status={item.data?.status}
           startedAt={startedAt}
           onOpenImage={onOpenImage}
+          lightweight={lightweight}
         />
       ) : images.length > 0 ? (
-        <CanvasImageStrip images={images} limit={4} onOpen={onOpenImage} onOpenAll={() => setShowAllImages(true)} onDelete={onDeleteImage} className="grid-cols-4" large />
+        <CanvasImageStrip images={images} limit={4} onOpen={onOpenImage} onOpenAll={() => setShowAllImages(true)} onDelete={onDeleteImage} className="grid-cols-4" large lightweight={lightweight} />
       ) : loading ? (
-        <CanvasGenerationLoading status={item.data?.status} />
+        <CanvasGenerationLoading status={item.data?.status} onStop={onStopNode} />
       ) : (
         <div className={cn("flex h-36 items-center justify-center rounded-xl border text-xs", canvasDashedClass)}>
           连接 API生成 节点后显示输出
@@ -2777,12 +3183,14 @@ function LoopOutputSlots({
   status,
   startedAt,
   onOpenImage,
+  lightweight,
 }: {
   images: CanvasImageRef[];
   raw: Record<string, unknown>;
   status?: CreationTask["status"];
   startedAt?: string;
   onOpenImage: (image: CanvasImageRef) => void;
+  lightweight: boolean;
 }) {
   const total = Math.max(1, Math.min(40, loopRawNumber(raw, "total", images.length || 1)));
   const current = loopRawNumber(raw, "current", 0);
@@ -2808,6 +3216,7 @@ function LoopOutputSlots({
             status={slot.status}
             elapsedLabel={slot.status === "running" ? elapsedLabel : ""}
             onOpenImage={onOpenImage}
+            lightweight={lightweight}
           />
         ))}
       </div>
@@ -2825,12 +3234,14 @@ function LoopOutputSlot({
   status,
   elapsedLabel,
   onOpenImage,
+  lightweight,
 }: {
   index: number;
   image?: CanvasImageRef;
   status?: CreationTask["status"];
   elapsedLabel?: string;
   onOpenImage: (image: CanvasImageRef) => void;
+  lightweight: boolean;
 }) {
   if (image) {
     return (
@@ -2839,7 +3250,11 @@ function LoopOutputSlot({
         className="relative aspect-square overflow-hidden rounded-xl border border-border bg-muted"
         onClick={() => onOpenImage(image)}
       >
-        <AuthenticatedImage src={canvasImagePreviewSource(image)} alt={canvasImageLabel(image, index)} className="h-full w-full object-cover" />
+        {lightweight ? (
+          <CanvasImagePlaceholder label={canvasImageLabel(image, index)} />
+        ) : (
+          <AuthenticatedImage src={canvasImagePreviewSource(image)} alt={canvasImageLabel(image, index)} className="h-full w-full object-cover" />
+        )}
         <span className="absolute left-1.5 top-1.5 rounded-md bg-black/55 px-1.5 py-0.5 text-[10px] font-black text-white">{index + 1}</span>
       </button>
     );
@@ -2870,7 +3285,7 @@ function LoopOutputSlot({
   );
 }
 
-function CanvasGenerationLoading({ status }: { status?: CreationTask["status"] }) {
+function CanvasGenerationLoading({ status, onStop }: { status?: CreationTask["status"]; onStop?: () => void }) {
   const queued = status === "queued";
   const progressPercent = queued ? 0 : 8;
   return (
@@ -2902,8 +3317,20 @@ function CanvasGenerationLoading({ status }: { status?: CreationTask["status"] }
             </div>
           </div>
         </div>
-        <div className="mt-2 pl-11 text-[11px] text-[#8e8e93] dark:text-muted-foreground">
-          {queued ? "画布任务排队中" : "画布任务处理中"}
+        <div className="mt-2 flex items-center justify-between gap-2 pl-11 text-[11px] text-[#8e8e93] dark:text-muted-foreground">
+          <span>{queued ? "画布任务排队中" : "画布任务处理中"}</span>
+          {onStop ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="h-7 shrink-0 rounded-lg border-rose-300/70 bg-white/80 px-2 text-xs font-black text-rose-600 hover:bg-rose-50 dark:border-rose-400/30 dark:bg-slate-950/50 dark:text-rose-100"
+              onClick={onStop}
+            >
+              <X className="mr-1 size-3.5" />
+              中断
+            </Button>
+          ) : null}
         </div>
       </div>
     </div>
@@ -2942,6 +3369,8 @@ export function CanvasImageStrip({
   onDelete,
   className,
   large,
+  lightweight,
+  style,
 }: {
   images: CanvasImageRef[];
   limit?: number;
@@ -2950,6 +3379,8 @@ export function CanvasImageStrip({
   onDelete?: (image: CanvasImageRef) => void;
   className?: string;
   large?: boolean;
+  lightweight?: boolean;
+  style?: CSSProperties;
 }) {
   const visible = images.slice(0, limit);
   const overflow = Math.max(0, images.length - visible.length);
@@ -2957,7 +3388,7 @@ export function CanvasImageStrip({
     return null;
   }
   return (
-    <div className={cn("grid gap-2", className || "grid-cols-3", large && "h-full")}>
+    <div className={cn("grid gap-2", className || "grid-cols-3", large && "h-full")} style={style}>
       {visible.map((image, index) => {
         const src = canvasImagePreviewSource(image);
         return (
@@ -2975,7 +3406,9 @@ export function CanvasImageStrip({
             title={canvasImageLabel(image, index)}
             data-node-interactive="true"
           >
-            {src ? (
+            {lightweight ? (
+              <CanvasImagePlaceholder label={canvasImageLabel(image, index)} />
+            ) : src ? (
               <AuthenticatedImage
                 src={src}
                 alt={canvasImageLabel(image, index)}
@@ -3040,6 +3473,15 @@ export function CanvasImageStrip({
         );
       })}
     </div>
+  );
+}
+
+function CanvasImagePlaceholder({ label }: { label: string }) {
+  return (
+    <span className="flex h-full w-full flex-col items-center justify-center gap-1 bg-muted/70 px-2 text-muted-foreground dark:bg-slate-900/70 dark:text-slate-500">
+      <ImageIcon className="size-4" />
+      <span className="max-w-full truncate text-[10px] font-semibold">{label}</span>
+    </span>
   );
 }
 
@@ -3273,12 +3715,23 @@ function IconToolButton({ title, onClick, children }: { title: string; onClick: 
 }
 
 function nodeTitle(item: SmartCanvasItem) {
+  if (item.name?.trim()) return item.name.trim();
   if (item.type === "image") return "Image";
   if (item.type === "prompt") return "Prompt";
   if (item.type === "llm") return "AI 提示词";
   if (item.type === "loop") return "循环";
   if (item.type === "group") return "Group";
   if (item.type === "image_generation") return "API生成";
+  return "Output";
+}
+
+function nodeTypeLabel(type: SmartCanvasItem["type"]) {
+  if (type === "image") return "图片";
+  if (type === "prompt") return "提示词";
+  if (type === "llm") return "AI 提示词";
+  if (type === "loop") return "循环";
+  if (type === "group") return "组";
+  if (type === "image_generation") return "API生成";
   return "Output";
 }
 

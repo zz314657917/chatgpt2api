@@ -2,7 +2,7 @@
 
 import { forwardRef, useCallback, useEffect, useMemo, useRef, useState, type HTMLAttributes } from "react";
 import { Check, Copy, Download, Eye, Globe2, ImageIcon, LoaderCircle, Lock, MoreHorizontal, RefreshCw, Search, SlidersHorizontal, Sparkles, Tag, Trash2, X } from "lucide-react";
-import { VirtuosoGrid } from "react-virtuoso";
+import { VirtuosoGrid, type VirtuosoGridHandle } from "react-virtuoso";
 import { useLocation, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 
@@ -354,6 +354,8 @@ function ImageManagerContent({
   const location = useLocation();
   const activeLoadRef = useRef<AbortController | null>(null);
   const autoRefreshAbortRef = useRef<AbortController | null>(null);
+  const imageGridRef = useRef<VirtuosoGridHandle | null>(null);
+  const imageGridScrollerRef = useRef<HTMLElement | null>(null);
   const [galleryView, setGalleryView] = useState<ImageGalleryView>("mine");
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
@@ -503,6 +505,20 @@ function ImageManagerContent({
     aspect_ratio: aspectRatioFilter,
     tags: selectedTags,
   }), [aspectRatioFilter, endDate, formatFilter, galleryView, orientationFilter, resolutionFilter, searchKeyword, selectedTags, startDate, visibilityFilter]);
+
+  const keepImageGridScrollInBounds = useCallback(() => {
+    window.requestAnimationFrame(() => {
+      const scroller = imageGridScrollerRef.current;
+      if (scroller) {
+        scroller.scrollTop = Math.min(scroller.scrollTop, Math.max(0, scroller.scrollHeight - scroller.clientHeight));
+      }
+      imageGridRef.current?.scrollBy({ top: 0 });
+    });
+  }, []);
+
+  useEffect(() => {
+    keepImageGridScrollInBounds();
+  }, [items.length, keepImageGridScrollInBounds]);
 
   const openImagePreview = useCallback((_item: ManagedImageSummary, index: number) => {
     setLightboxIndex(index);
@@ -853,6 +869,7 @@ function ImageManagerContent({
       removeCachedManagedImages(paths);
       invalidateAuthenticatedImageCacheForPaths(paths);
       setItems((current) => current.filter((item) => !pathSet.has(item.path)));
+      keepImageGridScrollInBounds();
       setSelectedImageIds((current) => {
         const next = { ...current };
         paths.forEach((path) => {
@@ -1483,7 +1500,7 @@ function ImageManagerContent({
                 {renderDateRangeFilter("w-full sm:w-full")}
                 {renderSearchFilter()}
               </div>
-              <div className="grid grid-cols-2 gap-2 lg:grid-cols-6">
+              <div className="grid grid-cols-2 gap-2">
                 {renderFilterControls()}
                 {renderAutoRefreshControls("desktop", "col-span-2 flex min-w-0 items-center gap-2")}
               </div>
@@ -1656,10 +1673,14 @@ function ImageManagerContent({
         {items.length > 0 ? (
           <div className="h-[calc(100dvh-14rem)] min-h-[360px] sm:min-h-[520px]">
             <VirtuosoGrid
+              ref={imageGridRef}
               data={items}
               components={imageGridComponents}
               computeItemKey={(_, item) => managedImageKey(item)}
               itemClassName="min-w-0"
+              scrollerRef={(ref) => {
+                imageGridScrollerRef.current = ref;
+              }}
               overscan={800}
               increaseViewportBy={{ top: 400, bottom: 800 }}
               style={{ height: "100%" }}
@@ -1676,17 +1697,12 @@ function ImageManagerContent({
                 const ownerLabel = imageOwnerLabel(item);
                 const canToggleVisibility = galleryView === "mine" && canUpdateImageVisibility;
                 const showVisibilityStatus = galleryView === "mine" || (isAdmin && (galleryView === "public" || galleryView === "all"));
-                const imageAspectRatio = item.width && item.height ? `${item.width} / ${item.height}` : "1 / 1";
                 return (
                   <figure
                     className={cn(
-                      "group relative overflow-hidden rounded-[22px] bg-background shadow-[0_0_15px_rgba(44,30,116,0.16)]",
+                      "group relative aspect-square overflow-hidden rounded-[22px] bg-background shadow-[0_0_15px_rgba(44,30,116,0.16)]",
                       selected && "ring-2 ring-[#1456f0]/80 ring-offset-2",
                     )}
-                    style={{
-                      contentVisibility: "auto",
-                      containIntrinsicSize: item.width && item.height ? `${Math.min(360, item.width)}px ${Math.min(480, item.height)}px` : "320px 320px",
-                    }}
                     onMouseLeave={(event) => blurFocusedElementInContainer(event.currentTarget)}
                     onBlurCapture={(event) => {
                       if (!event.currentTarget.contains(event.relatedTarget)) {
@@ -1705,8 +1721,7 @@ function ImageManagerContent({
                           event.currentTarget.blur();
                         }
                       }}
-                      className="block w-full cursor-pointer overflow-hidden text-left"
-                      style={{ aspectRatio: imageAspectRatio }}
+                      className="block h-full w-full cursor-pointer overflow-hidden text-left"
                       onFocus={() => setFocusedImagePath(imageKey)}
                       aria-label={selected ? "取消选择图片" : "选择图片"}
                     >

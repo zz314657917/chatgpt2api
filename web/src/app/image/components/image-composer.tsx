@@ -9,6 +9,7 @@ import {
   MessageCircle,
   Plus,
   SlidersHorizontal,
+  Sparkles,
   X,
 } from "lucide-react";
 import {
@@ -99,6 +100,7 @@ type ImageComposerProps = {
   onImagePartialImagesChange: (value: string) => void;
   onImageOutputFormatChange: (value: ImageOutputFormat) => void;
   onImageOutputCompressionChange: (value: string) => void;
+  onOpenPromptMarket: () => void;
   onSubmit: () => void | Promise<void>;
   onReferenceImageChange: (files: File[]) => void | Promise<void>;
   onImageResultDrop: (imageIds: string[]) => void | Promise<void>;
@@ -354,6 +356,7 @@ export function ImageComposer({
   onImagePartialImagesChange,
   onImageOutputFormatChange,
   onImageOutputCompressionChange,
+  onOpenPromptMarket,
   onSubmit,
   onReferenceImageChange,
   onImageResultDrop,
@@ -878,6 +881,24 @@ export function ImageComposer({
                     </div>
                   ) : null}
                 </div>
+                {composerMode === "image" ? (
+                  <button
+                    type="button"
+                    className="inline-flex size-9 shrink-0 items-center justify-center gap-1.5 rounded-full text-[#686b73] transition hover:bg-black/[0.05] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1456f0]/30 dark:text-muted-foreground dark:hover:bg-accent/60 dark:hover:text-foreground sm:h-8 sm:w-auto sm:border sm:border-[#e5e7eb] sm:bg-white sm:px-3 sm:text-xs sm:font-medium sm:text-[#45515e] sm:dark:border-border sm:dark:bg-background/70 sm:dark:text-muted-foreground"
+                    onClick={() => {
+                      setIsModelMenuOpen(false);
+                      setIsImageSettingsOpen(false);
+                      setIsAspectRatioMenuOpen(false);
+                      setIsResolutionMenuOpen(false);
+                      onOpenPromptMarket();
+                    }}
+                    aria-label="打开提示词市场"
+                    title="提示词市场"
+                  >
+                    <Sparkles className="size-5 sm:size-3.5" />
+                    <span className="hidden sm:inline">市场</span>
+                  </button>
+                ) : null}
                 {composerMode === "image" ? (
                   <Popover open={isImageSettingsOpen} onOpenChange={handleImageSettingsOpenChange}>
                     <PopoverTrigger asChild>
