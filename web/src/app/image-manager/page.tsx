@@ -90,23 +90,24 @@ function buildManagedImageDownloadName(item: ManagedImageSummary, index: number)
 }
 
 async function downloadManagedImage(item: ManagedImageDetail, index: number) {
-  let href = item.url;
   let objectUrl = "";
 
   try {
     const blob = shouldUseAuthenticatedImageFallback(item.url)
       ? await fetchAuthenticatedImageBlob(item.url)
-      : await fetch(item.url).then((response) => (response.ok ? response.blob() : null));
-    if (blob) {
-      objectUrl = URL.createObjectURL(blob);
-      href = objectUrl;
-    }
-  } catch {
-    href = item.url;
+      : await fetch(item.url).then((response) => {
+        if (!response.ok) {
+          throw new Error(`下载图片失败 (${response.status})`);
+        }
+        return response.blob();
+      });
+    objectUrl = URL.createObjectURL(blob);
+  } catch (error) {
+    throw error instanceof Error ? error : new Error("下载图片失败");
   }
 
   const link = document.createElement("a");
-  link.href = href;
+  link.href = objectUrl;
   link.download = buildManagedImageDownloadName(item, index);
   document.body.appendChild(link);
   link.click();

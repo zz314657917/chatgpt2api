@@ -3,6 +3,7 @@
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { ChevronLeft, ChevronRight, Download, RotateCcw, X, ZoomIn, ZoomOut } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
 
 import { AuthenticatedImage } from "@/components/authenticated-image";
 import { fetchAuthenticatedImageBlob, shouldUseAuthenticatedImageFallback } from "@/lib/authenticated-image";
@@ -146,30 +147,40 @@ export function ImageLightbox({
   const handleDownload = useCallback(() => {
     if (!current) return;
     const download = async () => {
-      const resolved = await resolveDownloadSource?.(current, currentIndex);
-      const downloadImage = resolved ? { ...current, ...resolved } : current;
-      let href = downloadImage.src;
       let objectURL = "";
       let blobType = "";
 
-      if (shouldUseAuthenticatedImageFallback(downloadImage.src)) {
-        try {
-          const blob = await fetchAuthenticatedImageBlob(downloadImage.src);
+      try {
+        const resolved = await resolveDownloadSource?.(current, currentIndex);
+        const downloadImage = resolved ? { ...current, ...resolved } : current;
+        let href = downloadImage.src;
+
+        if (!downloadImage.src.startsWith("data:") && !downloadImage.src.startsWith("blob:")) {
+          const blob = shouldUseAuthenticatedImageFallback(downloadImage.src)
+            ? await fetchAuthenticatedImageBlob(downloadImage.src)
+            : await fetch(downloadImage.src).then((response) => {
+              if (!response.ok) {
+                throw new Error(`下载图片失败 (${response.status})`);
+              }
+              return response.blob();
+            });
           blobType = blob.type;
           objectURL = URL.createObjectURL(blob);
           href = objectURL;
-        } catch {
-          href = downloadImage.src;
         }
-      }
 
-      const link = document.createElement("a");
-      link.href = href;
-      link.download = imageDownloadName(downloadImage, blobType);
-      link.click();
-
-      if (objectURL) {
-        window.setTimeout(() => URL.revokeObjectURL(objectURL), 1000);
+        const link = document.createElement("a");
+        link.href = href;
+        link.download = imageDownloadName(downloadImage, blobType);
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : "下载图片失败");
+      } finally {
+        if (objectURL) {
+          window.setTimeout(() => URL.revokeObjectURL(objectURL), 1000);
+        }
       }
     };
 
