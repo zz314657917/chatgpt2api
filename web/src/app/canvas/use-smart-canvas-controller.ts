@@ -200,6 +200,33 @@ function nodeInputImagesForCanvas(canvas: SmartCanvasDocument, item: SmartCanvas
   return itemOutputImages(canvas, item);
 }
 
+function llmReferenceImageSourceIdsForTarget(canvas: SmartCanvasDocument, llmNodes: SmartCanvasItem[], targetId: string) {
+  const existingImageKeys = new Set(
+    dedupeCanvasImageRefs(incomingItems(canvas, targetId).flatMap((item) => nodeInputImagesForCanvas(canvas, item)))
+      .map(canvasImageKey)
+      .filter(Boolean),
+  );
+  const sourceIds: string[] = [];
+  const sourceImageKeys = new Set<string>();
+  for (const llmNode of llmNodes) {
+    for (const source of incomingItems(canvas, llmNode.id, ["image", "result"])) {
+      const images = dedupeCanvasImageRefs(nodeInputImagesForCanvas(canvas, source))
+        .filter((image) => {
+          const key = canvasImageKey(image);
+          return Boolean(key && !existingImageKeys.has(key) && !sourceImageKeys.has(key));
+        });
+      if (images.length === 0 || canvas.edges.some((edge) => edge.source === source.id && edge.target === targetId)) {
+        continue;
+      }
+      sourceIds.push(source.id);
+      for (const image of images) {
+        sourceImageKeys.add(canvasImageKey(image));
+      }
+    }
+  }
+  return sourceIds;
+}
+
 function generatorPromptText(canvas: SmartCanvasDocument, generator: SmartCanvasItem) {
   const upstream = incomingItems(canvas, generator.id);
   return [
@@ -1208,17 +1235,9 @@ export function useSmartCanvasController() {
       return;
     }
     const llmNodes = incomingItems(current, generator.id, ["llm"]);
-    const imageNodeIds = new Set<string>();
-    for (const llmNode of llmNodes) {
-      for (const source of incomingItems(current, llmNode.id, ["image"])) {
-        if ((source.data?.images || []).length > 0) {
-          imageNodeIds.add(source.id);
-        }
-      }
-    }
-    const missingIds = Array.from(imageNodeIds).filter((sourceId) => !current.edges.some((edge) => edge.source === sourceId && edge.target === generator.id));
+    const missingIds = llmReferenceImageSourceIdsForTarget(current, llmNodes, generator.id);
     if (missingIds.length === 0) {
-      toast.info("没有需要补充连接的图片节点");
+      toast.info("没有需要补充连接的图片来源");
       return;
     }
     updateCanvas((doc) => ({
@@ -1228,7 +1247,7 @@ export function useSmartCanvasController() {
         ...missingIds.map((sourceId) => createSmartEdge(sourceId, generator.id)),
       ],
     }), true, "连接 AI 提示词参考图");
-    toast.success(`已连接 ${missingIds.length} 个图片节点到 API生成`);
+    toast.success(`已连接 ${missingIds.length} 个图片来源到 API生成`);
   }, [updateCanvas]);
 
   const connectLlmImagesToLoop = useCallback((loopId: string) => {
@@ -1238,17 +1257,9 @@ export function useSmartCanvasController() {
       return;
     }
     const llmNodes = incomingItems(current, loop.id, ["llm"]);
-    const imageNodeIds = new Set<string>();
-    for (const llmNode of llmNodes) {
-      for (const source of incomingItems(current, llmNode.id, ["image"])) {
-        if ((source.data?.images || []).length > 0) {
-          imageNodeIds.add(source.id);
-        }
-      }
-    }
-    const missingIds = Array.from(imageNodeIds).filter((sourceId) => !current.edges.some((edge) => edge.source === sourceId && edge.target === loop.id));
+    const missingIds = llmReferenceImageSourceIdsForTarget(current, llmNodes, loop.id);
     if (missingIds.length === 0) {
-      toast.info("没有需要补充连接的图片节点");
+      toast.info("没有需要补充连接的图片来源");
       return;
     }
     updateCanvas((doc) => ({
@@ -1258,7 +1269,7 @@ export function useSmartCanvasController() {
         ...missingIds.map((sourceId) => createSmartEdge(sourceId, loop.id)),
       ],
     }), true, "连接 AI 提示词参考图");
-    toast.success(`已连接 ${missingIds.length} 个图片节点到循环`);
+    toast.success(`已连接 ${missingIds.length} 个图片来源到循环`);
   }, [updateCanvas]);
 
   const deleteEdge = useCallback((edgeId: string) => {

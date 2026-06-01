@@ -137,6 +137,8 @@ function SelectContent({
   className,
   children,
   position = "popper",
+  onTouchMove,
+  onWheel,
   ...props
 }: React.ComponentProps<typeof SelectPrimitive.Content>) {
   return (
@@ -150,6 +152,14 @@ function SelectContent({
           className,
         )}
         position={position}
+        onTouchMove={(event) => {
+          onTouchMove?.(event);
+          event.stopPropagation();
+        }}
+        onWheel={(event) => {
+          onWheel?.(event);
+          event.stopPropagation();
+        }}
         {...props}
       >
         <SelectScrollUpButton />
