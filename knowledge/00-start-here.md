@@ -11,7 +11,7 @@ This directory stores project-local context that is useful across Codex sessions
 3. Read `knowledge/03-build-and-verify.md` for build/test commands and image-workspace verification entry points.
 4. Read `knowledge/tasks/current-task.md` when continuing an unfinished task.
 5. Read `knowledge/tasks/timeline.md` when the user asks for recent history, phase summary, or recovery context.
-6. Read domain notes only when they match the current task. Existing ChatGPT web protocol research remains under `jshook/docs/`.
+6. Read domain notes only when they match the current task. For `/canvas`, Sub2API launch/redeem, or embedded-session issues, read `knowledge/06-canvas-and-embedded-session.md`. Existing ChatGPT web protocol research remains under `jshook/docs/`.
 
 ## Stable Project Facts
 

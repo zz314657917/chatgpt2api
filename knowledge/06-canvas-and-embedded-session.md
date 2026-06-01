@@ -1,0 +1,101 @@
+---
+title: Canvas And Embedded Session
+type: architecture
+repo: chatgpt2api
+last_verified: 2026-05-30
+---
+
+# `/canvas` 与嵌入会话恢复专题
+
+## 适用范围
+
+- 继续做 `/canvas`、`/image`、Sub2API launch/redeem、leaf / embedded 登录态桥接。
+- 需要快速判断“这是不是纯前端交互问题”还是“同时牵涉任务链路/会话恢复/模型路由”的时候。
+
+## 一句话心智
+
+`chatgpt2api` 当前的 `/canvas` 不是独立 GPU 或 ComfyUI 系统，而是复用现有图片库、`creation-tasks`、权限体系和 Sub2API 模型路由的前端工作台；embedded session 恢复则是这条产品链路的默认可用性要求。
+
+## `/canvas` 的默认定位
+
+- `/canvas` 是站内已有图片能力上的节点式工作台，不是新后端。
+- 画布保存节点、引用、交互状态和运行关系，但不保存独立 API key、`base_url`、`group_id` 一类网关身份配置。
+- 图片本体、异步任务、任务状态和对象存储能力继续复用既有 image / creation task 链路。
+- API 生成节点、图片节点、结果节点和组节点都是对现有能力的前端编排，不是另起一套调度系统。
+
+## embedded session 恢复为什么重要
+
+- 近期稳定修复说明：嵌入模式下的 stale token / cookie 失配不是边角 bug，而是会直接影响用户是否还能继续使用 `/image` 或 `/canvas`。
+- 对从 Sub2API 或其他上游入口跳转进来的用户来说，“能否恢复当前会话”比“是否能重新打开登录页”更关键。
+- 所以这类问题不能只按普通 auth page 处理，而要一起看 session、request、store、cookie 和 launch 入口。
+
+## 当前稳定约束
+
+### 1. `/canvas` 继续复用现有 creation tasks
+
+- 运行节点、轮询状态、Output 回填和重新打开后恢复，依赖的是现有任务链路，不是新建的画布专属 worker。
+- 如果任务状态、权限或模型目录出问题，`/canvas` 往往会直接受到影响。
+
+### 2. `/canvas` 的“轻引用”是默认设计
+
+- 图片列表、预览、详情读取和画布节点展示已朝“轻摘要 + 按需详情 + 图片轻引用”方向稳定下来。
+- 这意味着后续优化性能时，不应回退到全量原图/全量详情一次性灌进前端的旧思路。
+
+### 3. embedded / Sub2API 登录链路是工作区能力的一部分
+
+- launch/redeem、leaf network login、嵌入式登录态恢复，已经进入产品默认范围。
+- 后续修改 `/image`、`/canvas` 或登录承接时，不能假设用户都从本地登录页冷启动进入。
+
+### 4. 组节点、轮询恢复和自动保存属于当前真实验证面
+
+- `/canvas` 当前不是只需要“页面能打开”。
+- 真正的最小验证面至少包括：节点运行、queued/running 状态恢复、Output 回填、组节点输入、自动保存和重新打开恢复。
+
+## 常见误判
+
+- 不要把 `/canvas` 误判成 ComfyUI、Infinite-Canvas 代码直搬或新 GPU 调度系统。
+- 不要把 embedded session 恢复误判成纯 cookie 小修。
+- 不要只跑 `go test ./...` 就认为 `/canvas` 没问题；它还有明显的前端交互和浏览器回读面。
+- 不要只跑前端 build 就认为登录态桥接、任务路由和模型目录没退化。
+
+## 推荐补读路径
+
+- 入口文档：
+  - `knowledge/00-start-here.md`
+  - `knowledge/05-current-focus.md`
+  - `knowledge/03-build-and-verify.md`
+- 当前快照：
+  - `knowledge/tasks/current-task.md`
+  - `knowledge/tasks/timeline.md`
+- 关键代码：
+  - `web/src/app/canvas/page.tsx`
+  - `web/src/app/canvas/use-smart-canvas-controller.ts`
+  - `web/src/app/canvas/canvas-node.tsx`
+  - `web/src/lib/api.ts`
+  - `internal/service/canvas.go`
+  - `internal/service/image_task.go`
+  - `internal/service/sub2api_launch.go`
+
+## 最小验证面
+
+### 改 `/canvas` 交互或节点逻辑
+
+1. `cd web && npm run lint`
+2. `cd web && npm run build`
+3. `go test ./...`
+4. `git diff --check`
+5. 如本地预览可用，至少补一次 `/canvas` 浏览器回读
+
+### 改 launch / redeem / embedded session
+
+1. `go test ./...`
+2. `cd web && npm run build`
+3. `git diff --check`
+4. 至少补一次从登录态进入 `/image` 或 `/canvas` 的最小人工回读
+
+### 改图片列表 / 轻摘要 / 对象存储
+
+1. `go test ./...`
+2. `cd web && npm run lint`
+3. `cd web && npm run build`
+4. 验证列表轻摘要、详情按需读取、预览加载和必要时的历史恢复

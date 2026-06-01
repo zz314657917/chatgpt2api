@@ -2,7 +2,7 @@
 title: Build And Verify
 type: build
 repo: chatgpt2api
-last_verified: 2026-05-26
+last_verified: 2026-05-31
 ---
 
 # 构建与验证
@@ -53,7 +53,7 @@ Sub2API launch/redeem、登录态桥接、图片任务路由或对象存储类�
 1. `go test ./...`
 2. `cd web && npm run build`
 3. `git diff --check`
-4. 如本地预览环境可用，再补 `http://127.0.0.1:8081/image` 或对应页面的最小人工回读
+4. 如本地预览环境可用，再补 `http://127.0.0.1:8081/image`、`/canvas` 或对应嵌入入口的最小人工回读
 
 配置限制、保留上限、策略开关类修改：
 
@@ -78,6 +78,8 @@ Sub2API launch/redeem、登录态桥接、图片任务路由或对象存储类�
   - 本地结果 URL 可用于 continued edits
   - per-user image retention cap 生效
   - image workspace policies hardening 不破坏已有主流程
+  - 从 Sub2API launch 进入后，已绑定 API key 不会在 session 初始化或刷新后丢失
+  - embedded mode 下 stale token / store 失效后，仍能通过 cookie 恢复认证态
 - 当前 `/canvas` 主线至少应覆盖：
   - 页面能正常打开并保留全局顶部导航
   - 默认节点或空白画布加载符合预期
@@ -87,9 +89,11 @@ Sub2API launch/redeem、登录态桥接、图片任务路由或对象存储类�
 - 只跑前端 build 不足以证明 Sub2API launch/redeem 或图片任务链路正确；涉及登录态、任务、配置和存储时必须带后端测试。
 - 只跑 `go test ./...` 也不足以证明 `/image` 工作台 UI 没被破坏；涉及编辑器、拖拽和展示流时应至少补前端 build。
 - 只跑命令行构建也不足以证明 `/canvas` 交互没退化；涉及节点拖拽、连线、画布缩放、自动保存和运行状态时，应至少补浏览器侧最小回读。
+- 只验证“能打开登录页”不足以证明嵌入链路正常；涉及 embedded session、Sub2API key 绑定或 launch/redeem 时，至少要确认用户不是被错误打回匿名态，且绑定 key 仍保持。
 
 ## 当前验证缺口
 
 - 仓库目前缺少一份更细的“Sub2API image workspace 最小人工闭环”记录，尤其是 launch -> `/image` -> continued edit 的真实页面验证入口。
 - 仓库目前也缺少一份更细的“`/canvas` 最小人工闭环”记录，尤其是建画布、拖入图片、节点运行、Output 回填、自动保存和重新打开恢复。
 - 当前知识库已能指向命令，但对“哪些改动必须同时验证前后端”之前表达不够稳定，后续应继续按 `/image`、`/canvas`、登录态桥接、对象存储、策略开关这些场景细化。
+- 对 embedded session recovery / bound key preservation 这类修复，知识库目前还缺一份更细的最小人工检查清单，例如“从 launch 进入后刷新页面、模拟前端 token 失效、确认 cookie 恢复后仍保留已绑定 key”。

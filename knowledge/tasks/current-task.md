@@ -1,6 +1,6 @@
 # Current Task
 
-更新时间：2026-05-28 17:02 +08:00
+更新时间：2026-05-29 03:30 +08:00
 
 ## 背景
 
@@ -51,8 +51,10 @@ Sprint 4 目标已完成：稳定当前 `/canvas` 未提交功能改动，并完
 - 新增管理员创作任务治理入口：
   - `GET /api/admin/creation-tasks/diagnostics` 返回任务总数、活动任务、queued/running 数、终态脏 `output_statuses` 数、当前并发占用等诊断数据。
   - `POST /api/admin/creation-tasks/diagnostics` 默认只修复终态任务里的 queued/running 脏 `output_statuses`。
-  - `POST /api/admin/creation-tasks/diagnostics` 携带 `finalize_active=true` 时，会把当前 queued/running 任务收尾为 error，取消运行 handler，并触发计费结算。
+  - `POST /api/admin/creation-tasks/diagnostics` 携带 `finalize_active=true` 时，只会把超过卡住阈值的 queued/running 任务收尾为 error，取消运行 handler，并触发计费结算；未超过阈值的活动任务会跳过。
   - `/settings` 管理员页面新增“创作任务治理”卡片，可刷新诊断、修复终态状态、确认后终止卡住任务。
+  - 诊断结果新增 `stale_active_tasks`、`stale_threshold_seconds` 和 `suspicious_tasks`，设置页会展示疑似卡住任务列表。
+  - `updated_at` 的本地时间字符串按本地时区解析，避免卡住阈值受 UTC 解析偏移影响。
 
 ## 已确认事实
 
@@ -66,6 +68,8 @@ Sprint 4 目标已完成：稳定当前 `/canvas` 未提交功能改动，并完
 - `/image-previews/` 与 `/image-thumbnails/` 共享同一类源图权限判断：先从缓存路径反解源图，再按源图授权。
 - `ImageTaskService` 当前已有 `recoverUnfinishedLocked()`、`CancelTask()`、超时和 no-output 收尾逻辑；本轮没有改业务逻辑，只补了防回归测试。
 - 创作任务治理接口是管理员专用；普通用户即使有 `/api/creation-tasks` 权限，也不能访问 `/api/admin/creation-tasks/diagnostics`。
+- 创作任务治理默认卡住阈值为 10 分钟；管理员可在设置页输入秒数，接口支持 `stale_seconds`。
+- 被创作任务治理终止的预扣费图片任务会按实际输出 0 进行结算并退款，不会吞掉用户余额。
 
 ## 待验证点
 
@@ -117,3 +121,9 @@ Sprint 4 已通过本机实现验证，可以关闭。组节点已完成前后�
 - 创作任务治理验证：`cd web && npm.cmd run lint`：PASS，0 warnings / 0 errors。
 - 创作任务治理验证：`cd web && npm.cmd run build`：PASS。
 - 创作任务治理验证：`git diff --check -- internal/service/image_task.go internal/service/image_task_test.go internal/httpapi/routes.go internal/httpapi/router.go internal/httpapi/app_test.go internal/service/permissions.go web/src/lib/api.ts web/src/app/settings/store.ts web/src/app/settings/page.tsx web/src/app/settings/components/creation-task-governance-card.tsx`：PASS，仅 Windows LF -> CRLF 提示。
+- 创作任务治理阈值收紧验证：`go test ./internal/service -run "TestImageTaskServiceDiagnosticsAndRepair|TestImageTaskServiceBillingSuccessFailureCancelAndTextOutput|TestImageTaskService(CancelQueuedTaskWaitingForCreationUnit|NormalizesTerminalOutputStatusesOnLoad)$" -count=1`：PASS。
+- 创作任务治理阈值收紧验证：`go test ./internal/httpapi -run TestAdminCreationTaskDiagnosticsAndRepair -count=1 -v`：PASS。
+- 创作任务治理阈值收紧验证：`go test ./internal/service ./internal/httpapi -count=1`：PASS。
+- 创作任务治理阈值收紧验证：`cd web && npm.cmd run lint`：PASS，0 warnings / 0 errors。
+- 创作任务治理阈值收紧验证：`cd web && npm.cmd run build`：PASS。
+- 创作任务治理阈值收紧验证：`git diff --check -- internal/service/image_task.go internal/service/image_task_test.go internal/httpapi/routes.go internal/httpapi/app_test.go web/src/lib/api.ts web/src/app/settings/store.ts web/src/app/settings/components/creation-task-governance-card.tsx knowledge/tasks/current-task.md`：PASS，仅 Windows LF -> CRLF 提示。
