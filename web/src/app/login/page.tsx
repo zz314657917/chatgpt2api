@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ArrowRight,
   LoaderCircle,
@@ -13,6 +13,7 @@ import {
 import { AnnouncementNotifications } from "@/components/announcement-banner";
 import { LoginPageImageStage } from "@/components/login-page-image-stage";
 import { Button } from "@/components/ui/button";
+import { fetchAuthProviders } from "@/lib/api";
 import {
   applyColorTheme,
   getPreferredColorTheme,
@@ -25,16 +26,53 @@ import { useRedirectIfAuthenticated } from "@/lib/use-auth-guard";
 const loginBackgroundClass =
   "bg-[#fff9fb] bg-[radial-gradient(rgba(20,86,240,0.12)_1px,transparent_1px),linear-gradient(145deg,#fff8fa_0%,#ffffff_48%,#f4f8ff_100%)] [background-position:0_0,center] [background-size:12px_12px,cover] dark:bg-[#090d16] dark:bg-[radial-gradient(rgba(96,165,250,0.16)_1px,transparent_1px),linear-gradient(145deg,#080b13_0%,#101827_52%,#070b12_100%)]";
 
-const leafNetworkBrandName = "落叶AI";
-const leafNetworkLoginURL = "https://ai.3zapi.top/login";
+const defaultLeafNetworkBrandName = "落叶AI";
+const defaultLeafNetworkLoginURL = "https://ai.3zapi.top/login";
 
 export default function LoginPage() {
   const appMeta = useAppMeta();
   const themeToggleRef = useRef<HTMLButtonElement | null>(null);
   const [theme, setTheme] = useState<ColorTheme>(() => getPreferredColorTheme());
+  const [leafNetworkBrandName, setLeafNetworkBrandName] = useState(defaultLeafNetworkBrandName);
+  const [leafNetworkLoginURL, setLeafNetworkLoginURL] = useState(defaultLeafNetworkLoginURL);
   const { isCheckingAuth } = useRedirectIfAuthenticated();
 
-  const handleLeafNetworkLogin = () => {
+  useEffect(() => {
+    let active = true;
+    void fetchAuthProviders()
+      .then((providers) => {
+        if (!active) {
+          return;
+        }
+        const sub2api = providers.sub2api;
+        const launchURL = String(sub2api?.launch_url || "").trim();
+        const brandName = String(sub2api?.brand_name || "").trim();
+        if (brandName) {
+          setLeafNetworkBrandName(brandName);
+        }
+        if (sub2api?.enabled && launchURL) {
+          setLeafNetworkLoginURL(launchURL);
+        }
+      })
+      .catch(() => {
+        // Keep the public fallback URL when provider discovery is unavailable.
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const handleLeafNetworkLogin = async () => {
+    try {
+      const providers = await fetchAuthProviders();
+      const launchURL = String(providers.sub2api?.launch_url || "").trim();
+      if (providers.sub2api?.enabled && launchURL) {
+        window.location.href = launchURL;
+        return;
+      }
+    } catch {
+      // Fall through to the configured fallback URL.
+    }
     window.location.href = leafNetworkLoginURL;
   };
 

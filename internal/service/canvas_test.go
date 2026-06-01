@@ -1,6 +1,10 @@
 package service
 
-import "testing"
+import (
+	"fmt"
+	"strings"
+	"testing"
+)
 
 func TestCanvasServiceCreateSaveAndRun(t *testing.T) {
 	backend := newTestStorageBackend(t)
@@ -129,6 +133,74 @@ func TestCanvasServiceAllowsGroupNode(t *testing.T) {
 	if len(saved.Nodes) != 4 || saved.Nodes[2].Type != CanvasNodeTypeGroup {
 		t.Fatalf("SaveCanvas() nodes = %#v", saved.Nodes)
 	}
+}
+
+func TestCanvasServiceLimitsUserCanvasCount(t *testing.T) {
+	backend := newTestStorageBackend(t)
+	svc := NewCanvasService(backend)
+	identity := Identity{ID: "user-1", Role: AuthRoleUser, OwnerID: "user-1"}
+	otherIdentity := Identity{ID: "user-2", Role: AuthRoleUser, OwnerID: "user-2"}
+
+	for index := 0; index < maxCanvasUserCount; index++ {
+		_, err := svc.CreateCanvas(identity, CanvasDocument{
+			ID:   fmt.Sprintf("canvas-%02d", index),
+			Name: fmt.Sprintf("Canvas %02d", index),
+		})
+		if err != nil {
+			t.Fatalf("CreateCanvas(%d) error = %v", index, err)
+		}
+	}
+
+	if _, err := svc.CreateCanvas(identity, CanvasDocument{Name: "Overflow"}); err == nil || !strings.Contains(err.Error(), "最多只能创建 50 个画布") {
+		t.Fatalf("CreateCanvas(over limit) error = %v, want user canvas limit", err)
+	}
+
+	if _, err := svc.CreateCanvas(otherIdentity, CanvasDocument{Name: "Other User Canvas"}); err != nil {
+		t.Fatalf("CreateCanvas(other user) error = %v", err)
+	}
+}
+
+func TestCanvasServiceLimitsCanvasNodeCount(t *testing.T) {
+	backend := newTestStorageBackend(t)
+	svc := NewCanvasService(backend)
+	identity := Identity{ID: "user-1", Role: AuthRoleUser, OwnerID: "user-1"}
+
+	created, err := svc.CreateCanvas(identity, CanvasDocument{
+		Name:  "Node Limit",
+		Nodes: testCanvasNodes(maxCanvasNodeCount),
+	})
+	if err != nil {
+		t.Fatalf("CreateCanvas(max nodes) error = %v", err)
+	}
+	if len(created.Nodes) != maxCanvasNodeCount {
+		t.Fatalf("CreateCanvas(max nodes) node count = %d, want %d", len(created.Nodes), maxCanvasNodeCount)
+	}
+
+	if _, err := svc.CreateCanvas(identity, CanvasDocument{
+		Name:  "Too Many Nodes",
+		Nodes: testCanvasNodes(maxCanvasNodeCount + 1),
+	}); err == nil || !strings.Contains(err.Error(), "最多只能包含 100 个节点") {
+		t.Fatalf("CreateCanvas(over node limit) error = %v, want node limit", err)
+	}
+
+	if _, err := svc.SaveCanvas(identity, created.ID, CanvasDocument{
+		Name:  "Too Many Nodes",
+		Nodes: testCanvasNodes(maxCanvasNodeCount + 1),
+	}); err == nil || !strings.Contains(err.Error(), "最多只能包含 100 个节点") {
+		t.Fatalf("SaveCanvas(over node limit) error = %v, want node limit", err)
+	}
+}
+
+func testCanvasNodes(count int) []CanvasNode {
+	nodes := make([]CanvasNode, 0, count)
+	for index := 0; index < count; index++ {
+		nodes = append(nodes, CanvasNode{
+			ID:   fmt.Sprintf("node-%03d", index),
+			Type: CanvasNodeTypeText,
+			Data: map[string]any{"text": fmt.Sprintf("node %d", index)},
+		})
+	}
+	return nodes
 }
 
 func assertCanvasNodeDataHasNoRoutingSecrets(t *testing.T, data map[string]any) {

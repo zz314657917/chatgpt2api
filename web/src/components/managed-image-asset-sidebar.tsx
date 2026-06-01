@@ -223,12 +223,12 @@ export function ManagedImageAssetSidebar({
               data={assets}
               overscan={400}
               components={assetGridComponents}
+              computeItemKey={(_, asset) => asset.path}
               itemClassName="min-w-0"
               style={{ height: "100%" }}
               endReached={onLoadMoreAssets}
               itemContent={(index, asset) => (
                 <ManagedImageAssetTile
-                  key={`${asset.path}-${index}`}
                   asset={asset}
                   showCanvasAction={Boolean(onAddAssetToCanvas)}
                   onDragStart={(event) => handleDragStart(event, asset)}

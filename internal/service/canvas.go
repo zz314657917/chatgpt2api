@@ -26,6 +26,8 @@ const (
 
 	canvasDocumentName = "canvases.json"
 	canvasRunDocName   = "canvas_runs.json"
+	maxCanvasUserCount = 50
+	maxCanvasNodeCount = 100
 	maxCanvasRunCount  = 20
 )
 
@@ -198,6 +200,9 @@ func (s *CanvasService) CreateCanvas(identity Identity, input CanvasDocument) (C
 	canvas.Name = firstNonEmpty(canvas.Name, "未命名画布")
 	canvas.CreatedAt = now
 	canvas.UpdatedAt = now
+	if err := validateCanvasNodeCount(canvas); err != nil {
+		return CanvasDocument{}, err
+	}
 	key := canvasKey(owner, canvas.ID)
 
 	s.mu.Lock()
@@ -205,11 +210,31 @@ func (s *CanvasService) CreateCanvas(identity Identity, input CanvasDocument) (C
 	if _, exists := s.canvases[key]; exists {
 		return CanvasDocument{}, fmt.Errorf("canvas already exists")
 	}
+	if s.canvasCountLocked(owner) >= maxCanvasUserCount {
+		return CanvasDocument{}, fmt.Errorf("每个用户最多只能创建 %d 个画布", maxCanvasUserCount)
+	}
 	s.canvases[key] = canvas
 	if err := s.saveCanvasesLocked(); err != nil {
 		return CanvasDocument{}, err
 	}
 	return cloneCanvas(canvas), nil
+}
+
+func validateCanvasNodeCount(canvas CanvasDocument) error {
+	if len(canvas.Nodes) > maxCanvasNodeCount {
+		return fmt.Errorf("每个画布最多只能包含 %d 个节点", maxCanvasNodeCount)
+	}
+	return nil
+}
+
+func (s *CanvasService) canvasCountLocked(owner string) int {
+	count := 0
+	for _, canvas := range s.canvases {
+		if canvas.OwnerID == owner {
+			count++
+		}
+	}
+	return count
 }
 
 func (s *CanvasService) GetCanvas(identity Identity, id string) (CanvasDocument, bool) {
@@ -249,6 +274,9 @@ func (s *CanvasService) SaveCanvas(identity Identity, id string, input CanvasDoc
 	canvas.CreatedAt = firstNonEmpty(existing.CreatedAt, now)
 	canvas.UpdatedAt = now
 	canvas.LastRun = existing.LastRun
+	if err := validateCanvasNodeCount(canvas); err != nil {
+		return CanvasDocument{}, err
+	}
 	s.canvases[key] = canvas
 	if err := s.saveCanvasesLocked(); err != nil {
 		return CanvasDocument{}, err
