@@ -4,6 +4,7 @@ import type {
   CanvasImageRef,
   CanvasModelOption,
   CanvasNodeOutput,
+  CanvasVideoRef,
   CreationTask,
   CreationTaskData,
   ManagedImageDetail,
@@ -61,7 +62,7 @@ export function normalizeSmartCanvas(input?: CanvasDocument | null): SmartCanvas
   }
   const nodes = Array.isArray(input.nodes)
     ? input.nodes.flatMap((node) => {
-        if (node.type !== "image" && node.type !== "prompt" && node.type !== "llm" && node.type !== "loop" && node.type !== "group" && node.type !== "image_generation" && node.type !== "result") {
+        if (node.type !== "image" && node.type !== "prompt" && node.type !== "llm" && node.type !== "loop" && node.type !== "group" && node.type !== "image_generation" && node.type !== "video_generation" && node.type !== "result") {
           return [];
         }
         return [{
@@ -135,6 +136,8 @@ export function smartItemTitle(type: SmartCanvasItem["type"]) {
       return "组";
     case "image_generation":
       return "API生成";
+    case "video_generation":
+      return "视频生成";
     case "result":
       return "结果";
   }
@@ -150,8 +153,11 @@ export function canConnectSmartCanvasNodes(source: Pick<SmartCanvasItem, "type">
   if (target.type === "image_generation") {
     return source.type === "image" || source.type === "prompt" || source.type === "llm" || source.type === "loop" || source.type === "group" || source.type === "result";
   }
+  if (target.type === "video_generation") {
+    return source.type === "image" || source.type === "prompt" || source.type === "llm" || source.type === "group" || source.type === "result";
+  }
   if (target.type === "result") {
-    return source.type === "image_generation" || source.type === "llm" || source.type === "loop" || source.type === "image" || source.type === "group" || source.type === "result";
+    return source.type === "image_generation" || source.type === "video_generation" || source.type === "llm" || source.type === "loop" || source.type === "image" || source.type === "group" || source.type === "result";
   }
   if (target.type === "image") {
     return source.type === "image" || source.type === "result";
@@ -271,6 +277,29 @@ export function createGeneratorNode(position: { x: number; y: number }): SmartCa
   };
 }
 
+export function createVideoGeneratorNode(position: { x: number; y: number }): SmartCanvasItem {
+  return {
+    id: createItemId("video_generation"),
+    type: "video_generation",
+    name: "视频生成",
+    position,
+    data: {
+      prompt: "",
+      model: "",
+      duration: 5,
+      aspect_ratio: "16:9",
+      resolution: "",
+      visibility: DEFAULT_COMPOSER.visibility,
+      enhance_prompt: true,
+      generate_audio: false,
+      input_images: [],
+      output: { videos: [] },
+      status: undefined,
+      created_at: new Date().toISOString(),
+    },
+  };
+}
+
 export function createOutputNode(position: { x: number; y: number }): SmartCanvasItem {
   return {
     id: createItemId("result"),
@@ -372,6 +401,15 @@ export function canvasImagesFromItem(item?: SmartCanvasItem | null): CanvasImage
   return dedupeCanvasImageRefs([...images, ...inputImages, ...sourceImages, ...outputImages]);
 }
 
+export function canvasVideosFromItem(item?: SmartCanvasItem | null): CanvasVideoRef[] {
+  if (!item?.data) {
+    return [];
+  }
+  const videos = Array.isArray(item.data.videos) ? item.data.videos : [];
+  const outputVideos = item.data.output?.videos || [];
+  return dedupeCanvasVideoRefs([...videos, ...outputVideos]);
+}
+
 export function canvasPromptFromItem(item?: SmartCanvasItem | null) {
   if (item?.type === "llm") {
     return item.data?.output?.text || item.data?.prompt || item.data?.text || "";
@@ -384,10 +422,11 @@ export function isBlankSmartCanvasItem(item: SmartCanvasItem) {
   const outputText = String(data.output?.text || "").trim();
   const outputRaw = data.output?.raw && Object.keys(data.output.raw).length > 0;
   const hasImages = canvasImagesFromItem(item).length > 0;
+  const hasVideos = canvasVideosFromItem(item).length > 0;
   const hasText = canvasPromptFromItem(item).trim().length > 0 || outputText.length > 0;
   const hasRunState = Boolean(data.task_id || data.status || data.error || data.started_at || data.stop_requested);
   const hasGroupMembers = (data.group_item_ids || []).length > 0;
-  return !hasImages && !hasText && !outputRaw && !hasRunState && !hasGroupMembers;
+  return !hasImages && !hasVideos && !hasText && !outputRaw && !hasRunState && !hasGroupMembers;
 }
 
 export function blankSmartCanvasItemIds(canvas: SmartCanvasDocument | null) {
@@ -643,7 +682,13 @@ function earliestOptionalRunTime(current?: string, next?: string) {
 
 function smartCanvasRunFromNode(canvas: SmartCanvasDocument, node: SmartCanvasItem): SmartCanvasRunRecord {
   const incomingImages = incomingItems(canvas, node.id).flatMap((input) => canvasImagesFromItem(input));
-  const mode: SmartCanvasRunRecord["mode"] = (node.data?.input_images?.length || incomingImages.length || 0) > 0 ? "edit" : "generate";
+  const outputImages = dedupeCanvasImageRefs(node.data?.output?.images || []);
+  const outputVideos = dedupeCanvasVideoRefs(node.data?.output?.videos || []);
+  const mode: SmartCanvasRunRecord["mode"] = node.type === "video_generation" || outputVideos.length > 0 || node.data?.output?.raw?.mode === "video"
+    ? "video"
+    : (node.data?.input_images?.length || incomingImages.length || 0) > 0
+      ? "edit"
+      : "generate";
   const startedAt = node.data?.started_at || (isActiveTask(node.data?.status) ? node.data?.updated_at || node.data?.created_at : undefined);
   return {
     id: node.id,
@@ -652,7 +697,8 @@ function smartCanvasRunFromNode(canvas: SmartCanvasDocument, node: SmartCanvasIt
     mode,
     status: node.data?.status || "queued",
     taskId: node.data?.task_id,
-    images: dedupeCanvasImageRefs(node.data?.output?.images || []),
+    images: outputImages,
+    videos: outputVideos,
     error: node.data?.error,
     startedAt,
     createdAt: node.data?.created_at || "",
@@ -671,10 +717,11 @@ function mergeSmartCanvasRunBucket(current: SmartCanvasRunBucket, next: SmartCan
       id: identity.run.id,
       prompt: next.run.prompt || current.run.prompt,
       model: next.run.model || current.run.model || "auto",
-      mode: current.run.mode === "edit" || next.run.mode === "edit" ? "edit" : "generate",
+      mode: current.run.mode === "video" || next.run.mode === "video" ? "video" : current.run.mode === "edit" || next.run.mode === "edit" ? "edit" : "generate",
       status: statusSource.status,
       taskId: current.run.taskId || next.run.taskId,
       images: dedupeCanvasImageRefs([...current.run.images, ...next.run.images]),
+      videos: dedupeCanvasVideoRefs([...current.run.videos, ...next.run.videos]),
       error: statusSource.error || next.run.error || current.run.error,
       startedAt: earliestOptionalRunTime(current.run.startedAt, next.run.startedAt),
       createdAt: latestRunTime(current.run.createdAt, next.run.createdAt),
@@ -713,7 +760,7 @@ export function smartCanvasRuns(canvas: SmartCanvasDocument | null): SmartCanvas
   }
   const runsByTaskId = new Map<string, SmartCanvasRunBucket>();
   canvas.nodes
-    .filter((node) => (node.type === "result" || node.type === "image_generation") && node.data?.task_id)
+    .filter((node) => (node.type === "result" || node.type === "image_generation" || node.type === "video_generation") && node.data?.task_id)
     .forEach((node) => {
       const taskId = node.data?.task_id || node.id;
       const bucket = {
@@ -792,10 +839,16 @@ function sanitizeSmartItemData(data?: SmartCanvasItemData): SmartCanvasItemData 
     model: typeof data.model === "string" && data.model ? data.model : "auto",
     size: typeof data.size === "string" && data.size ? data.size : "1024x1024",
     image_resolution: normalizeCanvasImageResolution(data.image_resolution),
+    duration: Number.isFinite(Number(data.duration)) ? Math.max(5, Math.min(15, Number(data.duration))) : undefined,
+    aspect_ratio: typeof data.aspect_ratio === "string" && data.aspect_ratio ? data.aspect_ratio : "16:9",
+    resolution: typeof data.resolution === "string" ? data.resolution : "",
+    enhance_prompt: data.enhance_prompt !== false,
+    generate_audio: data.generate_audio === true,
     quality: typeof data.quality === "string" && data.quality ? data.quality : "auto",
     n: Number.isFinite(Number(data.n)) ? Math.max(1, Math.min(10, Number(data.n))) : 1,
     visibility: data.visibility === "public" ? "public" : "private",
     images: dedupeCanvasImageRefs(Array.isArray(data.images) ? data.images : []),
+    videos: dedupeCanvasVideoRefs(Array.isArray(data.videos) ? data.videos : []),
     source_images: dedupeCanvasImageRefs(Array.isArray(data.source_images) ? data.source_images : []),
     input_images: dedupeCanvasImageRefs(Array.isArray(data.input_images) ? data.input_images : []),
     mention_images: dedupeCanvasImageRefs(Array.isArray(data.mention_images) ? data.mention_images : []),
@@ -846,6 +899,7 @@ function normalizeOutput(output?: CanvasNodeOutput): CanvasNodeOutput | undefine
     text: typeof output.text === "string" ? output.text : "",
     task_id: typeof output.task_id === "string" ? output.task_id : "",
     images: dedupeCanvasImageRefs(Array.isArray(output.images) ? output.images : []),
+    videos: dedupeCanvasVideoRefs(Array.isArray(output.videos) ? output.videos : []),
     raw: output.raw,
   };
 }
@@ -854,6 +908,7 @@ export function creationTaskToOutput(task: CreationTask): CanvasNodeOutput {
   return {
     task_id: task.id,
     images: dedupeCanvasImageRefs((task.data || []).flatMap(taskDataToImageRef)),
+    videos: dedupeCanvasVideoRefs((task.data || []).flatMap((item) => taskDataToVideoRef(item, task.mode))),
     text: (task.data || []).map((item) => item.text_response || item.revised_prompt || "").filter(Boolean).join("\n"),
     raw: {
       status: task.status,
@@ -864,12 +919,57 @@ export function creationTaskToOutput(task: CreationTask): CanvasNodeOutput {
 }
 
 function taskDataToImageRef(item: CreationTaskData): CanvasImageRef[] {
+  if (item.video_url) {
+    return [];
+  }
   if (!item.url && !item.local_url) {
     return [];
   }
   return [{
     url: item.url,
     local_url: item.local_url || item.url,
+  }];
+}
+
+export function canvasVideoKey(ref: CanvasVideoRef) {
+  return cleanImageText(ref.local_url) || cleanImageText(ref.url) || cleanImageText(ref.name);
+}
+
+export function dedupeCanvasVideoRefs(refs: CanvasVideoRef[]) {
+  const seen = new Set<string>();
+  const out: CanvasVideoRef[] = [];
+  for (const ref of refs) {
+    const clean: CanvasVideoRef = {
+      url: cleanImageText(ref.url),
+      local_url: cleanImageText(ref.local_url),
+      name: cleanImageText(ref.name),
+    };
+    const key = canvasVideoKey(clean);
+    if (!key || seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    out.push(clean);
+  }
+  return out;
+}
+
+export function canvasVideoSource(ref: CanvasVideoRef) {
+  return cleanImageText(ref.local_url) || cleanImageText(ref.url);
+}
+
+function taskDataToVideoRef(item: CreationTaskData, mode: CreationTask["mode"]): CanvasVideoRef[] {
+  if (mode !== "video" && !item.video_url) {
+    return [];
+  }
+  const url = item.video_url || item.url;
+  const localUrl = item.local_url || item.video_url || item.url;
+  if (!url && !localUrl) {
+    return [];
+  }
+  return [{
+    url,
+    local_url: localUrl,
   }];
 }
 

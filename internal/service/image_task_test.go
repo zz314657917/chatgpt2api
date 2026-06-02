@@ -307,6 +307,42 @@ func TestImageTaskServicePassesImageRequestMetadataToHandler(t *testing.T) {
 	waitForTaskStatus(t, svc, identity, "task-1", TaskStatusSuccess)
 }
 
+func TestImageTaskServicePassesVideoOptionsToHandler(t *testing.T) {
+	handlerCalls := make(chan map[string]any, 1)
+	videoHandler := func(ctx context.Context, identity Identity, payload map[string]any) (map[string]any, error) {
+		handlerCalls <- payload
+		return map[string]any{"data": []map[string]any{{"video_url": "https://example.test/video.mp4"}}}, nil
+	}
+	svc := newTestImageTaskService(t, failingImageTaskHandler, failingImageTaskHandler, failingImageTaskHandler, func() int { return 30 })
+	svc.SetVideoHandler(videoHandler)
+	identity := Identity{ID: "alice", Name: "Alice", Role: "user"}
+
+	if _, err := svc.SubmitVideo(context.Background(), identity, "video-task", "make video", "doubao-seedance-2.0", nil, VideoGenerationOptions{Duration: 60, AspectRatio: "adaptive", Resolution: "720p", EnhancePrompt: true, GenerateAudio: true}); err != nil {
+		t.Fatalf("SubmitVideo() error = %v", err)
+	}
+
+	select {
+	case payload := <-handlerCalls:
+		for key, want := range map[string]any{"duration": 15, "aspect_ratio": "adaptive", "resolution": "720p", "enhance_prompt": true, "generate_audio": true} {
+			if got := payload[key]; got != want {
+				t.Fatalf("payload[%s] = %#v, want %#v in %#v", key, got, want, payload)
+			}
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for video handler payload")
+	}
+	waitForTaskStatus(t, svc, identity, "video-task", TaskStatusSuccess)
+	got := svc.ListTasks(identity, []string{"video-task"})
+	items := got["items"].([]map[string]any)
+	if len(items) != 1 || items[0]["mode"] != "video" {
+		t.Fatalf("video task item = %#v", items)
+	}
+	statuses := util.AsStringSlice(items[0]["output_statuses"])
+	if len(statuses) != 1 || statuses[0] != TaskStatusSuccess {
+		t.Fatalf("video output_statuses = %#v", statuses)
+	}
+}
+
 func TestImageTaskBillingUnitAmountResolutionOverridesRequestedSize(t *testing.T) {
 	got := imageTaskBillingUnitAmount(map[string]any{
 		"model":            util.ImageModelGPT,
@@ -1310,6 +1346,7 @@ func TestImageTaskServiceNormalizesTerminalOutputStatusesOnLoad(t *testing.T) {
 		{"id": "error", "owner_id": "alice", "status": TaskStatusError, "mode": "generate", "count": 3, "data": []any{map[string]any{"url": "https://example.test/first.png"}}, "output_statuses": []any{TaskStatusSuccess, TaskStatusRunning, TaskStatusQueued}, "created_at": now, "updated_at": now},
 		{"id": "cancelled", "owner_id": "alice", "status": TaskStatusCancelled, "mode": "edit", "count": 2, "output_statuses": []any{TaskStatusRunning, TaskStatusQueued}, "created_at": now, "updated_at": now},
 		{"id": "success", "owner_id": "alice", "status": TaskStatusSuccess, "mode": "generate", "count": 2, "data": []any{map[string]any{"url": "https://example.test/first.png"}, map[string]any{"url": "https://example.test/second.png"}}, "output_statuses": []any{TaskStatusRunning, TaskStatusQueued}, "created_at": now, "updated_at": now},
+		{"id": "video", "owner_id": "alice", "status": TaskStatusSuccess, "mode": "video", "count": 1, "data": []any{map[string]any{"video_url": "https://example.test/video.mp4"}}, "output_statuses": []any{TaskStatusRunning}, "created_at": now, "updated_at": now},
 	}}
 	store, ok := backend.(storage.JSONDocumentBackend)
 	if !ok {
@@ -1320,9 +1357,9 @@ func TestImageTaskServiceNormalizesTerminalOutputStatusesOnLoad(t *testing.T) {
 	}
 
 	svc := NewStoredImageTaskService(backend, failingImageTaskHandler, failingImageTaskHandler, failingImageTaskHandler, func() int { return 30 })
-	got := svc.ListTasks(Identity{ID: "alice"}, []string{"error", "cancelled", "success"})
+	got := svc.ListTasks(Identity{ID: "alice"}, []string{"error", "cancelled", "success", "video"})
 	items := got["items"].([]map[string]any)
-	if len(items) != 3 {
+	if len(items) != 4 {
 		t.Fatalf("items = %#v", items)
 	}
 	for _, item := range items {
@@ -1344,6 +1381,13 @@ func TestImageTaskServiceNormalizesTerminalOutputStatusesOnLoad(t *testing.T) {
 		case "success":
 			if len(statuses) != 2 || statuses[0] != TaskStatusSuccess || statuses[1] != TaskStatusSuccess {
 				t.Fatalf("success output_statuses = %#v, want all success", statuses)
+			}
+		case "video":
+			if item["mode"] != "video" {
+				t.Fatalf("video task mode = %#v, want video in %#v", item["mode"], item)
+			}
+			if len(statuses) != 1 || statuses[0] != TaskStatusSuccess {
+				t.Fatalf("video output_statuses = %#v, want success", statuses)
 			}
 		}
 	}

@@ -4,6 +4,7 @@ import type {
   CanvasModelOption,
   CanvasNode,
   CanvasNodeOutput,
+  CanvasVideoRef,
   CreationTask,
   ImageVisibility,
   ManagedImageSummary,
@@ -13,7 +14,7 @@ export const SMART_CANVAS_KIND = "smart";
 export const SMART_CANVAS_SCHEMA_VERSION = 2;
 export const SMART_CANVAS_AUTOSAVE_DELAY_MS = 5000;
 
-export type SmartCanvasItemType = "image" | "prompt" | "llm" | "loop" | "group" | "image_generation" | "result";
+export type SmartCanvasItemType = "image" | "prompt" | "llm" | "loop" | "group" | "image_generation" | "video_generation" | "result";
 export type SmartCanvasSaveState = "saved" | "dirty" | "saving" | "error";
 export type SmartCanvasTool = "select" | "pan";
 export type SmartCanvasPortKind = "in" | "out";
@@ -41,10 +42,16 @@ export type SmartCanvasItemData = {
   model?: string;
   size?: string;
   image_resolution?: string;
+  duration?: number;
+  aspect_ratio?: string;
+  resolution?: string;
+  enhance_prompt?: boolean;
+  generate_audio?: boolean;
   quality?: string;
   n?: number;
   visibility?: ImageVisibility;
   images?: CanvasImageRef[];
+  videos?: CanvasVideoRef[];
   source_images?: CanvasImageRef[];
   input_images?: CanvasImageRef[];
   mention_images?: CanvasImageRef[];
@@ -124,10 +131,11 @@ export type SmartCanvasRunRecord = {
   id: string;
   prompt: string;
   model: string;
-  mode: "generate" | "edit";
+  mode: "generate" | "edit" | "video";
   status: CreationTask["status"];
   taskId?: string;
   images: CanvasImageRef[];
+  videos: CanvasVideoRef[];
   error?: string;
   startedAt?: string;
   createdAt: string;

@@ -11,6 +11,7 @@ import {
   CircleHelp,
   CircleAlert,
   CircleDot,
+  Clapperboard,
   Clock3,
   Eraser,
   Repeat2,
@@ -48,7 +49,7 @@ import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import type { CanvasImageRef, CanvasModelOption, CreationTask, ImageQuality, ImageVisibility } from "@/lib/api";
+import type { CanvasImageRef, CanvasModelOption, CanvasVideoRef, CreationTask, ImageQuality, ImageVisibility } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 import {
@@ -66,6 +67,7 @@ import {
   canvasImageLabel,
   canvasImagePreviewSource,
   canvasImageSource,
+  canvasVideoSource,
   dedupeCanvasImageRefs,
   expandedCanvasImagesFromItem,
   expandedCanvasPromptFromItem,
@@ -98,6 +100,7 @@ const NODE_SIZE: Record<SmartCanvasItem["type"], { w: number; h: number }> = {
   loop: { w: 340, h: 280 },
   group: { w: 340, h: 230 },
   image_generation: { w: 390, h: 370 },
+  video_generation: { w: 390, h: 420 },
   result: { w: 440, h: 245 },
 };
 const EMPTY_SMART_CANVAS_NODES: SmartCanvasItem[] = [];
@@ -144,6 +147,62 @@ const canvasImageQualityOptions = [
   { value: "medium", label: "标准" },
   { value: "high", label: "高品质" },
 ] as const satisfies ReadonlyArray<{ value: "auto" | ImageQuality; label: string }>;
+const canvasVideoRatioOptions = [
+  { value: "16:9", label: "16:9" },
+  { value: "9:16", label: "9:16" },
+  { value: "1:1", label: "1:1" },
+  { value: "4:3", label: "4:3" },
+  { value: "3:4", label: "3:4" },
+  { value: "21:9", label: "21:9" },
+  { value: "adaptive", label: "自适应" },
+] as const;
+const canvasVideoResolutionOptions = [
+  { value: "auto", label: "自动" },
+  { value: "480p", label: "480p" },
+  { value: "720p", label: "720p" },
+  { value: "1080p", label: "1080p" },
+  { value: "4k", label: "4K" },
+] as const;
+type CanvasVideoRatioValue = (typeof canvasVideoRatioOptions)[number]["value"];
+type CanvasVideoResolutionValue = (typeof canvasVideoResolutionOptions)[number]["value"];
+type CanvasVideoModelProfile = {
+  ratios: readonly CanvasVideoRatioValue[];
+  resolutions: readonly CanvasVideoResolutionValue[];
+  minDuration: number;
+  maxDuration: number;
+};
+const canvasVideoModelProfiles: Record<string, CanvasVideoModelProfile> = {
+  klingV3Omni: {
+    ratios: ["16:9", "9:16", "1:1"],
+    resolutions: ["auto", "720p", "1080p", "4k"],
+    minDuration: 3,
+    maxDuration: 15,
+  },
+  klingV26: {
+    ratios: ["16:9", "9:16", "1:1"],
+    resolutions: ["auto", "720p", "1080p"],
+    minDuration: 5,
+    maxDuration: 10,
+  },
+  wan27: {
+    ratios: ["16:9", "9:16", "1:1", "4:3", "3:4"],
+    resolutions: ["auto", "720p", "1080p"],
+    minDuration: 2,
+    maxDuration: 15,
+  },
+  veo31Fast: {
+    ratios: ["16:9", "9:16"],
+    resolutions: ["auto", "720p", "1080p", "4k"],
+    minDuration: 8,
+    maxDuration: 8,
+  },
+  doubaoSeedance20: {
+    ratios: ["16:9", "9:16", "1:1", "4:3", "3:4", "21:9", "adaptive"],
+    resolutions: ["auto", "480p", "720p", "1080p"],
+    minDuration: 5,
+    maxDuration: 15,
+  },
+};
 const imageNodeTileMinWidth = 108;
 const imageNodeTileMinHeight = 82;
 const imageNodeMaxColumns = 6;
@@ -157,6 +216,16 @@ function nodePromptForCanvas(canvas: SmartCanvasDocument, item: SmartCanvasItem)
   return expandedCanvasPromptFromItem(canvas, item);
 }
 
+function canvasVideoModelProfile(model?: string) {
+  const normalized = String(model || "").trim().toLowerCase();
+  if (normalized === "kling-v3-omni") return canvasVideoModelProfiles.klingV3Omni;
+  if (normalized === "kling-v2-6") return canvasVideoModelProfiles.klingV26;
+  if (normalized === "wan2.7") return canvasVideoModelProfiles.wan27;
+  if (normalized === "veo3.1-fast") return canvasVideoModelProfiles.veo31Fast;
+  if (normalized === "doubao-seedance-2.0" || normalized === "doubao-seedance-2.0-fast") return canvasVideoModelProfiles.doubaoSeedance20;
+  return canvasVideoModelProfiles.doubaoSeedance20;
+}
+
 function smartCanvasNodeMenuItems(): SmartCanvasNodeMenuItem[] {
   return [
     { type: "prompt", label: "提示词", icon: <FileText className="size-4" /> },
@@ -164,6 +233,7 @@ function smartCanvasNodeMenuItems(): SmartCanvasNodeMenuItem[] {
     { type: "loop", label: "循环节点", icon: <Repeat2 className="size-4" /> },
     { type: "group", label: "组", icon: <Layers3 className="size-4" /> },
     { type: "image_generation", label: "API生成", icon: <WandSparkles className="size-4" /> },
+    { type: "video_generation", label: "视频生成", icon: <Clapperboard className="size-4" /> },
     { type: "result", label: "Output", icon: <CircleDot className="size-4" /> },
   ];
 }
@@ -243,6 +313,7 @@ export function SmartCanvasLeftRail({
   onRefresh,
   onDeleteCanvas,
   onRenameCanvas,
+  onAddNode,
 }: {
   canvases: SmartCanvasDocument[];
   currentCanvasId: string;
@@ -254,6 +325,7 @@ export function SmartCanvasLeftRail({
   onRefresh: () => void;
   onDeleteCanvas: (id: string) => void;
   onRenameCanvas: (id: string, name: string) => void;
+  onAddNode: (type: SmartCanvasItem["type"]) => void;
 }) {
   const [editingCanvasId, setEditingCanvasId] = useState("");
   const [editingName, setEditingName] = useState("");
@@ -348,6 +420,24 @@ export function SmartCanvasLeftRail({
           <RefreshCw className={cn("size-4", loading && "animate-spin")} />
           刷新
         </button>
+      </div>
+
+      <div className={cn("mt-3 rounded-2xl border border-border bg-background/35 p-2 transition-all duration-300 dark:border-zinc-800 dark:bg-zinc-900/35", expanded ? "translate-x-0 opacity-100" : "pointer-events-none -translate-x-4 opacity-0")}>
+        <div className={cn("mb-2 px-1 text-[10px] font-black uppercase tracking-[0.16em]", canvasLabelClass)}>添加节点</div>
+        <div className="grid grid-cols-2 gap-1">
+          {smartCanvasNodeMenuItems().map((item) => (
+            <button
+              key={item.type}
+              type="button"
+              className="inline-flex h-8 min-w-0 items-center justify-center gap-1.5 rounded-xl px-2 text-xs font-black text-muted-foreground transition hover:bg-accent hover:text-foreground dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
+              title={`添加${item.label}`}
+              onClick={() => onAddNode(item.type)}
+            >
+              <span className="shrink-0">{item.icon}</span>
+              <span className="min-w-0 truncate">{item.label}</span>
+            </button>
+          ))}
+        </div>
       </div>
 
       <div className={cn("mt-4 min-h-0 flex-1 space-y-2 overflow-y-auto pr-1 transition-all duration-300", expanded ? "translate-x-0 opacity-100" : "pointer-events-none -translate-x-4 opacity-0")}>
@@ -534,6 +624,7 @@ export function SmartCanvasTopBar({
           <ToolbarButton icon={<Repeat2 className="size-4" />} label="循环" onClick={() => onAddNode("loop")} />
           <ToolbarButton icon={<Layers3 className="size-4" />} label="组" onClick={() => onAddNode("group")} />
           <ToolbarButton icon={<WandSparkles className="size-4" />} label="API生成" onClick={() => onAddNode("image_generation")} />
+          <ToolbarButton icon={<Clapperboard className="size-4" />} label="视频" onClick={() => onAddNode("video_generation")} />
           <ToolbarButton icon={<CircleDot className="size-4" />} label="Output" onClick={() => onAddNode("result")} />
           <ToolbarButton icon={<CircleHelp className="size-4" />} label="帮助" onClick={onHelpClick} />
           <Popover>
@@ -1135,6 +1226,7 @@ type SmartCanvasBoardProps = {
   boardRef: React.RefObject<HTMLDivElement | null>;
   imageModels: CanvasModelOption[];
   textModels: CanvasModelOption[];
+  videoModels: CanvasModelOption[];
   running: boolean;
   mentionOpen: boolean;
   mentionItems: CanvasImageRef[];
@@ -1188,6 +1280,7 @@ export function SmartCanvasBoard({
   boardRef,
   imageModels,
   textModels,
+  videoModels,
   running,
   mentionOpen,
   mentionItems,
@@ -1434,6 +1527,7 @@ export function SmartCanvasBoard({
               selected={item.id === selectedItemId || selectedItemIds.includes(item.id)}
               imageModels={imageModels}
               textModels={textModels}
+              videoModels={videoModels}
               running={running}
               lightweightMedia={lightweightMedia}
               mentionOpen={mentionOpen && item.id === selectedItemId}
@@ -2044,6 +2138,7 @@ type SmartCanvasNodeProps = {
   selected: boolean;
   imageModels: CanvasModelOption[];
   textModels: CanvasModelOption[];
+  videoModels: CanvasModelOption[];
   running: boolean;
   lightweightMedia: boolean;
   mentionOpen: boolean;
@@ -2077,6 +2172,7 @@ export const SmartCanvasNode = memo(function SmartCanvasNode({
   selected,
   imageModels,
   textModels,
+  videoModels,
   running,
   lightweightMedia,
   mentionOpen,
@@ -2107,7 +2203,7 @@ export const SmartCanvasNode = memo(function SmartCanvasNode({
   const resizable = item.type === "image" || item.type === "group";
   const width = resizable ? Number(item.data?.width || size.w) : size.w;
   const minHeight = resizable ? Number(item.data?.height || size.h) : size.h;
-  const canInput = item.type === "llm" || item.type === "loop" || item.type === "group" || item.type === "image_generation" || item.type === "result";
+  const canInput = item.type === "llm" || item.type === "loop" || item.type === "group" || item.type === "image_generation" || item.type === "video_generation" || item.type === "result";
   const canOutput = true;
   const zIndex = item.type === "group" ? 1 : selected ? 35 : 10;
   const measureRef = (node: HTMLDivElement | null) => {
@@ -2232,6 +2328,20 @@ export const SmartCanvasNode = memo(function SmartCanvasNode({
           onDeleteDirectImage={onDeleteImage}
           lightweightMedia={lightweightMedia}
         />
+      ) : item.type === "video_generation" ? (
+        <VideoGeneratorNodeBody
+          canvas={canvas}
+          item={item}
+          models={videoModels}
+          running={running}
+          onUpdateData={onUpdateData}
+          onRunGenerator={onRunGenerator}
+          onStopNode={onStopNode}
+          onConnectLlmImagesToGenerator={onConnectLlmImagesToGenerator}
+          onOpenImage={onOpenImage}
+          onDeleteDirectImage={onDeleteImage}
+          lightweightMedia={lightweightMedia}
+        />
       ) : (
         <OutputNodeBody item={item} onOpenImage={onOpenImage} onDeleteImage={onDeleteImage} onStopNode={onStopNode} lightweight={lightweightMedia} />
       )}
@@ -2243,7 +2353,7 @@ function suggestedNodeTypeForItem(item: SmartCanvasItem): Exclude<SmartCanvasIte
   if (item.type === "llm") {
     return "prompt";
   }
-  if (item.type === "image_generation") {
+  if (item.type === "image_generation" || item.type === "video_generation") {
     return "result";
   }
   return "image_generation";
@@ -2261,6 +2371,8 @@ function suggestedNodeName(type: SmartCanvasItem["type"]) {
       return "组";
     case "image_generation":
       return "API生成";
+    case "video_generation":
+      return "视频生成";
     case "result":
       return "Output";
     default:
@@ -2282,8 +2394,10 @@ function nodeUsageHint(item: SmartCanvasItem) {
       return "组节点会汇总组内文本和图片，连接到 API生成、AI 提示词或循环时会自动展开。";
     case "image_generation":
       return "API生成节点是真正提交生图的节点。上游接 Prompt/图片/循环，下游接 Output 展示结果。";
+    case "video_generation":
+      return "视频生成节点会提交视频任务。上游接 Prompt 和图片，下游接 Output 展示视频。";
     case "result":
-      return "Output 节点展示生成结果，也可以把结果继续连接到 API生成做二次创作。";
+      return "Output 节点展示生成结果，也可以把结果继续连接到 API生成或视频生成做二次创作。";
   }
 }
 
@@ -2705,7 +2819,7 @@ function LoopNodeBody({
   const downstreamGenerators = canvas.edges
     .filter((edge) => edge.source === item.id)
     .map((edge) => canvas.nodes.find((node) => node.id === edge.target))
-    .filter((node): node is SmartCanvasItem => node?.type === "image_generation");
+    .filter((node): node is SmartCanvasItem => node?.type === "image_generation" || node?.type === "video_generation");
   const mode = item.data?.loop_mode === "images" ? "images" : "repeat";
   const count = Math.max(1, Math.min(10, Number(item.data?.loop_count || 3)));
   const total = mode === "images" ? Math.max(1, inputImages.length) : count;
@@ -3059,6 +3173,267 @@ function GeneratorNodeBody({
   );
 }
 
+function VideoGeneratorNodeBody({
+  canvas,
+  item,
+  models,
+  running,
+  lightweightMedia,
+  onUpdateData,
+  onRunGenerator,
+  onStopNode,
+  onConnectLlmImagesToGenerator,
+  onOpenImage,
+  onDeleteDirectImage,
+}: {
+  canvas: SmartCanvasDocument;
+  item: SmartCanvasItem;
+  models: CanvasModelOption[];
+  running: boolean;
+  lightweightMedia: boolean;
+  onUpdateData: (patch: Partial<SmartCanvasItem["data"]>) => void;
+  onRunGenerator: () => void;
+  onStopNode: () => void;
+  onConnectLlmImagesToGenerator: () => void;
+  onOpenImage: (image: CanvasImageRef) => void;
+  onDeleteDirectImage: (image: CanvasImageRef) => void;
+}) {
+  const upstream = incomingItems(canvas, item.id);
+  const upstreamPrompts = upstream
+    .filter((node) => node.type === "prompt" || node.type === "llm" || node.type === "loop" || node.type === "group")
+    .map((node) => ({
+      id: node.id,
+      name: nodeTitle(node),
+      text: (node.type === "loop" ? loopPromptPreviewForCanvas(canvas, node) : nodePromptForCanvas(canvas, node)).trim(),
+    }))
+    .filter((entry) => entry.text);
+  const mergedPromptPreview = [
+    ...upstreamPrompts.map((entry) => entry.text),
+    item.data?.prompt || "",
+  ].map((value) => value.trim()).filter(Boolean).join("\n\n");
+  const upstreamImages = upstream.flatMap((node) => nodeInputImagesForCanvas(canvas, node));
+  const upstreamImageKeys = new Set(dedupeCanvasImageRefs(upstreamImages).map(canvasImageKey));
+  const images = dedupeCanvasImageRefs([
+    ...(item.data?.input_images || []).filter((image) => !upstreamImageKeys.has(canvasImageKey(image))),
+    ...upstreamImages,
+  ]);
+  const llmReferenceImageSources = upstream
+    .filter((node) => node.type === "llm")
+    .map((node) => {
+      const imagesFromNode = dedupeCanvasImageRefs(incomingItems(canvas, node.id).flatMap((source) => nodeInputImagesForCanvas(canvas, source)))
+        .filter((image) => !upstreamImageKeys.has(canvasImageKey(image)));
+      return {
+        id: node.id,
+        name: node.name || "AI 提示词",
+        images: imagesFromNode,
+      };
+    })
+    .filter((source) => source.images.length > 0);
+  const llmReferenceImages = dedupeCanvasImageRefs(llmReferenceImageSources.flatMap((source) => source.images));
+  const missingLlmReferenceImages = llmReferenceImages.filter((image) => !upstreamImageKeys.has(canvasImageKey(image)));
+  const outputVideos = item.data?.output?.videos || [];
+  const nodeRunning = isActiveTask(item.data?.status);
+  const modelValue = item.data?.model || (models[0]?.id ?? "");
+  const profile = canvasVideoModelProfile(modelValue);
+  const clampDuration = (next: number) => Math.max(profile.minDuration, Math.min(profile.maxDuration, Math.round(next) || profile.minDuration));
+  const duration = clampDuration(Number(item.data?.duration || profile.minDuration));
+  const setDuration = (next: number) => onUpdateData({ duration: clampDuration(next) });
+  const durationStep = profile.minDuration === 5 && profile.maxDuration === 10 ? 5 : 1;
+  const ratioOptions = canvasVideoRatioOptions.filter((option) => profile.ratios.includes(option.value));
+  const resolutionOptions = canvasVideoResolutionOptions.filter((option) => profile.resolutions.includes(option.value));
+  const resolutionValue = resolutionOptions.some((option) => option.value === item.data?.resolution) ? String(item.data?.resolution) : "auto";
+  const aspectRatioValue = ratioOptions.some((option) => option.value === item.data?.aspect_ratio) ? String(item.data?.aspect_ratio) : "16:9";
+
+  return (
+    <div className="space-y-3 p-3" data-node-interactive="true" onPointerDown={stopNodeInteraction}>
+      <div>
+        <div className={cn("mb-1 text-[11px] font-black uppercase tracking-[0.14em]", canvasLabelClass)}>Prompts</div>
+        {upstreamPrompts.length > 0 ? (
+          <div className="mb-2 space-y-1">
+            {upstreamPrompts.slice(0, 2).map((entry) => (
+              <div
+                key={entry.id}
+                className="rounded-xl border border-sky-500/20 bg-sky-500/8 px-3 py-2 text-xs font-semibold text-foreground dark:border-sky-400/20 dark:bg-sky-400/10 dark:text-slate-100"
+                title={`${entry.name}: ${entry.text}`}
+              >
+                <div className={cn("mb-1 truncate text-[10px] font-black uppercase tracking-[0.12em]", canvasAccentTextClass)}>
+                  已连接 {entry.name}
+                </div>
+                <div className="line-clamp-2 whitespace-pre-wrap break-words">{entry.text}</div>
+              </div>
+            ))}
+          </div>
+        ) : null}
+        <Textarea
+          value={item.data?.prompt || ""}
+          onChange={(event) => onUpdateData({ prompt: event.target.value })}
+          className={cn("h-14 resize-none rounded-xl text-xs", canvasFieldClass)}
+          placeholder={upstreamPrompts.length > 0 ? "补充视频提示词，会追加到已连接 Prompt 后..." : "描述镜头、主体、动作和风格..."}
+        />
+      </div>
+
+      <div>
+        <div className={cn("mb-1 text-[11px] font-black uppercase tracking-[0.14em]", canvasLabelClass)}>Images</div>
+        {images.length > 0 ? (
+          <CanvasImageStrip
+            images={images}
+            limit={4}
+            onOpen={onOpenImage}
+            onDelete={(image) => {
+              if ((item.data?.input_images || []).some((directImage) => canvasImageKey(directImage) === canvasImageKey(image))) {
+                onDeleteDirectImage(image);
+              }
+            }}
+            className="grid-cols-5"
+            lightweight={lightweightMedia}
+          />
+        ) : (
+          <div className={cn("rounded-xl border px-3 py-3 text-xs", canvasDashedClass)}>连接图片节点后作为首帧/参考图输入</div>
+        )}
+        {missingLlmReferenceImages.length > 0 ? (
+          <div className="mt-2 rounded-xl border border-amber-400/35 bg-amber-400/10 px-3 py-2 text-xs text-amber-800 dark:border-amber-300/25 dark:bg-amber-300/10 dark:text-amber-100">
+            <div className="font-semibold">上游 AI 提示词引用了 {missingLlmReferenceImages.length} 张图</div>
+            <Button
+              type="button"
+              size="sm"
+              className="mt-2 h-8 rounded-lg bg-amber-400 px-3 text-xs font-black text-amber-950 shadow-sm shadow-amber-950/10 hover:bg-amber-300 dark:bg-amber-300 dark:text-amber-950 dark:hover:bg-amber-200"
+              onClick={onConnectLlmImagesToGenerator}
+            >
+              <Link2 className="mr-1.5 size-3.5" />
+              连接这些图片
+            </Button>
+          </div>
+        ) : null}
+      </div>
+
+      <div className="grid grid-cols-[76px_1fr] gap-2">
+        <Select value="api" disabled>
+          <SelectTrigger className={canvasSelectClass}>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="api">API</SelectItem>
+          </SelectContent>
+        </Select>
+        <Select value={modelValue || undefined} onValueChange={(model) => onUpdateData({ model, duration: canvasVideoModelProfile(model).minDuration })}>
+          <SelectTrigger className={canvasSelectClass}>
+            <SelectValue placeholder={models.length > 0 ? "视频模型" : "暂无视频模型"} />
+          </SelectTrigger>
+          <SelectContent>
+            {models.map((model) => (
+              <SelectItem key={model.id} value={model.id}>{model.name || model.id}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+
+      <div className="grid grid-cols-[96px_1fr_88px] gap-2">
+        <Select value={aspectRatioValue} onValueChange={(aspectRatio) => onUpdateData({ aspect_ratio: aspectRatio })}>
+          <SelectTrigger className={canvasSelectClass}>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {ratioOptions.map((option) => (
+              <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Select value={resolutionValue} onValueChange={(resolution) => onUpdateData({ resolution: resolution === "auto" ? "" : resolution })}>
+          <SelectTrigger className={canvasSelectClass}>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {resolutionOptions.map((option) => (
+              <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <div className={cn("grid h-9 grid-cols-[28px_1fr_28px] overflow-hidden rounded-xl border", canvasFieldClass)}>
+          <button
+            type="button"
+            className="flex items-center justify-center border-r border-border text-muted-foreground transition hover:bg-accent hover:text-foreground disabled:opacity-40 dark:border-slate-700"
+            disabled={duration <= profile.minDuration}
+            onClick={() => setDuration(duration - durationStep)}
+            aria-label="减少时长"
+          >
+            <ChevronLeft className="size-3.5" />
+          </button>
+          <Input
+            type="number"
+            min={profile.minDuration}
+            max={profile.maxDuration}
+            value={duration}
+            onChange={(event) => setDuration(Number(event.target.value) || 5)}
+            className="h-9 rounded-none border-0 bg-transparent p-0 text-center text-xs font-bold shadow-none focus-visible:ring-0"
+            aria-label="视频时长"
+          />
+          <button
+            type="button"
+            className="flex items-center justify-center border-l border-border text-muted-foreground transition hover:bg-accent hover:text-foreground disabled:opacity-40 dark:border-slate-700"
+            disabled={duration >= profile.maxDuration}
+            onClick={() => setDuration(duration + durationStep)}
+            aria-label="增加时长"
+          >
+            <ChevronRight className="size-3.5" />
+          </button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-[1fr_1fr_1fr] gap-2">
+        <Button
+          type="button"
+          variant="outline"
+          className={cn("h-9 rounded-xl text-xs font-bold", item.data?.enhance_prompt !== false ? "border-sky-300 bg-sky-50 text-sky-700 hover:bg-sky-100 dark:border-sky-400/30 dark:bg-sky-400/10 dark:text-sky-100" : canvasGhostButtonClass)}
+          onClick={() => onUpdateData({ enhance_prompt: item.data?.enhance_prompt === false })}
+        >
+          提示增强
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          className={cn("h-9 rounded-xl text-xs font-bold", item.data?.generate_audio ? "border-sky-300 bg-sky-50 text-sky-700 hover:bg-sky-100 dark:border-sky-400/30 dark:bg-sky-400/10 dark:text-sky-100" : canvasGhostButtonClass)}
+          onClick={() => onUpdateData({ generate_audio: !item.data?.generate_audio })}
+        >
+          音频
+        </Button>
+        <Select value={String(item.data?.visibility || "private")} onValueChange={(visibility) => onUpdateData({ visibility: visibility as ImageVisibility })}>
+          <SelectTrigger className={canvasSelectClass}>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="private">私有</SelectItem>
+            <SelectItem value="public">公开</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+
+      {outputVideos.length > 0 ? <CanvasVideoStrip videos={outputVideos} limit={1} /> : null}
+      {item.data?.error ? <div className="rounded-lg bg-rose-500/10 px-2 py-1.5 text-xs text-rose-600 dark:text-rose-200">{item.data.error}</div> : null}
+      {nodeRunning ? (
+        <Button
+          type="button"
+          variant="outline"
+          className="h-10 w-full rounded-xl border-rose-300/70 font-bold text-rose-600 hover:bg-rose-50 dark:border-rose-400/30 dark:text-rose-100 dark:hover:bg-rose-500/10"
+          onClick={onStopNode}
+        >
+          <X className="size-4" />
+          中断视频生成
+        </Button>
+      ) : (
+        <Button
+          type="button"
+          className="h-10 w-full rounded-xl bg-primary font-bold text-primary-foreground hover:bg-primary/90 dark:bg-slate-100 dark:text-slate-950 dark:hover:bg-white"
+          disabled={running || !mergedPromptPreview || models.length === 0}
+          onClick={onRunGenerator}
+        >
+          {running ? <LoaderCircle className="size-4 animate-spin" /> : <Clapperboard className="size-4" />}
+          视频生成
+        </Button>
+      )}
+    </div>
+  );
+}
+
 function OutputNodeBody({
   item,
   onOpenImage,
@@ -3073,6 +3448,7 @@ function OutputNodeBody({
   lightweight: boolean;
 }) {
   const images = item.data?.output?.images || item.data?.images || [];
+  const videos = item.data?.output?.videos || item.data?.videos || [];
   const loading = item.data?.status === "running" || item.data?.status === "queued";
   const loopRaw = item.data?.output?.raw?.mode === "loop" ? item.data.output.raw : null;
   const startedAt = item.data?.started_at || item.data?.created_at || "";
@@ -3088,13 +3464,15 @@ function OutputNodeBody({
           onOpenImage={onOpenImage}
           lightweight={lightweight}
         />
+      ) : videos.length > 0 ? (
+        <CanvasVideoStrip videos={videos} limit={2} />
       ) : images.length > 0 ? (
         <CanvasImageStrip images={images} limit={4} onOpen={onOpenImage} onOpenAll={() => setShowAllImages(true)} onDelete={onDeleteImage} className="grid-cols-4" large lightweight={lightweight} />
       ) : loading ? (
         <CanvasGenerationLoading status={item.data?.status} onStop={onStopNode} />
       ) : (
         <div className={cn("flex h-36 items-center justify-center rounded-xl border text-xs", canvasDashedClass)}>
-          连接 API生成 节点后显示输出
+          连接生成节点后显示输出
         </div>
       )}
       {item.data?.error ? <div className="mt-2 rounded-lg bg-rose-500/10 px-2 py-1.5 text-xs text-rose-200">{item.data.error}</div> : null}
@@ -3110,6 +3488,46 @@ function OutputNodeBody({
           </div>
         </DialogContent>
       </Dialog>
+    </div>
+  );
+}
+
+function CanvasVideoStrip({ videos, limit = videos.length, className }: { videos: CanvasVideoRef[]; limit?: number; className?: string }) {
+  const visible = videos.slice(0, limit);
+  const overflow = Math.max(0, videos.length - visible.length);
+  if (visible.length === 0) {
+    return null;
+  }
+  return (
+    <div className={cn("grid gap-2", className)}>
+      {visible.map((video, index) => {
+        const src = canvasVideoSource(video);
+        return (
+          <div
+            key={`${src || video.name || "video"}-${index}`}
+            className="overflow-hidden rounded-xl border border-border bg-black dark:border-slate-700"
+            data-node-interactive="true"
+          >
+            {src ? (
+              <video
+                src={src}
+                className="aspect-video w-full bg-black object-contain"
+                controls
+                preload="metadata"
+                title={video.name || `视频 ${index + 1}`}
+              />
+            ) : (
+              <div className="flex aspect-video items-center justify-center text-xs font-bold text-white/70">
+                视频地址为空
+              </div>
+            )}
+            <div className="flex items-center justify-between gap-2 bg-card px-3 py-2 text-[11px] font-bold text-muted-foreground dark:bg-slate-950 dark:text-slate-400">
+              <span className="truncate">{video.name || `视频 ${index + 1}`}</span>
+              {overflow > 0 && index === visible.length - 1 ? <span className="shrink-0">+{overflow}</span> : null}
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -3625,15 +4043,17 @@ export function SmartCanvasOperationHistoryPanel({
 }
 
 function RunRecordCard({ run }: { run: SmartCanvasRunRecord }) {
+  const modeLabel = run.mode === "video" ? "视频生成" : run.mode === "edit" ? "图生图" : "文生图";
   return (
     <div className="rounded-xl border border-border bg-background/70 p-2 dark:border-slate-800 dark:bg-slate-950/55">
       <div className="flex items-center justify-between gap-2">
         <div className="min-w-0">
           <div className="truncate text-xs font-semibold text-foreground dark:text-slate-200">{run.prompt || "未命名任务"}</div>
-          <div className={cn("truncate text-[11px]", canvasSubtleTextClass)}>{run.model} · {run.mode === "edit" ? "图生图" : "文生图"}</div>
+          <div className={cn("truncate text-[11px]", canvasSubtleTextClass)}>{run.model} · {modeLabel}</div>
         </div>
         <StatusBadge status={run.status} />
       </div>
+      {run.videos.length > 0 ? <CanvasVideoStrip videos={run.videos} limit={1} className="mt-2" /> : null}
       {run.images.length > 0 ? <CanvasImageStrip images={run.images} limit={3} className="mt-2 grid-cols-3" /> : null}
       {run.error ? <div className="mt-2 text-[11px] text-rose-300">{run.error}</div> : null}
     </div>
@@ -3703,6 +4123,9 @@ function ItemTypeIcon({ type }: { type: SmartCanvasItem["type"] }) {
   if (type === "image_generation") {
     return <WandSparkles className="size-4 text-sky-700 dark:text-sky-200" />;
   }
+  if (type === "video_generation") {
+    return <Clapperboard className="size-4 text-sky-700 dark:text-sky-200" />;
+  }
   return <CircleDot className="size-4 text-sky-700 dark:text-sky-200" />;
 }
 
@@ -3722,6 +4145,7 @@ function nodeTitle(item: SmartCanvasItem) {
   if (item.type === "loop") return "循环";
   if (item.type === "group") return "Group";
   if (item.type === "image_generation") return "API生成";
+  if (item.type === "video_generation") return "视频生成";
   return "Output";
 }
 
@@ -3732,6 +4156,7 @@ function nodeTypeLabel(type: SmartCanvasItem["type"]) {
   if (type === "loop") return "循环";
   if (type === "group") return "组";
   if (type === "image_generation") return "API生成";
+  if (type === "video_generation") return "视频生成";
   return "Output";
 }
 

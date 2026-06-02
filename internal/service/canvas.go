@@ -20,6 +20,7 @@ const (
 	CanvasNodeTypeGroup       = "group"
 	CanvasNodeTypeImageCreate = "image_generation"
 	CanvasNodeTypeImageEdit   = "image_edit"
+	CanvasNodeTypeVideoCreate = "video_generation"
 	CanvasNodeTypeResult      = "result"
 
 	CanvasNodeStatusBlocked = "blocked"
@@ -115,6 +116,7 @@ type CanvasRunSummary struct {
 	BlockedNodes int              `json:"blocked_nodes"`
 	TextOutput   string           `json:"text_output,omitempty"`
 	ImageOutputs []CanvasImageRef `json:"image_outputs,omitempty"`
+	VideoOutputs []CanvasVideoRef `json:"video_outputs,omitempty"`
 	StartedAt    string           `json:"started_at,omitempty"`
 	CompletedAt  string           `json:"completed_at,omitempty"`
 }
@@ -122,6 +124,7 @@ type CanvasRunSummary struct {
 type CanvasNodeOutput struct {
 	Text   string           `json:"text,omitempty"`
 	Images []CanvasImageRef `json:"images,omitempty"`
+	Videos []CanvasVideoRef `json:"videos,omitempty"`
 	TaskID string           `json:"task_id,omitempty"`
 	Raw    map[string]any   `json:"raw,omitempty"`
 }
@@ -132,6 +135,12 @@ type CanvasImageRef struct {
 	Path         string `json:"path,omitempty"`
 	Name         string `json:"name,omitempty"`
 	ThumbnailURL string `json:"thumbnail_url,omitempty"`
+}
+
+type CanvasVideoRef struct {
+	URL      string `json:"url,omitempty"`
+	LocalURL string `json:"local_url,omitempty"`
+	Name     string `json:"name,omitempty"`
 }
 
 type CanvasNodeInput struct {
@@ -1045,6 +1054,16 @@ func canvasNodeOutputFromMap(raw map[string]any) CanvasNodeOutput {
 			output.Images = append(output.Images, ref)
 		}
 	}
+	for _, item := range util.AsMapSlice(raw["videos"]) {
+		ref := CanvasVideoRef{
+			URL:      util.Clean(item["url"]),
+			LocalURL: util.Clean(item["local_url"]),
+			Name:     util.Clean(item["name"]),
+		}
+		if ref.URL != "" || ref.LocalURL != "" {
+			output.Videos = append(output.Videos, ref)
+		}
+	}
 	return output
 }
 
@@ -1073,6 +1092,7 @@ func summarizeCanvasRun(run CanvasRun) CanvasRunSummary {
 			}
 		}
 		summary.ImageOutputs = append(summary.ImageOutputs, cloneCanvasImageRefs(state.Output.Images)...)
+		summary.VideoOutputs = append(summary.VideoOutputs, cloneCanvasVideoRefs(state.Output.Videos)...)
 	}
 	if summary.Status == "" {
 		summary.Status = run.Status
@@ -1082,7 +1102,7 @@ func summarizeCanvasRun(run CanvasRun) CanvasRunSummary {
 
 func isKnownCanvasNodeType(nodeType string) bool {
 	switch nodeType {
-	case CanvasNodeTypeText, CanvasNodeTypeImage, CanvasNodeTypePrompt, CanvasNodeTypeLoop, CanvasNodeTypeGroup, CanvasNodeTypeImageCreate, CanvasNodeTypeImageEdit, CanvasNodeTypeResult:
+	case CanvasNodeTypeText, CanvasNodeTypeImage, CanvasNodeTypePrompt, CanvasNodeTypeLoop, CanvasNodeTypeGroup, CanvasNodeTypeImageCreate, CanvasNodeTypeImageEdit, CanvasNodeTypeVideoCreate, CanvasNodeTypeResult:
 		return true
 	default:
 		return false
@@ -1141,6 +1161,7 @@ func cloneCanvasNodeOutput(output CanvasNodeOutput) CanvasNodeOutput {
 	return CanvasNodeOutput{
 		Text:   output.Text,
 		Images: cloneCanvasImageRefs(output.Images),
+		Videos: cloneCanvasVideoRefs(output.Videos),
 		TaskID: output.TaskID,
 		Raw:    cloneAnyMap(output.Raw),
 	}
@@ -1151,6 +1172,15 @@ func cloneCanvasImageRefs(items []CanvasImageRef) []CanvasImageRef {
 		return nil
 	}
 	out := make([]CanvasImageRef, len(items))
+	copy(out, items)
+	return out
+}
+
+func cloneCanvasVideoRefs(items []CanvasVideoRef) []CanvasVideoRef {
+	if len(items) == 0 {
+		return nil
+	}
+	out := make([]CanvasVideoRef, len(items))
 	copy(out, items)
 	return out
 }

@@ -89,6 +89,15 @@ export const CANVAS_NODE_HELP: SmartCanvasNodeHelp[] = [
     reminders: ["按钮灰掉通常表示没有可用提示词。", "如果上游是循环，点击 API生成 会按循环规则执行。"],
   },
   {
+    id: "video_generation",
+    title: "视频生成",
+    summary: "提交视频生成任务，支持提示词和参考图输入。",
+    upstream: "提示词、图片、AI 提示词、组、Output。",
+    downstream: "Output，也可以继续连接到其他节点传递结果。",
+    controls: ["补充提示词会追加到上游提示词后。", "模型、比例、时长、分辨率和音频开关控制本次提交参数。", "视频生成按钮提交任务。"],
+    reminders: ["视频模型来自当前 API 绑定的模型目录。", "未绑定 API Key 时后端会拒绝提交视频任务。"],
+  },
+  {
     id: "result",
     title: "Output",
     summary: "展示生成结果、运行状态和错误信息。",

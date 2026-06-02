@@ -19,6 +19,7 @@ import {
   createCanvas,
   createImageEditTask,
   createImageGenerationTask,
+  createVideoGenerationTask,
   deleteCanvas,
   fetchCanvasModels,
   fetchCanvases,
@@ -61,6 +62,7 @@ import {
   createOutputNode,
   createPromptNode,
   createSmartEdge,
+  createVideoGeneratorNode,
   creationTaskToOutput,
   canConnectSmartCanvasNodes,
   dedupeCanvasImageRefs,
@@ -115,6 +117,8 @@ type SmartCanvasNodeClipboard = {
   nodes: SmartCanvasItem[];
   edges: SmartCanvasDocument["edges"];
 };
+
+type SmartCanvasGenerationNode = SmartCanvasItem & { type: "image_generation" | "video_generation" };
 
 function sourceImageVisibility(item?: SmartCanvasItem | null): ImageVisibility {
   return item?.data?.visibility === "public" ? "public" : "private";
@@ -253,6 +257,10 @@ function hasLoopOutput(item?: SmartCanvasItem | null) {
   return item?.data?.output?.raw?.mode === "loop";
 }
 
+function isGenerationNode(item?: SmartCanvasItem | null): item is SmartCanvasGenerationNode {
+  return item?.type === "image_generation" || item?.type === "video_generation";
+}
+
 function isLoopDrivenGenerator(canvas: SmartCanvasDocument | null | undefined, generatorId: string) {
   if (!canvas) {
     return false;
@@ -266,7 +274,7 @@ function nodeStopScope(canvas: SmartCanvasDocument, node: SmartCanvasItem) {
     canvas.edges
       .filter((edge) => edge.source === node.id)
       .map((edge) => canvas.nodes.find((item) => item.id === edge.target))
-      .filter((item): item is SmartCanvasItem => item?.type === "image_generation")
+      .filter(isGenerationNode)
       .forEach((generator) => {
         ids.add(generator.id);
         canvas.edges
@@ -275,7 +283,7 @@ function nodeStopScope(canvas: SmartCanvasDocument, node: SmartCanvasItem) {
           .filter((item): item is SmartCanvasItem => item?.type === "result")
           .forEach((output) => ids.add(output.id));
       });
-  } else if (node.type === "image_generation") {
+  } else if (isGenerationNode(node)) {
     canvas.edges
       .filter((edge) => edge.source === node.id)
       .map((edge) => canvas.nodes.find((item) => item.id === edge.target))
@@ -285,7 +293,7 @@ function nodeStopScope(canvas: SmartCanvasDocument, node: SmartCanvasItem) {
     canvas.edges
       .filter((edge) => edge.target === node.id)
       .map((edge) => canvas.nodes.find((item) => item.id === edge.source))
-      .filter((item): item is SmartCanvasItem => item?.type === "image_generation" && item.data?.task_id === node.data?.task_id)
+      .filter((item): item is SmartCanvasItem => Boolean(item && (item.type === "image_generation" || item.type === "video_generation") && item.data?.task_id === node.data?.task_id))
       .forEach((generator) => ids.add(generator.id));
   }
   if (node.data?.task_id) {
@@ -303,8 +311,8 @@ function nodeStopLabel(node: SmartCanvasItem) {
   if (node.type === "loop") {
     return "循环";
   }
-  if (node.type === "image_generation") {
-    return "API 生成";
+  if (isGenerationNode(node)) {
+    return node.type === "video_generation" ? "视频生成" : "API 生成";
   }
   if (node.type === "result") {
     return node.data?.tool_type ? imageToolLabel(node.data.tool_type) : "输出任务";
@@ -407,6 +415,9 @@ function createCanvasNode(type: SmartCanvasItem["type"], position: { x: number; 
   if (type === "image_generation") {
     return createGeneratorNode(position);
   }
+  if (type === "video_generation") {
+    return createVideoGeneratorNode(position);
+  }
   if (type === "result") {
     return createOutputNode(position);
   }
@@ -424,7 +435,7 @@ function seedTemplateNodeData(item: SmartCanvasItem, templateId: SmartCanvasFlow
           : "根据参考图和要求生成高质量图片。";
     return { ...item, data: { ...item.data, prompt } };
   }
-  if (item.type === "image_generation") {
+  if (item.type === "image_generation" || item.type === "video_generation") {
     return { ...item, data: { ...item.data, prompt: "" } };
   }
   if (item.type === "loop") {
@@ -461,6 +472,9 @@ function canvasItemCenterOffset(type: SmartCanvasItem["type"]) {
   if (type === "image_generation") {
     return { x: -190, y: -150 };
   }
+  if (type === "video_generation") {
+    return { x: -190, y: -190 };
+  }
   if (type === "llm") {
     return { x: -190, y: -210 };
   }
@@ -494,6 +508,9 @@ function nodeSizeForType(type: SmartCanvasItem["type"]) {
   }
   if (type === "image_generation") {
     return { w: 390, h: 330 };
+  }
+  if (type === "video_generation") {
+    return { w: 390, h: 420 };
   }
   return { w: 440, h: 245 };
 }
@@ -1147,7 +1164,7 @@ export function useSmartCanvasController() {
     const nodes = template.nodes.map((type, index) => {
       const edgeTargets = new Set(template.edges.map((edge) => edge[1]));
       const column = edgeTargets.has(index) ? Math.max(1, Math.min(3, template.edges.find((edge) => edge[1] === index)?.[1] || index)) : 0;
-      const normalizedColumn = type === "image_generation" ? 2 : type === "result" ? 3 : type === "loop" || type === "llm" || type === "group" ? 1 : 0;
+      const normalizedColumn = type === "image_generation" || type === "video_generation" ? 2 : type === "result" ? 3 : type === "loop" || type === "llm" || type === "group" ? 1 : 0;
       const row = rowCounts.get(normalizedColumn) || 0;
       rowCounts.set(normalizedColumn, row + 1);
       const position = {
@@ -1212,7 +1229,7 @@ export function useSmartCanvasController() {
       return;
     }
     if (node.type !== "llm") {
-      addNodeFromPort(node.id, node.type === "image_generation" ? "result" : "image_generation");
+      addNodeFromPort(node.id, isGenerationNode(node) ? "result" : "image_generation");
       return;
     }
     const baseX = Number(node.position?.x || 0);
@@ -1288,7 +1305,7 @@ export function useSmartCanvasController() {
   const connectLlmImagesToGenerator = useCallback((generatorId: string) => {
     const current = canvasRef.current;
     const generator = current?.nodes.find((item) => item.id === generatorId);
-    if (!current || !generator || generator.type !== "image_generation") {
+    if (!current || !generator || !isGenerationNode(generator)) {
       return;
     }
     const llmNodes = incomingItems(current, generator.id, ["llm"]);
@@ -1304,7 +1321,7 @@ export function useSmartCanvasController() {
         ...missingIds.map((sourceId) => createSmartEdge(sourceId, generator.id)),
       ],
     }), true, "连接 AI 提示词参考图");
-    toast.success(`已连接 ${missingIds.length} 个图片来源到 API生成`);
+    toast.success(`已连接 ${missingIds.length} 个图片来源到${generator.type === "video_generation" ? "视频生成" : "API生成"}`);
   }, [updateCanvas]);
 
   const connectLlmImagesToLoop = useCallback((loopId: string) => {
@@ -1463,7 +1480,7 @@ export function useSmartCanvasController() {
     updateCanvas((current) => {
       const edges = [...current.edges];
       const selected = selectedItemId ? current.nodes.find((node) => node.id === selectedItemId) : null;
-      if (selected?.type === "image_generation") {
+      if (isGenerationNode(selected)) {
         edges.push(createSmartEdge(item.id, selected.id));
       }
       return { ...current, nodes: [...current.nodes, item], edges };
@@ -1477,7 +1494,7 @@ export function useSmartCanvasController() {
     position?: { x: number; y: number },
   ) => {
     const normalizedRefs = dedupeCanvasImageRefs(refs);
-    if (normalizedRefs.length === 0 || generator.type !== "image_generation") {
+    if (normalizedRefs.length === 0 || !isGenerationNode(generator)) {
       return false;
     }
     const current = canvasRef.current;
@@ -1621,7 +1638,7 @@ export function useSmartCanvasController() {
     }
     const current = canvasRef.current;
     const selected = selectedItemId && current ? current.nodes.find((node) => node.id === selectedItemId) : null;
-    const target = selected?.type === "image_generation"
+    const target = isGenerationNode(selected)
       ? selected
       : current?.nodes.find((node) => node.type === "image_generation");
     if (!target) {
@@ -1657,7 +1674,7 @@ export function useSmartCanvasController() {
 
   const addImagesNearGenerator = useCallback((refs: CanvasImageRef[], target: SmartCanvasItem, point?: { x: number; y: number }) => {
     const normalizedRefs = dedupeCanvasImageRefs(refs);
-    if (normalizedRefs.length === 0 || target.type !== "image_generation") {
+    if (normalizedRefs.length === 0 || !isGenerationNode(target)) {
       return false;
     }
     const rect = boardRef.current?.getBoundingClientRect();
@@ -1678,7 +1695,7 @@ export function useSmartCanvasController() {
       const item = JSON.parse(payload) as ManagedImageSummary;
       const refs = managedImagesToRefs([item]);
       const target = targetNodeId ? canvasRef.current?.nodes.find((node) => node.id === targetNodeId) : null;
-      if (target?.type === "image_generation" && addImagesNearGenerator(refs, target, point)) {
+      if (isGenerationNode(target) && addImagesNearGenerator(refs, target, point)) {
         return;
       }
       addImagesToCanvas(refs, point);
@@ -1704,7 +1721,7 @@ export function useSmartCanvasController() {
     const refs = await uploadFilesToRefs(files);
     if (targetGeneratorId) {
       const target = canvasRef.current?.nodes.find((node) => node.id === targetGeneratorId);
-      if (target?.type === "image_generation" && addImagesNearGenerator(refs, target, { x: event.clientX, y: event.clientY })) {
+      if (isGenerationNode(target) && addImagesNearGenerator(refs, target, { x: event.clientX, y: event.clientY })) {
         return;
       }
     }
@@ -1739,7 +1756,7 @@ export function useSmartCanvasController() {
           ? { ...item, data: { ...item.data, images: dedupeCanvasImageRefs([...(item.data?.images || []), ...refs]) } }
           : item),
       }), true, "粘贴图片");
-    } else if (selectedItem?.type === "image_generation") {
+    } else if (isGenerationNode(selectedItem)) {
       connectImagesToGenerator(refs, selectedItem);
     } else {
       addImagesToCanvas(refs);
@@ -2823,11 +2840,11 @@ export function useSmartCanvasController() {
   const runGeneratorNode = useCallback(async (generatorId: string) => {
     const current = canvasRef.current;
     const generator = current?.nodes.find((item) => item.id === generatorId);
-    if (!current || !generator || generator.type !== "image_generation") {
+    if (!current || !generator || !isGenerationNode(generator)) {
       return;
     }
     const loopNode = incomingItems(current, generator.id).find((item) => item.type === "loop");
-    if (loopNode) {
+    if (loopNode && generator.type === "image_generation") {
       await runLoopNode(loopNode.id, generator.id);
       return;
     }
@@ -2837,7 +2854,7 @@ export function useSmartCanvasController() {
     }
     const submittedPrompt = generatorPromptText(current, generator);
     if (!submittedPrompt) {
-      toast.error("请连接 Prompt 节点，或在 API生成节点里补充提示词");
+      toast.error(generator.type === "video_generation" ? "请连接 Prompt 节点，或在视频生成节点里补充提示词" : "请连接 Prompt 节点，或在 API生成节点里补充提示词");
       return;
     }
     const inputRefs = generatorInputImages(current, generator);
@@ -2856,7 +2873,7 @@ export function useSmartCanvasController() {
               input_images: [],
               status: "running",
               error: "",
-              output: { images: [] },
+              output: generator.type === "video_generation" ? { videos: [] } : { images: [] },
               started_at: startedAt,
               updated_at: startedAt,
             },
@@ -2865,7 +2882,23 @@ export function useSmartCanvasController() {
       }, true, "开始 API 生成");
       const clientTaskId = uniqueTaskId("smart-canvas-node");
       let task: CreationTask;
-      if (inputRefs.length > 0) {
+      if (generator.type === "video_generation") {
+        const videoModel = generator.data?.model || models.video[0]?.id || "";
+        task = await createVideoGenerationTask(
+          uniqueTaskId("smart-canvas-video"),
+          submittedPrompt,
+          videoModel,
+          inputRefs,
+          Number(generator.data?.duration || 5),
+          generator.data?.aspect_ratio || "16:9",
+          generator.data?.resolution || "",
+          generator.data?.visibility || "private",
+          {
+            enhancePrompt: generator.data?.enhance_prompt !== false,
+            generateAudio: generator.data?.generate_audio === true,
+          },
+        );
+      } else if (inputRefs.length > 0) {
         const files = await imageRefsToFiles(inputRefs);
         if (files.length === 0) {
           throw new Error("没有可读取的输入图片");
@@ -2875,6 +2908,7 @@ export function useSmartCanvasController() {
         task = await createImageGenerationTask(clientTaskId, submittedPrompt, generator.data?.model || "auto", generator.data?.size || "1024x1024", generatorImageQuality(generator), generatorImageCount(generator), undefined, generator.data?.visibility || "private", generatorImageResolution(generator));
       }
       const output = creationTaskToOutput(task);
+      const submittedModel = task.model || generator.data?.model || (generator.type === "video_generation" ? models.video[0]?.id || "" : "auto");
       let outputIds = migrated.edges.filter((edge) => edge.source === generator.id)
         .map((edge) => migrated.nodes.find((item) => item.id === edge.target))
         .filter((item): item is SmartCanvasItem => item?.type === "result")
@@ -2909,7 +2943,7 @@ export function useSmartCanvasController() {
           data: {
             ...item.data,
             prompt: submittedPrompt,
-            model: generator.data?.model || "auto",
+            model: submittedModel,
             output,
             status: task.status,
             error: task.error,
@@ -2919,7 +2953,7 @@ export function useSmartCanvasController() {
           },
         } : item);
         return { ...doc, nodes, edges };
-      }, true, "提交 API 生成");
+      }, true, generator.type === "video_generation" ? "提交视频生成" : "提交 API 生成");
       selectSingleItem(outputIds[0] || generator.id);
       void pollTaskIntoGenerator(task.id, generator.id, outputIds);
     } catch (error) {
@@ -2934,7 +2968,7 @@ export function useSmartCanvasController() {
     } finally {
       setRunning(false);
     }
-  }, [imageRefsToFiles, migrateGeneratorDirectInputsToImageNodes, pollTaskIntoGenerator, runLoopNode, selectSingleItem, updateCanvas]);
+  }, [imageRefsToFiles, migrateGeneratorDirectInputsToImageNodes, models.video, pollTaskIntoGenerator, runLoopNode, selectSingleItem, updateCanvas]);
 
   const stopLoopNode = useCallback(async (loopId: string) => {
     const current = canvasRef.current;
@@ -3030,7 +3064,7 @@ export function useSmartCanvasController() {
       return;
     }
     current.nodes
-      .filter((item) => item.type === "image_generation" && item.data?.task_id && isActiveTask(item.data.status) && !hasLoopOutput(item) && !isLoopDrivenGenerator(current, item.id))
+      .filter((item) => isGenerationNode(item) && item.data?.task_id && isActiveTask(item.data.status) && !hasLoopOutput(item) && !isLoopDrivenGenerator(current, item.id))
       .forEach((item) => {
         const outputIds = current.edges
           .filter((edge) => edge.source === item.id)

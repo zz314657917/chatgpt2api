@@ -65,6 +65,7 @@ const NODE_TITLES: Partial<Record<SmartCanvasItemType, string>> = {
   image: "图片节点异常",
   prompt: "提示词节点异常",
   image_generation: "图片生成失败",
+  video_generation: "视频生成失败",
   result: "结果节点失败",
 };
 
