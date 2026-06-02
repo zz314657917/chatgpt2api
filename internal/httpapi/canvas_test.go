@@ -23,12 +23,51 @@ func TestCanvasModelOptionsHideCodexImageRoute(t *testing.T) {
 			{"id": util.ImageModelCodex},
 			{"id": "remote-image"},
 		},
-	}, true)
+	}, true, false)
 	assertCanvasModelIDs(t, modelListItems, map[string]bool{
 		util.ImageModelCodex: false,
 		util.ImageModelGPT:   true,
 		"remote-image":       true,
 	})
+}
+
+func TestCanvasModelOptionsDoNotExposeVideoWithoutSub2APIBinding(t *testing.T) {
+	modelListItems := canvasModelOptionsFromModelList(map[string]any{
+		"data": []map[string]any{
+			{"id": "sora-2"},
+			{"id": "kling-v3-omni"},
+		},
+	}, true, false)
+
+	kinds := map[string]string{}
+	capabilities := map[string][]string{}
+	for _, item := range modelListItems {
+		kinds[item.ID] = item.Kind
+		capabilities[item.ID] = item.Capabilities
+	}
+	for _, id := range []string{"sora-2", "kling-v3-omni"} {
+		if kinds[id] == "video" {
+			t.Fatalf("model %q kind = video, want non-video in %#v", id, modelListItems)
+		}
+		if hasCanvasTestCapability(capabilities[id], "video") {
+			t.Fatalf("model %q capabilities = %#v, want no video", id, capabilities[id])
+		}
+	}
+}
+
+func TestCanvasModelOptionsAllowVideoForSub2APIModelList(t *testing.T) {
+	modelListItems := canvasModelOptionsFromModelList(map[string]any{
+		"data": []map[string]any{
+			{"id": "sora-2"},
+		},
+	}, false, true)
+
+	if len(modelListItems) != 1 {
+		t.Fatalf("model list items = %#v", modelListItems)
+	}
+	if modelListItems[0].Kind != "video" || !hasCanvasTestCapability(modelListItems[0].Capabilities, "video") {
+		t.Fatalf("model option = %#v, want video capability", modelListItems[0])
+	}
 }
 
 func assertCanvasModelIDs(t *testing.T, items []canvasModelOption, wants map[string]bool) {
@@ -42,4 +81,13 @@ func assertCanvasModelIDs(t *testing.T, items []canvasModelOption, wants map[str
 			t.Fatalf("model %q presence = %v, want %v in %#v", id, seen[id], want, items)
 		}
 	}
+}
+
+func hasCanvasTestCapability(capabilities []string, want string) bool {
+	for _, item := range capabilities {
+		if item == want {
+			return true
+		}
+	}
+	return false
 }

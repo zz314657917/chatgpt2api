@@ -381,14 +381,14 @@ func (a *App) canvasModelCatalog(ctx context.Context, identity service.Identity)
 			return canvasModelOptionsFromCatalog(result)
 		}
 		if result, err := a.getSub2APIModels(ctx, binding); err == nil {
-			return canvasModelOptionsFromModelList(result, false)
+			return canvasModelOptionsFromModelList(result, false, true)
 		}
 	}
 	result, err := a.engine.ListModels(ctx)
 	if err != nil {
 		result = map[string]any{"data": []map[string]any{}}
 	}
-	return canvasModelOptionsFromModelList(result, true)
+	return canvasModelOptionsFromModelList(result, true, false)
 }
 
 func (a *App) getSub2APIModelCatalog(ctx context.Context, binding service.Sub2APIBinding) (map[string]any, error) {
@@ -418,11 +418,11 @@ func canvasModelOptionsFromCatalog(result map[string]any) []canvasModelOption {
 	return sortedCanvasModelOptions(seen)
 }
 
-func canvasModelOptionsFromModelList(result map[string]any, includeLocal bool) []canvasModelOption {
+func canvasModelOptionsFromModelList(result map[string]any, includeLocal bool, allowVideo bool) []canvasModelOption {
 	seen := map[string]canvasModelOption{}
 	for _, item := range util.AsMapSlice(result["data"]) {
 		if id := util.Clean(item["id"]); id != "" && !shouldHideCanvasModel(id) {
-			seen[id] = newCanvasModelOption(id, firstNonEmpty(util.Clean(item["display_name"]), util.Clean(item["name"]), id))
+			seen[id] = newCanvasModelOption(id, firstNonEmpty(util.Clean(item["display_name"]), util.Clean(item["name"]), id), allowVideo)
 		}
 	}
 	if includeLocal {
@@ -431,7 +431,7 @@ func canvasModelOptionsFromModelList(result map[string]any, includeLocal bool) [
 				continue
 			}
 			if _, ok := seen[id]; !ok {
-				seen[id] = newCanvasModelOption(id, id)
+				seen[id] = newCanvasModelOption(id, id, allowVideo)
 			}
 		}
 	}
@@ -626,14 +626,31 @@ func canvasModelKind(id string) string {
 	return canvasModelKindFromCapabilities(canvasModelCapabilities(nil, id))
 }
 
-func newCanvasModelOption(id string, name string) canvasModelOption {
-	capabilities := canvasModelCapabilities(nil, id)
+func newCanvasModelOption(id string, name string, allowVideo bool) canvasModelOption {
+	capabilities := canvasModelCapabilitiesForModelList(id, allowVideo)
 	return canvasModelOption{
 		ID:           id,
 		Name:         firstNonEmpty(name, id),
 		Kind:         canvasModelKindFromCapabilities(capabilities),
 		Capabilities: capabilities,
 		Enabled:      true,
+	}
+}
+
+func canvasModelCapabilitiesForModelList(id string, allowVideo bool) []string {
+	if allowVideo {
+		return canvasModelCapabilities(nil, id)
+	}
+	switch id {
+	case util.ImageModelAuto:
+		return []string{"chat", "image"}
+	case util.ImageModelGPT, util.ImageModelGPTOfficial, util.ImageModelCodex:
+		return []string{"image"}
+	default:
+		if canvasModelLooksLikeImage(id) {
+			return []string{"image"}
+		}
+		return []string{"chat"}
 	}
 }
 
