@@ -200,6 +200,8 @@ func (a *App) ExecuteCanvasNode(ctx context.Context, identity service.Identity, 
 		return a.executeCanvasImageGenerationNode(ctx, identity, exec)
 	case service.CanvasNodeTypeImageEdit:
 		return a.executeCanvasImageEditNode(ctx, identity, exec)
+	case service.CanvasNodeTypeVideoCreate:
+		return a.executeCanvasVideoGenerationNode(ctx, identity, exec)
 	default:
 		return service.CanvasNodeOutput{}, fmt.Errorf("unknown node type: %s", exec.Node.Type)
 	}
@@ -243,6 +245,38 @@ func (a *App) executeCanvasImageGenerationNode(ctx context.Context, identity ser
 		canvasImageTaskMetadata(exec.Node),
 		canvasImageOutputOptions(exec.Node),
 		canvasImageToolOptions(exec.Node),
+		canvasNodeVisibility(exec.Node),
+	)
+	if err != nil {
+		return service.CanvasNodeOutput{}, err
+	}
+	return a.waitCanvasTaskOutput(ctx, identity, taskID, task)
+}
+
+func (a *App) executeCanvasVideoGenerationNode(ctx context.Context, identity service.Identity, exec service.CanvasNodeExecution) (service.CanvasNodeOutput, error) {
+	prompt := canvasPrompt(exec.Node, exec.Inputs)
+	if prompt == "" {
+		return service.CanvasNodeOutput{}, fmt.Errorf("视频生成节点缺少 prompt")
+	}
+	images, err := a.canvasUploadedImages(identity, exec.Node, exec.Inputs)
+	if err != nil {
+		return service.CanvasNodeOutput{}, err
+	}
+	taskID := canvasTaskID(exec.RunID, exec.Node.ID)
+	task, err := a.tasks.SubmitVideo(
+		ctx,
+		identity,
+		taskID,
+		prompt,
+		canvasNodeModel(exec.Node, util.ImageModelAuto),
+		images,
+		service.VideoGenerationOptions{
+			Duration:      util.ToInt(exec.Node.Data["duration"], 5),
+			AspectRatio:   util.Clean(exec.Node.Data["aspect_ratio"]),
+			Resolution:    util.Clean(exec.Node.Data["resolution"]),
+			EnhancePrompt: util.ToBool(exec.Node.Data["enhance_prompt"]),
+			GenerateAudio: util.ToBool(exec.Node.Data["generate_audio"]),
+		},
 		canvasNodeVisibility(exec.Node),
 	)
 	if err != nil {
@@ -483,12 +517,14 @@ func canvasResultNodeOutput(inputs []service.CanvasNodeInput) service.CanvasNode
 			}
 		}
 		out.Images = append(out.Images, input.Output.Images...)
+		out.Videos = append(out.Videos, input.Output.Videos...)
 	}
 	return out
 }
 
 func canvasOutputFromTask(task map[string]any) service.CanvasNodeOutput {
 	out := service.CanvasNodeOutput{TaskID: util.Clean(task["id"]), Raw: util.CopyMap(task)}
+	mode := util.Clean(task["mode"])
 	for _, item := range util.AsMapSlice(task["data"]) {
 		if text := util.Clean(item["text_response"]); text != "" {
 			if out.Text == "" {
@@ -496,6 +532,10 @@ func canvasOutputFromTask(task map[string]any) service.CanvasNodeOutput {
 			} else {
 				out.Text += "\n" + text
 			}
+		}
+		if ref := canvasVideoRefFromTaskItem(item, mode); ref.URL != "" || ref.LocalURL != "" {
+			out.Videos = append(out.Videos, ref)
+			continue
 		}
 		ref := service.CanvasImageRef{
 			URL:          util.Clean(item["url"]),
@@ -509,6 +549,19 @@ func canvasOutputFromTask(task map[string]any) service.CanvasNodeOutput {
 		}
 	}
 	return out
+}
+
+func canvasVideoRefFromTaskItem(item map[string]any, mode string) service.CanvasVideoRef {
+	videoURL := firstNonEmpty(util.Clean(item["video_url"]), util.Clean(item["url"]))
+	localURL := firstNonEmpty(util.Clean(item["local_url"]), videoURL)
+	if mode != "video" && util.Clean(item["video_url"]) == "" {
+		return service.CanvasVideoRef{}
+	}
+	return service.CanvasVideoRef{
+		URL:      videoURL,
+		LocalURL: localURL,
+		Name:     util.Clean(item["name"]),
+	}
 }
 
 func canvasTaskID(runID, nodeID string) string {

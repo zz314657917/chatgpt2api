@@ -150,6 +150,12 @@ func NewApp() (*App, error) {
 		cfg.UserDefaultConcurrentLimit,
 		cfg.UserDefaultRPMLimit,
 	)
+	app.tasks.SetVideoHandler(func(ctx context.Context, identity service.Identity, payload map[string]any) (map[string]any, error) {
+		if binding, ok := app.sub2APIBindingForIdentity(identity); ok {
+			return app.runLoggedSub2APIVideoTask(ctx, identity, payload, binding)
+		}
+		return nil, sub2APIKeyBindingRequiredError()
+	})
 	app.tasks.SetBillingService(billing)
 	app.tasks.SetTaskTimeoutGetter(func() time.Duration {
 		return time.Duration(app.config.ImageTaskTimeoutSeconds()) * time.Second

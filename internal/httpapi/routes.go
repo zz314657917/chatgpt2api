@@ -1596,6 +1596,27 @@ func (a *App) handleCreationTasks(w http.ResponseWriter, r *http.Request) {
 		util.WriteJSON(w, http.StatusOK, task)
 		return
 	}
+	if r.URL.Path == "/api/creation-tasks/video-generations" && r.Method == http.MethodPost {
+		body, _ := readJSONMap(r)
+		images, err := a.videoInputImages(body, identity)
+		if err != nil {
+			util.WriteError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		task, err := a.tasks.SubmitVideo(r.Context(), identity, util.Clean(body["client_task_id"]), util.Clean(body["prompt"]), firstNonEmpty(util.Clean(body["model"]), util.ImageModelAuto), images, service.VideoGenerationOptions{
+			Duration:      util.ToInt(body["duration"], 5),
+			AspectRatio:   util.Clean(body["aspect_ratio"]),
+			Resolution:    util.Clean(body["resolution"]),
+			EnhancePrompt: util.ToBool(body["enhance_prompt"]),
+			GenerateAudio: util.ToBool(body["generate_audio"]),
+		}, util.Clean(body["visibility"]))
+		if err != nil {
+			writeCreationTaskSubmitError(w, err)
+			return
+		}
+		util.WriteJSON(w, http.StatusOK, task)
+		return
+	}
 	if r.URL.Path == "/api/creation-tasks/image-edits" && r.Method == http.MethodPost {
 		body, images, err := a.readImageEditTaskBody(r, identity)
 		if err != nil {

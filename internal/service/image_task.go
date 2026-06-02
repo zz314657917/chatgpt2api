@@ -40,6 +40,14 @@ type ImageOutputOptions struct {
 	Compression *int
 }
 
+type VideoGenerationOptions struct {
+	Duration      int
+	AspectRatio   string
+	Resolution    string
+	EnhancePrompt bool
+	GenerateAudio bool
+}
+
 type ImageToolOptions struct {
 	Background       string
 	Moderation       string
@@ -56,6 +64,7 @@ type ImageTaskService struct {
 	generation          ImageTaskHandler
 	edit                ImageTaskHandler
 	chat                ImageTaskHandler
+	video               ImageTaskHandler
 	billing             *BillingService
 	retentionGetter     func() int
 	taskTimeoutGetter   func() time.Duration
@@ -120,11 +129,15 @@ func (e ImageTaskLimitError) Error() string {
 }
 
 func NewStoredImageTaskService(backend storage.Backend, generation ImageTaskHandler, edit ImageTaskHandler, chat ImageTaskHandler, retentionGetter func() int, limitGetters ...func() int) *ImageTaskService {
-	return newImageTaskService(jsonDocumentStoreFromBackend(backend), generation, edit, chat, retentionGetter, limitGetters...)
+	return newImageTaskService(jsonDocumentStoreFromBackend(backend), generation, edit, chat, nil, retentionGetter, limitGetters...)
 }
 
-func newImageTaskService(store storage.JSONDocumentBackend, generation ImageTaskHandler, edit ImageTaskHandler, chat ImageTaskHandler, retentionGetter func() int, limitGetters ...func() int) *ImageTaskService {
-	s := &ImageTaskService{store: store, docName: "image_tasks.json", generation: generation, edit: edit, chat: chat, retentionGetter: retentionGetter, tasks: map[string]map[string]any{}, cancels: map[string]context.CancelFunc{}, ownerSubmitTimes: map[string][]time.Time{}, ownerRunningUnits: map[string]int{}}
+func (s *ImageTaskService) SetVideoHandler(handler ImageTaskHandler) {
+	s.video = handler
+}
+
+func newImageTaskService(store storage.JSONDocumentBackend, generation ImageTaskHandler, edit ImageTaskHandler, chat ImageTaskHandler, video ImageTaskHandler, retentionGetter func() int, limitGetters ...func() int) *ImageTaskService {
+	s := &ImageTaskService{store: store, docName: "image_tasks.json", generation: generation, edit: edit, chat: chat, video: video, retentionGetter: retentionGetter, tasks: map[string]map[string]any{}, cancels: map[string]context.CancelFunc{}, ownerSubmitTimes: map[string][]time.Time{}, ownerRunningUnits: map[string]int{}}
 	s.creationUnitCond = sync.NewCond(&s.mu)
 	if len(limitGetters) > 0 {
 		s.userConcurrentLimit = limitGetters[0]
@@ -262,6 +275,40 @@ func (s *ImageTaskService) SubmitChat(ctx context.Context, identity Identity, cl
 		payload[imageTaskBillingBillablePayloadKey] = true
 	}
 	return s.submit(ctx, identity, clientTaskID, "chat", payload)
+}
+
+func (s *ImageTaskService) SubmitVideo(ctx context.Context, identity Identity, clientTaskID, prompt, model string, images any, options VideoGenerationOptions, visibilityValues ...string) (map[string]any, error) {
+	prompt = strings.TrimSpace(prompt)
+	if prompt == "" {
+		return nil, fmt.Errorf("prompt is required")
+	}
+	if err := ValidateImageContentPolicy(prompt, nil); err != nil {
+		return nil, err
+	}
+	visibility, err := imageTaskVisibility(visibilityValues...)
+	if err != nil {
+		return nil, err
+	}
+	duration := options.Duration
+	if duration < 5 {
+		duration = 5
+	}
+	if duration > 15 {
+		duration = 15
+	}
+	payload := map[string]any{
+		"prompt":         prompt,
+		"model":          firstNonEmpty(util.Clean(model), util.ImageModelAuto),
+		"images":         images,
+		"duration":       duration,
+		"aspect_ratio":   strings.TrimSpace(options.AspectRatio),
+		"resolution":     strings.TrimSpace(options.Resolution),
+		"n":              1,
+		"visibility":     visibility,
+		"enhance_prompt": options.EnhancePrompt,
+		"generate_audio": options.GenerateAudio,
+	}
+	return s.submit(ctx, identity, clientTaskID, "video", payload)
 }
 
 func (s *ImageTaskService) submitImageWithMetadata(ctx context.Context, identity Identity, clientTaskID, prompt, model, size, quality, baseURL string, n int, messages any, metadata map[string]any, mode string, images any, visibilityValues ...string) (map[string]any, error) {
@@ -547,7 +594,7 @@ func (s *ImageTaskService) submit(ctx context.Context, identity Identity, client
 	if util.ToBool(payload[imageTaskBillingBillablePayloadKey]) {
 		task[imageTaskBillingBillablePayloadKey] = true
 	}
-	if mode == "generate" || mode == "edit" {
+	if isMediaTaskMode(mode) {
 		task["output_statuses"] = initialImageOutputStatuses(count)
 	}
 	if SupportsImageOutputCompression(outputFormat) {
@@ -575,8 +622,14 @@ func (s *ImageTaskService) runTask(ctx context.Context, key, mode string, identi
 		handler = s.edit
 	} else if mode == "chat" {
 		handler = s.chat
+	} else if mode == "video" {
+		handler = s.video
 	}
-	if mode == "generate" || mode == "edit" {
+	if handler == nil {
+		s.updateActiveTask(key, map[string]any{"status": TaskStatusError, "error": mode + " task handler is unavailable", "data": []any{}})
+		return
+	}
+	if isMediaTaskMode(mode) {
 		payload[imageOutputCallbackPayloadKey] = func(data []map[string]any) {
 			if len(data) == 0 {
 				return
@@ -626,7 +679,7 @@ func (s *ImageTaskService) runTask(ctx context.Context, key, mode string, identi
 			status = TaskStatusCancelled
 			message = "任务已终止"
 		} else if runCtx.Err() == context.DeadlineExceeded {
-			message = "图片生成超时，请稍后重试或降低分辨率"
+			message = taskTimeoutMessage(mode)
 		}
 		data := taskResultData(result)
 		outputType := util.Clean(result["output_type"])
@@ -641,7 +694,7 @@ func (s *ImageTaskService) runTask(ctx context.Context, key, mode string, identi
 		if outputType != "" {
 			updates["output_type"] = outputType
 		}
-		if mode == "generate" || mode == "edit" {
+		if isMediaTaskMode(mode) {
 			updates["output_statuses"] = finalImageOutputStatuses(taskCount(mode, payload), data, status)
 		}
 		s.updateActiveTask(key, updates)
@@ -661,7 +714,7 @@ func (s *ImageTaskService) runTask(ctx context.Context, key, mode string, identi
 		if outputType != "" {
 			updates["output_type"] = outputType
 		}
-		if mode == "generate" || mode == "edit" {
+		if isMediaTaskMode(mode) {
 			updates["output_statuses"] = finalImageOutputStatuses(taskCount(mode, payload), nil, TaskStatusError)
 		}
 		s.updateActiveTask(key, updates)
@@ -669,7 +722,7 @@ func (s *ImageTaskService) runTask(ctx context.Context, key, mode string, identi
 		return
 	}
 	updates := map[string]any{"status": TaskStatusSuccess, "data": data, "error": ""}
-	if mode == "generate" || mode == "edit" {
+	if isMediaTaskMode(mode) {
 		updates["output_statuses"] = finalImageOutputStatuses(taskCount(mode, payload), data, TaskStatusSuccess)
 	}
 	if outputType != "" {
@@ -1013,6 +1066,8 @@ func (s *ImageTaskService) loadLocked() map[string]map[string]any {
 			mode = "edit"
 		} else if task["mode"] == "chat" {
 			mode = "chat"
+		} else if task["mode"] == "video" {
+			mode = "video"
 		}
 		count := storedImageOutputCount(task)
 		visibility, _ := NormalizeImageVisibility(util.Clean(task["visibility"]))
@@ -1307,6 +1362,17 @@ func taskCount(mode string, payload map[string]any) int {
 	return imageTaskCount(payload)
 }
 
+func isMediaTaskMode(mode string) bool {
+	return mode == "generate" || mode == "edit" || mode == "video"
+}
+
+func taskTimeoutMessage(mode string) string {
+	if mode == "video" {
+		return "视频生成超时，请稍后重试或降低分辨率"
+	}
+	return "图片生成超时，请稍后重试或降低分辨率"
+}
+
 func imageTaskBillingUnitAmount(payload map[string]any) int {
 	model := firstNonEmpty(util.Clean(payload["model"]), util.ImageModelAuto)
 	size := ""
@@ -1348,7 +1414,7 @@ func initialImageOutputStatuses(count int) []string {
 }
 
 func normalizedImageOutputStatuses(mode string, count int, value any) []string {
-	if mode != "generate" && mode != "edit" {
+	if mode != "generate" && mode != "edit" && mode != "video" {
 		return nil
 	}
 	if count < 1 {
@@ -1371,7 +1437,7 @@ func normalizedImageOutputStatuses(mode string, count int, value any) []string {
 
 func applyTerminalImageOutputStatuses(task map[string]any, status string) bool {
 	mode := util.Clean(task["mode"])
-	if mode != "generate" && mode != "edit" {
+	if mode != "generate" && mode != "edit" && mode != "video" {
 		return false
 	}
 	count := storedImageOutputCount(task)
@@ -1415,14 +1481,14 @@ func hasImageTaskOutputData(item map[string]any) bool {
 	if item == nil {
 		return false
 	}
-	return util.Clean(item["b64_json"]) != "" || util.Clean(item["url"]) != "" || util.Clean(item["text_response"]) != ""
+	return util.Clean(item["b64_json"]) != "" || util.Clean(item["url"]) != "" || util.Clean(item["video_url"]) != "" || util.Clean(item["local_url"]) != "" || util.Clean(item["text_response"]) != ""
 }
 
 func hasBillableImageTaskOutputData(item map[string]any) bool {
 	if item == nil {
 		return false
 	}
-	return util.Clean(item["b64_json"]) != "" || util.Clean(item["url"]) != ""
+	return util.Clean(item["b64_json"]) != "" || util.Clean(item["url"]) != "" || util.Clean(item["video_url"]) != "" || util.Clean(item["local_url"]) != ""
 }
 
 func billableTaskOutputCount(task map[string]any) int {
@@ -1439,7 +1505,7 @@ func billableTaskOutputCount(task map[string]any) int {
 }
 
 func isBillableImageTaskMode(mode string, payload map[string]any) bool {
-	if mode == "generate" || mode == "edit" {
+	if mode == "generate" || mode == "edit" || mode == "video" {
 		return true
 	}
 	return mode == "chat" && util.ToBool(payload[imageTaskBillingBillablePayloadKey])
@@ -1449,6 +1515,8 @@ func creationTaskBillingEndpoint(mode string) string {
 	switch mode {
 	case "edit":
 		return "/api/creation-tasks/image-edits"
+	case "video":
+		return "/api/creation-tasks/video-generations"
 	case "chat":
 		return "/api/creation-tasks/chat-completions"
 	default:

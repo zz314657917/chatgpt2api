@@ -2670,6 +2670,169 @@ func TestSub2APIImageCreationTaskUsesOfficialFallbackAndPollsTask(t *testing.T) 
 	}
 }
 
+func TestSub2APIVideoCreationTaskUsesApimartTasksEndpoint(t *testing.T) {
+	app := newTestApp(t)
+	defer app.Close()
+
+	var generationPayload map[string]any
+	var taskPolls int
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer sub2-key" {
+			t.Fatalf("gateway Authorization = %q", got)
+		}
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/videos/generations":
+			if err := json.NewDecoder(r.Body).Decode(&generationPayload); err != nil {
+				t.Fatalf("gateway json: %v", err)
+			}
+			util.WriteJSON(w, http.StatusOK, map[string]any{
+				"status":  "submitted",
+				"task_id": "task-video-apimart",
+			})
+		case r.Method == http.MethodGet && r.URL.Path == "/tasks/task-video-apimart":
+			taskPolls++
+			util.WriteJSON(w, http.StatusOK, map[string]any{
+				"status": "completed",
+				"result": map[string]any{
+					"videos": []map[string]any{
+						{"url": "https://cdn.example/video.mp4"},
+					},
+				},
+			})
+		default:
+			t.Fatalf("gateway request = %s %s", r.Method, r.URL.String())
+		}
+	}))
+	defer gateway.Close()
+
+	owner := service.AuthOwner{ID: "sub2api:video-user", Name: "sub2api-video", Provider: service.AuthProviderSub2API}
+	_, sessionKey, err := app.auth.UpsertSub2APISession(owner)
+	if err != nil {
+		t.Fatalf("UpsertSub2APISession() error = %v", err)
+	}
+	if err := app.sub2Bindings.Save(service.Sub2APIBinding{
+		OwnerID:        owner.ID,
+		Sub2APIUserID:  "video-user",
+		SessionToken:   "session-video-user",
+		APIKey:         "sub2-key",
+		GatewayBaseURL: gateway.URL,
+	}); err != nil {
+		t.Fatalf("Save(Sub2APIBinding) error = %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/creation-tasks/video-generations", strings.NewReader(`{"client_task_id":"sub2-video-task","prompt":"make a video","model":"doubao-seedance-2.0","duration":5,"aspect_ratio":"16:9","resolution":"720p","generate_audio":true}`))
+	req.Header.Set("Authorization", "Bearer "+sessionKey)
+	res := httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("submit sub2api video task status = %d body = %s", res.Code, res.Body.String())
+	}
+
+	var listed map[string]any
+	waitForHTTPTestCondition(t, func() bool {
+		req = httptest.NewRequest(http.MethodGet, "/api/creation-tasks?ids=sub2-video-task", nil)
+		req.Header.Set("Authorization", "Bearer "+sessionKey)
+		res = httptest.NewRecorder()
+		app.Handler().ServeHTTP(res, req)
+		if res.Code != http.StatusOK {
+			t.Fatalf("list sub2api video task status = %d body = %s", res.Code, res.Body.String())
+		}
+		if err := json.Unmarshal(res.Body.Bytes(), &listed); err != nil {
+			t.Fatalf("list sub2api video task json: %v", err)
+		}
+		items := util.AsMapSlice(listed["items"])
+		return len(items) == 1 && items[0]["status"] == service.TaskStatusSuccess
+	})
+
+	if generationPayload["model"] != "doubao-seedance-2.0" || generationPayload["duration"] != float64(5) || generationPayload["size"] != "16:9" || generationPayload["resolution"] != "720p" || generationPayload["generate_audio"] != true {
+		t.Fatalf("gateway video request body = %#v", generationPayload)
+	}
+	if _, ok := generationPayload["aspect_ratio"]; ok {
+		t.Fatalf("gateway video request should use APIMart size instead of aspect_ratio: %#v", generationPayload)
+	}
+	if taskPolls == 0 {
+		t.Fatalf("expected task polling through /tasks/{task_id}")
+	}
+	items := util.AsMapSlice(listed["items"])
+	data := util.AsMapSlice(items[0]["data"])
+	if len(data) != 1 || util.Clean(data[0]["video_url"]) != "https://cdn.example/video.mp4" {
+		t.Fatalf("sub2api video task data = %#v", items[0])
+	}
+}
+
+func TestSub2APIVideoPayloadUsesApimartFields(t *testing.T) {
+	payload := sub2APIVideoPayload(map[string]any{
+		"prompt":         "make a video",
+		"model":          "doubao-seedance-2.0",
+		"duration":       60,
+		"aspect_ratio":   "adaptive",
+		"resolution":     "2k",
+		"generate_audio": true,
+		"images": []protocol.UploadedImage{
+			{ContentType: "image/png", Data: []byte("png")},
+		},
+	})
+
+	if payload["duration"] != 15 || payload["size"] != "adaptive" || payload["generate_audio"] != true {
+		t.Fatalf("video payload = %#v", payload)
+	}
+	if _, ok := payload["aspect_ratio"]; ok {
+		t.Fatalf("video payload should use size instead of aspect_ratio: %#v", payload)
+	}
+	if _, ok := payload["resolution"]; ok {
+		t.Fatalf("invalid video resolution should be omitted: %#v", payload)
+	}
+	if _, ok := payload["images"]; ok {
+		t.Fatalf("video payload should use image_urls instead of images: %#v", payload)
+	}
+	imageURLs, ok := payload["image_urls"].([]string)
+	if !ok || len(imageURLs) != 1 || !strings.HasPrefix(imageURLs[0], "data:image/png;base64,") {
+		t.Fatalf("video image_urls = %#v", payload["image_urls"])
+	}
+
+	clamped := sub2APIVideoPayload(map[string]any{"prompt": "make a video", "duration": 1, "aspect_ratio": "bad", "resolution": "1080p"})
+	if clamped["duration"] != 5 || clamped["size"] != "16:9" || clamped["resolution"] != "1080p" {
+		t.Fatalf("clamped video payload = %#v", clamped)
+	}
+}
+
+func TestSub2APIVideoPayloadDetectsModelSpecificFields(t *testing.T) {
+	klingV3 := sub2APIVideoPayload(map[string]any{"prompt": "make", "model": "kling-v3-omni", "duration": 2, "aspect_ratio": "21:9", "resolution": "1080p", "generate_audio": true})
+	if klingV3["duration"] != 3 || klingV3["aspect_ratio"] != "16:9" || klingV3["mode"] != "pro" || klingV3["audio"] != true || klingV3["size"] != nil {
+		t.Fatalf("kling-v3 payload = %#v", klingV3)
+	}
+
+	klingV26 := sub2APIVideoPayload(map[string]any{
+		"prompt":         "make",
+		"model":          "kling-v2-6",
+		"duration":       7,
+		"aspect_ratio":   "1:1",
+		"resolution":     "720p",
+		"generate_audio": true,
+		"images": []protocol.UploadedImage{
+			{ContentType: "image/png", Data: []byte("first")},
+			{ContentType: "image/png", Data: []byte("last")},
+			{ContentType: "image/png", Data: []byte("ignored")},
+		},
+	})
+	if klingV26["duration"] != 10 || klingV26["aspect_ratio"] != "1:1" || klingV26["mode"] != "pro" || klingV26["audio"] != nil {
+		t.Fatalf("kling-v2-6 payload = %#v", klingV26)
+	}
+	if urls := util.AsStringSlice(klingV26["image_urls"]); len(urls) != 2 {
+		t.Fatalf("kling-v2-6 image_urls = %#v", klingV26["image_urls"])
+	}
+
+	wan := sub2APIVideoPayload(map[string]any{"prompt": "make", "model": "wan2.7", "duration": 1, "aspect_ratio": "adaptive", "resolution": "720p", "enhance_prompt": true, "generate_audio": true})
+	if wan["duration"] != 2 || wan["size"] != "16:9" || wan["resolution"] != "720P" || wan["prompt_extend"] != true || wan["generate_audio"] != nil || wan["audio"] != nil {
+		t.Fatalf("wan2.7 payload = %#v", wan)
+	}
+
+	veo := sub2APIVideoPayload(map[string]any{"prompt": "make", "model": "veo3.1-fast", "duration": 15, "aspect_ratio": "1:1", "resolution": "4k", "generate_audio": true})
+	if veo["duration"] != 8 || veo["aspect_ratio"] != "16:9" || veo["resolution"] != "4k" || veo["generate_audio"] != nil || veo["audio"] != nil || veo["size"] != nil {
+		t.Fatalf("veo3.1-fast payload = %#v", veo)
+	}
+}
+
 func TestCanvasModelsUseSub2APIGatewayForBoundUser(t *testing.T) {
 	app := newTestApp(t)
 	defer app.Close()

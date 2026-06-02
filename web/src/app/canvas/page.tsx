@@ -44,6 +44,7 @@ export default function CanvasPage() {
           onRefresh={() => void canvas.reloadCanvases()}
           onDeleteCanvas={(id) => void canvas.deleteCanvasById(id)}
           onRenameCanvas={(id, name) => void canvas.renameCanvasById(id, name)}
+          onAddNode={canvas.addNodeAt}
         />
         <div className="relative min-w-0 flex-1">
           <SmartCanvasTopBar
@@ -80,6 +81,7 @@ export default function CanvasPage() {
             boardRef={canvas.boardRef}
             imageModels={canvas.models.image}
             textModels={canvas.models.text}
+            videoModels={canvas.models.video}
             running={canvas.running}
             mentionOpen={canvas.mentionOpen}
             mentionItems={canvas.mentionItems}

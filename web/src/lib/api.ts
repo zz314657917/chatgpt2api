@@ -780,6 +780,7 @@ export type CreationTaskData = {
   b64_json?: string;
   url?: string;
   local_url?: string;
+  video_url?: string;
   revised_prompt?: string;
   text_response?: string;
   width?: number;
@@ -791,7 +792,7 @@ export type CreationTaskData = {
 export type CreationTask = {
   id: string;
   status: "queued" | "running" | "success" | "error" | "cancelled";
-  mode: "generate" | "edit" | "chat";
+  mode: "generate" | "edit" | "chat" | "video";
   model?: ImageModel;
   size?: string;
   quality?: ImageQuality;
@@ -827,7 +828,7 @@ export type CreationTaskMessage = {
   content: string;
 };
 
-export type CanvasNodeType = "text" | "image" | "prompt" | "llm" | "loop" | "group" | "image_generation" | "image_edit" | "result";
+export type CanvasNodeType = "text" | "image" | "prompt" | "llm" | "loop" | "group" | "image_generation" | "image_edit" | "video_generation" | "result";
 export type CanvasRunStatus = "queued" | "running" | "success" | "error" | "cancelled" | "blocked";
 
 export type CanvasImageRef = {
@@ -839,9 +840,16 @@ export type CanvasImageRef = {
   preview_url?: string;
 };
 
+export type CanvasVideoRef = {
+  url?: string;
+  local_url?: string;
+  name?: string;
+};
+
 export type CanvasNodeOutput = {
   text?: string;
   images?: CanvasImageRef[];
+  videos?: CanvasVideoRef[];
   task_id?: string;
   raw?: Record<string, unknown>;
 };
@@ -856,11 +864,14 @@ export type CanvasNodeData = {
   quality?: string;
   image_resolution?: string;
   n?: number;
+  duration?: number;
+  aspect_ratio?: string;
   visibility?: ImageVisibility;
   url?: string;
   local_url?: string;
   path?: string;
   images?: CanvasImageRef[];
+  videos?: CanvasVideoRef[];
   image_url?: string;
   image_path?: string;
   output_format?: ImageOutputFormat;
@@ -920,6 +931,7 @@ export type CanvasRunSummary = {
   blocked_nodes: number;
   text_output?: string;
   image_outputs?: CanvasImageRef[];
+  video_outputs?: CanvasVideoRef[];
   started_at?: string;
   completed_at?: string;
 };
@@ -1600,6 +1612,37 @@ export async function createImageGenerationTask(
       ...(fallbackReferenceImage ? { fallback_reference_image: fallbackReferenceImage } : {}),
       visibility,
       n: count,
+    },
+  });
+}
+
+export async function createVideoGenerationTask(
+  clientTaskId: string,
+  prompt: string,
+  model?: string,
+  images: CanvasImageRef[] = [],
+  duration = 5,
+  aspectRatio = "16:9",
+  resolution = "",
+  visibility: ImageVisibility = "private",
+  options: {
+    enhancePrompt?: boolean;
+    generateAudio?: boolean;
+  } = {},
+) {
+  return httpRequest<CreationTask>("/api/creation-tasks/video-generations", {
+    method: "POST",
+    body: {
+      client_task_id: clientTaskId,
+      prompt,
+      ...(model ? { model } : {}),
+      images,
+      duration,
+      aspect_ratio: aspectRatio,
+      ...(resolution ? { resolution } : {}),
+      enhance_prompt: options.enhancePrompt === true,
+      generate_audio: options.generateAudio === true,
+      visibility,
     },
   });
 }
