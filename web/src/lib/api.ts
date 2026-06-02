@@ -297,6 +297,10 @@ export function supportsStructuredImageParameters(model: ImageModel) {
   return usesCodexImageRoute(model);
 }
 
+export function supportsImageResolutionPresets(model: ImageModel) {
+  return isImageModel(model);
+}
+
 export function supportsImageOutputControls(model: ImageModel) {
   return usesOfficialImageRoute(model) || usesCodexImageRoute(model);
 }
