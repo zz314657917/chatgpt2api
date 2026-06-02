@@ -52,6 +52,7 @@ import {
   IMAGE_OUTPUT_FORMAT_OPTIONS,
   supportsImageOutputControls,
   supportsImageOutputCompression,
+  supportsImageResolutionPresets,
   supportsStructuredImageParameters,
   type ImageModel,
   type ImageOutputFormat,
@@ -283,17 +284,19 @@ function ImageSizePreviewPanel({
   detail,
   highResolution,
   structured,
+  resolutionPreset,
 }: {
   label: string;
   detail: string;
   highResolution: boolean;
   structured: boolean;
+  resolutionPreset: boolean;
 }) {
   return (
     <div className="col-span-2 rounded-xl border border-[#e5e7eb] bg-[#f8fafc] px-3 py-1 dark:border-border dark:bg-background/50 sm:col-span-3">
       <div className="flex min-w-0 items-center justify-between gap-3">
         <span className="shrink-0 text-[11px] font-medium text-[#45515e] dark:text-muted-foreground">
-          {structured ? "目标尺寸" : "画幅偏好"}
+          {structured ? "目标尺寸" : resolutionPreset ? "分辨率预设" : "画幅偏好"}
         </span>
         <span
           className={cn(
@@ -400,12 +403,13 @@ export function ImageComposer({
   const compressionSupported = supportsImageOutputCompression(imageOutputFormat);
   const compressionDisabled = !compressionSupported;
   const structuredImageParameters = supportsStructuredImageParameters(imageModel);
+  const resolutionPresetsSupported = supportsImageResolutionPresets(imageModel);
   const outputControlsSupported = supportsImageOutputControls(imageModel);
   const availableImageSizeModeOptions = structuredImageParameters
     ? IMAGE_SIZE_MODE_OPTIONS
     : IMAGE_SIZE_MODE_OPTIONS.filter((option) => option.value !== "custom");
   const effectiveImageSizeMode = structuredImageParameters || imageSizeMode !== "custom" ? imageSizeMode : "auto";
-  const effectiveImageResolution = structuredImageParameters ? imageResolution : "auto";
+  const effectiveImageResolution = resolutionPresetsSupported ? imageResolution : "auto";
   const submitLabel = composerMode === "chat" ? "发送对话" : referenceImages.length > 0 ? "编辑图片" : "生成图片";
   const estimateLabel = estimatedImagePriceLabel ? `预估价格 ${estimatedImagePriceLabel}，仅供参考` : "";
   const submitTitle = billingBlocked
@@ -429,12 +433,15 @@ export function ImageComposer({
   });
   const isCustomRatioInvalid =
     effectiveImageSizeMode === "ratio" && imageAspectRatio === CUSTOM_IMAGE_ASPECT_RATIO && !parseImageRatio(imageCustomRatio);
-  const sizePreviewLabel = computedImageSize
-    ? formatImageSizeDisplay(computedImageSize)
-    : effectiveImageSizeMode === "auto" || (effectiveImageSizeMode === "ratio" && effectiveImageResolution === "auto" && !isCustomRatioInvalid)
+  const hasResolutionPreset = effectiveImageResolution !== "auto";
+  const sizePreviewLabel = hasResolutionPreset && !structuredImageParameters
+    ? `${imageResolutionLabel} / ${activeImageAspectRatio || "Auto"}`
+    : computedImageSize
+      ? formatImageSizeDisplay(computedImageSize)
+      : effectiveImageSizeMode === "auto" || (effectiveImageSizeMode === "ratio" && effectiveImageResolution === "auto" && !isCustomRatioInvalid)
       ? "Auto"
       : "尺寸无效";
-  const sizeIsHighResolution = Boolean(computedImageSize && isHighResolutionImageSize(computedImageSize));
+  const sizeIsHighResolution = effectiveImageResolution === "2k" || effectiveImageResolution === "4k" || Boolean(computedImageSize && isHighResolutionImageSize(computedImageSize));
   const sizeRequirementLabel = computedImageSize ? getImageSizeRequirementLabel(computedImageSize) : "Auto";
   const sizePreviewDetail =
     effectiveImageSizeMode === "ratio"
@@ -445,8 +452,12 @@ export function ImageComposer({
             ? `${activeImageAspectRatio} 构图偏好，实际像素以上游返回为准`
             : "Auto 比例将交给模型决定"
           : computedImageSize
-            ? `目标尺寸 ${formatImageSizeDisplay(computedImageSize)}，${sizeRequirementLabel}`
-            : "比例需要填写为宽:高"
+            ? structuredImageParameters
+              ? `目标尺寸 ${formatImageSizeDisplay(computedImageSize)}，${sizeRequirementLabel}`
+              : `${imageResolutionLabel} 分辨率预设，比例仍作为构图偏好，实际像素以上游返回为准`
+            : hasResolutionPreset && !structuredImageParameters
+              ? `${imageResolutionLabel} 分辨率预设，比例交给模型决定，实际像素以上游返回为准`
+              : "比例需要填写为宽:高"
       : effectiveImageSizeMode === "custom"
         ? computedImageSize
           ? structuredImageParameters
@@ -1023,46 +1034,46 @@ export function ImageComposer({
                                 value={imageAspectRatio}
                                 valueLabel={imageAspectRatioLabel}
                                 options={IMAGE_ASPECT_RATIO_OPTIONS}
-                            open={isAspectRatioMenuOpen}
-                            onOpenChange={(open) => {
-                              setIsAspectRatioMenuOpen(open);
-                              setIsModelMenuOpen(false);
-                              if (open) {
-                                setIsResolutionMenuOpen(false);
-                                setIsQualityMenuOpen(false);
-                                setIsBackgroundMenuOpen(false);
-                                setIsModerationMenuOpen(false);
-                                setIsPartialImagesMenuOpen(false);
-                              }
-                            }}
-                                onValueChange={onImageAspectRatioChange}
-                              />
-                            </div>
-                            {structuredImageParameters ? (
-                            <div className={imageSettingsFieldClass}>
-                              <span className="shrink-0 font-medium text-[#45515e] dark:text-muted-foreground">分辨率</span>
-                              <ImageSettingsPopoverMenu
-                                label="分辨率"
-                                value={imageResolution}
-                                valueLabel={imageResolutionLabel}
-                                options={IMAGE_RESOLUTION_OPTIONS}
-                                open={isResolutionMenuOpen}
+                                open={isAspectRatioMenuOpen}
                                 onOpenChange={(open) => {
-                                  setIsResolutionMenuOpen(open);
+                                  setIsAspectRatioMenuOpen(open);
                                   setIsModelMenuOpen(false);
                                   if (open) {
-                                    setIsAspectRatioMenuOpen(false);
+                                    setIsResolutionMenuOpen(false);
                                     setIsQualityMenuOpen(false);
                                     setIsBackgroundMenuOpen(false);
                                     setIsModerationMenuOpen(false);
                                     setIsPartialImagesMenuOpen(false);
                                   }
                                 }}
-                                onValueChange={onImageResolutionChange}
-                                align="start"
-                                contentClassName="w-[min(24rem,calc(100vw-2rem))]"
+                                onValueChange={onImageAspectRatioChange}
                               />
                             </div>
+                            {resolutionPresetsSupported ? (
+                              <div className={imageSettingsFieldClass}>
+                                <span className="shrink-0 font-medium text-[#45515e] dark:text-muted-foreground">分辨率</span>
+                                <ImageSettingsPopoverMenu
+                                  label="分辨率"
+                                  value={imageResolution}
+                                  valueLabel={imageResolutionLabel}
+                                  options={IMAGE_RESOLUTION_OPTIONS}
+                                  open={isResolutionMenuOpen}
+                                  onOpenChange={(open) => {
+                                    setIsResolutionMenuOpen(open);
+                                    setIsModelMenuOpen(false);
+                                    if (open) {
+                                      setIsAspectRatioMenuOpen(false);
+                                      setIsQualityMenuOpen(false);
+                                      setIsBackgroundMenuOpen(false);
+                                      setIsModerationMenuOpen(false);
+                                      setIsPartialImagesMenuOpen(false);
+                                    }
+                                  }}
+                                  onValueChange={onImageResolutionChange}
+                                  align="start"
+                                  contentClassName="w-[min(24rem,calc(100vw-2rem))]"
+                                />
+                              </div>
                             ) : null}
                             {imageAspectRatio === CUSTOM_IMAGE_ASPECT_RATIO ? (
                               <div
@@ -1090,6 +1101,7 @@ export function ImageComposer({
                               detail={sizePreviewDetail}
                               highResolution={sizeIsHighResolution}
                               structured={structuredImageParameters}
+                              resolutionPreset={resolutionPresetsSupported}
                             />
                           </>
                         ) : null}
@@ -1099,9 +1111,10 @@ export function ImageComposer({
                             detail={sizePreviewDetail}
                             highResolution={sizeIsHighResolution}
                             structured={structuredImageParameters}
+                            resolutionPreset={resolutionPresetsSupported}
                           />
                         ) : null}
-                        {structuredImageParameters && effectiveImageSizeMode !== "auto" && sizeIsHighResolution && highResolutionHint ? (
+                        {resolutionPresetsSupported && effectiveImageSizeMode !== "auto" && sizeIsHighResolution && highResolutionHint ? (
                           <div className="col-span-2 rounded-xl border border-amber-100 bg-amber-50 px-3 py-1.5 text-[11px] leading-5 text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200 sm:col-span-3">
                             {highResolutionHint}
                           </div>
@@ -1110,7 +1123,9 @@ export function ImageComposer({
                           <p className="col-span-2 rounded-xl border border-sky-100 bg-sky-50 px-3 py-1.5 text-[11px] leading-5 text-sky-900 dark:border-sky-900/60 dark:bg-sky-950/30 dark:text-sky-100 sm:col-span-3">
                             {structuredImageParameters
                               ? "Codex 图片链路会下发目标尺寸；格式由后端保存结果时处理，压缩率仅适用于 JPEG。"
-                              : "常规/官方图片线路只会把比例作为构图偏好，实际尺寸以上游返回为准；格式由后端保存结果时处理。"}
+                              : resolutionPresetsSupported
+                                ? "常规/官方图片线路会提交分辨率预设，比例仍作为构图偏好；实际像素以上游返回为准。"
+                                : "当前图片线路只会把比例作为构图偏好，实际像素以上游返回为准；格式由后端保存结果时处理。"}
                           </p>
                         ) : null}
                         <div className={imageSettingsFieldClass}>

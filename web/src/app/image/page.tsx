@@ -18,6 +18,7 @@ import {
   IMAGE_SIZE_MODE_OPTIONS,
   buildImageSize,
   formatImageSizeDisplay,
+  getActiveImageAspectRatio,
   getImageSizeSelectionFromSize,
   getImageSizeRequirementLabel,
   isHighResolutionImageSize,
@@ -82,6 +83,7 @@ import {
   modelIDLooksImageCapable,
   supportsImageOutputCompression,
   supportsImageOutputControls,
+  supportsImageResolutionPresets,
   supportsStructuredImageParameters,
   type CanvasModelOption,
   uploadCreationTaskReferenceImage,
@@ -487,6 +489,9 @@ function effectiveImageSizeSelection(model: ImageModel, selection: ImageSizeSele
       resolution: "auto",
     };
   }
+  if (supportsImageResolutionPresets(model)) {
+    return selection;
+  }
   return {
     ...selection,
     resolution: "auto",
@@ -495,10 +500,47 @@ function effectiveImageSizeSelection(model: ImageModel, selection: ImageSizeSele
 
 function buildEffectiveImageSizeRequest(model: ImageModel, selection: ImageSizeSelection) {
   const effectiveSelection = effectiveImageSizeSelection(model, selection);
+  const sizeSelection = supportsStructuredImageParameters(model)
+    ? effectiveSelection
+    : {
+        ...effectiveSelection,
+        resolution: "auto" as const,
+      };
   return {
     selection: effectiveSelection,
-    size: buildImageSize(effectiveSelection),
+    size: buildImageSize(sizeSelection),
   };
+}
+
+function imageResolutionPresetForModel(model: ImageModel, selection: { resolution?: unknown } | undefined) {
+  const resolution = isImageResolution(selection?.resolution) ? selection.resolution : "auto";
+  return supportsImageResolutionPresets(model) && resolution !== "auto" ? resolution : undefined;
+}
+
+function imageResolutionPresetLabel(resolution: string | undefined) {
+  switch (resolution) {
+    case "1080p":
+      return "1K";
+    case "2k":
+      return "2K";
+    case "4k":
+      return "4K";
+    default:
+      return "";
+  }
+}
+
+function formatImageRequestTargetLabel(size: string, resolution?: string) {
+  const resolutionLabel = imageResolutionPresetLabel(resolution);
+  const sizeLabel = size ? formatImageSizeDisplay(size) : "";
+  if (resolutionLabel && sizeLabel) {
+    return `${resolutionLabel} / ${sizeLabel}`;
+  }
+  return resolutionLabel || sizeLabel || "当前设置";
+}
+
+function isHighResolutionImageRequest(size: string, resolution?: string) {
+  return resolution === "2k" || resolution === "4k" || isHighResolutionImageSize(size);
 }
 
 function imageOutputFormatForModel(model: ImageModel, format: ImageOutputFormat) {
@@ -620,7 +662,7 @@ function imageTaskProgressMessage(turn: ImageTurn, elapsedSeconds = 0) {
   }
 
   const route = IMAGE_MODEL_ROUTE_DETAILS[turn.model];
-  const isHighResolution = supportsStructuredImageParameters(turn.model) && isHighResolutionImageSize(turn.size);
+  const isHighResolution = isHighResolutionImageRequest(turn.size, imageResolutionPresetForModel(turn.model, turn.sizeSelection));
   void elapsedSeconds;
   if (isHighResolution) {
     return {
@@ -1455,9 +1497,18 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
   const editingDraftStructuredParameters = editingTurnDraft
     ? supportsStructuredImageParameters(editingTurnDraft.model)
     : false;
+  const editingDraftResolutionPresets = editingTurnDraft
+    ? supportsImageResolutionPresets(editingTurnDraft.model)
+    : false;
   const editingDraftOutputControls = editingTurnDraft
     ? supportsImageOutputControls(editingTurnDraft.model)
     : false;
+  const editingDraftActiveAspectRatio = editingDraftEffectiveSizeSelection
+    ? getActiveImageAspectRatio({
+        aspectRatio: editingDraftEffectiveSizeSelection.aspectRatio,
+        customRatio: editingDraftEffectiveSizeSelection.customRatio,
+      })
+    : "";
   const editingDraftCustomRatioInvalid = editingTurnDraft && editingDraftEffectiveSizeSelection
     ? isInvalidCustomRatioSelection(
         editingDraftEffectiveSizeSelection.mode,
@@ -1467,14 +1518,18 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     : false;
   const editingDraftSizePreviewLabel =
     editingTurnDraft && editingTurnDraft.mode !== "chat" && editingDraftEffectiveSizeSelection
-      ? editingDraftImageSize
-        ? formatImageSizeDisplay(editingDraftImageSize)
-        : editingDraftEffectiveSizeSelection.mode === "auto" ||
+      ? !editingDraftStructuredParameters && editingDraftEffectiveSizeSelection.resolution !== "auto"
+          ? `${imageResolutionPresetLabel(editingDraftEffectiveSizeSelection.resolution)} / ${
+              editingDraftActiveAspectRatio || "Auto"
+            }`
+          : editingDraftImageSize
+            ? formatImageSizeDisplay(editingDraftImageSize)
+            : editingDraftEffectiveSizeSelection.mode === "auto" ||
             (editingDraftEffectiveSizeSelection.mode === "ratio" &&
               editingDraftEffectiveSizeSelection.resolution === "auto" &&
               !editingDraftCustomRatioInvalid)
-          ? "Auto"
-          : "尺寸无效"
+              ? "Auto"
+              : "尺寸无效"
       : "";
   const editingDraftSizePreviewDetail =
     editingDraftEffectiveSizeSelection?.mode === "ratio"
@@ -1485,7 +1540,11 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
             ? `${editingDraftImageSize} 构图偏好，实际像素以上游返回为准`
             : "Auto 比例将交给模型决定"
           : editingDraftImageSize
-            ? `目标尺寸 ${formatImageSizeDisplay(editingDraftImageSize)}，${getImageSizeRequirementLabel(editingDraftImageSize)}`
+            ? editingDraftStructuredParameters
+              ? `目标尺寸 ${formatImageSizeDisplay(editingDraftImageSize)}，${getImageSizeRequirementLabel(editingDraftImageSize)}`
+              : editingDraftActiveAspectRatio
+                ? `${imageResolutionPresetLabel(editingDraftEffectiveSizeSelection.resolution)} 分辨率预设，比例仍作为构图偏好，实际像素以上游返回为准`
+                : `${imageResolutionPresetLabel(editingDraftEffectiveSizeSelection.resolution)} 分辨率预设，比例交给模型决定，实际像素以上游返回为准`
             : "比例需要填写为宽:高"
       : editingDraftEffectiveSizeSelection?.mode === "custom"
         ? editingDraftImageSize
@@ -1493,7 +1552,12 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
           : "宽高需要填写正整数"
         : "不指定画幅或尺寸";
   const editingDraftSizeIsHighResolution = Boolean(
-    editingDraftStructuredParameters && editingDraftImageSize && isHighResolutionImageSize(editingDraftImageSize),
+    editingDraftResolutionPresets &&
+      editingDraftEffectiveSizeSelection &&
+      isHighResolutionImageRequest(
+        editingDraftImageSize,
+        imageResolutionPresetForModel(editingTurnDraft?.model || "", editingDraftEffectiveSizeSelection),
+      ),
   );
   const chatModelOptions = useMemo(
     () => mergeImageModelOptions(canvasModelsByCapability(remoteCanvasModels, "chat"), CHAT_MODEL_OPTIONS, imageModel),
@@ -1525,10 +1589,11 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
       customWidth: imageCustomWidth,
       customHeight: imageCustomHeight,
     });
-    const estimateResolution =
-      imageModel === "auto" || imageModel === "gpt-image-2"
+    const estimateResolutionPreset = imageResolutionPresetForModel(imageModel, estimateSizeRequest.selection);
+    const estimateResolution = imageResolutionPresetLabel(estimateResolutionPreset) ||
+      (imageModel === "auto" || imageModel === "gpt-image-2"
         ? "1K"
-        : imagePriceSizeFromRequest(estimateSizeRequest.size);
+        : imagePriceSizeFromRequest(estimateSizeRequest.size));
     return imageBillingEstimate(imageModel, composerMode === "chat" ? 1 : parsedCount, estimateResolution, imageQuality);
   }, [
     composerMode,
@@ -2848,10 +2913,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
             : imageOutputCompressionForModel(activeTurn.model, taskOutputFormat, activeTurn.outputCompression);
         const taskImageQuality = imageQualityForTask(activeTurn.quality);
         const taskToolOptions = imageToolOptionsForTask(activeTurn);
-        const taskImageResolution =
-          supportsStructuredImageParameters(activeTurn.model) && activeTurnSizeRequest.selection?.resolution !== "auto"
-            ? activeTurnSizeRequest.selection?.resolution
-            : undefined;
+        const taskImageResolution = imageResolutionPresetForModel(activeTurn.model, activeTurnSizeRequest.selection);
         const fallbackReferenceImage = activeTurn.mode === "chat" ? undefined : getFallbackReferenceImage(snapshot, activeTurn.id);
         const pendingTaskGroups = activeTurn.images.reduce<Array<{ taskId: string; count: number }>>(
           (groups, image, imageIndex) => {
@@ -3387,10 +3449,10 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
           : imageOutputCompressionForModel(draft.model, draftOutputFormat, draft.outputCompression);
       const draftQuality = imageQualityForTask(draft.quality);
       const draftPartialImages = normalizePositiveImageParameter(draft.partialImages);
-      if (mode !== "chat" && supportsStructuredImageParameters(effectiveDraftModel) && isHighResolutionImageSize(draftImageSize)) {
-        const sizeLabel = formatImageSizeDisplay(draftImageSize);
+      const draftImageResolution = imageResolutionPresetForModel(effectiveDraftModel, draftSizeRequest?.selection);
+      if (mode !== "chat" && isHighResolutionImageRequest(draftImageSize, draftImageResolution)) {
         if (regenerate) {
-          toast.message(`${sizeLabel} 属于 Codex 结构化高分辨率任务，会直接提交给上游判断。`);
+          toast.message(`${formatImageRequestTargetLabel(draftImageSize, draftImageResolution)} 属于高分辨率任务，会直接提交给上游判断。`);
         }
       }
       const now = new Date().toISOString();
@@ -3533,13 +3595,12 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
           : imageOutputCompressionForModel(effectiveModel, effectiveOutputFormat, imageOutputCompression);
       const effectiveImageQuality = imageQualityForTask(imageQuality);
       const effectivePartialImages = normalizePositiveImageParameter(imagePartialImages);
+      const effectiveImageResolution = imageResolutionPresetForModel(effectiveModel, currentImageSizeRequest?.selection);
       const isHighResolutionRequest =
         effectiveImageMode !== "chat" &&
-        supportsStructuredImageParameters(effectiveModel) &&
-        isHighResolutionImageSize(currentImageSize);
+        isHighResolutionImageRequest(currentImageSize, effectiveImageResolution);
       if (isHighResolutionRequest) {
-        const sizeLabel = formatImageSizeDisplay(currentImageSize);
-        toast.message(`${sizeLabel} 属于 Codex 结构化高分辨率任务，会直接提交给上游判断。`);
+        toast.message(`${formatImageRequestTargetLabel(currentImageSize, effectiveImageResolution)} 属于高分辨率任务，会直接提交给上游判断。`);
       }
       const targetConversation = selectedConversationId
         ? conversationsRef.current.find((conversation) => conversation.id === selectedConversationId) ?? null
@@ -3814,7 +3875,9 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                         <div className="rounded-2xl border border-sky-100 bg-sky-50 px-3 py-2 text-xs leading-5 text-sky-900 sm:col-span-2 lg:col-span-4">
                           {editingDraftStructuredParameters
                             ? "Codex 图片链路会下发目标尺寸；格式由后端保存结果时处理，压缩率仅适用于 JPEG。"
-                            : "常规/官方图片线路只会把比例作为构图偏好，实际尺寸以上游返回为准；格式由后端保存结果时处理。"}
+                            : editingDraftResolutionPresets
+                              ? "常规/官方图片线路会提交分辨率预设，比例仍作为构图偏好；实际像素以上游返回为准。"
+                              : "当前图片线路只会把比例作为构图偏好，实际尺寸以上游返回为准；格式由后端保存结果时处理。"}
                         </div>
                         <label className="flex flex-col gap-2 text-sm font-medium text-stone-700">
                           画幅
@@ -3914,7 +3977,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                                 </SelectContent>
                               </Select>
                             </label>
-                            {editingDraftStructuredParameters ? (
+                            {editingDraftResolutionPresets ? (
                               <label className="flex flex-col gap-2 text-sm font-medium text-stone-700">
                                 分辨率
                                 <Select
@@ -4110,7 +4173,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                             <div className="rounded-2xl border border-stone-200 bg-stone-50 px-3 py-2 text-sm sm:col-span-2 lg:col-span-4">
                               <div className="flex min-w-0 items-center justify-between gap-3">
                                 <span className="shrink-0 font-medium text-stone-600">
-                                  {editingDraftStructuredParameters ? "目标尺寸" : "画幅偏好"}
+                                  {editingDraftStructuredParameters ? "目标尺寸" : editingDraftResolutionPresets ? "分辨率预设" : "画幅偏好"}
                                 </span>
                                 <span className={cn(
                                   "min-w-0 truncate text-right font-mono font-semibold",

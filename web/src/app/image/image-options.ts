@@ -26,7 +26,7 @@ export type ImageSizeMode = (typeof IMAGE_SIZE_MODE_OPTIONS)[number]["value"];
 
 export const IMAGE_RESOLUTION_OPTIONS = [
   { value: "auto", label: "Auto", description: "不指定固定像素，交给图片工具决定" },
-  { value: "1080p", label: "1080P", description: "结构化目标尺寸，正方形约 1088×1088" },
+  { value: "1080p", label: "1K", description: "常规分辨率预设，正方形约 1088×1088" },
   { value: "2k", label: "2K", description: "2K Square 为 2048×2048，上游会按账号能力判断" },
   { value: "4k", label: "4K", description: "按链路像素上限收敛，上游会按账号能力判断" },
 ] as const;
@@ -62,7 +62,7 @@ export const IMAGE_SIZE_PRESET_DETAILS = [
   { label: "2:3", requestValue: "2:3", normalizedSize: "1024x1536", highResolution: false },
   { label: "16:9", requestValue: "16:9", normalizedSize: "1536x864", highResolution: false },
   { label: "9:16", requestValue: "9:16", normalizedSize: "864x1536", highResolution: false },
-  { label: "1080P Square", requestValue: "1080p", normalizedSize: "1088x1088", highResolution: false },
+  { label: "1K Square", requestValue: "1080p", normalizedSize: "1088x1088", highResolution: false },
   { label: "2K Square", requestValue: "2k", normalizedSize: "2048x2048", highResolution: true },
   { label: "4K", requestValue: "4k", normalizedSize: "2880x2880", highResolution: true },
 ] as const;
