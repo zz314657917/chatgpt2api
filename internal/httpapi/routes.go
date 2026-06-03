@@ -1693,7 +1693,7 @@ func imageOutputOptionsFromBody(body map[string]any) service.ImageOutputOptions 
 	format := service.NormalizeImageOutputFormat(util.Clean(body["output_format"]))
 	options := service.ImageOutputOptions{Format: format}
 	if service.SupportsImageOutputCompression(format) {
-		if compression, ok := imageOutputCompressionFromBody(body["output_compression"]); ok {
+		if compression, ok := service.NormalizeImageOutputCompressionValue(body["output_compression"]); ok {
 			options.Compression = &compression
 		}
 	}
@@ -1715,20 +1715,6 @@ func imageToolOptionsFromBody(body map[string]any) service.ImageToolOptions {
 		options.OfficialFallback = &officialFallback
 	}
 	return options
-}
-
-func imageOutputCompressionFromBody(value any) (int, bool) {
-	if value == nil || strings.TrimSpace(util.Clean(value)) == "" {
-		return 0, false
-	}
-	compression := util.ToInt(value, -1)
-	if compression < 0 {
-		return 0, false
-	}
-	if compression > 100 {
-		compression = 100
-	}
-	return compression, true
 }
 
 func writeCreationTaskSubmitError(w http.ResponseWriter, err error) {

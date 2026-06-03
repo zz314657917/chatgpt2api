@@ -9,8 +9,8 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { SMART_CANVAS_QUEUE_CHANGED_EVENT, type SmartCanvasQueueChangedDetail } from "@/app/canvas/canvas-events";
 import { normalizeSmartCanvas, smartCanvasRuns } from "@/app/canvas/canvas-utils";
 import type { SmartCanvasDocument, SmartCanvasRunRecord } from "@/app/canvas/types";
-import { formatImageSizeDisplay, getImageSizeRequirementLabel, isHighResolutionImageSize } from "@/app/image/image-options";
 import { fetchCanvases, IMAGE_MODEL_ROUTE_DETAILS, type CanvasDocument, type CreationTask } from "@/lib/api";
+import { formatImageSizeDisplay, getImageSizeRequirementLabel, isHighResolutionImageSize } from "@/lib/image-parameters";
 import { cn } from "@/lib/utils";
 import {
   ACTIVE_IMAGE_CONVERSATION_STORAGE_KEY,

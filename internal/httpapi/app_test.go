@@ -742,6 +742,34 @@ func TestRecordGeneratedImagesForPayloadStoresReusableRequestMetadata(t *testing
 	if !ok || len(referenceURLs) != 1 || !strings.Contains(referenceURLs[0], "/image-references/") {
 		t.Fatalf("reference_image_urls = %#v", item["reference_image_urls"])
 	}
+
+	pngRel := "2026/05/12/reusable-png.png"
+	pngPath := filepath.Join(app.config.ImagesDir(), filepath.FromSlash(pngRel))
+	if err := os.MkdirAll(filepath.Dir(pngPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := writeHTTPTestPNG(pngPath); err != nil {
+		t.Fatalf("writeHTTPTestPNG() error = %v", err)
+	}
+	app.recordGeneratedImagesForPayload(
+		service.Identity{ID: "admin", Role: service.AuthRoleAdmin, Name: "Admin"},
+		[]string{pngRel},
+		service.ImageVisibilityPublic,
+		map[string]any{
+			"prompt":                  "png compression ignored",
+			"output_format":           "png",
+			"output_compression":      88,
+			"share_prompt_parameters": true,
+		},
+	)
+	pngDetail, err := app.images.ImageDetail("http://127.0.0.1:8000", pngRel, service.ImageAccessScope{Public: true})
+	if err != nil {
+		t.Fatalf("png ImageDetail() error = %v", err)
+	}
+	if pngDetail["output_format"] != "png" || pngDetail["output_compression"] != nil {
+		t.Fatalf("png reusable metadata = %#v", pngDetail)
+	}
+
 	parsedReferenceURL, err := url.Parse(referenceURLs[0])
 	if err != nil {
 		t.Fatalf("parse reference url: %v", err)
@@ -816,6 +844,43 @@ func TestSub2APIImagePayloadPassesModelAndResolution(t *testing.T) {
 	}
 	if payload["official_fallback"] != true {
 		t.Fatalf("official_fallback = %#v, want true", payload["official_fallback"])
+	}
+
+	oneKPayload := sub2APIImageJSONPayload(map[string]any{
+		"prompt":           "draw",
+		"image_resolution": "1080p",
+	})
+	if oneKPayload["resolution"] != "1k" {
+		t.Fatalf("1080p resolution = %#v, want 1k", oneKPayload["resolution"])
+	}
+}
+
+func TestSub2APIImagePayloadNormalizesOutputOptions(t *testing.T) {
+	jpegPayload := sub2APIImageJSONPayload(map[string]any{
+		"prompt":             "draw",
+		"output_format":      "jpg",
+		"output_compression": 120,
+	})
+	if jpegPayload["output_format"] != "jpeg" || jpegPayload["output_compression"] != 100 {
+		t.Fatalf("jpeg output options = %#v", jpegPayload)
+	}
+
+	pngPayload := sub2APIImageJSONPayload(map[string]any{
+		"prompt":             "draw",
+		"output_format":      "png",
+		"output_compression": 80,
+	})
+	if pngPayload["output_format"] != "png" || pngPayload["output_compression"] != nil {
+		t.Fatalf("png output options = %#v", pngPayload)
+	}
+
+	invalidPayload := sub2APIImageJSONPayload(map[string]any{
+		"prompt":             "draw",
+		"output_format":      "gif",
+		"output_compression": 80,
+	})
+	if invalidPayload["output_format"] != "png" || invalidPayload["output_compression"] != nil {
+		t.Fatalf("invalid output options = %#v", invalidPayload)
 	}
 }
 

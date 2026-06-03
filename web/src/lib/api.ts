@@ -1,5 +1,14 @@
 import { httpRequest } from "@/lib/request";
 import type { LoginPageImageMode } from "@/lib/login-page-image-layout";
+export {
+  IMAGE_OUTPUT_FORMAT_OPTIONS,
+  isImageOutputFormat,
+  isImageQuality,
+  supportsImageOutputCompression,
+  type ImageOutputFormat,
+  type ImageQuality,
+} from "@/lib/image-parameters";
+import type { ImageOutputFormat, ImageQuality } from "@/lib/image-parameters";
 
 export type AccountType = "Free" | "Plus" | "ProLite" | "Pro" | "Team";
 export type AccountStatus = "正常" | "限流" | "异常" | "禁用" | "刷新中" | "过期待刷新";
@@ -351,30 +360,7 @@ export function formatImageDisplayPriceCNY(value: number | null) {
   return `约 ¥${cny.toFixed(3)}`;
 }
 
-export type ImageQuality = "low" | "medium" | "high";
-export type ImageOutputFormat = "png" | "jpeg" | "webp";
 export type ImageVisibility = "private" | "public";
-
-const IMAGE_QUALITY_VALUES = new Set<string>(["low", "medium", "high"]);
-const IMAGE_OUTPUT_FORMAT_VALUES = new Set<string>(["png", "jpeg", "webp"]);
-
-export const IMAGE_OUTPUT_FORMAT_OPTIONS = [
-  { value: "png", label: "PNG" },
-  { value: "jpeg", label: "JPEG" },
-  { value: "webp", label: "WebP" },
-] as const satisfies ReadonlyArray<{ value: ImageOutputFormat; label: string }>;
-
-export function isImageQuality(value: unknown): value is ImageQuality {
-  return typeof value === "string" && IMAGE_QUALITY_VALUES.has(value);
-}
-
-export function isImageOutputFormat(value: unknown): value is ImageOutputFormat {
-  return typeof value === "string" && IMAGE_OUTPUT_FORMAT_VALUES.has(value);
-}
-
-export function supportsImageOutputCompression(format: ImageOutputFormat) {
-  return format === "jpeg";
-}
 
 export type AuthRole = "admin" | "user";
 export type AnnouncementTarget = "login" | "image";
@@ -838,6 +824,7 @@ export type CanvasImageRef = {
   name?: string;
   thumbnail_url?: string;
   preview_url?: string;
+  visibility?: ImageVisibility;
 };
 
 export type CanvasVideoRef = {

@@ -35,6 +35,8 @@ import {
   type ManagedImageSummary,
 } from "@/lib/api";
 import { fetchAuthenticatedImageBlob } from "@/lib/authenticated-image";
+import { isPixelIconSize } from "@/lib/image-parameters";
+import { getCachedAuthSession } from "@/lib/session";
 import { useAuthGuard } from "@/lib/use-auth-guard";
 
 import {
@@ -45,6 +47,14 @@ import {
 } from "./canvas-help";
 import { dispatchSmartCanvasQueueChanged } from "./canvas-events";
 import { createSmartCanvasFromPreset, type SmartCanvasPresetId } from "./canvas-presets";
+import {
+  createSmartCanvasFromUserPreset,
+  createSmartCanvasUserPreset,
+  loadSmartCanvasUserPresets,
+  persistSmartCanvasUserPresets,
+  SMART_CANVAS_USER_PRESET_LIMIT,
+  type SmartCanvasUserPreset,
+} from "./canvas-user-presets";
 import {
   DEFAULT_SMART_VIEWPORT,
   blankSmartCanvasItemIds,
@@ -113,12 +123,22 @@ const CROP_NODE_OFFSET = { x: 32, y: 32 };
 const DEFAULT_ANGLE_CONTROL_VALUES: SmartCanvasAngleControlValues = { horizontal: 0, vertical: 15, zoom: 5 };
 const DETAIL_ENHANCE_PROMPT = "请对这张图片进行细节增强和高清修复，提升清晰度、纹理细节、边缘锐度和整体质感，同时严格保留原始构图、主体、颜色关系和风格，不新增无关元素。";
 
+type SmartCanvasAssetLibraryScope = "mine" | "public";
+
 type SmartCanvasNodeClipboard = {
   nodes: SmartCanvasItem[];
   edges: SmartCanvasDocument["edges"];
 };
 
 type SmartCanvasGenerationNode = SmartCanvasItem & { type: "image_generation" | "video_generation" };
+
+function userPresetScope() {
+  const session = getCachedAuthSession();
+  if (!session) {
+    return "anonymous";
+  }
+  return `${session.provider || "local"}:${session.role}:${session.subjectId || "unknown"}`;
+}
 
 function sourceImageVisibility(item?: SmartCanvasItem | null): ImageVisibility {
   return item?.data?.visibility === "public" ? "public" : "private";
@@ -350,7 +370,10 @@ function mergeLoopSlotStatuses(
 }
 
 function generatorImageResolution(generator: SmartCanvasItem) {
-  return normalizeCanvasImageResolution(generator.data?.image_resolution);
+  if (isPixelIconSize(generator.data?.size)) {
+    return undefined;
+  }
+  return normalizeCanvasImageResolution(generator.data?.image_resolution) || undefined;
 }
 
 function generatorImageQuality(generator: SmartCanvasItem): ImageQuality | undefined {
@@ -360,6 +383,10 @@ function generatorImageQuality(generator: SmartCanvasItem): ImageQuality | undef
 
 function generatorImageCount(generator: SmartCanvasItem) {
   return Math.max(1, Math.min(10, Number(generator.data?.n || 1)));
+}
+
+function generatorImageVisibility(generator: SmartCanvasItem): ImageVisibility {
+  return generator.type === "image_generation" ? "private" : generator.data?.visibility === "public" ? "public" : "private";
 }
 
 function llmInputText(canvas: SmartCanvasDocument, node: SmartCanvasItem) {
@@ -720,6 +747,11 @@ export function useSmartCanvasController() {
   const [assets, setAssets] = useState<ManagedImageSummary[]>([]);
   const [assetNextCursor, setAssetNextCursor] = useState("");
   const [hasMoreAssets, setHasMoreAssets] = useState(false);
+  const [publicAssets, setPublicAssets] = useState<ManagedImageSummary[]>([]);
+  const [publicAssetNextCursor, setPublicAssetNextCursor] = useState("");
+  const [hasMorePublicAssets, setHasMorePublicAssets] = useState(false);
+  const [publicAssetsLoaded, setPublicAssetsLoaded] = useState(false);
+  const [assetLibraryScope, setAssetLibraryScope] = useState<SmartCanvasAssetLibraryScope>("mine");
   const [selectedItemId, setSelectedItemId] = useState("");
   const [selectedItemIds, setSelectedItemIds] = useState<string[]>([]);
   const [viewport, setViewport] = useState<SmartCanvasViewport>(DEFAULT_SMART_VIEWPORT);
@@ -734,6 +766,8 @@ export function useSmartCanvasController() {
   const [uploading, setUploading] = useState(false);
   const [loadingAssets, setLoadingAssets] = useState(false);
   const [loadingMoreAssets, setLoadingMoreAssets] = useState(false);
+  const [loadingPublicAssets, setLoadingPublicAssets] = useState(false);
+  const [loadingMorePublicAssets, setLoadingMorePublicAssets] = useState(false);
   const [draggingImages, setDraggingImages] = useState(false);
   const [mentionOpen, setMentionOpen] = useState(false);
   const [imageEditorImage, setImageEditorImage] = useState<CanvasImageRef | null>(null);
@@ -742,6 +776,7 @@ export function useSmartCanvasController() {
   const [angleControlResultItemId, setAngleControlResultItemId] = useState("");
   const [canvasPickerOpen, setCanvasPickerOpen] = useState(false);
   const [canvasPresetPickerOpen, setCanvasPresetPickerOpen] = useState(false);
+  const [userPresets, setUserPresets] = useState<SmartCanvasUserPreset[]>([]);
   const [leftRailCollapsed, setLeftRailCollapsed] = useState(() => {
     if (typeof window === "undefined") {
       return true;
@@ -781,7 +816,11 @@ export function useSmartCanvasController() {
   );
   const blankNodeCount = useMemo(() => blankSmartCanvasItemIds(canvas).length, [canvas]);
   const selectedImageToolDisabledReason = useMemo(() => imageToolUnavailableReason(selectedItem), [selectedItem]);
-  const mentionItems = useMemo(() => mentionCandidateImages(canvas, assets), [assets, canvas]);
+  const mentionItems = useMemo(() => mentionCandidateImages(canvas, [...assets, ...publicAssets]), [assets, canvas, publicAssets]);
+  const assetLibraryTabs = useMemo(() => [
+    { id: "mine", label: "我的图库", count: assets.length },
+    { id: "public", label: "公共图库", count: publicAssets.length },
+  ], [assets.length, publicAssets.length]);
   const angleControlPrompt = useMemo(() => buildAngleControlPrompt(angleControlValues), [angleControlValues]);
   const angleControlResultItem = useMemo(() => {
     if (!angleControlResultItemId) {
@@ -808,6 +847,10 @@ export function useSmartCanvasController() {
   useEffect(() => {
     window.localStorage.setItem("smart-canvas-left-rail-collapsed", leftRailCollapsed ? "1" : "0");
   }, [leftRailCollapsed]);
+
+  useEffect(() => {
+    setUserPresets(loadSmartCanvasUserPresets(userPresetScope()));
+  }, []);
 
   useEffect(() => {
     if (typeof window === "undefined" || isCheckingAuth || loading) {
@@ -922,6 +965,65 @@ export function useSmartCanvasController() {
       setLoadingMoreAssets(false);
     }
   }, [assetNextCursor, hasMoreAssets, loadingAssets, loadingMoreAssets]);
+
+  const loadPublicAssets = useCallback(async () => {
+    setLoadingPublicAssets(true);
+    try {
+      const result = await fetchManagedImages({ scope: "public", page_size: CANVAS_ASSET_PAGE_SIZE });
+      setPublicAssets(result.items);
+      setPublicAssetNextCursor(result.next_cursor);
+      setHasMorePublicAssets(result.has_more);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "加载公共图片库失败");
+    } finally {
+      setPublicAssetsLoaded(true);
+      setLoadingPublicAssets(false);
+    }
+  }, []);
+
+  const loadMorePublicAssets = useCallback(async () => {
+    if (loadingPublicAssets || loadingMorePublicAssets || !hasMorePublicAssets || !publicAssetNextCursor) {
+      return;
+    }
+    setLoadingMorePublicAssets(true);
+    try {
+      const result = await fetchManagedImages({
+        scope: "public",
+        page_size: CANVAS_ASSET_PAGE_SIZE,
+        cursor: publicAssetNextCursor,
+      });
+      setPublicAssets((current) => {
+        const seen = new Set(current.map((asset) => asset.path));
+        return [...current, ...result.items.filter((asset) => !seen.has(asset.path))];
+      });
+      setPublicAssetNextCursor(result.next_cursor);
+      setHasMorePublicAssets(result.has_more);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "加载更多公共图片失败");
+    } finally {
+      setLoadingMorePublicAssets(false);
+    }
+  }, [hasMorePublicAssets, loadingMorePublicAssets, loadingPublicAssets, publicAssetNextCursor]);
+
+  useEffect(() => {
+    if (assetLibraryScope === "public" && !publicAssetsLoaded && !loadingPublicAssets) {
+      void loadPublicAssets();
+    }
+  }, [assetLibraryScope, loadPublicAssets, loadingPublicAssets, publicAssetsLoaded]);
+
+  const selectAssetLibraryScope = useCallback((scope: string) => {
+    if (scope === "mine" || scope === "public") {
+      setAssetLibraryScope(scope);
+    }
+  }, []);
+
+  const refreshAssetLibrary = useCallback(() => {
+    return assetLibraryScope === "public" ? loadPublicAssets() : loadAssets();
+  }, [assetLibraryScope, loadAssets, loadPublicAssets]);
+
+  const loadMoreAssetLibrary = useCallback(() => {
+    return assetLibraryScope === "public" ? loadMorePublicAssets() : loadMoreAssets();
+  }, [assetLibraryScope, loadMoreAssets, loadMorePublicAssets]);
 
   const reloadCanvases = useCallback(async () => {
     try {
@@ -1185,38 +1287,40 @@ export function useSmartCanvasController() {
     return nodes;
   }, [selectSingleItem, updateCanvas]);
 
-  const addNodeFromPort = useCallback((sourceId: string, type: SmartCanvasItem["type"], point?: { x: number; y: number }) => {
+  const addNodeFromPort = useCallback((nodeId: string, type: SmartCanvasItem["type"], point?: { x: number; y: number }, direction: "upstream" | "downstream" = "downstream") => {
     const rect = boardRef.current?.getBoundingClientRect();
     const current = canvasRef.current;
-    const source = current?.nodes.find((node) => node.id === sourceId);
-    if (!source) {
+    const anchor = current?.nodes.find((node) => node.id === nodeId);
+    if (!anchor) {
       return null;
     }
-    const sourceSize = nodeSizeForType(source.type);
+    const anchorSize = nodeSizeForType(anchor.type);
     const nextSize = nodeSizeForType(type);
     const anchorWorld = rect && point
       ? screenToWorld(point, rect, viewportRef.current)
       : {
-          x: Number(source.position?.x || 0) + sourceSize.w + 170,
-          y: Number(source.position?.y || 0) + sourceSize.h / 2,
+          x: Number(anchor.position?.x || 0) + (direction === "upstream" ? -170 : anchorSize.w + 170),
+          y: Number(anchor.position?.y || 0) + anchorSize.h / 2,
         };
     const position = {
-      x: anchorWorld.x + 150,
+      x: direction === "upstream" ? anchorWorld.x - nextSize.w - 150 : anchorWorld.x + 150,
       y: anchorWorld.y - nextSize.h / 2,
     };
-    const item = type === "group" && isGroupableItem(source)
-      ? createGroupNode(position, [source.id])
+    const item = type === "group" && direction === "downstream" && isGroupableItem(anchor)
+      ? createGroupNode(position, [anchor.id])
       : createCanvasNode(type, position);
-    if (!canConnectSmartCanvasNodes(source, item)) {
+    const source = direction === "upstream" ? item : anchor;
+    const target = direction === "upstream" ? anchor : item;
+    if (!canConnectSmartCanvasNodes(source, target)) {
       toast.error("这两个节点不能直接连接");
       return null;
     }
     updateCanvas((doc) => ({
       ...doc,
-      nodes: [...doc.nodes, item],
-      edges: doc.edges.some((edge) => edge.source === source.id && edge.target === item.id)
+      nodes: doc.nodes.map((node) => direction === "upstream" && node.id === target.id ? withGroupMember(node, source.id) : node).concat(item),
+      edges: doc.edges.some((edge) => edge.source === source.id && edge.target === target.id)
         ? doc.edges
-        : [...doc.edges, createSmartEdge(source.id, item.id)],
+        : [...doc.edges, createSmartEdge(source.id, target.id)],
     }), true, `新增并连接 ${type === "llm" ? "AI 提示词" : item.name || "节点"}`);
     selectSingleItem(item.id);
     return item;
@@ -1449,7 +1553,8 @@ export function useSmartCanvasController() {
         } else {
           setPortMenuRequest({
             id: Date.now(),
-            sourceId: activeConnect.sourceId,
+            nodeId: activeConnect.sourceId,
+            direction: "downstream",
             screen: { x: event.clientX, y: event.clientY },
           });
         }
@@ -2760,9 +2865,9 @@ export function useSmartCanvasController() {
             if (files.length === 0) {
               throw new Error("没有可读取的输入图片");
             }
-            task = await createImageEditTask(uniqueTaskId("smart-canvas-loop"), files, submittedPrompt, generator.data?.model || "auto", generator.data?.size || "1024x1024", generatorImageQuality(generator), taskCount, undefined, generator.data?.visibility || "private", generatorImageResolution(generator));
+            task = await createImageEditTask(uniqueTaskId("smart-canvas-loop"), files, submittedPrompt, generator.data?.model || "auto", generator.data?.size || "1024x1024", generatorImageQuality(generator), taskCount, undefined, generatorImageVisibility(generator), generatorImageResolution(generator));
           } else {
-            task = await createImageGenerationTask(uniqueTaskId("smart-canvas-loop"), submittedPrompt, generator.data?.model || "auto", generator.data?.size || "1024x1024", generatorImageQuality(generator), taskCount, undefined, generator.data?.visibility || "private", generatorImageResolution(generator));
+            task = await createImageGenerationTask(uniqueTaskId("smart-canvas-loop"), submittedPrompt, generator.data?.model || "auto", generator.data?.size || "1024x1024", generatorImageQuality(generator), taskCount, undefined, generatorImageVisibility(generator), generatorImageResolution(generator));
           }
           taskIds.push(task.id);
           for (let offset = 0; offset < taskCount && slotStart + offset < slotStatuses.length; offset += 1) {
@@ -2903,9 +3008,9 @@ export function useSmartCanvasController() {
         if (files.length === 0) {
           throw new Error("没有可读取的输入图片");
         }
-        task = await createImageEditTask(clientTaskId, files, submittedPrompt, generator.data?.model || "auto", generator.data?.size || "1024x1024", generatorImageQuality(generator), generatorImageCount(generator), undefined, generator.data?.visibility || "private", generatorImageResolution(generator));
+        task = await createImageEditTask(clientTaskId, files, submittedPrompt, generator.data?.model || "auto", generator.data?.size || "1024x1024", generatorImageQuality(generator), generatorImageCount(generator), undefined, generatorImageVisibility(generator), generatorImageResolution(generator));
       } else {
-        task = await createImageGenerationTask(clientTaskId, submittedPrompt, generator.data?.model || "auto", generator.data?.size || "1024x1024", generatorImageQuality(generator), generatorImageCount(generator), undefined, generator.data?.visibility || "private", generatorImageResolution(generator));
+        task = await createImageGenerationTask(clientTaskId, submittedPrompt, generator.data?.model || "auto", generator.data?.size || "1024x1024", generatorImageQuality(generator), generatorImageCount(generator), undefined, generatorImageVisibility(generator), generatorImageResolution(generator));
       }
       const output = creationTaskToOutput(task);
       const submittedModel = task.model || generator.data?.model || (generator.type === "video_generation" ? models.video[0]?.id || "" : "auto");
@@ -3110,6 +3215,48 @@ export function useSmartCanvasController() {
     setCanvasPickerOpen(false);
     setCanvasPresetPickerOpen(false);
   }, [applyCanvas, flushSave]);
+
+  const createCanvasFromUserPreset = useCallback(async (presetId: string) => {
+    if (saveStateRef.current === "dirty" || saveStateRef.current === "error" || saveStateRef.current === "saving") {
+      const saved = await flushSave();
+      if (!saved && !window.confirm("当前画布保存失败，仍然新建吗？")) {
+        return;
+      }
+    }
+    const preset = userPresets.find((item) => item.id === presetId);
+    if (!preset) {
+      toast.error("预设不存在");
+      return;
+    }
+    applyCanvas(createSmartCanvasFromUserPreset(preset));
+    setCanvasPickerOpen(false);
+    setCanvasPresetPickerOpen(false);
+  }, [applyCanvas, flushSave, userPresets]);
+
+  const saveCurrentCanvasAsPreset = useCallback((name: string) => {
+    const current = canvasRef.current;
+    const title = name.trim() || current?.name?.trim() || "我的画布预设";
+    if (!current) {
+      toast.error("当前没有可保存的画布");
+      return;
+    }
+    const preset = createSmartCanvasUserPreset(current, title);
+    setUserPresets((items) => {
+      const next = [preset, ...items].slice(0, SMART_CANVAS_USER_PRESET_LIMIT);
+      persistSmartCanvasUserPresets(next, userPresetScope());
+      return next;
+    });
+    toast.success("已保存到我的预设");
+  }, []);
+
+  const deleteUserPreset = useCallback((presetId: string) => {
+    setUserPresets((items) => {
+      const next = items.filter((item) => item.id !== presetId);
+      persistSmartCanvasUserPresets(next, userPresetScope());
+      return next;
+    });
+    toast.success("已删除预设");
+  }, []);
 
   const deleteCanvasById = useCallback(async (id: string) => {
     if (!id) {
@@ -3419,7 +3566,9 @@ export function useSmartCanvasController() {
     canvases,
     canvas,
     models,
-    assets,
+    assets: assetLibraryScope === "public" ? publicAssets : assets,
+    assetLibraryScope,
+    assetLibraryTabs,
     selectedItemId,
     selectedItemIds,
     selectedItem,
@@ -3433,9 +3582,9 @@ export function useSmartCanvasController() {
     saving,
     running,
     uploading,
-    loadingAssets,
-    loadingMoreAssets,
-    hasMoreAssets,
+    loadingAssets: assetLibraryScope === "public" ? loadingPublicAssets : loadingAssets,
+    loadingMoreAssets: assetLibraryScope === "public" ? loadingMorePublicAssets : loadingMoreAssets,
+    hasMoreAssets: assetLibraryScope === "public" ? hasMorePublicAssets : hasMoreAssets,
     draggingImages,
     mentionOpen,
     mentionItems,
@@ -3447,6 +3596,7 @@ export function useSmartCanvasController() {
     selectedImageToolDisabledReason,
     canvasPickerOpen,
     canvasPresetPickerOpen,
+    userPresets,
     runHistoryOpen,
     operationHistoryOpen,
     helpOpen,
@@ -3470,12 +3620,13 @@ export function useSmartCanvasController() {
     setHelpTopic,
     setOnboardingOpen,
     setLeftRailCollapsed,
+    setAssetLibraryScope: selectAssetLibraryScope,
     undoCanvas,
     redoCanvas,
     restoreHistoryEntry,
     saveNow,
-    loadAssets,
-    loadMoreAssets,
+    loadAssets: refreshAssetLibrary,
+    loadMoreAssets: loadMoreAssetLibrary,
     reloadCanvases,
     updateItemData,
     addNodeAt,
@@ -3522,6 +3673,9 @@ export function useSmartCanvasController() {
     connectLlmImagesToLoop,
     selectCanvas,
     createNewCanvas,
+    createCanvasFromUserPreset,
+    saveCurrentCanvasAsPreset,
+    deleteUserPreset,
     deleteCanvasById,
     renameCanvas,
     renameCanvasById,

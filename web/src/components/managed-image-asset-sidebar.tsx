@@ -10,6 +10,12 @@ import { Button } from "@/components/ui/button";
 import type { ManagedImageSummary } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
+export type ManagedImageAssetSidebarTab = {
+  id: string;
+  label: string;
+  count?: number;
+};
+
 export type ManagedImageAssetSidebarProps = {
   assets: ManagedImageSummary[];
   loadingAssets: boolean;
@@ -31,6 +37,9 @@ export type ManagedImageAssetSidebarProps = {
   emptyLabel?: string;
   collapsedTitle?: string;
   accent?: "sky" | "slate";
+  tabs?: ManagedImageAssetSidebarTab[];
+  activeTabId?: string;
+  onActiveTabChange?: (tabId: string) => void;
 };
 
 const panelClass =
@@ -61,6 +70,9 @@ export function ManagedImageAssetSidebar({
   emptyLabel = "图片库暂无图片",
   collapsedTitle = "展开图片库",
   accent = "sky",
+  tabs,
+  activeTabId,
+  onActiveTabChange,
 }: ManagedImageAssetSidebarProps) {
   const pinnedStorageKey = `${storagePrefix}-pinned`;
   const wideStorageKey = `${storagePrefix}-wide`;
@@ -217,6 +229,34 @@ export function ManagedImageAssetSidebar({
             </Button>
           </div>
         </div>
+        {tabs?.length ? (
+          <div className="mt-3 grid grid-cols-2 gap-1 rounded-xl border border-border bg-muted/40 p-1 dark:border-slate-800 dark:bg-slate-950/40">
+            {tabs.map((tab) => {
+              const active = tab.id === activeTabId;
+              return (
+                <button
+                  key={tab.id}
+                  type="button"
+                  className={cn(
+                    "flex h-8 min-w-0 items-center justify-center gap-1.5 rounded-lg px-2 text-xs font-semibold transition",
+                    active
+                      ? "bg-background text-foreground shadow-sm dark:bg-slate-900 dark:text-slate-100"
+                      : "text-muted-foreground hover:bg-background/70 hover:text-foreground dark:text-slate-500 dark:hover:bg-slate-900/80 dark:hover:text-slate-200",
+                  )}
+                  onClick={() => onActiveTabChange?.(tab.id)}
+                  title={tab.label}
+                >
+                  <span className="truncate">{tab.label}</span>
+                  {typeof tab.count === "number" ? (
+                    <span className={cn("rounded-full px-1.5 py-0.5 text-[10px]", active ? countClass : "bg-background/80 dark:bg-slate-900")}>
+                      {tab.count}
+                    </span>
+                  ) : null}
+                </button>
+              );
+            })}
+          </div>
+        ) : null}
         <div className="mt-3 min-h-0 flex-1 overflow-auto pr-1">
           {assets.length > 0 ? (
             <VirtuosoGrid

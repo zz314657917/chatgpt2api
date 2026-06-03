@@ -129,7 +129,7 @@ func NormalizeImageOutputFormat(format string) string {
 }
 
 func SupportsImageOutputCompression(format string) bool {
-	return NormalizeImageOutputFormat(format) == "jpeg"
+	return service.SupportsImageOutputCompression(format)
 }
 
 type ImageOutputOptions struct {
@@ -172,17 +172,7 @@ func ImageToolOptionsFromPayload(payload map[string]any) ImageToolOptions {
 }
 
 func normalizedImageOutputCompression(value any) (int, bool) {
-	if value == nil || strings.TrimSpace(util.Clean(value)) == "" {
-		return 0, false
-	}
-	compression := util.ToInt(value, -1)
-	if compression < 0 {
-		return 0, false
-	}
-	if compression > 100 {
-		compression = 100
-	}
-	return compression, true
+	return service.NormalizeImageOutputCompressionValue(value)
 }
 
 func (r ConversationRequest) SupportsImageGenerationModel() bool {

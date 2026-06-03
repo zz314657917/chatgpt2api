@@ -7,10 +7,12 @@ import type {
   CanvasVideoRef,
   CreationTask,
   CreationTaskData,
+  ImageVisibility,
   ManagedImageDetail,
   ManagedImageSummary,
 } from "@/lib/api";
 import { getManagedImagePathFromUrl, getManagedImagePreviewUrlFromPath, getManagedImageThumbnailUrlFromPath, getManagedImageUrlFromPath } from "@/lib/image-path";
+import { normalizeImageResolutionPreset } from "@/lib/image-parameters";
 
 import {
   SMART_CANVAS_KIND,
@@ -38,11 +40,11 @@ export const DEFAULT_COMPOSER: SmartCanvasComposer = {
 };
 
 export function normalizeCanvasImageResolution(value?: string) {
-  const normalized = String(value || "").trim().toLowerCase();
-  if (normalized === "2k" || normalized === "4k") {
-    return normalized;
-  }
-  return "1080p";
+  return normalizeImageResolutionPreset(value);
+}
+
+export function isPixelIconGeneratorNode(item?: SmartCanvasItem | null) {
+  return item?.type === "image_generation" && /^(16x64|32x64|64x64|128x128) 像素图标$/.test(item.name || "");
 }
 
 export function createItemId(type: SmartCanvasItem["type"]) {
@@ -169,13 +171,15 @@ export function canConnectSmartCanvasNodes(source: Pick<SmartCanvasItem, "type">
 }
 
 export function createImageItem(images: CanvasImageRef[], position: { x: number; y: number }): SmartCanvasItem {
+  const refs = dedupeCanvasImageRefs(images);
   return {
     id: createItemId("image"),
     type: "image",
-    name: images.length > 1 ? `${images.length} 张图片` : "图片",
+    name: refs.length > 1 ? `${refs.length} 张图片` : "图片",
     position,
     data: {
-      images: dedupeCanvasImageRefs(images),
+      images: refs,
+      visibility: imageRefsVisibility(refs),
       created_at: new Date().toISOString(),
     },
   };
@@ -387,6 +391,7 @@ export function managedImagesToRefs(items: Array<ManagedImageSummary | ManagedIm
     name: item.name,
     thumbnail_url: item.thumbnail_url,
     preview_url: item.preview_url,
+    visibility: item.visibility,
   })));
 }
 
@@ -563,6 +568,7 @@ export function dedupeCanvasImageRefs(refs: CanvasImageRef[]) {
       name: cleanImageText(ref.name),
       thumbnail_url: cleanImageText(ref.thumbnail_url),
       preview_url: cleanImageText(ref.preview_url),
+      visibility: normalizeCanvasImageRefVisibility(ref.visibility),
     };
     const key = canvasImageKey(clean);
     if (!key || seen.has(key)) {
@@ -889,6 +895,14 @@ function uniqueStringList(values: unknown[]) {
     out.push(text);
   }
   return out;
+}
+
+function normalizeCanvasImageRefVisibility(value: unknown): ImageVisibility | undefined {
+  return value === "public" ? "public" : value === "private" ? "private" : undefined;
+}
+
+function imageRefsVisibility(refs: CanvasImageRef[]): ImageVisibility {
+  return refs.some((ref) => ref.visibility === "public") ? "public" : "private";
 }
 
 function normalizeOutput(output?: CanvasNodeOutput): CanvasNodeOutput | undefined {
