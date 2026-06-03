@@ -7,9 +7,14 @@ import {
   calculateImageSize,
   getImageSizeSelectionFromSize,
   isHighResolutionImageSize,
+  isImageOutputFormat,
+  isImageQuality,
+  normalizeImageOutputFormat,
+  normalizeImageResolutionPreset,
   parseImageRatio,
+  supportsImageOutputCompression,
   type ImageSizeSelection,
-} from "./image-options";
+} from "@/lib/image-parameters";
 
 function ratioSelection(overrides: Partial<ImageSizeSelection> = {}): ImageSizeSelection {
   return {
@@ -38,8 +43,36 @@ assert.equal(
   "",
 );
 assert.equal(buildImageSize(ratioSelection({ aspectRatio: "", resolution: "4k" })), "2880x2880");
+assert.equal(buildImageSize(ratioSelection({ aspectRatio: "16x64", resolution: "auto" })), "16x64");
+assert.equal(buildImageSize(ratioSelection({ aspectRatio: "128x128", resolution: "4k" })), "128x128");
+assert.equal(normalizeImageResolutionPreset("1k"), "1080p");
+assert.equal(normalizeImageResolutionPreset("1080p"), "1080p");
+assert.equal(normalizeImageResolutionPreset("2K"), "2k");
+assert.equal(normalizeImageResolutionPreset("4k"), "4k");
+assert.equal(normalizeImageResolutionPreset("auto"), "");
+assert.equal(normalizeImageOutputFormat(""), "png");
+assert.equal(normalizeImageOutputFormat("jpg"), "jpeg");
+assert.equal(normalizeImageOutputFormat("jpeg"), "jpeg");
+assert.equal(normalizeImageOutputFormat("webp"), "webp");
+assert.equal(normalizeImageOutputFormat("bad"), "png");
+assert.equal(isImageQuality("high"), true);
+assert.equal(isImageQuality("auto"), false);
+assert.equal(isImageOutputFormat("jpeg"), true);
+assert.equal(isImageOutputFormat("jpg"), false);
+assert.equal(supportsImageOutputCompression("jpeg"), true);
+assert.equal(supportsImageOutputCompression("png"), false);
+assert.equal(supportsImageOutputCompression("webp"), false);
 assert.equal(isHighResolutionImageSize("1088x1088"), false);
 assert.equal(isHighResolutionImageSize("2048x2048"), true);
+assert.equal(isHighResolutionImageSize("16x64"), false);
+assert.deepEqual(getImageSizeSelectionFromSize("16x64"), {
+  mode: "ratio",
+  aspectRatio: "16x64",
+  resolution: "auto",
+  customRatio: "16:9",
+  customWidth: "16",
+  customHeight: "64",
+});
 assert.deepEqual(getImageSizeSelectionFromSize("2.39:1"), {
   mode: "ratio",
   aspectRatio: CUSTOM_IMAGE_ASPECT_RATIO,

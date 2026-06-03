@@ -44,7 +44,6 @@ export default function CanvasPage() {
           onRefresh={() => void canvas.reloadCanvases()}
           onDeleteCanvas={(id) => void canvas.deleteCanvasById(id)}
           onRenameCanvas={(id, name) => void canvas.renameCanvasById(id, name)}
-          onAddNode={canvas.addNodeAt}
         />
         <div className="relative min-w-0 flex-1">
           <SmartCanvasTopBar
@@ -137,6 +136,12 @@ export default function CanvasPage() {
             onLoadMoreAssets={() => void canvas.loadMoreAssets()}
             onAddAssetToCanvas={canvas.addAssetToCanvas}
             onAddAssetToComposer={canvas.addAssetToComposer}
+            title={canvas.assetLibraryScope === "public" ? "公共图片库" : "图片库"}
+            subtitle={canvas.assetLibraryScope === "public" ? `${canvas.assets.length} 张公开素材 · 点击加入输入` : undefined}
+            emptyLabel={canvas.assetLibraryScope === "public" ? "公共图片库暂无图片" : undefined}
+            tabs={canvas.assetLibraryTabs}
+            activeTabId={canvas.assetLibraryScope}
+            onActiveTabChange={canvas.setAssetLibraryScope}
           />
 
           <SmartCanvasHelpPanel
@@ -228,8 +233,13 @@ export default function CanvasPage() {
 
       <SmartCanvasPresetDialog
         open={canvas.canvasPresetPickerOpen}
+        currentCanvasName={canvas.canvas?.name || ""}
+        userPresets={canvas.userPresets}
         onOpenChange={canvas.setCanvasPresetPickerOpen}
         onCreateCanvas={(presetId) => void canvas.createNewCanvas(presetId)}
+        onCreateFromUserPreset={(presetId) => void canvas.createCanvasFromUserPreset(presetId)}
+        onSaveCurrentAsPreset={canvas.saveCurrentCanvasAsPreset}
+        onDeleteUserPreset={canvas.deleteUserPreset}
       />
     </div>
   );

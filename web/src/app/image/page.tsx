@@ -16,6 +16,7 @@ import {
   IMAGE_ASPECT_RATIO_OPTIONS,
   IMAGE_RESOLUTION_OPTIONS,
   IMAGE_SIZE_MODE_OPTIONS,
+  PIXEL_ICON_SIZE_OPTIONS,
   buildImageSize,
   formatImageSizeDisplay,
   getActiveImageAspectRatio,
@@ -25,12 +26,13 @@ import {
   isImageAspectRatio,
   isImageResolution,
   isImageSizeMode,
+  isPixelIconSize,
   parseImageRatio,
   type ImageAspectRatio,
   type ImageResolution,
   type ImageSizeMode,
   type ImageSizeSelection,
-} from "@/app/image/image-options";
+} from "@/lib/image-parameters";
 import { IMAGE_PROMPT_PRESETS, type ImagePromptPreset } from "@/app/image/image-presets";
 import type { BananaPrompt } from "@/app/image/banana-prompts";
 import { consumeSimilarImageIntent } from "@/app/image/similar-image-intent";
@@ -54,6 +56,8 @@ import {
   SelectContent,
   SelectGroup,
   SelectItem,
+  SelectLabel,
+  SelectSeparator,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
@@ -76,12 +80,8 @@ import {
   formatImageDisplayPriceCNY,
   IMAGE_CREATION_MODEL_OPTIONS,
   IMAGE_MODEL_ROUTE_DETAILS,
-  IMAGE_OUTPUT_FORMAT_OPTIONS,
   isImageModel,
-  isImageOutputFormat,
-  isImageQuality,
   modelIDLooksImageCapable,
-  supportsImageOutputCompression,
   supportsImageOutputControls,
   supportsImageResolutionPresets,
   supportsStructuredImageParameters,
@@ -89,14 +89,20 @@ import {
   uploadCreationTaskReferenceImage,
   updateManagedImageVisibility,
   type ImageModel,
-  type ImageOutputFormat,
-  type ImageQuality,
   type CreationTask,
   type CreationTaskMessage,
   type FallbackReferenceImage,
   type ImageVisibility,
   type ManagedImageSummary,
 } from "@/lib/api";
+import {
+  IMAGE_OUTPUT_FORMAT_OPTIONS,
+  isImageOutputFormat,
+  isImageQuality,
+  supportsImageOutputCompression,
+  type ImageOutputFormat,
+  type ImageQuality,
+} from "@/lib/image-parameters";
 import { fetchAuthenticatedImageBlob } from "@/lib/authenticated-image";
 import { clearImageManagerCache } from "@/lib/image-manager-cache";
 import { getManagedImagePathFromUrl, getManagedImageUrlFromPath } from "@/lib/image-path";
@@ -479,23 +485,33 @@ function imagePriceSizeFromRequest(size: string) {
 }
 
 function effectiveImageSizeSelection(model: ImageModel, selection: ImageSizeSelection): ImageSizeSelection {
+  const normalizedSelection = isPixelIconSize(selection.aspectRatio)
+    ? {
+        ...selection,
+        resolution: "auto" as const,
+      }
+    : selection;
   if (supportsStructuredImageParameters(model)) {
-    return selection;
+    return normalizedSelection;
   }
-  if (selection.mode !== "ratio") {
+  if (normalizedSelection.mode !== "ratio") {
     return {
-      ...selection,
+      ...normalizedSelection,
       mode: "auto",
       resolution: "auto",
     };
   }
   if (supportsImageResolutionPresets(model)) {
-    return selection;
+    return normalizedSelection;
   }
   return {
-    ...selection,
+    ...normalizedSelection,
     resolution: "auto",
   };
+}
+
+function hasPixelIconAspectRatio(selection: { aspectRatio?: unknown } | undefined) {
+  return isPixelIconSize(selection?.aspectRatio);
 }
 
 function buildEffectiveImageSizeRequest(model: ImageModel, selection: ImageSizeSelection) {
@@ -512,7 +528,10 @@ function buildEffectiveImageSizeRequest(model: ImageModel, selection: ImageSizeS
   };
 }
 
-function imageResolutionPresetForModel(model: ImageModel, selection: { resolution?: unknown } | undefined) {
+function imageResolutionPresetForModel(model: ImageModel, selection: { aspectRatio?: unknown; resolution?: unknown } | undefined) {
+  if (hasPixelIconAspectRatio(selection)) {
+    return undefined;
+  }
   const resolution = isImageResolution(selection?.resolution) ? selection.resolution : "auto";
   return supportsImageResolutionPresets(model) && resolution !== "auto" ? resolution : undefined;
 }
@@ -933,7 +952,7 @@ function getStoredImageSizeSelection(): ImageSizeSelection {
     return {
       mode: storedSizeMode,
       aspectRatio: storedAspectRatio,
-      resolution: storedResolution,
+      resolution: isPixelIconSize(storedAspectRatio) ? "auto" : storedResolution,
       customRatio,
       customWidth,
       customHeight,
@@ -986,7 +1005,7 @@ function serializeImageSizeSelection(selection: ImageSizeSelection): StoredImage
   return {
     mode: selection.mode,
     aspectRatio: selection.aspectRatio,
-    resolution: selection.resolution,
+    resolution: isPixelIconSize(selection.aspectRatio) ? "auto" : selection.resolution,
     customRatio: selection.customRatio,
     customWidth: selection.customWidth,
     customHeight: selection.customHeight,
@@ -1001,7 +1020,11 @@ function restoreImageSizeSelection(stored: StoredImageSizeSelection | undefined,
   return {
     mode: isImageSizeMode(stored.mode) ? stored.mode : fallbackSelection.mode,
     aspectRatio: isImageAspectRatio(stored.aspectRatio) ? stored.aspectRatio : fallbackSelection.aspectRatio,
-    resolution: isImageResolution(stored.resolution) ? stored.resolution : fallbackSelection.resolution,
+    resolution: isPixelIconSize(stored.aspectRatio)
+      ? "auto"
+      : isImageResolution(stored.resolution)
+        ? stored.resolution
+        : fallbackSelection.resolution,
     customRatio: stored.customRatio || fallbackSelection.customRatio,
     customWidth: stored.customWidth || fallbackSelection.customWidth,
     customHeight: stored.customHeight || fallbackSelection.customHeight,
@@ -1500,6 +1523,10 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
   const editingDraftResolutionPresets = editingTurnDraft
     ? supportsImageResolutionPresets(editingTurnDraft.model)
     : false;
+  const editingDraftPixelIconSizeSelected =
+    editingDraftEffectiveSizeSelection?.mode === "ratio" &&
+    isPixelIconSize(editingDraftEffectiveSizeSelection.aspectRatio);
+  const editingDraftResolutionControlsVisible = editingDraftResolutionPresets && !editingDraftPixelIconSizeSelected;
   const editingDraftOutputControls = editingTurnDraft
     ? supportsImageOutputControls(editingTurnDraft.model)
     : false;
@@ -1518,7 +1545,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     : false;
   const editingDraftSizePreviewLabel =
     editingTurnDraft && editingTurnDraft.mode !== "chat" && editingDraftEffectiveSizeSelection
-      ? !editingDraftStructuredParameters && editingDraftEffectiveSizeSelection.resolution !== "auto"
+      ? editingDraftResolutionControlsVisible && !editingDraftStructuredParameters && editingDraftEffectiveSizeSelection.resolution !== "auto"
           ? `${imageResolutionPresetLabel(editingDraftEffectiveSizeSelection.resolution)} / ${
               editingDraftActiveAspectRatio || "Auto"
             }`
@@ -1535,7 +1562,9 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     editingDraftEffectiveSizeSelection?.mode === "ratio"
       ? editingDraftCustomRatioInvalid
         ? "比例需要填写为宽:高"
-        : editingDraftEffectiveSizeSelection.resolution === "auto"
+        : isPixelIconSize(editingDraftEffectiveSizeSelection.aspectRatio)
+          ? `目标尺寸 ${formatImageSizeDisplay(editingDraftEffectiveSizeSelection.aspectRatio)}，像素图标快捷尺寸`
+        : !editingDraftResolutionControlsVisible || editingDraftEffectiveSizeSelection.resolution === "auto"
           ? editingDraftImageSize
             ? `${editingDraftImageSize} 构图偏好，实际像素以上游返回为准`
             : "Auto 比例将交给模型决定"
@@ -1543,7 +1572,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
             ? editingDraftStructuredParameters
               ? `目标尺寸 ${formatImageSizeDisplay(editingDraftImageSize)}，${getImageSizeRequirementLabel(editingDraftImageSize)}`
               : editingDraftActiveAspectRatio
-                ? `${imageResolutionPresetLabel(editingDraftEffectiveSizeSelection.resolution)} 分辨率预设，比例仍作为构图偏好，实际像素以上游返回为准`
+                ? `${imageResolutionPresetLabel(editingDraftEffectiveSizeSelection.resolution)} 分辨率预设，画幅仍作为构图偏好，实际像素以上游返回为准`
                 : `${imageResolutionPresetLabel(editingDraftEffectiveSizeSelection.resolution)} 分辨率预设，比例交给模型决定，实际像素以上游返回为准`
             : "比例需要填写为宽:高"
       : editingDraftEffectiveSizeSelection?.mode === "custom"
@@ -1553,6 +1582,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         : "不指定画幅或尺寸";
   const editingDraftSizeIsHighResolution = Boolean(
     editingDraftResolutionPresets &&
+      editingDraftResolutionControlsVisible &&
       editingDraftEffectiveSizeSelection &&
       isHighResolutionImageRequest(
         editingDraftImageSize,
@@ -3875,8 +3905,10 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                         <div className="rounded-2xl border border-sky-100 bg-sky-50 px-3 py-2 text-xs leading-5 text-sky-900 sm:col-span-2 lg:col-span-4">
                           {editingDraftStructuredParameters
                             ? "Codex 图片链路会下发目标尺寸；格式由后端保存结果时处理，压缩率仅适用于 JPEG。"
-                            : editingDraftResolutionPresets
-                              ? "常规/官方图片线路会提交分辨率预设，比例仍作为构图偏好；实际像素以上游返回为准。"
+                            : editingDraftPixelIconSizeSelected
+                              ? "像素图标尺寸会作为目标尺寸提交，不叠加分辨率预设。"
+                            : editingDraftResolutionControlsVisible
+                              ? "常规/官方图片线路会提交分辨率预设，画幅仍作为构图偏好；实际像素以上游返回为准。"
                               : "当前图片线路只会把比例作为构图偏好，实际尺寸以上游返回为准；格式由后端保存结果时处理。"}
                         </div>
                         <label className="flex flex-col gap-2 text-sm font-medium text-stone-700">
@@ -3941,20 +3973,19 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                         {editingDraftEffectiveSizeSelection.mode === "ratio" ? (
                           <>
                             <label className="flex flex-col gap-2 text-sm font-medium text-stone-700">
-                              比例
+                              画幅/尺寸
                               <Select
                                 value={editingTurnDraft.aspectRatio || EMPTY_IMAGE_ASPECT_RATIO_SELECT_VALUE}
                                 onValueChange={(value) =>
                                   setEditingTurnDraft((current) =>
-                                    current
+                                    current && (value === EMPTY_IMAGE_ASPECT_RATIO_SELECT_VALUE || isImageAspectRatio(value))
                                       ? {
                                           ...current,
                                           aspectRatio:
                                             value === EMPTY_IMAGE_ASPECT_RATIO_SELECT_VALUE
                                               ? ""
-                                              : isImageAspectRatio(value)
-                                                ? value
-                                                : current.aspectRatio,
+                                              : value,
+                                          resolution: isPixelIconSize(value) ? "auto" : current.resolution,
                                         }
                                       : current,
                                   )
@@ -3965,7 +3996,8 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                                 </SelectTrigger>
                                 <SelectContent>
                                   <SelectGroup>
-                                    {IMAGE_ASPECT_RATIO_OPTIONS.map((option) => (
+                                    <SelectLabel>常用画幅</SelectLabel>
+                                    {IMAGE_ASPECT_RATIO_OPTIONS.filter((option) => option.value !== CUSTOM_IMAGE_ASPECT_RATIO).map((option) => (
                                       <SelectItem
                                         key={option.label}
                                         value={option.value || EMPTY_IMAGE_ASPECT_RATIO_SELECT_VALUE}
@@ -3974,10 +4006,24 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                                       </SelectItem>
                                     ))}
                                   </SelectGroup>
+                                  <SelectSeparator />
+                                  <SelectGroup>
+                                    <SelectLabel>像素图标尺寸</SelectLabel>
+                                    {PIXEL_ICON_SIZE_OPTIONS.map((option) => (
+                                      <SelectItem key={option.label} value={option.value}>
+                                        {option.label}
+                                      </SelectItem>
+                                    ))}
+                                  </SelectGroup>
+                                  <SelectSeparator />
+                                  <SelectGroup>
+                                    <SelectLabel>自定义</SelectLabel>
+                                    <SelectItem value={CUSTOM_IMAGE_ASPECT_RATIO}>自定义比例</SelectItem>
+                                  </SelectGroup>
                                 </SelectContent>
                               </Select>
                             </label>
-                            {editingDraftResolutionPresets ? (
+                            {editingDraftResolutionControlsVisible ? (
                               <label className="flex flex-col gap-2 text-sm font-medium text-stone-700">
                                 分辨率
                                 <Select
@@ -4173,7 +4219,11 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                             <div className="rounded-2xl border border-stone-200 bg-stone-50 px-3 py-2 text-sm sm:col-span-2 lg:col-span-4">
                               <div className="flex min-w-0 items-center justify-between gap-3">
                                 <span className="shrink-0 font-medium text-stone-600">
-                                  {editingDraftStructuredParameters ? "目标尺寸" : editingDraftResolutionPresets ? "分辨率预设" : "画幅偏好"}
+                                  {editingDraftStructuredParameters || editingDraftPixelIconSizeSelected
+                                    ? "目标尺寸"
+                                    : editingDraftResolutionControlsVisible
+                                      ? "分辨率预设"
+                                      : "画幅偏好"}
                                 </span>
                                 <span className={cn(
                                   "min-w-0 truncate text-right font-mono font-semibold",

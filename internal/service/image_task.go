@@ -598,7 +598,7 @@ func (s *ImageTaskService) submit(ctx context.Context, identity Identity, client
 		task["output_statuses"] = initialImageOutputStatuses(count)
 	}
 	if SupportsImageOutputCompression(outputFormat) {
-		if compression, ok := normalizedImageOutputCompressionValue(payload["output_compression"]); ok {
+		if compression, ok := NormalizeImageOutputCompressionValue(payload["output_compression"]); ok {
 			task["output_compression"] = compression
 		}
 	}
@@ -1074,7 +1074,7 @@ func (s *ImageTaskService) loadLocked() map[string]map[string]any {
 		outputFormat := NormalizeImageOutputFormat(util.Clean(task["output_format"]))
 		normalized := map[string]any{"id": id, "owner_id": owner, "status": status, "mode": mode, "model": firstNonEmpty(util.Clean(task["model"]), util.ImageModelAuto), "size": util.Clean(task["size"]), "quality": util.Clean(task["quality"]), "output_format": outputFormat, "visibility": visibility, "count": count, "created_at": firstNonEmpty(util.Clean(task["created_at"]), util.NowLocal()), "updated_at": firstNonEmpty(util.Clean(task["updated_at"]), util.Clean(task["created_at"]), util.NowLocal())}
 		if SupportsImageOutputCompression(outputFormat) {
-			if compression, ok := normalizedImageOutputCompressionValue(task["output_compression"]); ok {
+			if compression, ok := NormalizeImageOutputCompressionValue(task["output_compression"]); ok {
 				normalized["output_compression"] = compression
 			}
 		}
@@ -1291,7 +1291,7 @@ func publicTask(task map[string]any) map[string]any {
 		item["output_format"] = format
 	}
 	if SupportsImageOutputCompression(util.Clean(item["output_format"])) {
-		if compression, ok := normalizedImageOutputCompressionValue(task["output_compression"]); ok {
+		if compression, ok := NormalizeImageOutputCompressionValue(task["output_compression"]); ok {
 			item["output_compression"] = compression
 		}
 	}
@@ -1625,37 +1625,6 @@ func mergePublicImageToolTaskFields(target, source map[string]any) {
 	if _, ok := source["official_fallback"]; ok {
 		target["official_fallback"] = util.ToBool(source["official_fallback"])
 	}
-}
-
-func NormalizeImageOutputFormat(format string) string {
-	switch strings.ToLower(strings.TrimSpace(format)) {
-	case "", "png":
-		return "png"
-	case "jpg", "jpeg":
-		return "jpeg"
-	case "webp":
-		return "webp"
-	default:
-		return "png"
-	}
-}
-
-func SupportsImageOutputCompression(format string) bool {
-	return NormalizeImageOutputFormat(format) == "jpeg"
-}
-
-func normalizedImageOutputCompressionValue(value any) (int, bool) {
-	if value == nil || strings.TrimSpace(util.Clean(value)) == "" {
-		return 0, false
-	}
-	compression := util.ToInt(value, -1)
-	if compression < 0 {
-		return 0, false
-	}
-	if compression > 100 {
-		compression = 100
-	}
-	return compression, true
 }
 
 func taskResultData(result map[string]any) []map[string]any {

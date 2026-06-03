@@ -406,9 +406,18 @@ func sub2APIImageJSONPayload(payload map[string]any) map[string]any {
 	if _, ok := payload["official_fallback"]; ok {
 		out["official_fallback"] = util.ToBool(payload["official_fallback"])
 	}
-	for _, key := range []string{"background", "moderation", "style", "partial_images", "output_format", "output_compression", "input_image_mask"} {
+	for _, key := range []string{"background", "moderation", "style", "partial_images", "input_image_mask"} {
 		if value := payload[key]; value != nil && util.Clean(value) != "" {
 			out[key] = value
+		}
+	}
+	if _, ok := payload["output_format"]; ok {
+		outputFormat := service.NormalizeImageOutputFormat(util.Clean(payload["output_format"]))
+		out["output_format"] = outputFormat
+		if service.SupportsImageOutputCompression(outputFormat) {
+			if compression, ok := service.NormalizeImageOutputCompressionValue(payload["output_compression"]); ok {
+				out["output_compression"] = compression
+			}
 		}
 	}
 	for key, value := range out {
@@ -435,9 +444,11 @@ func sub2APIImageSize(payload map[string]any) string {
 }
 
 func sub2APIImageResolution(payload map[string]any) string {
-	resolution := strings.ToLower(strings.TrimSpace(firstNonEmpty(util.Clean(payload["resolution"]), util.Clean(payload["image_resolution"]))))
+	resolution := service.NormalizeImageResolutionPreset(firstNonEmpty(util.Clean(payload["resolution"]), util.Clean(payload["image_resolution"])))
 	switch resolution {
-	case "1k", "2k", "4k":
+	case "1080p":
+		return "1k"
+	case "2k", "4k":
 		return resolution
 	default:
 		return ""

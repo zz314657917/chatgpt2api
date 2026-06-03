@@ -50,6 +50,15 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import type { CanvasImageRef, CanvasModelOption, CanvasVideoRef, CreationTask, ImageQuality, ImageVisibility } from "@/lib/api";
+import {
+  IMAGE_ASPECT_RATIO_OPTIONS,
+  IMAGE_QUALITY_OPTIONS,
+  IMAGE_RESOLUTION_OPTIONS,
+  PIXEL_ICON_SIZE_OPTIONS,
+  isPixelIconSize,
+  type ImageAspectRatio,
+  type ImageResolution,
+} from "@/lib/image-parameters";
 import { cn } from "@/lib/utils";
 
 import {
@@ -60,7 +69,8 @@ import {
   type SmartCanvasFlowTemplateId,
   type SmartCanvasHelpTopic,
 } from "./canvas-help";
-import { SMART_CANVAS_PRESETS, type SmartCanvasPreset, type SmartCanvasPresetId } from "./canvas-presets";
+import { SMART_CANVAS_PRESETS, type SmartCanvasPresetLike, type SmartCanvasPresetId } from "./canvas-presets";
+import type { SmartCanvasUserPreset } from "./canvas-user-presets";
 import {
   canConnectSmartCanvasNodes,
   canvasImageKey,
@@ -104,12 +114,20 @@ const NODE_SIZE: Record<SmartCanvasItem["type"], { w: number; h: number }> = {
   result: { w: 440, h: 245 },
 };
 const EMPTY_SMART_CANVAS_NODES: SmartCanvasItem[] = [];
+const CANVAS_NODE_MENU_WIDTH = 224;
+const CANVAS_NODE_MENU_GAP = 12;
 
 type SmartCanvasNodeSizeMap = Record<string, { w: number; h: number }>;
-type SmartCanvasNodeMenuState = { x: number; y: number; screen: { x: number; y: number }; sourceId?: string };
+type SmartCanvasNodeMenuState = {
+  x: number;
+  y: number;
+  screen: { x: number; y: number };
+  nodeId?: string;
+  direction: "upstream" | "downstream";
+};
 type SmartCanvasViewBounds = { left: number; top: number; right: number; bottom: number };
 type SmartCanvasNodeMenuItem = {
-  type: Exclude<SmartCanvasItem["type"], "image">;
+  type: SmartCanvasItem["type"];
   label: string;
   icon: ReactNode;
 };
@@ -128,24 +146,17 @@ const canvasAccentTextClass = "text-sky-700 dark:text-sky-200";
 const canvasDashedClass = "border-dashed border-border bg-muted/50 text-muted-foreground dark:border-slate-700 dark:bg-slate-950/40 dark:text-slate-500";
 const canvasGhostButtonClass = "border-border bg-background/70 text-foreground hover:bg-accent dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800";
 const canvasImageResolutionOptions = [
-  { value: "1080p", label: "1K" },
-  { value: "2k", label: "2K" },
-  { value: "4k", label: "4K" },
-] as const;
+  { value: "unspecified", label: "默认清晰度" },
+  ...IMAGE_RESOLUTION_OPTIONS.filter((option): option is Extract<(typeof IMAGE_RESOLUTION_OPTIONS)[number], { value: ImageResolution & ("1080p" | "2k" | "4k") }> => option.value !== "auto")
+    .map((option) => ({ value: option.value, label: option.label })),
+] as const satisfies ReadonlyArray<{ value: "unspecified" | Exclude<ImageResolution, "auto">; label: string }>;
 const canvasImageRatioOptions = [
-  { value: "1:1", label: "1:1" },
-  { value: "2:3", label: "2:3" },
-  { value: "3:2", label: "3:2" },
-  { value: "3:4", label: "3:4" },
-  { value: "4:3", label: "4:3" },
-  { value: "9:16", label: "9:16" },
-  { value: "16:9", label: "16:9" },
-] as const;
+  ...IMAGE_ASPECT_RATIO_OPTIONS.filter((option) => option.value !== "" && option.value !== "custom").map((option) => ({ value: option.value, label: option.value })),
+  ...PIXEL_ICON_SIZE_OPTIONS.map((option) => ({ value: option.value, label: option.value })),
+] as const satisfies ReadonlyArray<{ value: Exclude<ImageAspectRatio, "" | "custom">; label: string }>;
 const canvasImageQualityOptions = [
   { value: "auto", label: "自动" },
-  { value: "low", label: "速度优先" },
-  { value: "medium", label: "标准" },
-  { value: "high", label: "高品质" },
+  ...IMAGE_QUALITY_OPTIONS.map((option) => ({ value: option.value, label: option.label })),
 ] as const satisfies ReadonlyArray<{ value: "auto" | ImageQuality; label: string }>;
 const canvasVideoRatioOptions = [
   { value: "16:9", label: "16:9" },
@@ -228,6 +239,7 @@ function canvasVideoModelProfile(model?: string) {
 
 function smartCanvasNodeMenuItems(): SmartCanvasNodeMenuItem[] {
   return [
+    { type: "image", label: "图片", icon: <Images className="size-4" /> },
     { type: "prompt", label: "提示词", icon: <FileText className="size-4" /> },
     { type: "llm", label: "AI 提示词", icon: <Bot className="size-4" /> },
     { type: "loop", label: "循环节点", icon: <Repeat2 className="size-4" /> },
@@ -238,12 +250,14 @@ function smartCanvasNodeMenuItems(): SmartCanvasNodeMenuItem[] {
   ];
 }
 
-function connectableNodeMenuItems(source?: SmartCanvasItem | null) {
-  const items = smartCanvasNodeMenuItems();
-  if (!source) {
+function connectableNodeMenuItems(node?: SmartCanvasItem | null, direction: "upstream" | "downstream" = "downstream") {
+  const items = smartCanvasNodeMenuItems().filter((item) => direction === "upstream" || item.type !== "image");
+  if (!node) {
     return items;
   }
-  return items.filter((item) => canConnectSmartCanvasNodes(source, { type: item.type }));
+  return items.filter((item) => direction === "upstream"
+    ? canConnectSmartCanvasNodes({ type: item.type }, node)
+    : canConnectSmartCanvasNodes(node, { type: item.type }));
 }
 
 function canvasImageRatioValue(value?: string) {
@@ -313,7 +327,6 @@ export function SmartCanvasLeftRail({
   onRefresh,
   onDeleteCanvas,
   onRenameCanvas,
-  onAddNode,
 }: {
   canvases: SmartCanvasDocument[];
   currentCanvasId: string;
@@ -325,7 +338,6 @@ export function SmartCanvasLeftRail({
   onRefresh: () => void;
   onDeleteCanvas: (id: string) => void;
   onRenameCanvas: (id: string, name: string) => void;
-  onAddNode: (type: SmartCanvasItem["type"]) => void;
 }) {
   const [editingCanvasId, setEditingCanvasId] = useState("");
   const [editingName, setEditingName] = useState("");
@@ -420,24 +432,6 @@ export function SmartCanvasLeftRail({
           <RefreshCw className={cn("size-4", loading && "animate-spin")} />
           刷新
         </button>
-      </div>
-
-      <div className={cn("mt-3 rounded-2xl border border-border bg-background/35 p-2 transition-all duration-300 dark:border-zinc-800 dark:bg-zinc-900/35", expanded ? "translate-x-0 opacity-100" : "pointer-events-none -translate-x-4 opacity-0")}>
-        <div className={cn("mb-2 px-1 text-[10px] font-black uppercase tracking-[0.16em]", canvasLabelClass)}>添加节点</div>
-        <div className="grid grid-cols-2 gap-1">
-          {smartCanvasNodeMenuItems().map((item) => (
-            <button
-              key={item.type}
-              type="button"
-              className="inline-flex h-8 min-w-0 items-center justify-center gap-1.5 rounded-xl px-2 text-xs font-black text-muted-foreground transition hover:bg-accent hover:text-foreground dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
-              title={`添加${item.label}`}
-              onClick={() => onAddNode(item.type)}
-            >
-              <span className="shrink-0">{item.icon}</span>
-              <span className="min-w-0 truncate">{item.label}</span>
-            </button>
-          ))}
-        </div>
       </div>
 
       <div className={cn("mt-4 min-h-0 flex-1 space-y-2 overflow-y-auto pr-1 transition-all duration-300", expanded ? "translate-x-0 opacity-100" : "pointer-events-none -translate-x-4 opacity-0")}>
@@ -1099,58 +1093,137 @@ export function SmartCanvasPickerDialog({
 
 export function SmartCanvasPresetDialog({
   open,
+  currentCanvasName,
+  userPresets,
   onOpenChange,
   onCreateCanvas,
+  onCreateFromUserPreset,
+  onSaveCurrentAsPreset,
+  onDeleteUserPreset,
 }: {
   open: boolean;
+  currentCanvasName: string;
+  userPresets: SmartCanvasUserPreset[];
   onOpenChange: (open: boolean) => void;
   onCreateCanvas: (presetId: SmartCanvasPresetId) => void;
+  onCreateFromUserPreset: (presetId: string) => void;
+  onSaveCurrentAsPreset: (name: string) => void;
+  onDeleteUserPreset: (presetId: string) => void;
 }) {
+  const [presetName, setPresetName] = useState("");
+  const handleSavePreset = () => {
+    const name = presetName.trim() || currentCanvasName.trim() || "我的画布预设";
+    onSaveCurrentAsPreset(name);
+    setPresetName("");
+  };
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className={cn("flex h-[min(88dvh,720px)] w-[min(96vw,980px)] max-w-none flex-col overflow-hidden rounded-[28px] border p-0", canvasPanelClass)}>
-        <div className="border-b border-border px-5 pt-5 pr-12 pb-4 dark:border-slate-800 sm:px-6 sm:pt-6 sm:pr-14">
+      <DialogContent className={cn("flex h-[min(86dvh,640px)] w-[min(96vw,920px)] max-w-none flex-col overflow-hidden rounded-3xl border p-0", canvasPanelClass)}>
+        <div className="border-b border-border px-5 pt-4 pr-12 pb-3 dark:border-slate-800 sm:px-6 sm:pr-14">
           <div className="flex items-start justify-between gap-4">
             <div className="min-w-0">
-              <DialogTitle className="text-xl font-black leading-tight sm:text-2xl">新建画布</DialogTitle>
-              <DialogDescription className={cn("mt-2 text-sm leading-6", canvasSubtleTextClass)}>
+              <DialogTitle className="text-xl font-black leading-tight">新建画布</DialogTitle>
+              <DialogDescription className={cn("mt-1.5 text-sm leading-5", canvasSubtleTextClass)}>
                 选择一个起始结构，创建后仍可自由添加、删除和连接节点。
               </DialogDescription>
             </div>
             <span className={cn("shrink-0 rounded-full border px-3 py-1 text-xs font-black", canvasDashedClass)}>
-              {SMART_CANVAS_PRESETS.length} 个预设
+              {SMART_CANVAS_PRESETS.length + userPresets.length} 个预设
             </span>
           </div>
         </div>
 
-        <div className="min-h-0 flex-1 overflow-y-auto bg-background/65 px-4 py-4 dark:bg-slate-950/25 sm:px-6">
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto bg-background/65 px-4 py-4 dark:bg-slate-950/25 sm:px-6">
+          <div className="grid gap-2 rounded-2xl border border-border bg-card/70 p-3 dark:border-slate-800 dark:bg-slate-900/65 sm:grid-cols-[minmax(0,1fr)_auto]">
+            <div className="min-w-0">
+              <div className="text-sm font-black text-foreground dark:text-slate-100">保存当前画布为我的预设</div>
+              <div className={cn("mt-1 text-xs leading-5", canvasSubtleTextClass)}>保留节点、连线和参数，清除运行状态。</div>
+            </div>
+            <div className="flex min-w-0 gap-2">
+              <Input
+                value={presetName}
+                onChange={(event) => setPresetName(event.target.value)}
+                placeholder={currentCanvasName || "预设名称"}
+                className="h-9 min-w-0 rounded-xl text-sm"
+              />
+              <Button type="button" className="h-9 shrink-0 rounded-xl px-3 text-xs font-black" onClick={handleSavePreset}>
+                <Save className="size-4" />
+                保存
+              </Button>
+            </div>
+          </div>
+
+          {userPresets.length > 0 ? (
+            <section className="space-y-2">
+              <div className={cn("text-xs font-black uppercase tracking-[0.16em]", canvasLabelClass)}>我的预设</div>
+              <div className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-3">
+                {userPresets.map((preset) => (
+                  <div
+                    key={preset.id}
+                    className="flex min-h-[138px] flex-col rounded-2xl border border-border bg-card text-left shadow-sm dark:border-slate-800 dark:bg-slate-900/80"
+                  >
+                    <div className="flex items-start gap-2.5 p-3">
+                      <span className="flex size-8 shrink-0 items-center justify-center rounded-xl bg-sky-500/10 text-sky-700 dark:text-sky-200">
+                        <Save className="size-4" />
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <h3 className="truncate text-sm font-black text-foreground dark:text-slate-100">{preset.title}</h3>
+                        <p className={cn("mt-1 line-clamp-2 text-xs leading-5", canvasSubtleTextClass)}>{preset.description}</p>
+                      </div>
+                    </div>
+                    <div className="mt-auto flex items-center justify-between gap-2 border-t border-border px-3 py-2 dark:border-slate-800">
+                      <div className="flex min-w-0 flex-wrap gap-1">
+                        {preset.tags.slice(0, 2).map((tag) => (
+                          <span key={tag} className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-bold text-muted-foreground dark:bg-slate-800 dark:text-slate-300">
+                            {tag}
+                          </span>
+                        ))}
+                      </div>
+                      <div className="flex shrink-0 gap-1">
+                        <Button type="button" size="icon" variant="ghost" className="size-8 rounded-xl" onClick={() => onDeleteUserPreset(preset.id)} title="删除预设">
+                          <Trash2 className="size-4" />
+                        </Button>
+                        <Button type="button" className="h-8 rounded-xl px-3 text-xs font-black" onClick={() => onCreateFromUserPreset(preset.id)}>
+                          使用
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          ) : null}
+
+          <section className="space-y-2">
+            <div className={cn("text-xs font-black uppercase tracking-[0.16em]", canvasLabelClass)}>系统预设</div>
+            <div className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-3">
             {SMART_CANVAS_PRESETS.map((preset) => (
               <button
                 key={preset.id}
                 type="button"
-                className="group flex min-h-[230px] flex-col overflow-hidden rounded-2xl border border-border bg-card text-left shadow-[0_4px_6px_rgba(0,0,0,0.06)] transition hover:-translate-y-0.5 hover:border-sky-400 hover:shadow-[0_18px_38px_rgba(14,165,233,0.16)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 dark:border-slate-800 dark:bg-slate-900/80 dark:hover:border-sky-400/80"
+                className="group flex min-h-[168px] flex-col overflow-hidden rounded-2xl border border-border bg-card text-left shadow-sm transition hover:-translate-y-0.5 hover:border-sky-400 hover:shadow-[0_12px_28px_rgba(14,165,233,0.14)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 dark:border-slate-800 dark:bg-slate-900/80 dark:hover:border-sky-400/80"
                 onClick={() => onCreateCanvas(preset.id)}
               >
-                <div className="flex min-h-[94px] items-center justify-center border-b border-border bg-muted/35 px-4 py-4 dark:border-slate-800 dark:bg-slate-950/35">
+                <div className="flex min-h-[58px] items-center justify-center border-b border-border bg-muted/35 px-3 py-2 dark:border-slate-800 dark:bg-slate-950/35">
                   <PresetFlowPreview preset={preset} />
                 </div>
-                <div className="flex flex-1 flex-col p-4">
-                  <div className="flex items-start gap-3">
-                    <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-sky-500/10 text-sky-700 transition group-hover:bg-sky-500/15 dark:text-sky-200">
+                <div className="flex flex-1 flex-col p-3">
+                  <div className="flex items-start gap-2.5">
+                    <span className="flex size-8 shrink-0 items-center justify-center rounded-xl bg-sky-500/10 text-sky-700 transition group-hover:bg-sky-500/15 dark:text-sky-200">
                       <PresetIcon presetId={preset.id} />
                     </span>
                     <div className="min-w-0 flex-1">
-                      <h3 className="truncate text-base font-black text-foreground dark:text-slate-100">{preset.title}</h3>
+                      <h3 className="truncate text-sm font-black text-foreground dark:text-slate-100">{preset.title}</h3>
                       <p className={cn("mt-1 text-xs font-semibold", canvasAccentTextClass)}>{preset.summary}</p>
                     </div>
                   </div>
-                  <p className={cn("mt-3 line-clamp-2 text-sm leading-6", canvasSubtleTextClass)}>{preset.description}</p>
-                  <div className="mt-auto flex flex-wrap gap-1.5 pt-4">
+                  <p className={cn("mt-2 line-clamp-2 text-xs leading-5", canvasSubtleTextClass)}>{preset.description}</p>
+                  <div className="mt-auto flex flex-wrap gap-1.5 pt-3">
                     {preset.tags.map((tag) => (
                       <span
                         key={tag}
-                        className="rounded-full bg-muted px-2.5 py-1 text-[11px] font-bold text-muted-foreground dark:bg-slate-800 dark:text-slate-300"
+                        className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-bold text-muted-foreground dark:bg-slate-800 dark:text-slate-300"
                       >
                         {tag}
                       </span>
@@ -1159,8 +1232,9 @@ export function SmartCanvasPresetDialog({
                 </div>
               </button>
             ))}
+            </div>
+          </section>
           </div>
-        </div>
       </DialogContent>
     </Dialog>
   );
@@ -1179,24 +1253,27 @@ function PresetIcon({ presetId }: { presetId: SmartCanvasPresetId }) {
   if (presetId === "batch-variants") {
     return <Repeat2 className="size-4" />;
   }
+  if (presetId === "pixel-icon") {
+    return <ImageIcon className="size-4" />;
+  }
   return <WandSparkles className="size-4" />;
 }
 
-function PresetFlowPreview({ preset }: { preset: SmartCanvasPreset }) {
+function PresetFlowPreview({ preset }: { preset: SmartCanvasPresetLike }) {
   if (preset.nodeTypes.length === 0) {
     return (
-      <div className="grid h-16 w-full grid-cols-4 gap-2 opacity-70">
+      <div className="grid h-10 w-full grid-cols-4 gap-1.5 opacity-70">
         {Array.from({ length: 8 }).map((_, index) => (
-          <span key={index} className="rounded-lg border border-dashed border-border bg-background/80 dark:border-slate-700 dark:bg-slate-900/70" />
+          <span key={index} className="rounded-md border border-dashed border-border bg-background/80 dark:border-slate-700 dark:bg-slate-900/70" />
         ))}
       </div>
     );
   }
   return (
-    <div className="flex w-full items-center justify-center gap-2">
+    <div className="flex w-full items-center justify-center gap-1.5">
       {preset.nodeTypes.map((type, index) => (
         <FragmentWithConnector key={`${preset.id}-${type}-${index}`} showConnector={index < preset.nodeTypes.length - 1}>
-          <span className="flex size-11 items-center justify-center rounded-xl border border-border bg-background text-sky-700 shadow-sm dark:border-slate-700 dark:bg-slate-900 dark:text-sky-200">
+          <span className="flex size-8 items-center justify-center rounded-xl border border-border bg-background text-sky-700 shadow-sm dark:border-slate-700 dark:bg-slate-900 dark:text-sky-200 [&>svg]:size-3.5">
             <ItemTypeIcon type={type} />
           </span>
         </FragmentWithConnector>
@@ -1209,7 +1286,7 @@ function FragmentWithConnector({ children, showConnector }: { children: ReactNod
   return (
     <>
       {children}
-      {showConnector ? <span className="h-px w-5 shrink-0 bg-border dark:bg-slate-700" /> : null}
+      {showConnector ? <span className="h-px w-4 shrink-0 bg-border dark:bg-slate-700" /> : null}
     </>
   );
 }
@@ -1263,7 +1340,7 @@ type SmartCanvasBoardProps = {
   onMentionToggle: () => void;
   onAddMentionToPrompt: (nodeId: string, image: CanvasImageRef) => void;
   onCreateNodeAt: (type: SmartCanvasItem["type"], point: { x: number; y: number }) => void;
-  onCreateNodeFromPort: (sourceId: string, type: SmartCanvasItem["type"], point?: { x: number; y: number }) => void;
+  onCreateNodeFromPort: (nodeId: string, type: SmartCanvasItem["type"], point?: { x: number; y: number }, direction?: "upstream" | "downstream") => void;
   onCreateNodeHelpTemplate: (nodeId: string) => void;
   onUploadAt: (point: { x: number; y: number }) => void;
 };
@@ -1326,16 +1403,24 @@ export function SmartCanvasBoard({
   const outputPortPressRef = useRef<SmartCanvasPortPress | null>(null);
   const outputPortCleanupRef = useRef<(() => void) | null>(null);
   const ignoreNextBoardClickRef = useRef(false);
-  const openNodeMenu = useCallback((screen: { x: number; y: number }, sourceId?: string) => {
+  const [showZoomBadge, setShowZoomBadge] = useState(false);
+  const previousZoomRef = useRef(viewport.zoom);
+  const zoomBadgeTimerRef = useRef<number | null>(null);
+  const openNodeMenu = useCallback((screen: { x: number; y: number }, nodeId?: string, direction: "upstream" | "downstream" = "downstream") => {
     const rect = boardRef.current?.getBoundingClientRect();
     if (!rect) {
       return;
     }
+    const localX = screen.x - rect.left;
+    const menuX = direction === "upstream"
+      ? localX - CANVAS_NODE_MENU_WIDTH - CANVAS_NODE_MENU_GAP
+      : localX + CANVAS_NODE_MENU_GAP;
     setContextMenu({
-      x: Math.min(screen.x - rect.left, rect.width - 236),
+      x: Math.min(menuX, rect.width - CANVAS_NODE_MENU_WIDTH - CANVAS_NODE_MENU_GAP),
       y: Math.min(screen.y - rect.top, rect.height - 330),
       screen,
-      sourceId,
+      nodeId,
+      direction,
     });
   }, [boardRef]);
   const handleOutputPortPointerDown = useCallback((event: ReactPointerEvent<HTMLElement>, sourceId: string) => {
@@ -1377,7 +1462,7 @@ export function SmartCanvasBoard({
       cleanup();
       if (shouldOpenMenu) {
         ignoreNextBoardClickRef.current = true;
-        window.setTimeout(() => openNodeMenu({ x: pointerEvent.clientX, y: pointerEvent.clientY }, sourceId), 0);
+        window.setTimeout(() => openNodeMenu({ x: pointerEvent.clientX, y: pointerEvent.clientY }, sourceId, "downstream"), 0);
       }
     };
 
@@ -1402,7 +1487,7 @@ export function SmartCanvasBoard({
     onPointerUp(event);
     if (shouldOpenPortMenu) {
       ignoreNextBoardClickRef.current = true;
-      window.setTimeout(() => openNodeMenu({ x: event.clientX, y: event.clientY }, connectState.sourceId), 0);
+      window.setTimeout(() => openNodeMenu({ x: event.clientX, y: event.clientY }, connectState.sourceId, "downstream"), 0);
     }
   }, [connectState, onPointerUp, openNodeMenu]);
   const handleBoardPointerCancel = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
@@ -1416,7 +1501,7 @@ export function SmartCanvasBoard({
       return;
     }
     ignoreNextBoardClickRef.current = true;
-    openNodeMenu(portMenuRequest.screen, portMenuRequest.sourceId);
+    openNodeMenu(portMenuRequest.screen, portMenuRequest.nodeId, portMenuRequest.direction);
   }, [portMenuRequest, openNodeMenu]);
   const handleMeasureNode = useCallback((id: string, size: { w: number; h: number }) => {
     setNodeSizes((current) => {
@@ -1454,6 +1539,26 @@ export function SmartCanvasBoard({
   }, [canvas?.nodes, nodeSizes, selectedItemId, selectedItemIds, viewBounds]);
   const renderNodeIds = useMemo(() => new Set(renderNodes.map((item) => item.id)), [renderNodes]);
   const renderEdges = useMemo(() => (canvas?.edges || []).filter((edge) => renderNodeIds.has(edge.source) || renderNodeIds.has(edge.target)), [canvas?.edges, renderNodeIds]);
+  useEffect(() => {
+    if (Math.abs(previousZoomRef.current - viewport.zoom) < 0.001) {
+      return;
+    }
+    previousZoomRef.current = viewport.zoom;
+    setShowZoomBadge(true);
+    if (zoomBadgeTimerRef.current !== null) {
+      window.clearTimeout(zoomBadgeTimerRef.current);
+    }
+    zoomBadgeTimerRef.current = window.setTimeout(() => {
+      setShowZoomBadge(false);
+      zoomBadgeTimerRef.current = null;
+    }, 1200);
+  }, [viewport.zoom]);
+
+  useEffect(() => () => {
+    if (zoomBadgeTimerRef.current !== null) {
+      window.clearTimeout(zoomBadgeTimerRef.current);
+    }
+  }, []);
 
   return (
     <section className="relative h-full min-h-0 flex-1 overflow-hidden bg-[#eef4fb] dark:bg-[#050505]">
@@ -1548,6 +1653,10 @@ export function SmartCanvasBoard({
               onDeleteItem={() => onDeleteItem(item.id)}
               onStartConnect={(event) => handleOutputPortPointerDown(event, item.id)}
               onFinishConnect={(event) => onFinishConnect(event, item.id)}
+              onOpenUpstreamMenu={(event) => {
+                ignoreNextBoardClickRef.current = true;
+                openNodeMenu({ x: event.clientX, y: event.clientY }, item.id, "upstream");
+              }}
               onMentionToggle={onMentionToggle}
               onAddMention={(image) => onAddMentionToPrompt(item.id, image)}
               onCreateNodeFromPort={onCreateNodeFromPort}
@@ -1570,16 +1679,17 @@ export function SmartCanvasBoard({
             x={contextMenu.x}
             y={contextMenu.y}
             onClose={() => setContextMenu(null)}
-            sourceItem={contextMenu.sourceId ? canvas?.nodes.find((item) => item.id === contextMenu.sourceId) || null : null}
-            onUpload={contextMenu.sourceId
+            node={contextMenu.nodeId ? canvas?.nodes.find((item) => item.id === contextMenu.nodeId) || null : null}
+            direction={contextMenu.direction}
+            onUpload={contextMenu.nodeId
               ? undefined
               : () => {
                   onUploadAt(contextMenu.screen);
                   setContextMenu(null);
                 }}
             onCreate={(type) => {
-              if (contextMenu.sourceId) {
-                onCreateNodeFromPort(contextMenu.sourceId, type, contextMenu.screen);
+              if (contextMenu.nodeId) {
+                onCreateNodeFromPort(contextMenu.nodeId, type, contextMenu.screen, contextMenu.direction);
               } else {
                 onCreateNodeAt(type, contextMenu.screen);
               }
@@ -1604,9 +1714,11 @@ export function SmartCanvasBoard({
       <div className="absolute bottom-3 left-1/2 z-30 -translate-x-1/2 rounded-full bg-card/85 px-4 py-1 text-[11px] font-semibold text-muted-foreground shadow-sm backdrop-blur dark:bg-slate-950/70 dark:text-slate-500">
         右键添加节点，Ctrl/⌘ 点击多选，拖动任一已选节点可一起移动，Delete 删除所选
       </div>
-      <div className="absolute right-6 top-24 z-30 rounded-full border border-border bg-card/90 px-3 py-1 text-xs font-bold text-muted-foreground shadow-sm backdrop-blur dark:border-slate-700 dark:bg-slate-950/80 dark:text-slate-400">
-        {Math.round(viewport.zoom * 100)}%
-      </div>
+      {showZoomBadge ? (
+        <div className="pointer-events-none absolute bottom-12 left-1/2 z-40 -translate-x-1/2 rounded-full border border-border bg-card/95 px-3 py-1 text-xs font-bold text-muted-foreground shadow-sm backdrop-blur dark:border-slate-700 dark:bg-slate-950/90 dark:text-slate-400">
+          {Math.round(viewport.zoom * 100)}%
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -1833,14 +1945,16 @@ function SmartCanvasContextMenu({
   x,
   y,
   onClose,
-  sourceItem,
+  node,
+  direction,
   onUpload,
   onCreate,
 }: {
   x: number;
   y: number;
   onClose: () => void;
-  sourceItem?: SmartCanvasItem | null;
+  node?: SmartCanvasItem | null;
+  direction: "upstream" | "downstream";
   onUpload?: () => void;
   onCreate: (type: SmartCanvasItem["type"]) => void;
 }) {
@@ -1851,7 +1965,7 @@ function SmartCanvasContextMenu({
     disabled?: boolean;
   }> = [
     ...(onUpload ? [{ label: "上传卡片", icon: <ImagePlus className="size-4" />, action: onUpload }] : []),
-    ...connectableNodeMenuItems(sourceItem).map((item) => ({
+    ...connectableNodeMenuItems(node, direction).map((item) => ({
       label: item.label,
       icon: item.icon,
       action: () => onCreate(item.type),
@@ -1862,7 +1976,7 @@ function SmartCanvasContextMenu({
     <div
       data-node-interactive="true"
       className="absolute z-50 w-56 rounded-2xl border border-border bg-card/96 p-2 text-card-foreground shadow-[0_24px_72px_rgba(15,23,42,0.24)] backdrop-blur dark:border-slate-700 dark:bg-[#111827]/96 dark:text-slate-100"
-      style={{ left: Math.max(12, x), top: Math.max(12, y) }}
+      style={{ left: Math.max(CANVAS_NODE_MENU_GAP, x), top: Math.max(CANVAS_NODE_MENU_GAP, y) }}
       onPointerDown={(event) => event.stopPropagation()}
       onClick={(event) => event.stopPropagation()}
       onContextMenu={(event) => event.preventDefault()}
@@ -1888,7 +2002,7 @@ function SmartCanvasContextMenu({
       ))}
       {items.length === 0 ? (
         <div className="px-3 py-4 text-center text-xs font-semibold text-muted-foreground dark:text-slate-500">
-          当前节点没有可连接的下游节点
+          当前节点没有可连接的{direction === "upstream" ? "上游" : "下游"}节点
         </div>
       ) : null}
       <div className="mt-2 border-t border-border pt-2 dark:border-slate-700">
@@ -1993,60 +2107,64 @@ function SmartCanvasMiniMap({
   return (
     <div
       className={cn(
-        "absolute bottom-4 left-6 z-30 rounded-2xl border border-border/80 bg-card/60 p-2 shadow-xl backdrop-blur transition-opacity duration-200 hover:opacity-100 dark:border-slate-700/80 dark:bg-slate-950/55",
+        "absolute bottom-4 left-6 z-30 transition-opacity duration-200 hover:opacity-100",
         dragging ? "opacity-100" : "opacity-45",
       )}
     >
       <div
-        className="relative cursor-grab overflow-hidden rounded-xl border border-muted-foreground/40 bg-background/70 active:cursor-grabbing dark:border-slate-500 dark:bg-slate-950/70"
-        style={{ width: mapWidth, height: mapHeight }}
-        onPointerDown={(event) => {
-          event.preventDefault();
-          setDragging(true);
-          event.currentTarget.setPointerCapture(event.pointerId);
-          moveViewportToClientPoint(event);
-        }}
-        onPointerMove={(event) => {
-          if (dragging) {
-            moveViewportToClientPoint(event);
-          }
-        }}
-        onPointerUp={(event) => {
-          if (dragging) {
-            moveViewportToClientPoint(event, true);
-          }
-          setDragging(false);
-          try {
-            event.currentTarget.releasePointerCapture(event.pointerId);
-          } catch {
-            // Pointer capture may already be released.
-          }
-        }}
-        onPointerCancel={() => setDragging(false)}
-        title="拖动小地图移动画布视口"
+        className="relative rounded-2xl border border-border/80 bg-card/60 p-2 shadow-xl backdrop-blur dark:border-slate-700/80 dark:bg-slate-950/55"
       >
-        {nodes.map((item) => {
-          const size = nodeSizes[item.id] || NODE_SIZE[item.type];
-          const point = worldToMap({ x: Number(item.position?.x || 0), y: Number(item.position?.y || 0) });
-          return (
+        <div
+          className="relative cursor-grab overflow-hidden rounded-xl border border-muted-foreground/40 bg-background/70 active:cursor-grabbing dark:border-slate-500 dark:bg-slate-950/70"
+          style={{ width: mapWidth, height: mapHeight }}
+          onPointerDown={(event) => {
+            event.preventDefault();
+            setDragging(true);
+            event.currentTarget.setPointerCapture(event.pointerId);
+            moveViewportToClientPoint(event);
+          }}
+          onPointerMove={(event) => {
+            if (dragging) {
+              moveViewportToClientPoint(event);
+            }
+          }}
+          onPointerUp={(event) => {
+            if (dragging) {
+              moveViewportToClientPoint(event, true);
+            }
+            setDragging(false);
+            try {
+              event.currentTarget.releasePointerCapture(event.pointerId);
+            } catch {
+              // Pointer capture may already be released.
+            }
+          }}
+          onPointerCancel={() => setDragging(false)}
+          title="拖动小地图移动画布视口"
+        >
+          {nodes.map((item) => {
+            const size = nodeSizes[item.id] || NODE_SIZE[item.type];
+            const point = worldToMap({ x: Number(item.position?.x || 0), y: Number(item.position?.y || 0) });
+            return (
+              <span
+                key={item.id}
+                className={cn("absolute rounded bg-sky-400", item.type === "image" && "bg-cyan-400", item.type === "result" && "bg-indigo-400")}
+                style={{
+                  left: point.x,
+                  top: point.y,
+                  width: Math.max(10, size.w * scale),
+                  height: Math.max(7, size.h * scale),
+                }}
+              />
+            );
+          })}
+          {viewportRect ? (
             <span
-              key={item.id}
-              className={cn("absolute rounded bg-sky-400", item.type === "image" && "bg-cyan-400", item.type === "result" && "bg-indigo-400")}
-              style={{
-                left: point.x,
-                top: point.y,
-                width: Math.max(10, size.w * scale),
-                height: Math.max(7, size.h * scale),
-              }}
+              className="absolute rounded-md border-2 border-slate-900/75 bg-sky-400/10 shadow-[0_0_0_1px_rgba(255,255,255,0.7)] dark:border-white/85"
+              style={{ left: viewportRect.x, top: viewportRect.y, width: viewportRect.w, height: viewportRect.h }}
             />
-          );
-        })}
-        {viewportRect ? (
-          <span
-            className="absolute rounded-md border-2 border-slate-900/75 bg-sky-400/10 shadow-[0_0_0_1px_rgba(255,255,255,0.7)] dark:border-white/85"
-            style={{ left: viewportRect.x, top: viewportRect.y, width: viewportRect.w, height: viewportRect.h }}
-          />
-        ) : null}
+          ) : null}
+        </div>
       </div>
     </div>
   );
@@ -2159,9 +2277,10 @@ type SmartCanvasNodeProps = {
   onDeleteItem: () => void;
   onStartConnect: (event: ReactPointerEvent<HTMLElement>) => void;
   onFinishConnect: (event: ReactPointerEvent<HTMLElement>) => void;
+  onOpenUpstreamMenu: (event: ReactPointerEvent<HTMLElement>) => void;
   onMentionToggle: () => void;
   onAddMention: (image: CanvasImageRef) => void;
-  onCreateNodeFromPort: (sourceId: string, type: SmartCanvasItem["type"], point?: { x: number; y: number }) => void;
+  onCreateNodeFromPort: (nodeId: string, type: SmartCanvasItem["type"], point?: { x: number; y: number }, direction?: "upstream" | "downstream") => void;
   onCreateNodeHelpTemplate: (nodeId: string) => void;
   onMeasure: (id: string, size: { w: number; h: number }) => void;
 };
@@ -2193,6 +2312,7 @@ export const SmartCanvasNode = memo(function SmartCanvasNode({
   onDeleteItem,
   onStartConnect,
   onFinishConnect,
+  onOpenUpstreamMenu,
   onMentionToggle,
   onAddMention,
   onCreateNodeFromPort,
@@ -2255,7 +2375,7 @@ export const SmartCanvasNode = memo(function SmartCanvasNode({
         event.stopPropagation();
       }}
     >
-      {canInput ? <Port side="in" onPointerUp={onFinishConnect} /> : null}
+      {canInput ? <Port side="in" onPointerUp={onFinishConnect} onOpenMenu={onOpenUpstreamMenu} /> : null}
       {canOutput ? <Port side="out" onPointerDown={onStartConnect} /> : null}
       <NodeHeader
         item={item}
@@ -2987,7 +3107,7 @@ function GeneratorNodeBody({
   const nodeRunning = isActiveTask(item.data?.status);
   const imageCount = Math.max(1, Math.min(10, Number(item.data?.n || 1)));
   const ratioValue = canvasImageRatioValue(item.data?.size);
-  const imageResolutionValue = normalizeCanvasImageResolution(item.data?.image_resolution);
+  const imageResolutionValue = normalizeCanvasImageResolution(item.data?.image_resolution) || "unspecified";
   const setImageCount = (next: number) => onUpdateData({ n: Math.max(1, Math.min(10, Math.round(next) || 1)) });
 
   return (
@@ -3075,8 +3195,8 @@ function GeneratorNodeBody({
           </SelectContent>
         </Select>
       </div>
-      <div className="grid grid-cols-[82px_minmax(0,1fr)_90px_100px] gap-2">
-        <Select value={imageResolutionValue} onValueChange={(imageResolution) => onUpdateData({ image_resolution: imageResolution })}>
+      <div className="grid grid-cols-2 gap-2">
+        <Select value={imageResolutionValue} onValueChange={(imageResolution) => onUpdateData({ image_resolution: imageResolution === "unspecified" ? "" : imageResolution })}>
           <SelectTrigger className={canvasSelectClass}>
             <SelectValue />
           </SelectTrigger>
@@ -3086,7 +3206,7 @@ function GeneratorNodeBody({
             ))}
           </SelectContent>
         </Select>
-        <Select value={ratioValue} onValueChange={(size) => onUpdateData({ size })}>
+        <Select value={ratioValue} onValueChange={(size) => onUpdateData({ size, ...(isPixelIconSize(size) ? { image_resolution: "" } : {}) })}>
           <SelectTrigger className={canvasSelectClass}>
             <SelectValue />
           </SelectTrigger>
@@ -3116,14 +3236,18 @@ function GeneratorNodeBody({
           >
             <ChevronLeft className="size-3.5" />
           </button>
-          <Input
-            type="number"
-            min={1}
-            max={10}
-            value={imageCount}
-            onChange={(event) => setImageCount(Number(event.target.value) || 1)}
-            className="h-9 rounded-none border-0 bg-transparent p-0 text-center text-xs font-bold shadow-none focus-visible:ring-0"
-          />
+          <div className="flex min-w-0 items-center justify-center gap-1">
+            <Input
+              type="text"
+              inputMode="numeric"
+              pattern="[0-9]*"
+              value={imageCount}
+              onChange={(event) => setImageCount(Number(event.target.value) || 1)}
+              className="h-9 w-7 rounded-none border-0 bg-transparent p-0 text-right text-xs font-bold shadow-none focus-visible:ring-0"
+              aria-label="生成张数"
+            />
+            <span className={cn("text-[11px] font-bold", canvasSubtleTextClass)}>张</span>
+          </div>
           <button
             type="button"
             className="flex items-center justify-center border-l border-border text-muted-foreground transition hover:bg-accent hover:text-foreground disabled:opacity-40 dark:border-slate-700"
@@ -3135,19 +3259,8 @@ function GeneratorNodeBody({
           </button>
         </div>
       </div>
-      <div className="grid grid-cols-[1fr_1fr] gap-2">
-        <Select value={String(item.data?.visibility || "private")} onValueChange={(visibility) => onUpdateData({ visibility: visibility as ImageVisibility })}>
-          <SelectTrigger className={canvasSelectClass}>
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="private">私有</SelectItem>
-            <SelectItem value="public">公开</SelectItem>
-          </SelectContent>
-        </Select>
-      </div>
       {outputImages.length > 0 ? <CanvasImageStrip images={outputImages} limit={3} onOpen={onOpenImage} className="grid-cols-3" lightweight={lightweightMedia} /> : null}
-      {item.data?.error ? <div className="rounded-lg bg-rose-500/10 px-2 py-1.5 text-xs text-rose-200">{item.data.error}</div> : null}
+      {item.data?.error ? <div className="rounded-lg bg-rose-500/10 px-2 py-1.5 text-xs text-rose-600 dark:text-rose-200">{item.data.error}</div> : null}
       {nodeRunning ? (
         <Button
           type="button"
@@ -3475,7 +3588,7 @@ function OutputNodeBody({
           连接生成节点后显示输出
         </div>
       )}
-      {item.data?.error ? <div className="mt-2 rounded-lg bg-rose-500/10 px-2 py-1.5 text-xs text-rose-200">{item.data.error}</div> : null}
+      {item.data?.error ? <div className="mt-2 rounded-lg bg-rose-500/10 px-2 py-1.5 text-xs text-rose-600 dark:text-rose-200">{item.data.error}</div> : null}
       <Dialog open={showAllImages} onOpenChange={setShowAllImages}>
         <DialogContent className={cn("w-[min(92vw,780px)] max-w-none rounded-2xl p-0", canvasPanelClass)}>
           <DialogTitle className="sr-only">全部输出图片</DialogTitle>
@@ -3759,10 +3872,12 @@ function Port({
   side,
   onPointerDown,
   onPointerUp,
+  onOpenMenu,
 }: {
   side: "in" | "out";
   onPointerDown?: (event: ReactPointerEvent<HTMLElement>) => void;
   onPointerUp?: (event: ReactPointerEvent<HTMLElement>) => void;
+  onOpenMenu?: (event: ReactPointerEvent<HTMLElement>) => void;
 }) {
   return (
     <button
@@ -3773,7 +3888,14 @@ function Port({
         side === "in" ? "-left-2" : "-right-2",
       )}
       onPointerDown={onPointerDown}
-      onPointerUp={onPointerUp}
+      onPointerUp={(event) => {
+        event.stopPropagation();
+        onPointerUp?.(event);
+        if (event.defaultPrevented) {
+          return;
+        }
+        onOpenMenu?.(event);
+      }}
       title={side === "in" ? "输入" : "输出"}
     />
   );

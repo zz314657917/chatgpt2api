@@ -2368,9 +2368,10 @@ func (a *App) recordGeneratedImagesForPayload(identity service.Identity, urls []
 		return
 	}
 	ownerID := identityScope(identity)
-	outputCompression, hasOutputCompression := imageOutputCompressionFromBody(payload["output_compression"])
+	outputFormat := service.NormalizeImageOutputFormat(util.Clean(payload["output_format"]))
+	outputCompression, hasOutputCompression := service.NormalizeImageOutputCompressionValue(payload["output_compression"])
 	var outputCompressionPtr *int
-	if hasOutputCompression {
+	if hasOutputCompression && service.SupportsImageOutputCompression(outputFormat) {
 		outputCompressionPtr = &outputCompression
 	}
 	var partialImagesPtr *int
@@ -2384,7 +2385,7 @@ func (a *App) recordGeneratedImagesForPayload(identity service.Identity, urls []
 		Quality:           util.Clean(payload["quality"]),
 		ResolutionPreset:  util.Clean(payload["image_resolution"]),
 		RequestedSize:     util.Clean(payload["size"]),
-		OutputFormat:      service.NormalizeImageOutputFormat(util.Clean(payload["output_format"])),
+		OutputFormat:      outputFormat,
 		OutputCompression: outputCompressionPtr,
 		Background:        util.Clean(payload["background"]),
 		Moderation:        util.Clean(payload["moderation"]),

@@ -1,16 +1,35 @@
 # Current Task
 
-更新时间：2026-05-29 03:30 +08:00
+更新时间：2026-06-03 22:59 +08:00
 
 ## 背景
 
-`/canvas` 已进入节点式图片创作画布方向，继续复用 `chatgpt2api` 现有图片库、`creation-tasks`、权限体系和 Sub2API 模型路由。本轮 Sprint 4 从项目整体收口图片多场景性能，而不是只优化 `/image-manager` 局部。
+`/canvas` 已进入节点式图片创作画布方向，继续复用 `chatgpt2api` 现有图片库、`creation-tasks`、权限体系和 Sub2API 模型路由。5 月底的 Sprint 4 / group 节点收口已经完成；近 3 天主线继续前移到视频生成节点、图片创作台分辨率预设，以及更近一轮画布交互工作流修复。
 
 ## 当前目标
 
-Sprint 4 目标已完成：稳定当前 `/canvas` 未提交功能改动，并完成图片接口轻量化、中图预览、图片库按需详情读取和画布图片轻引用。本轮在此基础上补充 `/canvas` 组节点，用于把多张图片和多段文本作为一个可复用输入集合传给后续节点。
+当前目标不再是关闭 Sprint 4。本轮应把默认快照切到以下几条主线：
 
-## 本次已完成
+- `/canvas` 新增 video generation nodes，并明确没有 Sub2API 绑定时要隐藏视频模型；
+- `/image` composer 暴露分辨率预设，补齐更靠近用户的输入面；
+- `/canvas` 继续收口 image workflow，包括 LLM 参考图来源连线、图片下载/预览和相关交互修复。
+
+Sprint 4 / group 节点相关内容已转为历史完成事实，不再是当前目标本身。
+
+## 近 3 天新增事实
+
+- `feat(canvas): add video generation nodes` 已进入主线，说明 `/canvas` 默认能力边界已经从静态图片创作推进到包含视频生成节点的画布工作流。
+- `fix(canvas): hide video models without Sub2API binding` 说明视频节点并不是对所有登录态无条件开放；当前默认约束是“没有 Sub2API 绑定时 fail-closed 隐藏视频模型”，避免把能力边界误读成纯前端展示问题。
+- `feat(image): expose resolution presets in composer` 已把分辨率预设推进到 `/image` 创作台，说明 composer 侧输入体验仍在继续演进，不应把当前主线只理解成 `/canvas` 独占。
+- `fix(canvas): connect llm reference image sources`、`fix(image): download gallery images via blob` 与 `feat(image): add composer asset library` 共同说明：当前图片工作流默认心智已经同时覆盖画布、图库、composer 和下载链路。
+
+## 当前结论
+
+- 5 月底的 group 节点、轻摘要列表、中图预览和任务治理已经完成，当前它们更适合作为稳定背景层。
+- 6 月初的默认续做入口应切到“画布视频节点 + composer 分辨率预设 + 更近一轮 canvas/image workflow 修复”，否则后续接手者会误把仓库停留在旧 Sprint 4 语境。
+- 图片参数共享配置已完成第一轮静态收口：前端参数源头集中到 `web/src/lib/image-parameters.ts`，后端输出格式、分辨率、compression 规范函数集中到 `internal/service/image_parameters.go`；`/image`、`/canvas`、API helper、`protocol`、`httpapi` 和 `sub2api` 继续使用现有 wire shape。
+
+## 历史已完成背景
 
 - `/canvas` 循环重复生成修复：
   - 前端循环进度合并时会用 `task.data` 里已经返回的图片反推 slot 成功，避免图片已出现但循环仍显示 `1/10、成功 0`。
@@ -70,6 +89,12 @@ Sprint 4 目标已完成：稳定当前 `/canvas` 未提交功能改动，并完
 - 创作任务治理接口是管理员专用；普通用户即使有 `/api/creation-tasks` 权限，也不能访问 `/api/admin/creation-tasks/diagnostics`。
 - 创作任务治理默认卡住阈值为 10 分钟；管理员可在设置页输入秒数，接口支持 `stale_seconds`。
 - 被创作任务治理终止的预扣费图片任务会按实际输出 0 进行结算并退款，不会吞掉用户余额。
+- 图片参数共享配置当前规则：
+  - 前端 `auto` 分辨率只作为 UI 值，不作为 `image_resolution` 提交；像素图标尺寸作为明确 `size`，不叠加分辨率预设。
+  - 后端 `1k` 归一为 `1080p`，只接受并保存 `1080p/2k/4k` 分辨率预设。
+  - `output_format` 空值或非法值归一为 `png`，`jpg/jpeg` 归一为 `jpeg`。
+  - 只有 `jpeg` 支持 `output_compression`，compression 统一钳制到 `0..100`；PNG/WebP metadata 不保存 compression。
+  - Sub2API 图片 JSON payload 中 `1080p` 会转成上游 `1k`，`output_format/output_compression` 也走同一套共享规范，不再原样透传非法格式或非 JPEG compression。
 
 ## 待验证点
 
@@ -78,6 +103,7 @@ Sprint 4 目标已完成：稳定当前 `/canvas` 未提交功能改动，并完
 - 下载/高清原图验收：本轮未执行真实下载动作。后续在浏览器点击下载/高清查看，确认才请求 `/images/...` 或 detail 原图。
 - 生产卡顿复核：上线前建议在正式同量级数据上对 `/api/images?page_size=50` 响应体和首屏 Network 原图请求数做一次对比。
 - 组节点浏览器验收：本地 Vite 访问 `/canvas` 会被登录页拦截，本轮未完成登录态内创建、连线和运行的点击验收。
+- 图片参数共享配置浏览器验收：Vite 源码前端 `http://127.0.0.1:5173/image` 可加载但被登录页拦截，控制台无 error；未完成登录态内参数下拉与实际提交 payload 点击验收。
 
 ## 当前结论
 
@@ -127,3 +153,15 @@ Sprint 4 已通过本机实现验证，可以关闭。组节点已完成前后�
 - 创作任务治理阈值收紧验证：`cd web && npm.cmd run lint`：PASS，0 warnings / 0 errors。
 - 创作任务治理阈值收紧验证：`cd web && npm.cmd run build`：PASS。
 - 创作任务治理阈值收紧验证：`git diff --check -- internal/service/image_task.go internal/service/image_task_test.go internal/httpapi/routes.go internal/httpapi/app_test.go web/src/lib/api.ts web/src/app/settings/store.ts web/src/app/settings/components/creation-task-governance-card.tsx knowledge/tasks/current-task.md`：PASS，仅 Windows LF -> CRLF 提示。
+- 图片参数共享配置验证：`go test ./internal/service ./internal/httpapi ./internal/protocol -count=1`：PASS。
+- 图片参数共享配置验证：`cd web && npm.cmd run lint`：PASS，0 warnings / 0 errors。
+- 图片参数共享配置验证：`cd web && npm.cmd run build`：PASS。
+- 图片参数共享配置验证：本地 Node + TypeScript 临时转译执行 `web/src/app/image/image-options.assert.ts`：PASS。
+- 图片参数共享配置验证：`git diff --check -- internal/service/image_parameters.go internal/service/image_parameters_test.go internal/service/image_task.go internal/service/image.go internal/httpapi/routes.go internal/httpapi/app.go internal/httpapi/app_test.go internal/protocol/conversation.go web/src/lib/image-parameters.ts web/src/app/image/image-options.ts web/src/lib/api.ts web/src/app/image/page.tsx web/src/app/image/components/image-composer.tsx web/src/app/image/components/image-results.tsx web/src/components/image-task-queue.tsx web/src/app/canvas/canvas-utils.ts web/src/app/canvas/canvas-node.tsx web/src/app/image/image-options.assert.ts`：PASS，仅 Windows LF -> CRLF 提示。
+- 图片参数共享配置浏览器验证：启动 Vite `http://127.0.0.1:5173` 并设置 `VITE_API_URL=http://127.0.0.1:8081`；Browser 打开 `/image` 被登录页拦截，控制台无 error；验收后已停止 5173 Vite 进程。
+- 图片参数共享配置自检：独立只读智能体初审 FAIL，指出 `/canvas` 像素图标仍可能叠加 `image_resolution`，以及 Sub2API 未映射 `1080p -> 1k`。
+- 图片参数共享配置自检修复：`/canvas` 选择像素图标尺寸时清空分辨率，提交层如果 `size` 是像素图标也不传 `image_resolution`；Sub2API `1080p` 转 `1k`，并规范 `output_format/output_compression`。
+- 图片参数共享配置自检修复验证：`go test ./internal/httpapi -run "TestSub2APIImagePayload(PassesModelAndResolution|NormalizesOutputOptions)$" -count=1`：PASS。
+- 图片参数共享配置自检修复验证：`go test ./internal/service ./internal/httpapi ./internal/protocol -count=1`：PASS。
+- 图片参数共享配置自检修复验证：`cd web && npm.cmd run lint`：PASS，0 warnings / 0 errors。
+- 图片参数共享配置自检修复验证：`cd web && npm.cmd run build`：PASS。

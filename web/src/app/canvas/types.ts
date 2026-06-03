@@ -121,7 +121,8 @@ export type SmartCanvasConnectState =
 
 export type SmartCanvasPortMenuRequest = {
   id: number;
-  sourceId: string;
+  nodeId: string;
+  direction: "upstream" | "downstream";
   screen: { x: number; y: number };
 };
 

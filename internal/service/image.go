@@ -2949,19 +2949,6 @@ func uploadedImageExtension(filename, contentType string) string {
 	}
 }
 
-func NormalizeImageResolutionPreset(value string) string {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "1080p":
-		return "1080p"
-	case "2k":
-		return "2k"
-	case "4k":
-		return "4k"
-	default:
-		return ""
-	}
-}
-
 func imageDay(rel string, modTime time.Time) string {
 	parts := strings.Split(rel, "/")
 	if len(parts) >= 4 {

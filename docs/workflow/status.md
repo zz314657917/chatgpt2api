@@ -6,23 +6,24 @@ pending_action: close-image-composer-asset-library
 project_type: web
 qa_mode: browser
 approval_required: false
-last_verified: 2026-05-31
+last_verified: 2026-06-03
 ---
 
 # Workflow Status
 
-- 当前阶段：`done`
-- 当前 Sprint：`image-composer-asset-library`
-- 当前目标：在 `/image` 创作台右侧复用画布图片库能力，支持点击加入输入和拖到输入框作为参考图。
-- Task contract：`docs/workflow/tasks/image-composer-asset-library.md`
-- 本次结论：PASS。已抽出共享图片库侧栏和 managed-image 拖拽协议，`/canvas` 继续通过包装组件使用同一侧栏，`/image` 加入右侧图片库并识别图库拖拽。
+- 当前阶段：`build`
+- 当前 Sprint：`canvas-video-and-composer-followups`
+- 当前目标：把近 3 天已进入主线的 `/canvas` 视频生成节点、无 Sub2API 绑定时的视频模型 fail-closed、`/image` 分辨率预设，以及新一轮 canvas/image workflow 修复收口成当前默认 Sprint 语境。
+- Task contract：暂无单独 contract；当前以近期主线提交和 `knowledge/tasks/current-task.md` 为事实源。
+- 本次结论：进行中。现有 workflow status 不能再停留在 2026-05-31 的 `image-composer-asset-library done`，否则会漏掉 6 月初的新主线。
 - 验证命令：
   - `cd web && npm.cmd run lint`
   - `cd web && npm.cmd run build`
+  - `go test ./...`
   - `git diff --check`
-- 浏览器验收：本地 8081 `/image` 可打开并按当前未登录状态重定向到 `/login`，控制台无 error；因当前浏览器没有登录态，未完成登录后图库展开交互验收。
-- 未完全自动化覆盖：未在已登录浏览器会话中实际点击/拖拽图库素材。
-- 下一合法动作：关闭本次小任务，或进入下一 Sprint Planner。
+- 浏览器验收：当前应至少补 `/canvas` 视频节点与 `/image` 分辨率预设的最小页面回读；是否已完成需以后续任务记录为准。
+- 未完全自动化覆盖：当前状态文件尚未沉淀 6 月初这轮视频节点和 composer 预设的人工闭环。
+- 下一合法动作：补当前 Sprint 的最小验证与收口记录，或补单独 contract 后继续推进。
 
 ## Previous Canvas Sprint 4
 

@@ -20,7 +20,8 @@ export type SmartCanvasPresetId =
   | "text-to-image"
   | "image-to-image"
   | "ai-prompt"
-  | "batch-variants";
+  | "batch-variants"
+  | "pixel-icon";
 
 export type SmartCanvasPreset = {
   id: SmartCanvasPresetId;
@@ -30,6 +31,10 @@ export type SmartCanvasPreset = {
   canvasName: string;
   tags: string[];
   nodeTypes: SmartCanvasItemType[];
+};
+
+export type SmartCanvasPresetLike = Omit<SmartCanvasPreset, "id"> & {
+  id: string;
 };
 
 export const SMART_CANVAS_PRESETS: SmartCanvasPreset[] = [
@@ -77,6 +82,15 @@ export const SMART_CANVAS_PRESETS: SmartCanvasPreset[] = [
     canvasName: "批量变体画布",
     tags: ["批量", "变体"],
     nodeTypes: ["prompt", "loop", "image_generation", "result"],
+  },
+  {
+    id: "pixel-icon",
+    title: "像素图标生成",
+    summary: "图标类型 -> 可选 AI -> 2x2",
+    description: "只改图标类型，可先运行 AI 提词增强，也可以直接生成四组像素图标尺寸。",
+    canvasName: "像素图标生成画布",
+    tags: ["像素图标", "多尺寸", "游戏素材"],
+    nodeTypes: ["prompt", "llm", "image_generation", "result"],
   },
 ];
 
@@ -164,6 +178,39 @@ function createPresetLayout(presetId: SmartCanvasPresetId): Pick<SmartCanvasDocu
     };
   }
 
+  if (presetId === "pixel-icon") {
+    const prompt = {
+      ...createPromptNode({ x: 80, y: 420 }, "红色药水瓶"),
+      name: "图标类型",
+    };
+    const llm = {
+      ...createLlmNode({ x: 430, y: 300 }),
+      name: "可选 AI 提词",
+    };
+    const sizes = [
+      { value: "16x64", x: 930, y: 80 },
+      { value: "32x64", x: 1880, y: 80 },
+      { value: "64x64", x: 930, y: 560 },
+      { value: "128x128", x: 1880, y: 560 },
+    ];
+    const nodes: SmartCanvasDocument["nodes"] = [prompt, llm];
+    const edges: SmartCanvasDocument["edges"] = [createSmartEdge(prompt.id, llm.id)];
+    sizes.forEach((size) => {
+      const generator = createPixelIconGeneratorNode(size.value, { x: size.x, y: size.y });
+      const output = {
+        ...createOutputNode({ x: size.x + 440, y: size.y + 40 }),
+        name: `${size.value} 结果`,
+      };
+      nodes.push(generator, output);
+      edges.push(createSmartEdge(prompt.id, generator.id), createSmartEdge(llm.id, generator.id), createSmartEdge(generator.id, output.id));
+    });
+    return {
+      nodes,
+      edges,
+      viewport: { x: -20, y: 70, zoom: 0.34 },
+    };
+  }
+
   const prompt = createPromptNode({ x: 360, y: 430 }, "生成一张高质量图片，主体清晰，构图稳定，光影精致。");
   const generator = createGeneratorNode({ x: 760, y: 300 });
   const output = createOutputNode({ x: 1190, y: 300 });
@@ -171,5 +218,25 @@ function createPresetLayout(presetId: SmartCanvasPresetId): Pick<SmartCanvasDocu
     nodes: [prompt, generator, output],
     edges: [createSmartEdge(prompt.id, generator.id), createSmartEdge(generator.id, output.id)],
     viewport: { x: -120, y: -120, zoom: 1 },
+  };
+}
+
+function createPixelIconGeneratorNode(size: string, position: { x: number; y: number }) {
+  const generator = createGeneratorNode(position);
+  return {
+    ...generator,
+    name: `${size} 像素图标`,
+    data: {
+      ...generator.data,
+      prompt: [
+        `生成单个像素风图标，目标尺寸：${size}。`,
+        "主体居中，硬边像素块，有限调色板，高可读剪影，适合游戏物品栏或素材库。",
+        "不要文字、水印、图标集合、复杂背景、写实摄影、3D 渲染或柔焦渐变。",
+      ].join("\n"),
+      size,
+      image_resolution: "",
+      quality: "high",
+      n: 1,
+    },
   };
 }

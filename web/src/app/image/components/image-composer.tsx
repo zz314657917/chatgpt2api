@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import {
   useEffect,
+  Fragment,
   useMemo,
   useRef,
   useState,
@@ -34,29 +35,32 @@ import { hasImageResultDragPayload, parseImageResultDragPayload } from "@/app/im
 import { hasManagedImageDragPayload, parseManagedImageDragPayload } from "@/components/managed-image-drag";
 import {
   CUSTOM_IMAGE_ASPECT_RATIO,
+  IMAGE_QUALITY_OPTIONS,
   IMAGE_ASPECT_RATIO_OPTIONS,
+  PIXEL_ICON_SIZE_OPTIONS,
   IMAGE_RESOLUTION_OPTIONS,
   IMAGE_SIZE_MODE_OPTIONS,
+  IMAGE_OUTPUT_FORMAT_OPTIONS,
   buildImageSize,
   formatImageSizeDisplay,
   getActiveImageAspectRatio,
   getImageSizeRequirementLabel,
   isHighResolutionImageSize,
+  isPixelIconSize,
   parseImageRatio,
+  supportsImageOutputCompression,
+  type ImageOutputFormat,
+  type ImageQuality,
   type ImageAspectRatio,
   type ImageResolution,
   type ImageSizeMode,
-} from "@/app/image/image-options";
+} from "@/lib/image-parameters";
 import {
   IMAGE_MODEL_ROUTE_DETAILS,
-  IMAGE_OUTPUT_FORMAT_OPTIONS,
   supportsImageOutputControls,
-  supportsImageOutputCompression,
   supportsImageResolutionPresets,
   supportsStructuredImageParameters,
   type ImageModel,
-  type ImageOutputFormat,
-  type ImageQuality,
   type ManagedImageSummary,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -163,11 +167,9 @@ function ImageComposerDock({ children }: { children: ReactNode }) {
 const imageSettingsFieldClass =
   "flex min-h-8 min-w-0 items-center justify-between gap-2 rounded-xl border border-[#e5e7eb] bg-white px-3 py-1 text-[11px] dark:border-border dark:bg-background/70";
 
-const IMAGE_QUALITY_OPTIONS = [
+const IMAGE_QUALITY_SETTINGS_OPTIONS = [
   { value: "auto", label: "自动", description: "不指定质量，由上游选择默认质量。" },
-  { value: "low", label: "速度优先", description: "优先速度和成本，适合草稿测试。" },
-  { value: "medium", label: "标准", description: "兼顾速度与细节，适合日常生成。" },
-  { value: "high", label: "高品质", description: "优先细节效果，适合最终出图。" },
+  ...IMAGE_QUALITY_OPTIONS,
 ] as const satisfies ReadonlyArray<ImageSettingsMenuOption<"auto" | ImageQuality>>;
 
 const IMAGE_BACKGROUND_OPTIONS = [
@@ -192,7 +194,23 @@ type ImageSettingsMenuOption<Value extends string> = {
   value: Value;
   label: string;
   description?: string;
+  section?: string;
 };
+
+const IMAGE_ASPECT_RATIO_SETTINGS_OPTIONS = [
+  ...IMAGE_ASPECT_RATIO_OPTIONS.filter((option) => option.value !== CUSTOM_IMAGE_ASPECT_RATIO).map((option) => ({
+    ...option,
+    section: "常用画幅",
+  })),
+  ...PIXEL_ICON_SIZE_OPTIONS.map((option) => ({
+    ...option,
+    section: "像素图标尺寸",
+  })),
+  {
+    ...IMAGE_ASPECT_RATIO_OPTIONS[IMAGE_ASPECT_RATIO_OPTIONS.length - 1],
+    section: "自定义",
+  },
+] satisfies ReadonlyArray<ImageSettingsMenuOption<ImageAspectRatio>>;
 
 function ImageSettingsPopoverMenu<Value extends string>({
   label,
@@ -243,34 +261,41 @@ function ImageSettingsPopoverMenu<Value extends string>({
         onOpenAutoFocus={(event) => event.preventDefault()}
       >
         <div className="grid gap-1" role="listbox" aria-label={label}>
-          {options.map((option) => {
+          {options.map((option, index) => {
             const active = option.value === value;
+            const showSection = option.section && option.section !== options[index - 1]?.section;
             return (
-              <button
-                key={`${label}-${option.value || option.label}`}
-                type="button"
-                role="option"
-                aria-selected={active}
-                className={cn(
-                  "flex w-full max-w-full items-start justify-between gap-3 rounded-lg px-3 py-2 text-left text-sm text-[#45515e] transition hover:bg-black/[0.05] dark:text-muted-foreground dark:hover:bg-accent/60",
-                  active && "bg-black/[0.05] font-medium text-[#18181b] dark:bg-accent dark:text-foreground",
-                )}
-                title={option.description}
-                onClick={() => {
-                  onValueChange(option.value);
-                  onOpenChange(false);
-                }}
-              >
-                <span className="min-w-0 max-w-full">
-                  <span className="block whitespace-normal break-words">{option.label}</span>
-                  {option.description ? (
-                    <span className="block whitespace-normal break-words text-[11px] font-normal text-[#8e8e93] dark:text-muted-foreground">
-                      {option.description}
-                    </span>
-                  ) : null}
-                </span>
-                {active ? <Check className="mt-0.5 size-4 shrink-0" /> : null}
-              </button>
+              <Fragment key={`${label}-${option.value || option.label}`}>
+                {showSection ? (
+                  <div className="px-3 pt-2 pb-1 text-[11px] font-medium text-[#8e8e93] dark:text-muted-foreground">
+                    {option.section}
+                  </div>
+                ) : null}
+                <button
+                  type="button"
+                  role="option"
+                  aria-selected={active}
+                  className={cn(
+                    "flex w-full max-w-full items-start justify-between gap-3 rounded-lg px-3 py-2 text-left text-sm text-[#45515e] transition hover:bg-black/[0.05] dark:text-muted-foreground dark:hover:bg-accent/60",
+                    active && "bg-black/[0.05] font-medium text-[#18181b] dark:bg-accent dark:text-foreground",
+                  )}
+                  title={option.description}
+                  onClick={() => {
+                    onValueChange(option.value);
+                    onOpenChange(false);
+                  }}
+                >
+                  <span className="min-w-0 max-w-full">
+                    <span className="block whitespace-normal break-words">{option.label}</span>
+                    {option.description ? (
+                      <span className="block whitespace-normal break-words text-[11px] font-normal text-[#8e8e93] dark:text-muted-foreground">
+                        {option.description}
+                      </span>
+                    ) : null}
+                  </span>
+                  {active ? <Check className="mt-0.5 size-4 shrink-0" /> : null}
+                </button>
+              </Fragment>
             );
           })}
         </div>
@@ -393,10 +418,10 @@ export function ImageComposer({
   const imageAspectRatioLabel =
     imageAspectRatio === CUSTOM_IMAGE_ASPECT_RATIO
       ? imageCustomRatio.trim() || "自定义比例"
-      : IMAGE_ASPECT_RATIO_OPTIONS.find((option) => option.value === imageAspectRatio)?.label || "Auto";
+      : IMAGE_ASPECT_RATIO_SETTINGS_OPTIONS.find((option) => option.value === imageAspectRatio)?.label || "Auto";
   const imageResolutionLabel =
     IMAGE_RESOLUTION_OPTIONS.find((option) => option.value === imageResolution)?.label || "Auto";
-  const imageQualityLabel = IMAGE_QUALITY_OPTIONS.find((option) => option.value === imageQuality)?.label || "自动";
+  const imageQualityLabel = IMAGE_QUALITY_SETTINGS_OPTIONS.find((option) => option.value === imageQuality)?.label || "自动";
   const imageBackgroundLabel = IMAGE_BACKGROUND_OPTIONS.find((option) => option.value === imageBackground)?.label || "Auto";
   const imageModerationLabel = IMAGE_MODERATION_OPTIONS.find((option) => option.value === imageModeration)?.label || "Auto";
   const imagePartialImagesLabel = IMAGE_PARTIAL_IMAGE_OPTIONS.find((option) => option.value === imagePartialImages)?.label || "关闭";
@@ -409,7 +434,9 @@ export function ImageComposer({
     ? IMAGE_SIZE_MODE_OPTIONS
     : IMAGE_SIZE_MODE_OPTIONS.filter((option) => option.value !== "custom");
   const effectiveImageSizeMode = structuredImageParameters || imageSizeMode !== "custom" ? imageSizeMode : "auto";
-  const effectiveImageResolution = resolutionPresetsSupported ? imageResolution : "auto";
+  const pixelIconSizeSelected = effectiveImageSizeMode === "ratio" && isPixelIconSize(imageAspectRatio);
+  const resolutionControlsVisible = resolutionPresetsSupported && !pixelIconSizeSelected;
+  const effectiveImageResolution = resolutionControlsVisible ? imageResolution : "auto";
   const submitLabel = composerMode === "chat" ? "发送对话" : referenceImages.length > 0 ? "编辑图片" : "生成图片";
   const estimateLabel = estimatedImagePriceLabel ? `预估价格 ${estimatedImagePriceLabel}，仅供参考` : "";
   const submitTitle = billingBlocked
@@ -447,6 +474,8 @@ export function ImageComposer({
     effectiveImageSizeMode === "ratio"
       ? isCustomRatioInvalid
         ? "比例需要填写为宽:高"
+        : isPixelIconSize(imageAspectRatio)
+          ? `目标尺寸 ${formatImageSizeDisplay(imageAspectRatio)}，像素图标快捷尺寸`
         : effectiveImageResolution === "auto"
           ? activeImageAspectRatio
             ? `${activeImageAspectRatio} 构图偏好，实际像素以上游返回为准`
@@ -454,7 +483,7 @@ export function ImageComposer({
           : computedImageSize
             ? structuredImageParameters
               ? `目标尺寸 ${formatImageSizeDisplay(computedImageSize)}，${sizeRequirementLabel}`
-              : `${imageResolutionLabel} 分辨率预设，比例仍作为构图偏好，实际像素以上游返回为准`
+              : `${imageResolutionLabel} 分辨率预设，画幅仍作为构图偏好，实际像素以上游返回为准`
             : hasResolutionPreset && !structuredImageParameters
               ? `${imageResolutionLabel} 分辨率预设，比例交给模型决定，实际像素以上游返回为准`
               : "比例需要填写为宽:高"
@@ -1028,12 +1057,12 @@ export function ImageComposer({
                         {effectiveImageSizeMode === "ratio" ? (
                           <>
                             <div className={imageSettingsFieldClass}>
-                              <span className="shrink-0 font-medium text-[#45515e] dark:text-muted-foreground">比例</span>
+                              <span className="shrink-0 font-medium text-[#45515e] dark:text-muted-foreground">画幅/尺寸</span>
                               <ImageSettingsPopoverMenu
-                                label="比例"
+                                label="画幅/尺寸"
                                 value={imageAspectRatio}
                                 valueLabel={imageAspectRatioLabel}
-                                options={IMAGE_ASPECT_RATIO_OPTIONS}
+                                options={IMAGE_ASPECT_RATIO_SETTINGS_OPTIONS}
                                 open={isAspectRatioMenuOpen}
                                 onOpenChange={(open) => {
                                   setIsAspectRatioMenuOpen(open);
@@ -1046,10 +1075,15 @@ export function ImageComposer({
                                     setIsPartialImagesMenuOpen(false);
                                   }
                                 }}
-                                onValueChange={onImageAspectRatioChange}
+                                onValueChange={(value) => {
+                                  onImageAspectRatioChange(value);
+                                  if (isPixelIconSize(value)) {
+                                    onImageResolutionChange("auto");
+                                  }
+                                }}
                               />
                             </div>
-                            {resolutionPresetsSupported ? (
+                            {resolutionControlsVisible ? (
                               <div className={imageSettingsFieldClass}>
                                 <span className="shrink-0 font-medium text-[#45515e] dark:text-muted-foreground">分辨率</span>
                                 <ImageSettingsPopoverMenu
@@ -1100,8 +1134,8 @@ export function ImageComposer({
                               label={sizePreviewLabel}
                               detail={sizePreviewDetail}
                               highResolution={sizeIsHighResolution}
-                              structured={structuredImageParameters}
-                              resolutionPreset={resolutionPresetsSupported}
+                              structured={structuredImageParameters || pixelIconSizeSelected}
+                              resolutionPreset={resolutionControlsVisible}
                             />
                           </>
                         ) : null}
@@ -1111,10 +1145,10 @@ export function ImageComposer({
                             detail={sizePreviewDetail}
                             highResolution={sizeIsHighResolution}
                             structured={structuredImageParameters}
-                            resolutionPreset={resolutionPresetsSupported}
+                            resolutionPreset={resolutionControlsVisible}
                           />
                         ) : null}
-                        {resolutionPresetsSupported && effectiveImageSizeMode !== "auto" && sizeIsHighResolution && highResolutionHint ? (
+                        {resolutionControlsVisible && effectiveImageSizeMode !== "auto" && sizeIsHighResolution && highResolutionHint ? (
                           <div className="col-span-2 rounded-xl border border-amber-100 bg-amber-50 px-3 py-1.5 text-[11px] leading-5 text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200 sm:col-span-3">
                             {highResolutionHint}
                           </div>
@@ -1123,8 +1157,10 @@ export function ImageComposer({
                           <p className="col-span-2 rounded-xl border border-sky-100 bg-sky-50 px-3 py-1.5 text-[11px] leading-5 text-sky-900 dark:border-sky-900/60 dark:bg-sky-950/30 dark:text-sky-100 sm:col-span-3">
                             {structuredImageParameters
                               ? "Codex 图片链路会下发目标尺寸；格式由后端保存结果时处理，压缩率仅适用于 JPEG。"
-                              : resolutionPresetsSupported
-                                ? "常规/官方图片线路会提交分辨率预设，比例仍作为构图偏好；实际像素以上游返回为准。"
+                              : pixelIconSizeSelected
+                                ? "像素图标尺寸会作为目标尺寸提交，不叠加分辨率预设。"
+                              : resolutionControlsVisible
+                                ? "常规/官方图片线路会提交分辨率预设，画幅仍作为构图偏好；实际像素以上游返回为准。"
                                 : "当前图片线路只会把比例作为构图偏好，实际像素以上游返回为准；格式由后端保存结果时处理。"}
                           </p>
                         ) : null}
@@ -1134,7 +1170,7 @@ export function ImageComposer({
                             label="质量"
                             value={imageQuality}
                             valueLabel={imageQualityLabel}
-                            options={IMAGE_QUALITY_OPTIONS}
+                            options={IMAGE_QUALITY_SETTINGS_OPTIONS}
                             open={isQualityMenuOpen}
                             onOpenChange={(open) => {
                               setIsQualityMenuOpen(open);
