@@ -27,6 +27,8 @@ import {
   isImageResolution,
   isImageSizeMode,
   isPixelIconSize,
+  normalizeImageOutputCompression,
+  normalizePositiveImageParameter,
   parseImageRatio,
   type ImageAspectRatio,
   type ImageResolution,
@@ -626,25 +628,7 @@ function positiveDimension(value: unknown) {
 }
 
 function normalizeOutputCompressionValue(value: unknown): number | undefined {
-  if (value === undefined || value === null || String(value).trim() === "") {
-    return undefined;
-  }
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric) || numeric < 0) {
-    return undefined;
-  }
-  return Math.min(100, Math.round(numeric));
-}
-
-function normalizePositiveImageParameter(value: unknown): number | undefined {
-  if (value === undefined || value === null || String(value).trim() === "") {
-    return undefined;
-  }
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric) || numeric <= 0) {
-    return undefined;
-  }
-  return Math.round(numeric);
+  return normalizeImageOutputCompression(value);
 }
 
 function imageOutputCompressionForFormat(format: ImageOutputFormat, value: unknown) {

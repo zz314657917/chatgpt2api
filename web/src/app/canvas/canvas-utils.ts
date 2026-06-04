@@ -12,7 +12,14 @@ import type {
   ManagedImageSummary,
 } from "@/lib/api";
 import { getManagedImagePathFromUrl, getManagedImagePreviewUrlFromPath, getManagedImageThumbnailUrlFromPath, getManagedImageUrlFromPath } from "@/lib/image-path";
-import { normalizeImageResolutionPreset, normalizePixelIconSizeAlias } from "@/lib/image-parameters";
+import {
+  normalizeImageOutputCompression,
+  normalizeImageOutputFormat,
+  normalizeImageResolutionPreset,
+  normalizePixelIconSizeAlias,
+  normalizePositiveImageParameter,
+  supportsImageOutputCompression,
+} from "@/lib/image-parameters";
 
 import {
   SMART_CANVAS_KIND,
@@ -41,6 +48,29 @@ export const DEFAULT_COMPOSER: SmartCanvasComposer = {
 
 export function normalizeCanvasImageResolution(value?: string) {
   return normalizeImageResolutionPreset(value);
+}
+
+export function normalizeCanvasImageOutputFormat(value?: string) {
+  return normalizeImageOutputFormat(value);
+}
+
+export function normalizeCanvasImageOutputCompression(format: string | undefined, value: unknown) {
+  return supportsImageOutputCompression(format || "") ? normalizeImageOutputCompression(value) : undefined;
+}
+
+export function normalizeCanvasImageBackground(value?: string) {
+  const normalized = cleanImageText(value).toLowerCase();
+  return normalized === "transparent" || normalized === "opaque" ? normalized : "";
+}
+
+export function normalizeCanvasImageModeration(value?: string) {
+  const normalized = cleanImageText(value).toLowerCase();
+  return normalized === "low" ? normalized : "";
+}
+
+export function normalizeCanvasPartialImages(value: unknown) {
+  const normalized = normalizePositiveImageParameter(value);
+  return normalized ? Math.min(3, normalized) : undefined;
 }
 
 export function isPixelIconGeneratorNode(item?: SmartCanvasItem | null) {
@@ -271,6 +301,7 @@ export function createGeneratorNode(position: { x: number; y: number }): SmartCa
       model: DEFAULT_COMPOSER.model,
       size: DEFAULT_COMPOSER.size,
       image_resolution: "1080p",
+      output_format: "png",
       quality: "auto",
       n: DEFAULT_COMPOSER.n,
       visibility: DEFAULT_COMPOSER.visibility,
@@ -849,6 +880,11 @@ function sanitizeSmartItemData(data?: SmartCanvasItemData): SmartCanvasItemData 
     model: typeof data.model === "string" && data.model ? data.model : "auto",
     size: normalizeCanvasImageSize(data.size),
     image_resolution: normalizeCanvasImageResolution(data.image_resolution),
+    output_format: data.output_format ? normalizeCanvasImageOutputFormat(data.output_format) : undefined,
+    output_compression: normalizeCanvasImageOutputCompression(data.output_format, data.output_compression),
+    background: normalizeCanvasImageBackground(data.background),
+    moderation: normalizeCanvasImageModeration(data.moderation),
+    partial_images: normalizeCanvasPartialImages(data.partial_images),
     duration: Number.isFinite(Number(data.duration)) ? Math.max(5, Math.min(15, Number(data.duration))) : undefined,
     aspect_ratio: typeof data.aspect_ratio === "string" && data.aspect_ratio ? data.aspect_ratio : "16:9",
     resolution: typeof data.resolution === "string" ? data.resolution : "",
