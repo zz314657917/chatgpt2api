@@ -803,6 +803,10 @@ func sanitizeCanvasNodeData(data map[string]any) map[string]any {
 		if _, blocked := canvasNodeBlockedDataFields[key]; blocked {
 			continue
 		}
+		if key == "size" {
+			out[key] = normalizeImageTaskSize(util.Clean(value))
+			continue
+		}
 		out[key] = value
 	}
 	if len(out) == 0 {

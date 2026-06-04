@@ -1192,7 +1192,7 @@ func (e *Engine) formatImageResultWithOptions(items []map[string]any, prompt, re
 				}
 			}
 		}
-		if !itemOptions.TrustUpstreamFormat {
+		if !itemOptions.TrustUpstreamFormat || (itemOptions.TargetWidth > 0 && itemOptions.TargetHeight > 0) {
 			imageBytes, err = encodeImageBytes(imageBytes, itemOptions)
 			if err != nil {
 				continue

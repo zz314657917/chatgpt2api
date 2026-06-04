@@ -105,6 +105,46 @@ func TestCanvasServiceStripsRoutingSecretsFromNodeData(t *testing.T) {
 	assertCanvasNodeDataHasNoRoutingSecrets(t, got.Nodes[0].Data)
 }
 
+func TestCanvasServiceNormalizesPixelIconSizeAliases(t *testing.T) {
+	backend := newTestStorageBackend(t)
+	svc := NewCanvasService(backend)
+	identity := Identity{ID: "user-1", Role: AuthRoleUser, OwnerID: "user-1"}
+
+	created, err := svc.CreateCanvas(identity, CanvasDocument{
+		Name: "Pixel Icons",
+		Nodes: []CanvasNode{
+			{
+				ID:   "n1",
+				Type: CanvasNodeTypeImageCreate,
+				Data: map[string]any{"prompt": "draw", "size": "32:32"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateCanvas() error = %v", err)
+	}
+	if got := created.Nodes[0].Data["size"]; got != "32x32" {
+		t.Fatalf("CreateCanvas() node size = %#v, want 32x32", got)
+	}
+
+	saved, err := svc.SaveCanvas(identity, created.ID, CanvasDocument{
+		Name: "Pixel Icons Updated",
+		Nodes: []CanvasNode{
+			{
+				ID:   "n1",
+				Type: CanvasNodeTypeImageCreate,
+				Data: map[string]any{"prompt": "draw", "size": "128:128"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("SaveCanvas() error = %v", err)
+	}
+	if got := saved.Nodes[0].Data["size"]; got != "128x128" {
+		t.Fatalf("SaveCanvas() node size = %#v, want 128x128", got)
+	}
+}
+
 func TestCanvasServiceAllowsGroupNode(t *testing.T) {
 	backend := newTestStorageBackend(t)
 	svc := NewCanvasService(backend)

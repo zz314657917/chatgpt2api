@@ -236,6 +236,34 @@ func TestImageTaskServiceNormalizesPixelIconSizeAliases(t *testing.T) {
 	}
 }
 
+func TestImageTaskServiceNormalizesRequestedPixelIconSizeAliases(t *testing.T) {
+	handlerCalls := make(chan map[string]any, 1)
+	handler := func(ctx context.Context, identity Identity, payload map[string]any) (map[string]any, error) {
+		handlerCalls <- payload
+		return map[string]any{"data": []map[string]any{{"url": "https://example.test/image.png"}}}, nil
+	}
+	svc := newTestImageTaskService(t, handler, handler, handler, func() int { return 30 })
+	identity := Identity{ID: "alice", Name: "Alice", Role: "user"}
+
+	metadata := map[string]any{"requested_size": "32:32"}
+	if _, err := svc.SubmitGenerationWithMetadata(context.Background(), identity, "pixel-icon-requested", "draw", "gpt-image-2", "32:32", "high", "https://base.test", 1, nil, metadata); err != nil {
+		t.Fatalf("SubmitGenerationWithMetadata() error = %v", err)
+	}
+
+	select {
+	case payload := <-handlerCalls:
+		if got := payload["size"]; got != "32x32" {
+			t.Fatalf("payload size = %#v, want 32x32 in %#v", got, payload)
+		}
+		if got := payload["requested_size"]; got != "32x32" {
+			t.Fatalf("payload requested_size = %#v, want 32x32 in %#v", got, payload)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for handler payload")
+	}
+	waitForTaskStatus(t, svc, identity, "pixel-icon-requested", TaskStatusSuccess)
+}
+
 func TestImageTaskServiceClampsQueuedOutputsToTen(t *testing.T) {
 	handlerCalls := make(chan map[string]any, 1)
 	handler := func(ctx context.Context, identity Identity, payload map[string]any) (map[string]any, error) {
