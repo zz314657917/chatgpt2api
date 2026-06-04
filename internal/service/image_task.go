@@ -211,6 +211,7 @@ func (s *ImageTaskService) SubmitGeneration(ctx context.Context, identity Identi
 	if err != nil {
 		return nil, err
 	}
+	size = normalizeImageTaskSize(size)
 	payload := map[string]any{"prompt": prompt, "model": model, "n": normalizedImageTaskCount(n), "size": size, "quality": quality, "response_format": "url", "base_url": baseURL, "visibility": visibility}
 	if messages != nil {
 		payload["messages"] = messages
@@ -238,6 +239,7 @@ func (s *ImageTaskService) SubmitEdit(ctx context.Context, identity Identity, cl
 	if err != nil {
 		return nil, err
 	}
+	size = normalizeImageTaskSize(size)
 	payload := map[string]any{"prompt": prompt, "images": images, "model": model, "n": normalizedImageTaskCount(n), "size": size, "quality": quality, "response_format": "url", "base_url": baseURL, "visibility": visibility}
 	if messages != nil {
 		payload["messages"] = messages
@@ -327,6 +329,7 @@ func (s *ImageTaskService) submitImageWithMetadataAndOptions(ctx context.Context
 	if err != nil {
 		return nil, err
 	}
+	size = normalizeImageTaskSize(size)
 	payload := map[string]any{"prompt": prompt, "model": model, "n": normalizedImageTaskCount(n), "size": size, "quality": quality, "response_format": "url", "base_url": baseURL, "visibility": visibility}
 	if images != nil {
 		payload["images"] = images
@@ -1364,6 +1367,23 @@ func taskCount(mode string, payload map[string]any) int {
 
 func isMediaTaskMode(mode string) bool {
 	return mode == "generate" || mode == "edit" || mode == "video"
+}
+
+func normalizeImageTaskSize(size string) string {
+	switch strings.ToLower(strings.TrimSpace(size)) {
+	case "8:8":
+		return "8x8"
+	case "16:16":
+		return "16x16"
+	case "32:32":
+		return "32x32"
+	case "64:64":
+		return "64x64"
+	case "128:128":
+		return "128x128"
+	default:
+		return strings.TrimSpace(size)
+	}
 }
 
 func taskTimeoutMessage(mode string) string {

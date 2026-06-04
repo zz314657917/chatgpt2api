@@ -12,7 +12,7 @@ import type {
   ManagedImageSummary,
 } from "@/lib/api";
 import { getManagedImagePathFromUrl, getManagedImagePreviewUrlFromPath, getManagedImageThumbnailUrlFromPath, getManagedImageUrlFromPath } from "@/lib/image-path";
-import { normalizeImageResolutionPreset } from "@/lib/image-parameters";
+import { normalizeImageResolutionPreset, normalizePixelIconSizeAlias } from "@/lib/image-parameters";
 
 import {
   SMART_CANVAS_KIND,
@@ -44,7 +44,7 @@ export function normalizeCanvasImageResolution(value?: string) {
 }
 
 export function isPixelIconGeneratorNode(item?: SmartCanvasItem | null) {
-  return item?.type === "image_generation" && /^(8x8|16x16|32x32|64x64) 像素图标$/.test(item.name || "");
+  return item?.type === "image_generation" && /^(8x8|16x16|32x32|64x64|128x128) 像素图标$/.test(item.name || "");
 }
 
 export function createItemId(type: SmartCanvasItem["type"]) {
@@ -835,20 +835,8 @@ function normalizeItemData(data?: SmartCanvasItemData): SmartCanvasItemData {
   return sanitizeSmartItemData(data);
 }
 
-function normalizeCanvasImageSize(value?: string) {
-  const size = cleanImageText(value);
-  switch (size.toLowerCase()) {
-    case "8:8":
-      return "8x8";
-    case "16:16":
-      return "16x16";
-    case "32:32":
-      return "32x32";
-    case "64:64":
-      return "64x64";
-    default:
-      return size || "1024x1024";
-  }
+export function normalizeCanvasImageSize(value?: string) {
+  return normalizePixelIconSizeAlias(cleanImageText(value)) || "1024x1024";
 }
 
 function sanitizeSmartItemData(data?: SmartCanvasItemData): SmartCanvasItemData {

@@ -83,6 +83,7 @@ import {
   isActiveTask,
   managedImagesToRefs,
   mentionCandidateImages,
+  normalizeCanvasImageSize,
   normalizeCanvasImageResolution,
   normalizeModelCatalog,
   normalizeSmartCanvas,
@@ -370,10 +371,14 @@ function mergeLoopSlotStatuses(
 }
 
 function generatorImageResolution(generator: SmartCanvasItem) {
-  if (isPixelIconSize(generator.data?.size)) {
+  if (isPixelIconSize(normalizeCanvasImageSize(generator.data?.size))) {
     return undefined;
   }
   return normalizeCanvasImageResolution(generator.data?.image_resolution) || undefined;
+}
+
+function generatorImageSize(generator: SmartCanvasItem) {
+  return normalizeCanvasImageSize(generator.data?.size);
 }
 
 function generatorImageQuality(generator: SmartCanvasItem): ImageQuality | undefined {
@@ -2865,9 +2870,9 @@ export function useSmartCanvasController() {
             if (files.length === 0) {
               throw new Error("没有可读取的输入图片");
             }
-            task = await createImageEditTask(uniqueTaskId("smart-canvas-loop"), files, submittedPrompt, generator.data?.model || "auto", generator.data?.size || "1024x1024", generatorImageQuality(generator), taskCount, undefined, generatorImageVisibility(generator), generatorImageResolution(generator));
+            task = await createImageEditTask(uniqueTaskId("smart-canvas-loop"), files, submittedPrompt, generator.data?.model || "auto", generatorImageSize(generator), generatorImageQuality(generator), taskCount, undefined, generatorImageVisibility(generator), generatorImageResolution(generator));
           } else {
-            task = await createImageGenerationTask(uniqueTaskId("smart-canvas-loop"), submittedPrompt, generator.data?.model || "auto", generator.data?.size || "1024x1024", generatorImageQuality(generator), taskCount, undefined, generatorImageVisibility(generator), generatorImageResolution(generator));
+            task = await createImageGenerationTask(uniqueTaskId("smart-canvas-loop"), submittedPrompt, generator.data?.model || "auto", generatorImageSize(generator), generatorImageQuality(generator), taskCount, undefined, generatorImageVisibility(generator), generatorImageResolution(generator));
           }
           taskIds.push(task.id);
           for (let offset = 0; offset < taskCount && slotStart + offset < slotStatuses.length; offset += 1) {
@@ -3008,9 +3013,9 @@ export function useSmartCanvasController() {
         if (files.length === 0) {
           throw new Error("没有可读取的输入图片");
         }
-        task = await createImageEditTask(clientTaskId, files, submittedPrompt, generator.data?.model || "auto", generator.data?.size || "1024x1024", generatorImageQuality(generator), generatorImageCount(generator), undefined, generatorImageVisibility(generator), generatorImageResolution(generator));
+        task = await createImageEditTask(clientTaskId, files, submittedPrompt, generator.data?.model || "auto", generatorImageSize(generator), generatorImageQuality(generator), generatorImageCount(generator), undefined, generatorImageVisibility(generator), generatorImageResolution(generator));
       } else {
-        task = await createImageGenerationTask(clientTaskId, submittedPrompt, generator.data?.model || "auto", generator.data?.size || "1024x1024", generatorImageQuality(generator), generatorImageCount(generator), undefined, generatorImageVisibility(generator), generatorImageResolution(generator));
+        task = await createImageGenerationTask(clientTaskId, submittedPrompt, generator.data?.model || "auto", generatorImageSize(generator), generatorImageQuality(generator), generatorImageCount(generator), undefined, generatorImageVisibility(generator), generatorImageResolution(generator));
       }
       const output = creationTaskToOutput(task);
       const submittedModel = task.model || generator.data?.model || (generator.type === "video_generation" ? models.video[0]?.id || "" : "auto");

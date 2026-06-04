@@ -136,6 +136,8 @@ type ImageOutputOptions struct {
 	Format              string
 	Compression         *int
 	TrustUpstreamFormat bool
+	TargetWidth         int
+	TargetHeight        int
 }
 
 type ImageToolOptions struct {
@@ -148,7 +150,8 @@ type ImageToolOptions struct {
 
 func ImageOutputOptionsFromPayload(payload map[string]any) ImageOutputOptions {
 	format := NormalizeImageOutputFormat(util.Clean(payload["output_format"]))
-	options := ImageOutputOptions{Format: format}
+	width, height := pixelIconOutputDimensions(util.Clean(payload["size"]))
+	options := ImageOutputOptions{Format: format, TargetWidth: width, TargetHeight: height}
 	if !SupportsImageOutputCompression(format) {
 		return options
 	}
@@ -927,10 +930,11 @@ func (e *Engine) StreamResponsesImageOutputs(ctx context.Context, client *backen
 }
 
 func imageResultOutputOptions(request ConversationRequest, event backend.ResponsesImageEvent) ImageOutputOptions {
+	width, height := pixelIconOutputDimensions(request.Size)
 	if strings.TrimSpace(request.Model) == util.ImageModelCodex {
-		return ImageOutputOptions{Format: firstNonEmpty(event.OutputFormat, request.OutputFormat), TrustUpstreamFormat: true}
+		return ImageOutputOptions{Format: firstNonEmpty(event.OutputFormat, request.OutputFormat), TrustUpstreamFormat: true, TargetWidth: width, TargetHeight: height}
 	}
-	return ImageOutputOptions{Format: request.OutputFormat, Compression: request.OutputCompression}
+	return ImageOutputOptions{Format: request.OutputFormat, Compression: request.OutputCompression, TargetWidth: width, TargetHeight: height}
 }
 
 func responsesInputImages(values []string) []backend.ResponsesInputImage {
@@ -1324,12 +1328,24 @@ func imageBytesDimensions(data []byte) (int, int) {
 
 func encodeImageBytes(data []byte, options ImageOutputOptions) ([]byte, error) {
 	format := NormalizeImageOutputFormat(options.Format)
-	if format == "png" {
-		return data, nil
+	if options.TargetWidth <= 0 || options.TargetHeight <= 0 {
+		if format == "png" {
+			return data, nil
+		}
 	}
 	img, _, err := image.Decode(bytes.NewReader(data))
 	if err != nil {
 		return nil, err
+	}
+	if options.TargetWidth > 0 && options.TargetHeight > 0 {
+		img = resizeImageNearest(img, options.TargetWidth, options.TargetHeight)
+	}
+	if format == "png" {
+		var buf bytes.Buffer
+		if err := png.Encode(&buf, img); err != nil {
+			return nil, err
+		}
+		return buf.Bytes(), nil
 	}
 	var buf bytes.Buffer
 	switch format {
@@ -1356,6 +1372,40 @@ func encodeImageBytes(data []byte, options ImageOutputOptions) ([]byte, error) {
 		}
 	}
 	return buf.Bytes(), nil
+}
+
+func resizeImageNearest(src image.Image, width, height int) image.Image {
+	if width <= 0 || height <= 0 {
+		return src
+	}
+	bounds := src.Bounds()
+	srcWidth := bounds.Dx()
+	srcHeight := bounds.Dy()
+	if srcWidth <= 0 || srcHeight <= 0 {
+		return src
+	}
+	dst := image.NewNRGBA(image.Rect(0, 0, width, height))
+	for y := 0; y < height; y++ {
+		sourceY := bounds.Min.Y + y*srcHeight/height
+		for x := 0; x < width; x++ {
+			sourceX := bounds.Min.X + x*srcWidth/width
+			dst.Set(x, y, src.At(sourceX, sourceY))
+		}
+	}
+	return dst
+}
+
+func pixelIconOutputDimensions(size string) (int, int) {
+	width, height, ok := imageSizeDimensions(NormalizeImageGenerationSize(size))
+	if !ok || width != height {
+		return 0, 0
+	}
+	switch width {
+	case 8, 16, 32, 64, 128:
+		return width, height
+	default:
+		return 0, 0
+	}
 }
 
 func flattenAlpha(img image.Image) image.Image {
@@ -1524,6 +1574,8 @@ func NormalizeImageGenerationSize(size string) string {
 		return "32x32"
 	case "64:64":
 		return "64x64"
+	case "128:128":
+		return "128x128"
 	default:
 		return strings.TrimSpace(size)
 	}

@@ -8,6 +8,7 @@ export {
   type ImageOutputFormat,
   type ImageQuality,
 } from "@/lib/image-parameters";
+import { normalizePixelIconSizeAlias } from "@/lib/image-parameters";
 import type { ImageOutputFormat, ImageQuality } from "@/lib/image-parameters";
 
 export type AccountType = "Free" | "Plus" | "ProLite" | "Pro" | "Team";
@@ -1514,6 +1515,7 @@ export async function updateAccount(
 }
 
 export async function generateImage(prompt: string, model?: ImageModel, size?: string, quality?: ImageQuality) {
+  const normalizedSize = size ? normalizePixelIconSizeAlias(size) : "";
   return httpRequest<ImageResponse>(
     "/v1/images/generations",
     {
@@ -1521,7 +1523,7 @@ export async function generateImage(prompt: string, model?: ImageModel, size?: s
       body: {
         prompt,
         ...(model ? { model } : {}),
-        ...(size ? { size } : {}),
+        ...(normalizedSize ? { size: normalizedSize } : {}),
         ...(quality ? { quality } : {}),
         n: 1,
         response_format: "b64_json",
@@ -1533,6 +1535,7 @@ export async function generateImage(prompt: string, model?: ImageModel, size?: s
 export async function editImage(files: File | File[], prompt: string, model?: ImageModel, size?: string, quality?: ImageQuality) {
   const formData = new FormData();
   const uploadFiles = Array.isArray(files) ? files : [files];
+  const normalizedSize = size ? normalizePixelIconSizeAlias(size) : "";
 
   uploadFiles.forEach((file) => {
     formData.append("image", file);
@@ -1541,8 +1544,8 @@ export async function editImage(files: File | File[], prompt: string, model?: Im
   if (model) {
     formData.append("model", model);
   }
-  if (size) {
-    formData.append("size", size);
+  if (normalizedSize) {
+    formData.append("size", normalizedSize);
   }
   if (quality) {
     formData.append("quality", quality);
@@ -1579,13 +1582,14 @@ export async function createImageGenerationTask(
   frontendConversationId?: string,
   fallbackReferenceImage?: FallbackReferenceImage,
 ) {
+  const normalizedSize = size ? normalizePixelIconSizeAlias(size) : "";
   return httpRequest<CreationTask>("/api/creation-tasks/image-generations", {
     method: "POST",
     body: {
       client_task_id: clientTaskId,
       prompt,
       ...(model ? { model } : {}),
-      ...(size ? { size } : {}),
+      ...(normalizedSize ? { size: normalizedSize } : {}),
       ...(imageResolution ? { image_resolution: imageResolution } : {}),
       ...(quality ? { quality } : {}),
       ...(outputFormat ? { output_format: outputFormat } : {}),
@@ -1659,6 +1663,7 @@ export async function createImageEditTask(
 ) {
   const formData = new FormData();
   const uploadFiles = Array.isArray(files) ? files : [files];
+  const normalizedSize = size ? normalizePixelIconSizeAlias(size) : "";
 
   uploadFiles.forEach((file) => {
     formData.append("image", file);
@@ -1668,8 +1673,8 @@ export async function createImageEditTask(
   if (model) {
     formData.append("model", model);
   }
-  if (size) {
-    formData.append("size", size);
+  if (normalizedSize) {
+    formData.append("size", normalizedSize);
   }
   if (imageResolution) {
     formData.append("image_resolution", imageResolution);
@@ -1760,6 +1765,7 @@ export async function createImageEditTaskFromReferenceIds(
   frontendConversationId?: string,
   fallbackReferenceImage?: FallbackReferenceImage,
 ) {
+  const normalizedSize = size ? normalizePixelIconSizeAlias(size) : "";
   return httpRequest<CreationTask>("/api/creation-tasks/image-edits", {
     method: "POST",
     body: {
@@ -1767,7 +1773,7 @@ export async function createImageEditTaskFromReferenceIds(
       reference_image_ids: referenceImageIds,
       prompt,
       ...(model ? { model } : {}),
-      ...(size ? { size } : {}),
+      ...(normalizedSize ? { size: normalizedSize } : {}),
       ...(imageResolution ? { image_resolution: imageResolution } : {}),
       ...(quality ? { quality } : {}),
       ...(outputFormat ? { output_format: outputFormat } : {}),

@@ -454,6 +454,62 @@ func TestFormatImageResultEncodesRequestedOutputFormat(t *testing.T) {
 	}
 }
 
+func TestFormatImageResultResizesPixelIconOutputs(t *testing.T) {
+	config := testProtocolImageConfig{root: t.TempDir()}
+	engine := &Engine{Config: config}
+	src := image.NewNRGBA(image.Rect(0, 0, 1254, 1254))
+	src.Set(0, 0, color.NRGBA{R: 255, A: 255})
+	src.Set(1253, 1253, color.NRGBA{B: 255, A: 255})
+	var encoded bytes.Buffer
+	if err := png.Encode(&encoded, src); err != nil {
+		t.Fatalf("png.Encode() error = %v", err)
+	}
+
+	result := engine.FormatImageResultWithOptions(
+		[]map[string]any{{"b64_json": base64.StdEncoding.EncodeToString(encoded.Bytes())}},
+		"draw",
+		"b64_json",
+		"https://example.test",
+		"owner-1",
+		"Alice",
+		123,
+		"",
+		ImageOutputOptions{Format: "png", TargetWidth: 128, TargetHeight: 128},
+	)
+	items, _ := result["data"].([]map[string]any)
+	if len(items) != 1 {
+		t.Fatalf("FormatImageResultWithOptions() data = %#v", result["data"])
+	}
+	if items[0]["width"] != 128 || items[0]["height"] != 128 || items[0]["resolution"] != "128x128" {
+		t.Fatalf("resized item dimensions = %#v", items[0])
+	}
+	b64, _ := items[0]["b64_json"].(string)
+	converted, err := base64.StdEncoding.DecodeString(b64)
+	if err != nil {
+		t.Fatalf("DecodeString() error = %v", err)
+	}
+	configResult, _, err := image.DecodeConfig(bytes.NewReader(converted))
+	if err != nil {
+		t.Fatalf("DecodeConfig(response) error = %v", err)
+	}
+	if configResult.Width != 128 || configResult.Height != 128 {
+		t.Fatalf("response dimensions = %dx%d, want 128x128", configResult.Width, configResult.Height)
+	}
+	imageURL, _ := items[0]["url"].(string)
+	rel := strings.TrimPrefix(imageURL, "https://example.test/images/")
+	stored, err := os.ReadFile(filepath.Join(config.ImagesDir(), filepath.FromSlash(rel)))
+	if err != nil {
+		t.Fatalf("ReadFile(stored image) error = %v", err)
+	}
+	storedConfig, _, err := image.DecodeConfig(bytes.NewReader(stored))
+	if err != nil {
+		t.Fatalf("DecodeConfig(stored) error = %v", err)
+	}
+	if storedConfig.Width != 128 || storedConfig.Height != 128 {
+		t.Fatalf("stored dimensions = %dx%d, want 128x128", storedConfig.Width, storedConfig.Height)
+	}
+}
+
 func TestFormatImageResultRequestedFormatOverridesUpstreamFormat(t *testing.T) {
 	config := testProtocolImageConfig{root: t.TempDir()}
 	engine := &Engine{Config: config}
