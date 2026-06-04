@@ -801,12 +801,6 @@ export function ImageResults({
                       {turn.background ? (
                         <span className="rounded-full bg-[#f0f0f0] px-3 py-1">背景 {turn.background}</span>
                       ) : null}
-                      {turn.moderation ? (
-                        <span className="rounded-full bg-[#f0f0f0] px-3 py-1">审核 {turn.moderation}</span>
-                      ) : null}
-                      {turn.partialImages ? (
-                        <span className="rounded-full bg-[#f0f0f0] px-3 py-1">预览 {turn.partialImages}</span>
-                      ) : null}
                       {outcomeLabel ? <span className="rounded-full bg-[#f0f0f0] px-3 py-1">{outcomeLabel}</span> : null}
                       <span className={cn("rounded-full px-3 py-1", getStatusChipClass(turn.status))}>
                         {getTurnStatusLabel(turn.status)}

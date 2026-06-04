@@ -79,8 +79,6 @@ type ImageComposerProps = {
   imageCustomHeight: string;
   imageQuality: "auto" | ImageQuality;
   imageBackground: string;
-  imageModeration: string;
-  imagePartialImages: string;
   imageOutputFormat: ImageOutputFormat;
   imageOutputCompression: string;
   highResolutionHint?: ReactNode;
@@ -101,8 +99,6 @@ type ImageComposerProps = {
   onImageCustomHeightChange: (value: string) => void;
   onImageQualityChange: (value: "auto" | ImageQuality) => void;
   onImageBackgroundChange: (value: string) => void;
-  onImageModerationChange: (value: string) => void;
-  onImagePartialImagesChange: (value: string) => void;
   onImageOutputFormatChange: (value: ImageOutputFormat) => void;
   onImageOutputCompressionChange: (value: string) => void;
   onOpenPromptMarket: () => void;
@@ -176,18 +172,6 @@ const IMAGE_BACKGROUND_OPTIONS = [
   { value: "auto", label: "Auto", description: "不指定背景参数。" },
   { value: "transparent", label: "透明", description: "请求透明背景，具体效果以上游能力为准。" },
   { value: "opaque", label: "不透明", description: "请求不透明背景。" },
-] as const;
-
-const IMAGE_MODERATION_OPTIONS = [
-  { value: "auto", label: "Auto", description: "使用上游默认审核策略。" },
-  { value: "low", label: "Low", description: "低审核强度，是否生效以上游为准。" },
-] as const;
-
-const IMAGE_PARTIAL_IMAGE_OPTIONS = [
-  { value: "", label: "关闭", description: "不请求中间预览帧。" },
-  { value: "1", label: "1 帧", description: "请求 1 张中间预览。" },
-  { value: "2", label: "2 帧", description: "请求 2 张中间预览。" },
-  { value: "3", label: "3 帧", description: "请求 3 张中间预览。" },
 ] as const;
 
 type ImageSettingsMenuOption<Value extends string> = {
@@ -358,8 +342,6 @@ export function ImageComposer({
   imageCustomHeight,
   imageQuality,
   imageBackground,
-  imageModeration,
-  imagePartialImages,
   imageOutputFormat,
   imageOutputCompression,
   highResolutionHint,
@@ -380,8 +362,6 @@ export function ImageComposer({
   onImageCustomHeightChange,
   onImageQualityChange,
   onImageBackgroundChange,
-  onImageModerationChange,
-  onImagePartialImagesChange,
   onImageOutputFormatChange,
   onImageOutputCompressionChange,
   onOpenPromptMarket,
@@ -398,8 +378,6 @@ export function ImageComposer({
   const [isResolutionMenuOpen, setIsResolutionMenuOpen] = useState(false);
   const [isQualityMenuOpen, setIsQualityMenuOpen] = useState(false);
   const [isBackgroundMenuOpen, setIsBackgroundMenuOpen] = useState(false);
-  const [isModerationMenuOpen, setIsModerationMenuOpen] = useState(false);
-  const [isPartialImagesMenuOpen, setIsPartialImagesMenuOpen] = useState(false);
   const [isImageSettingsOpen, setIsImageSettingsOpen] = useState(false);
   const [promptAreaHeight, setPromptAreaHeight] = useState(PROMPT_AREA_DEFAULT_HEIGHT);
   const [isPromptAreaResizing, setIsPromptAreaResizing] = useState(false);
@@ -423,8 +401,6 @@ export function ImageComposer({
     IMAGE_RESOLUTION_OPTIONS.find((option) => option.value === imageResolution)?.label || "Auto";
   const imageQualityLabel = IMAGE_QUALITY_SETTINGS_OPTIONS.find((option) => option.value === imageQuality)?.label || "自动";
   const imageBackgroundLabel = IMAGE_BACKGROUND_OPTIONS.find((option) => option.value === imageBackground)?.label || "Auto";
-  const imageModerationLabel = IMAGE_MODERATION_OPTIONS.find((option) => option.value === imageModeration)?.label || "Auto";
-  const imagePartialImagesLabel = IMAGE_PARTIAL_IMAGE_OPTIONS.find((option) => option.value === imagePartialImages)?.label || "关闭";
   const compressionSupported = supportsImageOutputCompression(imageOutputFormat);
   const compressionDisabled = !compressionSupported;
   const structuredImageParameters = supportsStructuredImageParameters(imageModel);
@@ -502,8 +478,6 @@ export function ImageComposer({
       setIsResolutionMenuOpen(false);
       setIsQualityMenuOpen(false);
       setIsBackgroundMenuOpen(false);
-      setIsModerationMenuOpen(false);
-      setIsPartialImagesMenuOpen(false);
     }
   }, [composerMode]);
 
@@ -1071,8 +1045,6 @@ export function ImageComposer({
                                     setIsResolutionMenuOpen(false);
                                     setIsQualityMenuOpen(false);
                                     setIsBackgroundMenuOpen(false);
-                                    setIsModerationMenuOpen(false);
-                                    setIsPartialImagesMenuOpen(false);
                                   }
                                 }}
                                 onValueChange={(value) => {
@@ -1099,8 +1071,6 @@ export function ImageComposer({
                                       setIsAspectRatioMenuOpen(false);
                                       setIsQualityMenuOpen(false);
                                       setIsBackgroundMenuOpen(false);
-                                      setIsModerationMenuOpen(false);
-                                      setIsPartialImagesMenuOpen(false);
                                     }
                                   }}
                                   onValueChange={onImageResolutionChange}
@@ -1179,8 +1149,6 @@ export function ImageComposer({
                                 setIsAspectRatioMenuOpen(false);
                                 setIsResolutionMenuOpen(false);
                                 setIsBackgroundMenuOpen(false);
-                                setIsModerationMenuOpen(false);
-                                setIsPartialImagesMenuOpen(false);
                               }
                             }}
                             onValueChange={onImageQualityChange}
@@ -1201,57 +1169,9 @@ export function ImageComposer({
                                 setIsAspectRatioMenuOpen(false);
                                 setIsResolutionMenuOpen(false);
                                 setIsQualityMenuOpen(false);
-                                setIsModerationMenuOpen(false);
-                                setIsPartialImagesMenuOpen(false);
                               }
                             }}
                             onValueChange={onImageBackgroundChange}
-                            align="start"
-                          />
-                        </div>
-                        <div className={imageSettingsFieldClass}>
-                          <span className="shrink-0 font-medium text-[#45515e] dark:text-muted-foreground">审核</span>
-                          <ImageSettingsPopoverMenu
-                            label="审核"
-                            value={imageModeration}
-                            valueLabel={imageModerationLabel}
-                            options={IMAGE_MODERATION_OPTIONS}
-                            open={isModerationMenuOpen}
-                            onOpenChange={(open) => {
-                              setIsModerationMenuOpen(open);
-                              setIsModelMenuOpen(false);
-                              if (open) {
-                                setIsAspectRatioMenuOpen(false);
-                                setIsResolutionMenuOpen(false);
-                                setIsQualityMenuOpen(false);
-                                setIsBackgroundMenuOpen(false);
-                                setIsPartialImagesMenuOpen(false);
-                              }
-                            }}
-                            onValueChange={onImageModerationChange}
-                            align="start"
-                          />
-                        </div>
-                        <div className={imageSettingsFieldClass}>
-                          <span className="shrink-0 font-medium text-[#45515e] dark:text-muted-foreground">预览帧</span>
-                          <ImageSettingsPopoverMenu
-                            label="预览帧"
-                            value={imagePartialImages}
-                            valueLabel={imagePartialImagesLabel}
-                            options={IMAGE_PARTIAL_IMAGE_OPTIONS}
-                            open={isPartialImagesMenuOpen}
-                            onOpenChange={(open) => {
-                              setIsPartialImagesMenuOpen(open);
-                              setIsModelMenuOpen(false);
-                              if (open) {
-                                setIsAspectRatioMenuOpen(false);
-                                setIsResolutionMenuOpen(false);
-                                setIsQualityMenuOpen(false);
-                                setIsBackgroundMenuOpen(false);
-                                setIsModerationMenuOpen(false);
-                              }
-                            }}
-                            onValueChange={onImagePartialImagesChange}
                             align="start"
                           />
                         </div>

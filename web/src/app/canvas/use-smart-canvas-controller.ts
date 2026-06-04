@@ -39,7 +39,6 @@ import {
   isPixelIconSize,
   normalizeImageOutputCompression,
   normalizeImageOutputFormat,
-  normalizePositiveImageParameter,
   supportsImageOutputCompression,
 } from "@/lib/image-parameters";
 import { getCachedAuthSession } from "@/lib/session";
@@ -403,13 +402,7 @@ function generatorOutputCompression(generator: SmartCanvasItem) {
 
 function generatorToolOptions(generator: SmartCanvasItem) {
   const background = String(generator.data?.background || "").trim();
-  const moderation = String(generator.data?.moderation || "").trim();
-  const partialImages = normalizePositiveImageParameter(generator.data?.partial_images);
-  return {
-    ...(background ? { background } : {}),
-    ...(moderation ? { moderation } : {}),
-    ...(partialImages ? { partialImages } : {}),
-  };
+  return background ? { background } : {};
 }
 
 function generatorImageCount(generator: SmartCanvasItem) {
