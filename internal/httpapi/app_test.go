@@ -816,6 +816,7 @@ func TestSub2APIImagePayloadNormalizesRatioSizes(t *testing.T) {
 		{name: "vertical ratio", payload: map[string]any{"prompt": "draw", "size": "9:16"}, want: "864x1536"},
 		{name: "requested size fallback", payload: map[string]any{"prompt": "draw", "requested_size": "1:1"}, want: "1024x1024"},
 		{name: "resolution preset", payload: map[string]any{"prompt": "draw", "image_resolution": "2k"}, want: "2048x2048"},
+		{name: "pixel icon size uses square upstream ratio", payload: map[string]any{"prompt": "draw", "size": "64x64"}, want: "1:1"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
