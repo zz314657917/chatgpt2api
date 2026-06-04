@@ -35,6 +35,7 @@ import { hasImageResultDragPayload, parseImageResultDragPayload } from "@/app/im
 import { hasManagedImageDragPayload, parseManagedImageDragPayload } from "@/components/managed-image-drag";
 import {
   CUSTOM_IMAGE_ASPECT_RATIO,
+  IMAGE_QUALITY_OPTIONS,
   IMAGE_ASPECT_RATIO_OPTIONS,
   PIXEL_ICON_SIZE_OPTIONS,
   IMAGE_RESOLUTION_OPTIONS,
@@ -47,6 +48,7 @@ import {
   isPixelIconSize,
   parseImageRatio,
   type ImageOutputFormat,
+  type ImageQuality,
   type ImageAspectRatio,
   type ImageResolution,
   type ImageSizeMode,
@@ -73,6 +75,8 @@ type ImageComposerProps = {
   imageCustomRatio: string;
   imageCustomWidth: string;
   imageCustomHeight: string;
+  imageQuality: "auto" | ImageQuality;
+  imageBackground: string;
   imageOutputFormat: ImageOutputFormat;
   imageOutputCompression: string;
   highResolutionHint?: ReactNode;
@@ -91,6 +95,8 @@ type ImageComposerProps = {
   onImageCustomRatioChange: (value: string) => void;
   onImageCustomWidthChange: (value: string) => void;
   onImageCustomHeightChange: (value: string) => void;
+  onImageQualityChange: (value: "auto" | ImageQuality) => void;
+  onImageBackgroundChange: (value: string) => void;
   onImageOutputFormatChange: (value: ImageOutputFormat) => void;
   onImageOutputCompressionChange: (value: string) => void;
   onOpenPromptMarket: () => void;
@@ -161,6 +167,17 @@ type ImageSettingsMenuOption<Value extends string> = {
   description?: string;
   section?: string;
 };
+
+const IMAGE_QUALITY_SETTINGS_OPTIONS = [
+  { value: "auto", label: "自动", description: "不指定质量，由上游选择默认质量。" },
+  ...IMAGE_QUALITY_OPTIONS,
+] as const satisfies ReadonlyArray<ImageSettingsMenuOption<"auto" | ImageQuality>>;
+
+const IMAGE_BACKGROUND_OPTIONS = [
+  { value: "auto", label: "Auto", description: "不指定背景参数。" },
+  { value: "transparent", label: "透明", description: "请求透明背景，具体效果以上游能力为准。" },
+  { value: "opaque", label: "不透明", description: "请求不透明背景。" },
+] as const satisfies ReadonlyArray<ImageSettingsMenuOption<string>>;
 
 const IMAGE_ASPECT_RATIO_SETTINGS_OPTIONS = [
   ...IMAGE_ASPECT_RATIO_OPTIONS.filter((option) => option.value !== CUSTOM_IMAGE_ASPECT_RATIO).map((option) => ({
@@ -321,6 +338,8 @@ export function ImageComposer({
   imageCustomRatio,
   imageCustomWidth,
   imageCustomHeight,
+  imageQuality,
+  imageBackground,
   imageOutputFormat,
   imageOutputCompression,
   highResolutionHint,
@@ -339,6 +358,8 @@ export function ImageComposer({
   onImageCustomRatioChange,
   onImageCustomWidthChange,
   onImageCustomHeightChange,
+  onImageQualityChange,
+  onImageBackgroundChange,
   onImageOutputFormatChange,
   onImageOutputCompressionChange,
   onOpenPromptMarket,
@@ -353,6 +374,8 @@ export function ImageComposer({
   const [isModelMenuOpen, setIsModelMenuOpen] = useState(false);
   const [isAspectRatioMenuOpen, setIsAspectRatioMenuOpen] = useState(false);
   const [isResolutionMenuOpen, setIsResolutionMenuOpen] = useState(false);
+  const [isQualityMenuOpen, setIsQualityMenuOpen] = useState(false);
+  const [isBackgroundMenuOpen, setIsBackgroundMenuOpen] = useState(false);
   const [isImageSettingsOpen, setIsImageSettingsOpen] = useState(false);
   const [promptAreaHeight, setPromptAreaHeight] = useState(PROMPT_AREA_DEFAULT_HEIGHT);
   const [isPromptAreaResizing, setIsPromptAreaResizing] = useState(false);
@@ -374,6 +397,8 @@ export function ImageComposer({
       : IMAGE_ASPECT_RATIO_SETTINGS_OPTIONS.find((option) => option.value === imageAspectRatio)?.label || "Auto";
   const imageResolutionLabel =
     IMAGE_RESOLUTION_OPTIONS.find((option) => option.value === imageResolution)?.label || "Auto";
+  const imageQualityLabel = IMAGE_QUALITY_SETTINGS_OPTIONS.find((option) => option.value === imageQuality)?.label || "自动";
+  const imageBackgroundLabel = IMAGE_BACKGROUND_OPTIONS.find((option) => option.value === imageBackground)?.label || "Auto";
   const structuredImageParameters = supportsStructuredImageParameters(imageModel);
   const resolutionPresetsSupported = supportsImageResolutionPresets(imageModel);
   const outputControlsSupported = supportsImageOutputControls(imageModel);
@@ -1145,73 +1170,23 @@ export function ImageComposer({
                           />
                         </div>
                         {outputControlsSupported ? (
-                        <>
-                        <div className={imageSettingsFieldClass}>
-                          <span className="shrink-0 font-medium text-[#45515e] dark:text-muted-foreground">格式</span>
-                          <Select
-                            value={imageOutputFormat}
-                            onValueChange={(value) => {
-                              const nextFormat = value as ImageOutputFormat;
-                              onImageOutputFormatChange(nextFormat);
-                              if (!supportsImageOutputCompression(nextFormat)) {
-                                onImageOutputCompressionChange("");
-                              }
-                            }}
-                          >
-                            <SelectTrigger
-                              className="h-7 min-w-0 flex-1 justify-end gap-1 border-0 bg-transparent px-0 py-0 text-right text-xs font-semibold text-[#18181b] shadow-none focus-visible:ring-0 dark:text-foreground [&_svg]:size-4 [&_svg]:opacity-60 [&>span]:flex-none"
-                              aria-label="图片输出格式"
-                            >
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent
-                              align="end"
-                              side="top"
-                              sideOffset={8}
-                              collisionPadding={12}
-                              className="z-[120] max-h-[min(var(--radix-select-content-available-height),14rem)] w-[min(12rem,calc(100vw-2rem))] overflow-x-hidden overscroll-contain rounded-[16px] border-[#e5e7eb] bg-white p-1.5 shadow-[0_18px_46px_-26px_rgba(15,23,42,0.35)] dark:border-border dark:bg-card dark:shadow-[0_18px_46px_-24px_rgba(0,0,0,0.72)]"
-                            >
-                              <SelectGroup>
-                                {IMAGE_OUTPUT_FORMAT_OPTIONS.map((option) => (
-                                  <SelectItem
-                                    key={option.value}
-                                    value={option.value}
-                                    className="rounded-lg px-3 py-2 pr-8 text-sm text-[#45515e] focus:bg-black/[0.05] focus:text-[#18181b] dark:text-muted-foreground dark:focus:bg-accent dark:focus:text-foreground"
-                                  >
-                                    {option.label}
-                                  </SelectItem>
-                                ))}
-                              </SelectGroup>
-                            </SelectContent>
-                          </Select>
-                        </div>
-                        <label
-                          className={cn(
-                            imageSettingsFieldClass,
-                            compressionDisabled && "opacity-55",
-                          )}
-                          title={compressionDisabled ? "只有 JPEG 支持压缩率参数" : "JPEG 压缩率，0-100"}
-                        >
-                          <span className="shrink-0 font-medium text-[#45515e] dark:text-muted-foreground">压缩率</span>
-                          <Input
-                            type="number"
-                            inputMode="numeric"
-                            min="0"
-                            max="100"
-                            step="1"
-                            value={imageOutputCompression}
-                            onChange={(event) => onImageOutputCompressionChange(event.target.value)}
-                            disabled={compressionDisabled}
-                            placeholder={compressionDisabled ? "N/A" : "0-100"}
-                            className="h-7 w-[4.25rem] border-0 bg-transparent px-0 text-right text-xs font-semibold text-[#18181b] shadow-none focus-visible:ring-0 disabled:cursor-not-allowed dark:text-foreground"
+                          <ImageOutputControls
+                            outputFormat={imageOutputFormat}
+                            outputCompression={imageOutputCompression}
+                            onOutputFormatChange={onImageOutputFormatChange}
+                            onOutputCompressionChange={onImageOutputCompressionChange}
+                            fieldClassName={imageSettingsFieldClass}
+                            labelClassName="font-medium text-[#45515e] dark:text-muted-foreground"
+                            selectTriggerClassName="h-7 min-w-0 flex-1 justify-end gap-1 border-0 bg-transparent px-0 py-0 text-right text-xs font-semibold text-[#18181b] shadow-none focus-visible:ring-0 dark:text-foreground [&_svg]:size-4 [&_svg]:opacity-60 [&>span]:flex-none"
+                            inputClassName="h-7 w-[4.25rem] border-0 bg-transparent px-0 text-right text-xs font-semibold text-[#18181b] shadow-none focus-visible:ring-0 disabled:cursor-not-allowed dark:text-foreground"
+                            selectContentAlign="end"
+                            selectContentSide="top"
+                            selectContentSideOffset={8}
+                            selectContentCollisionPadding={12}
+                            selectContentClassName="z-[120] max-h-[min(var(--radix-select-content-available-height),14rem)] w-[min(12rem,calc(100vw-2rem))] overflow-x-hidden overscroll-contain rounded-[16px] border-[#e5e7eb] bg-white p-1.5 shadow-[0_18px_46px_-26px_rgba(15,23,42,0.35)] dark:border-border dark:bg-card dark:shadow-[0_18px_46px_-24px_rgba(0,0,0,0.72)]"
+                            helperClassName="px-1 text-[11px] leading-5 text-[#8e8e93] dark:text-muted-foreground"
+                            includeHelper
                           />
-                        </label>
-                        <p className="col-span-2 px-1 text-[11px] leading-5 text-[#8e8e93] dark:text-muted-foreground sm:col-span-3">
-                          {compressionDisabled
-                            ? "PNG 和 WebP 不接收压缩率。结果卡会显示实际保存后的格式、像素和文件大小。"
-                            : "JPEG 压缩率由后端保存结果时应用；实际上游返回格式不受此项控制。"}
-                        </p>
-                        </>
                         ) : null}
                       </div>
                     </PopoverContent>
