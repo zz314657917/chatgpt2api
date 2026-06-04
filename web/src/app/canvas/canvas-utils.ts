@@ -17,6 +17,7 @@ import {
   normalizeImageOutputFormat,
   normalizeImageResolutionPreset,
   normalizePixelIconSizeAlias,
+  isPixelIconSize,
   supportsImageOutputCompression,
 } from "@/lib/image-parameters";
 
@@ -289,7 +290,9 @@ export function createGeneratorNode(position: { x: number; y: number }): SmartCa
       prompt: "",
       model: DEFAULT_COMPOSER.model,
       size: DEFAULT_COMPOSER.size,
-      image_resolution: "1080p",
+      size_user_modified: false,
+      image_resolution: "",
+      image_resolution_user_modified: false,
       output_format: "png",
       quality: "auto",
       n: DEFAULT_COMPOSER.n,
@@ -449,7 +452,7 @@ export function isBlankSmartCanvasItem(item: SmartCanvasItem) {
   const hasImages = canvasImagesFromItem(item).length > 0;
   const hasVideos = canvasVideosFromItem(item).length > 0;
   const hasText = canvasPromptFromItem(item).trim().length > 0 || outputText.length > 0;
-  const hasRunState = Boolean(data.task_id || data.status || data.error || data.started_at || data.stop_requested);
+  const hasRunState = Boolean(data.task_id || data.status || data.error || data.started_at || data.stop_requested || data.upload_status);
   const hasGroupMembers = (data.group_item_ids || []).length > 0;
   return !hasImages && !hasVideos && !hasText && !outputRaw && !hasRunState && !hasGroupMembers;
 }
@@ -859,16 +862,30 @@ export function normalizeCanvasImageSize(value?: string) {
   return normalizePixelIconSizeAlias(cleanImageText(value)) || "1024x1024";
 }
 
+function isUserModifiedCanvasImageSize(data: SmartCanvasItemData, normalizedSize: string) {
+  return data.size_user_modified === true || (cleanImageText(data.size) !== "" && normalizedSize !== DEFAULT_COMPOSER.size);
+}
+
+function isUserModifiedCanvasImageResolution(data: SmartCanvasItemData) {
+  const resolution = normalizeCanvasImageResolution(data.image_resolution);
+  return data.image_resolution_user_modified === true || (resolution !== "" && resolution !== "1080p");
+}
+
 function sanitizeSmartItemData(data?: SmartCanvasItemData): SmartCanvasItemData {
   if (!data) {
     return {};
   }
+  const size = normalizeCanvasImageSize(data.size);
+  const pixelIconSize = isPixelIconSize(size);
+  const resolutionUserModified = isUserModifiedCanvasImageResolution(data);
   return {
     ...data,
     prompt: typeof data.prompt === "string" ? data.prompt : "",
     model: typeof data.model === "string" && data.model ? data.model : "auto",
-    size: normalizeCanvasImageSize(data.size),
-    image_resolution: normalizeCanvasImageResolution(data.image_resolution),
+    size: data.size_user_modified === true && !cleanImageText(data.size) ? "" : size,
+    size_user_modified: isUserModifiedCanvasImageSize(data, size),
+    image_resolution: pixelIconSize || !resolutionUserModified ? "" : normalizeCanvasImageResolution(data.image_resolution),
+    image_resolution_user_modified: pixelIconSize ? true : resolutionUserModified,
     output_format: data.output_format ? normalizeCanvasImageOutputFormat(data.output_format) : undefined,
     output_compression: normalizeCanvasImageOutputCompression(data.output_format, data.output_compression),
     background: normalizeCanvasImageBackground(data.background),
@@ -904,6 +921,8 @@ function sanitizeSmartItemData(data?: SmartCanvasItemData): SmartCanvasItemData 
     output: normalizeOutput(data.output),
     status: data.status,
     error: typeof data.error === "string" ? data.error : "",
+    upload_status: data.upload_status === "uploading" || data.upload_status === "error" ? data.upload_status : undefined,
+    upload_progress: Number.isFinite(Number(data.upload_progress)) ? Math.max(0, Math.min(100, Number(data.upload_progress))) : undefined,
     task_id: typeof data.task_id === "string" ? data.task_id : "",
     started_at: typeof data.started_at === "string" ? data.started_at : "",
     stop_requested: data.stop_requested === true,

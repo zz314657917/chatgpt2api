@@ -27,20 +27,18 @@ import {
 } from "react";
 
 import { ImageLightbox } from "@/components/image-lightbox";
+import { ImageOutputControls } from "@/components/image-output-controls";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { hasImageResultDragPayload, parseImageResultDragPayload } from "@/app/image/image-result-drag";
 import { hasManagedImageDragPayload, parseManagedImageDragPayload } from "@/components/managed-image-drag";
 import {
   CUSTOM_IMAGE_ASPECT_RATIO,
-  IMAGE_QUALITY_OPTIONS,
   IMAGE_ASPECT_RATIO_OPTIONS,
   PIXEL_ICON_SIZE_OPTIONS,
   IMAGE_RESOLUTION_OPTIONS,
   IMAGE_SIZE_MODE_OPTIONS,
-  IMAGE_OUTPUT_FORMAT_OPTIONS,
   buildImageSize,
   formatImageSizeDisplay,
   getActiveImageAspectRatio,
@@ -48,9 +46,7 @@ import {
   isHighResolutionImageSize,
   isPixelIconSize,
   parseImageRatio,
-  supportsImageOutputCompression,
   type ImageOutputFormat,
-  type ImageQuality,
   type ImageAspectRatio,
   type ImageResolution,
   type ImageSizeMode,
@@ -77,8 +73,6 @@ type ImageComposerProps = {
   imageCustomRatio: string;
   imageCustomWidth: string;
   imageCustomHeight: string;
-  imageQuality: "auto" | ImageQuality;
-  imageBackground: string;
   imageOutputFormat: ImageOutputFormat;
   imageOutputCompression: string;
   highResolutionHint?: ReactNode;
@@ -97,8 +91,6 @@ type ImageComposerProps = {
   onImageCustomRatioChange: (value: string) => void;
   onImageCustomWidthChange: (value: string) => void;
   onImageCustomHeightChange: (value: string) => void;
-  onImageQualityChange: (value: "auto" | ImageQuality) => void;
-  onImageBackgroundChange: (value: string) => void;
   onImageOutputFormatChange: (value: ImageOutputFormat) => void;
   onImageOutputCompressionChange: (value: string) => void;
   onOpenPromptMarket: () => void;
@@ -162,17 +154,6 @@ function ImageComposerDock({ children }: { children: ReactNode }) {
 
 const imageSettingsFieldClass =
   "flex min-h-8 min-w-0 items-center justify-between gap-2 rounded-xl border border-[#e5e7eb] bg-white px-3 py-1 text-[11px] dark:border-border dark:bg-background/70";
-
-const IMAGE_QUALITY_SETTINGS_OPTIONS = [
-  { value: "auto", label: "自动", description: "不指定质量，由上游选择默认质量。" },
-  ...IMAGE_QUALITY_OPTIONS,
-] as const satisfies ReadonlyArray<ImageSettingsMenuOption<"auto" | ImageQuality>>;
-
-const IMAGE_BACKGROUND_OPTIONS = [
-  { value: "auto", label: "Auto", description: "不指定背景参数。" },
-  { value: "transparent", label: "透明", description: "请求透明背景，具体效果以上游能力为准。" },
-  { value: "opaque", label: "不透明", description: "请求不透明背景。" },
-] as const;
 
 type ImageSettingsMenuOption<Value extends string> = {
   value: Value;
@@ -340,8 +321,6 @@ export function ImageComposer({
   imageCustomRatio,
   imageCustomWidth,
   imageCustomHeight,
-  imageQuality,
-  imageBackground,
   imageOutputFormat,
   imageOutputCompression,
   highResolutionHint,
@@ -360,8 +339,6 @@ export function ImageComposer({
   onImageCustomRatioChange,
   onImageCustomWidthChange,
   onImageCustomHeightChange,
-  onImageQualityChange,
-  onImageBackgroundChange,
   onImageOutputFormatChange,
   onImageOutputCompressionChange,
   onOpenPromptMarket,
@@ -376,8 +353,6 @@ export function ImageComposer({
   const [isModelMenuOpen, setIsModelMenuOpen] = useState(false);
   const [isAspectRatioMenuOpen, setIsAspectRatioMenuOpen] = useState(false);
   const [isResolutionMenuOpen, setIsResolutionMenuOpen] = useState(false);
-  const [isQualityMenuOpen, setIsQualityMenuOpen] = useState(false);
-  const [isBackgroundMenuOpen, setIsBackgroundMenuOpen] = useState(false);
   const [isImageSettingsOpen, setIsImageSettingsOpen] = useState(false);
   const [promptAreaHeight, setPromptAreaHeight] = useState(PROMPT_AREA_DEFAULT_HEIGHT);
   const [isPromptAreaResizing, setIsPromptAreaResizing] = useState(false);
@@ -399,10 +374,6 @@ export function ImageComposer({
       : IMAGE_ASPECT_RATIO_SETTINGS_OPTIONS.find((option) => option.value === imageAspectRatio)?.label || "Auto";
   const imageResolutionLabel =
     IMAGE_RESOLUTION_OPTIONS.find((option) => option.value === imageResolution)?.label || "Auto";
-  const imageQualityLabel = IMAGE_QUALITY_SETTINGS_OPTIONS.find((option) => option.value === imageQuality)?.label || "自动";
-  const imageBackgroundLabel = IMAGE_BACKGROUND_OPTIONS.find((option) => option.value === imageBackground)?.label || "Auto";
-  const compressionSupported = supportsImageOutputCompression(imageOutputFormat);
-  const compressionDisabled = !compressionSupported;
   const structuredImageParameters = supportsStructuredImageParameters(imageModel);
   const resolutionPresetsSupported = supportsImageResolutionPresets(imageModel);
   const outputControlsSupported = supportsImageOutputControls(imageModel);
@@ -476,8 +447,6 @@ export function ImageComposer({
       setIsImageSettingsOpen(false);
       setIsAspectRatioMenuOpen(false);
       setIsResolutionMenuOpen(false);
-      setIsQualityMenuOpen(false);
-      setIsBackgroundMenuOpen(false);
     }
   }, [composerMode]);
 

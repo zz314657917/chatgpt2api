@@ -2,7 +2,7 @@
 title: Canvas And Embedded Session
 type: architecture
 repo: chatgpt2api
-last_verified: 2026-05-30
+last_verified: 2026-06-04
 ---
 
 # `/canvas` 与嵌入会话恢复专题
@@ -14,7 +14,7 @@ last_verified: 2026-05-30
 
 ## 一句话心智
 
-`chatgpt2api` 当前的 `/canvas` 不是独立 GPU 或 ComfyUI 系统，而是复用现有图片库、`creation-tasks`、权限体系和 Sub2API 模型路由的前端工作台；embedded session 恢复则是这条产品链路的默认可用性要求。
+`chatgpt2api` 当前的 `/canvas` 不是独立 GPU 或 ComfyUI 系统，而是复用现有图片库、`creation-tasks`、权限体系和 Sub2API 模型路由的前端工作台；embedded session 恢复、视频节点绑定约束和图片参数共享配置都是这条产品链路的默认可用性要求。
 
 ## `/canvas` 的默认定位
 
@@ -22,6 +22,7 @@ last_verified: 2026-05-30
 - 画布保存节点、引用、交互状态和运行关系，但不保存独立 API key、`base_url`、`group_id` 一类网关身份配置。
 - 图片本体、异步任务、任务状态和对象存储能力继续复用既有 image / creation task 链路。
 - API 生成节点、图片节点、结果节点和组节点都是对现有能力的前端编排，不是另起一套调度系统。
+- 6 月初新增的视频生成节点仍属于这套前端编排；它不是新后端，只是在现有能力上增加了“受绑定约束的视频工作流”。
 
 ## embedded session 恢复为什么重要
 
@@ -51,10 +52,21 @@ last_verified: 2026-05-30
 - `/canvas` 当前不是只需要“页面能打开”。
 - 真正的最小验证面至少包括：节点运行、queued/running 状态恢复、Output 回填、组节点输入、自动保存和重新打开恢复。
 
+### 5. 视频节点与参数共享配置属于新的稳定约束
+
+- 视频节点不是对所有登录态无条件开放；当前默认规则是“没有 Sub2API 绑定时 fail-closed 隐藏视频模型”。
+- `/image` 与 `/canvas` 现在共享一套更稳定的图片参数规则：
+  - `auto` 只作为 UI 值，不作为 `image_resolution` 提交。
+  - 像素图标尺寸作为显式 `size`，不叠加分辨率预设。
+  - `1080p` 会归一为上游 `1k`。
+  - `output_format/output_compression` 走统一规范，不再原样透传非法值。
+- 因此后续修改 `/canvas`、`/image` 或 Sub2API 图片 payload 时，不能只盯单个页面；要把共享参数规则一起考虑。
+
 ## 常见误判
 
 - 不要把 `/canvas` 误判成 ComfyUI、Infinite-Canvas 代码直搬或新 GPU 调度系统。
 - 不要把 embedded session 恢复误判成纯 cookie 小修。
+- 不要把“视频节点隐藏”误判成纯 UI 细节；它是受绑定状态约束的产品边界。
 - 不要只跑 `go test ./...` 就认为 `/canvas` 没问题；它还有明显的前端交互和浏览器回读面。
 - 不要只跑前端 build 就认为登录态桥接、任务路由和模型目录没退化。
 
@@ -84,7 +96,7 @@ last_verified: 2026-05-30
 2. `cd web && npm run build`
 3. `go test ./...`
 4. `git diff --check`
-5. 如本地预览可用，至少补一次 `/canvas` 浏览器回读
+5. 如本地预览可用，至少补一次 `/canvas` 浏览器回读，并确认视频节点显示/隐藏符合当前绑定状态
 
 ### 改 launch / redeem / embedded session
 
@@ -99,3 +111,11 @@ last_verified: 2026-05-30
 2. `cd web && npm run lint`
 3. `cd web && npm run build`
 4. 验证列表轻摘要、详情按需读取、预览加载和必要时的历史恢复
+
+### 改图片参数共享配置或 composer 分辨率预设
+
+1. `go test ./...`
+2. `cd web && npm run lint`
+3. `cd web && npm run build`
+4. `git diff --check`
+5. 至少补一次 `/image` 或 `/canvas` 的最小页面回读，确认 payload 不回退到旧字段组合

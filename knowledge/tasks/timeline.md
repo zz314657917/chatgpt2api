@@ -1,5 +1,15 @@
 # Project Timeline
 
+## 2026-06-04 08:30 +08:00 - 图片性能、画布稳定化与参数共享收口
+
+- 当前阶段：`/image`、`/image-manager`、`/canvas` 的图片工作流已从局部性能修复推进到参数边界和画布稳定性收口。
+- 本段重点：完成图片列表轻摘要、分页/虚拟滚动、中图预览、预览缓存治理、画布素材轻引用、创作任务状态治理，以及图片参数共享配置抽取；独立自检发现并修复 `/canvas` 像素图标叠加分辨率和 Sub2API `1080p` 映射问题。
+- 已完成：新增 `ManagedImageSummary/ManagedImageDetail` 分层，列表不返回原图 URL 和重元数据；新增 `/image-previews/` 中图缓存；删除图片同步清理原图、缩略图、中图、metadata、references 和对象存储；创作任务治理可诊断并修复终态脏 `output_statuses`，必要时终止超时活动任务并结算退款；前端图片参数集中到 `web/src/lib/image-parameters.ts`，后端图片参数集中到 `internal/service/image_parameters.go`。
+- 关键决策：继续不引入数据库，图片索引和元数据仍基于文件系统/JSON；列表只给轻摘要，完整元数据和原图只走 detail；`auto` 分辨率仅作为前端 UI 值，像素图标尺寸只提交 `size`，不叠加 `image_resolution`；Sub2API payload 中 `1080p` 映射为上游 `1k`，`output_format/output_compression` 走共享规范。
+- 验证记录：`go test ./internal/service ./internal/httpapi ./internal/protocol -count=1` PASS；`cd web && npm.cmd run lint` PASS；`cd web && npm.cmd run build` PASS；`web/src/app/image/image-options.assert.ts` 纯函数断言 PASS；`go test ./internal/httpapi -run "TestSub2APIImagePayload(PassesModelAndResolution|NormalizesOutputOptions)$" -count=1` PASS；`git diff --check` PASS，仅 Windows CRLF 提示。
+- 遗留问题：源码前端 Vite 访问 `/image` 和 `/canvas` 会因登录态被拦截，未完成登录态内参数下拉、像素图标 payload、画布组节点、下载/高清原图和 300+ 图片滚动的浏览器点击验收；8081 容器不会自动使用当前源码 build，仍需替换镜像/二进制后才能在 8081 生效。
+- 下一步：先做登录态人工验收，重点检查 `/image` 参数下拉、`/canvas` 像素图标不带 `image_resolution`、Sub2API `1080p -> 1k`、图片库滚动分页和下载/高清原图按需请求；上线前在正式同量级数据复核 `/api/images?page_size=50` 响应体和首屏 Network 原图请求数。
+
 ## 2026-05-28 21:24 +08:00 - 8081 Sub2API Launch 容器配置修复
 
 - 当前阶段：8081 本地 Docker 预览恢复 Sub2API/OpenWebUI 启动登录能力。

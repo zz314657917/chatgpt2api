@@ -849,8 +849,10 @@ export type CanvasNodeData = {
   instruction?: string;
   model?: string;
   size?: string;
+  size_user_modified?: boolean;
   quality?: string;
   image_resolution?: string;
+  image_resolution_user_modified?: boolean;
   n?: number;
   duration?: number;
   aspect_ratio?: string;
@@ -2100,7 +2102,11 @@ export async function fetchManagedImageDetail(
   return data.item;
 }
 
-export async function uploadManagedImages(files: File[], visibility: ImageVisibility = "private") {
+export async function uploadManagedImages(
+  files: File[],
+  visibility: ImageVisibility = "private",
+  options: { onUploadProgress?: (progress: { loaded: number; total?: number; progress?: number }) => void } = {},
+) {
   const formData = new FormData();
   files.forEach((file) => {
     formData.append("image[]", file);
@@ -2109,6 +2115,7 @@ export async function uploadManagedImages(files: File[], visibility: ImageVisibi
   const data = await httpRequest<{ items?: ManagedImageDetail[] | null }>("/api/images/uploads", {
     method: "POST",
     body: formData,
+    onUploadProgress: options.onUploadProgress,
   });
   return Array.isArray(data.items) ? data.items : [];
 }
