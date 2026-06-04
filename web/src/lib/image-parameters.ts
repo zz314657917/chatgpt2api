@@ -15,7 +15,6 @@ export const IMAGE_ASPECT_RATIO_OPTIONS = [
 ] as const;
 
 export const PIXEL_ICON_SIZE_OPTIONS = [
-  { value: "8x8", label: "8x8 (像素图标)" },
   { value: "16x16", label: "16x16 (像素图标)" },
   { value: "32x32", label: "32x32 (像素图标)" },
   { value: "64x64", label: "64x64 (像素图标)" },
@@ -242,8 +241,6 @@ export function isPixelIconSize(value: unknown): value is PixelIconSize {
 
 export function normalizePixelIconSizeAlias(value: string) {
   switch (value.trim().toLowerCase()) {
-    case "8:8":
-      return "8x8";
     case "16:16":
       return "16x16";
     case "32:32":

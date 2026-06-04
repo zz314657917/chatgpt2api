@@ -625,6 +625,49 @@ func TestFormatImageResultTrustsCodexUpstreamOutputFormat(t *testing.T) {
 	}
 }
 
+func TestFormatImageResultResizesTrustedPixelIconOutputs(t *testing.T) {
+	config := testProtocolImageConfig{root: t.TempDir()}
+	engine := &Engine{Config: config}
+	src := image.NewNRGBA(image.Rect(0, 0, 1254, 1254))
+	src.Set(0, 0, color.NRGBA{R: 255, A: 255})
+	var encoded bytes.Buffer
+	if err := png.Encode(&encoded, src); err != nil {
+		t.Fatalf("png.Encode() error = %v", err)
+	}
+
+	result := engine.FormatImageResultWithOptions(
+		[]map[string]any{{"b64_json": base64.StdEncoding.EncodeToString(encoded.Bytes()), "output_format": "png"}},
+		"draw",
+		"url",
+		"https://example.test",
+		"owner-1",
+		"Alice",
+		123,
+		"",
+		ImageOutputOptions{Format: "png", TrustUpstreamFormat: true, TargetWidth: 64, TargetHeight: 64},
+	)
+	items, _ := result["data"].([]map[string]any)
+	if len(items) != 1 {
+		t.Fatalf("FormatImageResultWithOptions() data = %#v", result["data"])
+	}
+	if items[0]["width"] != 64 || items[0]["height"] != 64 || items[0]["resolution"] != "64x64" {
+		t.Fatalf("resized trusted item dimensions = %#v", items[0])
+	}
+	imageURL, _ := items[0]["url"].(string)
+	rel := strings.TrimPrefix(imageURL, "https://example.test/images/")
+	stored, err := os.ReadFile(filepath.Join(config.ImagesDir(), filepath.FromSlash(rel)))
+	if err != nil {
+		t.Fatalf("ReadFile(stored image) error = %v", err)
+	}
+	storedConfig, _, err := image.DecodeConfig(bytes.NewReader(stored))
+	if err != nil {
+		t.Fatalf("DecodeConfig(stored) error = %v", err)
+	}
+	if storedConfig.Width != 64 || storedConfig.Height != 64 {
+		t.Fatalf("stored dimensions = %dx%d, want 64x64", storedConfig.Width, storedConfig.Height)
+	}
+}
+
 func TestFormatImageResultIgnoresWebPOutputCompression(t *testing.T) {
 	config := testProtocolImageConfig{root: t.TempDir()}
 	engine := &Engine{Config: config}

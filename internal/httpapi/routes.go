@@ -1672,7 +1672,7 @@ func imageTaskRequestMetadata(body map[string]any) map[string]any {
 		metadata["image_resolution"] = preset
 	}
 	if size != "" {
-		metadata["requested_size"] = size
+		metadata["requested_size"] = protocol.NormalizeImageGenerationSize(size)
 	}
 	if util.ToBool(body["share_prompt_parameters"]) {
 		metadata["share_prompt_parameters"] = true

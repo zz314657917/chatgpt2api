@@ -651,10 +651,9 @@ func (a *App) formatSub2APIImageResult(ctx context.Context, result map[string]an
 			})
 		}
 	}
-	return a.engine.FormatImageResultWithOptions(normalized, util.Clean(payload["prompt"]), "url", util.Clean(payload["base_url"]), identityScope(identity), identityDisplayName(identity), created, "", protocol.ImageOutputOptions{
-		Format:              service.NormalizeImageOutputFormat(util.Clean(payload["output_format"])),
-		TrustUpstreamFormat: true,
-	}), nil
+	outputOptions := protocol.ImageOutputOptionsFromPayload(payload)
+	outputOptions.TrustUpstreamFormat = true
+	return a.engine.FormatImageResultWithOptions(normalized, util.Clean(payload["prompt"]), "url", util.Clean(payload["base_url"]), identityScope(identity), identityDisplayName(identity), created, "", outputOptions), nil
 }
 
 func sub2APIImageTaskID(result map[string]any) string {

@@ -44,7 +44,7 @@ export function normalizeCanvasImageResolution(value?: string) {
 }
 
 export function isPixelIconGeneratorNode(item?: SmartCanvasItem | null) {
-  return item?.type === "image_generation" && /^(8x8|16x16|32x32|64x64|128x128) 像素图标$/.test(item.name || "");
+  return item?.type === "image_generation" && /^(16x16|32x32|64x64|128x128) 像素图标$/.test(item.name || "");
 }
 
 export function createItemId(type: SmartCanvasItem["type"]) {

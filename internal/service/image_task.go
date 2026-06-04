@@ -1565,7 +1565,7 @@ func mergeImageTaskMetadata(payload map[string]any, metadata map[string]any) {
 		payload["image_resolution"] = preset
 	}
 	if requestedSize := strings.TrimSpace(util.Clean(metadata["requested_size"])); requestedSize != "" {
-		payload["requested_size"] = requestedSize
+		payload["requested_size"] = normalizeImageTaskSize(requestedSize)
 	}
 	if util.ToBool(metadata["share_prompt_parameters"]) {
 		payload["share_prompt_parameters"] = true
