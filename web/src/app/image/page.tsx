@@ -28,7 +28,6 @@ import {
   isImageSizeMode,
   isPixelIconSize,
   normalizeImageOutputCompression,
-  normalizePositiveImageParameter,
   parseImageRatio,
   type ImageAspectRatio,
   type ImageResolution,
@@ -154,8 +153,6 @@ const IMAGE_OUTPUT_FORMAT_STORAGE_KEY = "chatgpt2api:image_last_output_format";
 const IMAGE_OUTPUT_COMPRESSION_STORAGE_KEY = "chatgpt2api:image_last_output_compression";
 const IMAGE_QUALITY_STORAGE_KEY = "chatgpt2api:image_last_quality";
 const IMAGE_BACKGROUND_STORAGE_KEY = "chatgpt2api:image_last_background";
-const IMAGE_MODERATION_STORAGE_KEY = "chatgpt2api:image_last_moderation";
-const IMAGE_PARTIAL_IMAGES_STORAGE_KEY = "chatgpt2api:image_last_partial_images";
 const QUOTA_REFRESH_EVENT = "chatgpt2api:quota-refresh";
 const DEFAULT_IMAGE_OUTPUT_FORMAT: ImageOutputFormat = "png";
 const REFERENCE_IMAGE_MAX_SIDE = 2048;
@@ -184,8 +181,6 @@ type EditingTurnDraft = {
   customHeight: string;
   quality: "auto" | ImageQuality;
   background: string;
-  moderation: string;
-  partialImages: string;
   outputFormat: ImageOutputFormat;
   outputCompression: string;
   visibility: ImageVisibility;
@@ -579,13 +574,8 @@ function imageQualityForTask(value: "auto" | ImageQuality | undefined): ImageQua
   return isImageQuality(value) ? value : undefined;
 }
 
-function imageToolOptionsForTask(turn: Pick<ImageTurn, "background" | "moderation" | "partialImages">) {
-  const partialImages = normalizePositiveImageParameter(turn.partialImages);
-  return {
-    ...(turn.background && turn.background !== "auto" ? { background: turn.background } : {}),
-    ...(turn.moderation && turn.moderation !== "auto" ? { moderation: turn.moderation } : {}),
-    ...(partialImages ? { partialImages } : {}),
-  };
+function imageToolOptionsForTask(turn: Pick<ImageTurn, "background">) {
+  return turn.background && turn.background !== "auto" ? { background: turn.background } : {};
 }
 
 function managedImageReferenceUrl(item: ManagedImageSummary) {
@@ -975,14 +965,6 @@ function getStoredOptionalImageParameter(key: string, allowed: Set<string>) {
   }
   const value = window.localStorage.getItem(key) || "auto";
   return allowed.has(value) ? value : "auto";
-}
-
-function getStoredImagePartialImages() {
-  if (typeof window === "undefined") {
-    return "";
-  }
-  const value = normalizePositiveImageParameter(window.localStorage.getItem(IMAGE_PARTIAL_IMAGES_STORAGE_KEY));
-  return value === undefined ? "" : String(value);
 }
 
 function serializeImageSizeSelection(selection: ImageSizeSelection): StoredImageSizeSelection {
@@ -1433,8 +1415,6 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
   const [imageCustomHeight, setImageCustomHeight] = useState(() => getStoredImageSizeSelection().customHeight);
   const [imageQuality, setImageQuality] = useState<"auto" | ImageQuality>(getStoredImageQuality);
   const [imageBackground, setImageBackground] = useState(() => getStoredOptionalImageParameter(IMAGE_BACKGROUND_STORAGE_KEY, new Set(["auto", "transparent", "opaque"])));
-  const [imageModeration, setImageModeration] = useState(() => getStoredOptionalImageParameter(IMAGE_MODERATION_STORAGE_KEY, new Set(["auto", "low"])));
-  const [imagePartialImages, setImagePartialImages] = useState(getStoredImagePartialImages);
   const [imageOutputFormat, setImageOutputFormat] = useState<ImageOutputFormat>(getStoredImageOutputFormat);
   const [imageOutputCompression, setImageOutputCompression] = useState(getStoredImageOutputCompression);
   const [defaultImageVisibility, setDefaultImageVisibility] = useState<ImageVisibility>("private");
@@ -1744,8 +1724,6 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         setImageCustomHeight(storedSelection.customHeight);
         setImageQuality(getStoredImageQuality());
         setImageBackground(getStoredOptionalImageParameter(IMAGE_BACKGROUND_STORAGE_KEY, new Set(["auto", "transparent", "opaque"])));
-        setImageModeration(getStoredOptionalImageParameter(IMAGE_MODERATION_STORAGE_KEY, new Set(["auto", "low"])));
-        setImagePartialImages(getStoredImagePartialImages());
         setImageOutputFormat(getStoredImageOutputFormat());
         setImageOutputCompression(getStoredImageOutputCompression());
 
@@ -1962,17 +1940,6 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     } else {
       window.localStorage.setItem(IMAGE_BACKGROUND_STORAGE_KEY, imageBackground);
     }
-    if (imageModeration === "auto") {
-      window.localStorage.removeItem(IMAGE_MODERATION_STORAGE_KEY);
-    } else {
-      window.localStorage.setItem(IMAGE_MODERATION_STORAGE_KEY, imageModeration);
-    }
-    const normalizedPartialImages = normalizePositiveImageParameter(imagePartialImages);
-    if (normalizedPartialImages === undefined) {
-      window.localStorage.removeItem(IMAGE_PARTIAL_IMAGES_STORAGE_KEY);
-    } else {
-      window.localStorage.setItem(IMAGE_PARTIAL_IMAGES_STORAGE_KEY, String(normalizedPartialImages));
-    }
     window.localStorage.setItem(IMAGE_OUTPUT_FORMAT_STORAGE_KEY, imageOutputFormat);
     const normalizedCompression = normalizeOutputCompressionValue(imageOutputCompression);
     if (normalizedCompression === undefined || !supportsImageOutputCompression(imageOutputFormat)) {
@@ -1980,7 +1947,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
       return;
     }
     window.localStorage.setItem(IMAGE_OUTPUT_COMPRESSION_STORAGE_KEY, String(normalizedCompression));
-  }, [imageBackground, imageModeration, imageOutputCompression, imageOutputFormat, imagePartialImages, imageQuality]);
+  }, [imageBackground, imageOutputCompression, imageOutputFormat, imageQuality]);
 
   useEffect(() => {
     if (selectedConversationId && !conversations.some((conversation) => conversation.id === selectedConversationId)) {
@@ -2172,8 +2139,6 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     setImageCount("1");
     setImageQuality("auto");
     setImageBackground("auto");
-    setImageModeration("auto");
-    setImagePartialImages("");
     setImageOutputFormat(DEFAULT_IMAGE_OUTPUT_FORMAT);
     setImageOutputCompression("");
     setDefaultImageVisibility("private");
@@ -2216,8 +2181,6 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     setImageCustomHeight(presetSizeSelection.customHeight);
     setImageQuality("auto");
     setImageBackground("auto");
-    setImageModeration("auto");
-    setImagePartialImages("");
     setImageOutputFormat(DEFAULT_IMAGE_OUTPUT_FORMAT);
     setImageOutputCompression("");
     setDefaultImageVisibility("private");
@@ -2256,8 +2219,6 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     setImageCount("1");
     setImageQuality("auto");
     setImageBackground("auto");
-    setImageModeration("auto");
-    setImagePartialImages("");
     setImageOutputFormat(DEFAULT_IMAGE_OUTPUT_FORMAT);
     setImageOutputCompression("");
     setDefaultImageVisibility("private");
@@ -2741,11 +2702,6 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
       customHeight: targetTurn.mode === "chat" ? DEFAULT_IMAGE_CUSTOM_HEIGHT : sizeSelection.customHeight,
       quality: targetTurn.quality || "auto",
       background: targetTurn.background || "auto",
-      moderation: targetTurn.moderation || "auto",
-      partialImages:
-        targetTurn.partialImages === undefined || targetTurn.partialImages === null
-          ? ""
-          : String(targetTurn.partialImages),
       outputFormat: targetTurn.outputFormat || DEFAULT_IMAGE_OUTPUT_FORMAT,
       outputCompression:
         targetTurn.outputCompression === undefined || targetTurn.outputCompression === null
@@ -3462,7 +3418,6 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
           ? undefined
           : imageOutputCompressionForModel(draft.model, draftOutputFormat, draft.outputCompression);
       const draftQuality = imageQualityForTask(draft.quality);
-      const draftPartialImages = normalizePositiveImageParameter(draft.partialImages);
       const draftImageResolution = imageResolutionPresetForModel(effectiveDraftModel, draftSizeRequest?.selection);
       if (mode !== "chat" && isHighResolutionImageRequest(draftImageSize, draftImageResolution)) {
         if (regenerate) {
@@ -3496,8 +3451,6 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
               outputFormat: draftOutputFormat,
               outputCompression: draftOutputCompression,
               background: mode !== "chat" && draft.background !== "auto" ? draft.background : undefined,
-              moderation: mode !== "chat" && draft.moderation !== "auto" ? draft.moderation : undefined,
-              partialImages: mode !== "chat" ? draftPartialImages : undefined,
               visibility: mode === "chat" ? "private" : draft.visibility,
             };
             if (!regenerate) {
@@ -3608,7 +3561,6 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
           ? undefined
           : imageOutputCompressionForModel(effectiveModel, effectiveOutputFormat, imageOutputCompression);
       const effectiveImageQuality = imageQualityForTask(imageQuality);
-      const effectivePartialImages = normalizePositiveImageParameter(imagePartialImages);
       const effectiveImageResolution = imageResolutionPresetForModel(effectiveModel, currentImageSizeRequest?.selection);
       const isHighResolutionRequest =
         effectiveImageMode !== "chat" &&
@@ -3635,8 +3587,6 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         outputFormat: effectiveOutputFormat,
         outputCompression: effectiveImageMode === "chat" ? undefined : effectiveOutputCompression,
         background: effectiveImageMode !== "chat" && imageBackground !== "auto" ? imageBackground : undefined,
-        moderation: effectiveImageMode !== "chat" && imageModeration !== "auto" ? imageModeration : undefined,
-        partialImages: effectiveImageMode !== "chat" ? effectivePartialImages : undefined,
         visibility: effectiveImageMode === "chat" ? "private" : defaultImageVisibility,
         images: Array.from({ length: requestedCount }, (_, index): StoredImage => {
           const imageId = `${turnId}-${index}`;
@@ -4103,52 +4053,6 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                               </Select>
                             </label>
                             <label className="flex flex-col gap-2 text-sm font-medium text-stone-700">
-                              审核
-                              <Select
-                                value={editingTurnDraft.moderation}
-                                onValueChange={(value) =>
-                                  setEditingTurnDraft((current) =>
-                                    current && (value === "auto" || value === "low")
-                                      ? { ...current, moderation: value }
-                                      : current,
-                                  )
-                                }
-                              >
-                                <SelectTrigger>
-                                  <SelectValue />
-                                </SelectTrigger>
-                                <SelectContent>
-                                  <SelectGroup>
-                                    <SelectItem value="auto">Auto</SelectItem>
-                                    <SelectItem value="low">Low</SelectItem>
-                                  </SelectGroup>
-                                </SelectContent>
-                              </Select>
-                            </label>
-                            <label className="flex flex-col gap-2 text-sm font-medium text-stone-700">
-                              预览帧
-                              <Select
-                                value={editingTurnDraft.partialImages || "off"}
-                                onValueChange={(value) =>
-                                  setEditingTurnDraft((current) =>
-                                    current ? { ...current, partialImages: value === "off" ? "" : value } : current,
-                                  )
-                                }
-                              >
-                                <SelectTrigger>
-                                  <SelectValue />
-                                </SelectTrigger>
-                                <SelectContent>
-                                  <SelectGroup>
-                                    <SelectItem value="off">关闭</SelectItem>
-                                    <SelectItem value="1">1 帧</SelectItem>
-                                    <SelectItem value="2">2 帧</SelectItem>
-                                    <SelectItem value="3">3 帧</SelectItem>
-                                  </SelectGroup>
-                                </SelectContent>
-                              </Select>
-                            </label>
-                            <label className="flex flex-col gap-2 text-sm font-medium text-stone-700">
                               格式
                               <Select
                                 value={editingTurnDraft.outputFormat}
@@ -4336,8 +4240,6 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                 imageCustomHeight={imageCustomHeight}
                 imageQuality={imageQuality}
                 imageBackground={imageBackground}
-                imageModeration={imageModeration}
-                imagePartialImages={imagePartialImages}
                 imageOutputFormat={imageOutputFormat}
                 imageOutputCompression={imageOutputCompression}
                 highResolutionHint={highResolutionHint}
@@ -4358,8 +4260,6 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                 onImageCustomHeightChange={setImageCustomHeight}
                 onImageQualityChange={setImageQuality}
                 onImageBackgroundChange={setImageBackground}
-                onImageModerationChange={setImageModeration}
-                onImagePartialImagesChange={setImagePartialImages}
                 onImageOutputFormatChange={setImageOutputFormat}
                 onImageOutputCompressionChange={setImageOutputCompression}
                 onOpenPromptMarket={() => setIsPromptMarketOpen(true)}

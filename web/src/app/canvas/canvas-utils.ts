@@ -17,7 +17,6 @@ import {
   normalizeImageOutputFormat,
   normalizeImageResolutionPreset,
   normalizePixelIconSizeAlias,
-  normalizePositiveImageParameter,
   supportsImageOutputCompression,
 } from "@/lib/image-parameters";
 
@@ -61,16 +60,6 @@ export function normalizeCanvasImageOutputCompression(format: string | undefined
 export function normalizeCanvasImageBackground(value?: string) {
   const normalized = cleanImageText(value).toLowerCase();
   return normalized === "transparent" || normalized === "opaque" ? normalized : "";
-}
-
-export function normalizeCanvasImageModeration(value?: string) {
-  const normalized = cleanImageText(value).toLowerCase();
-  return normalized === "low" ? normalized : "";
-}
-
-export function normalizeCanvasPartialImages(value: unknown) {
-  const normalized = normalizePositiveImageParameter(value);
-  return normalized ? Math.min(3, normalized) : undefined;
 }
 
 export function isPixelIconGeneratorNode(item?: SmartCanvasItem | null) {
@@ -883,8 +872,6 @@ function sanitizeSmartItemData(data?: SmartCanvasItemData): SmartCanvasItemData 
     output_format: data.output_format ? normalizeCanvasImageOutputFormat(data.output_format) : undefined,
     output_compression: normalizeCanvasImageOutputCompression(data.output_format, data.output_compression),
     background: normalizeCanvasImageBackground(data.background),
-    moderation: normalizeCanvasImageModeration(data.moderation),
-    partial_images: normalizeCanvasPartialImages(data.partial_images),
     duration: Number.isFinite(Number(data.duration)) ? Math.max(5, Math.min(15, Number(data.duration))) : undefined,
     aspect_ratio: typeof data.aspect_ratio === "string" && data.aspect_ratio ? data.aspect_ratio : "16:9",
     resolution: typeof data.resolution === "string" ? data.resolution : "",

@@ -167,16 +167,6 @@ const canvasImageBackgroundOptions = [
   { value: "transparent", label: "透明" },
   { value: "opaque", label: "不透明" },
 ] as const;
-const canvasImageModerationOptions = [
-  { value: "auto", label: "Auto" },
-  { value: "low", label: "Low" },
-] as const;
-const canvasImagePartialImageOptions = [
-  { value: "off", label: "预览关闭" },
-  { value: "1", label: "1 帧" },
-  { value: "2", label: "2 帧" },
-  { value: "3", label: "3 帧" },
-] as const;
 const canvasVideoRatioOptions = [
   { value: "16:9", label: "16:9" },
   { value: "9:16", label: "9:16" },
@@ -3131,8 +3121,6 @@ function GeneratorNodeBody({
   const outputCompression = typeof item.data?.output_compression === "number" ? item.data.output_compression : undefined;
   const compressionDisabled = !supportsImageOutputCompression(outputFormat);
   const backgroundValue = canvasImageBackgroundOptions.some((option) => option.value === item.data?.background) ? String(item.data?.background) : "auto";
-  const moderationValue = canvasImageModerationOptions.some((option) => option.value === item.data?.moderation) ? String(item.data?.moderation) : "auto";
-  const partialImagesValue = canvasImagePartialImageOptions.some((option) => option.value === String(item.data?.partial_images)) ? String(item.data?.partial_images) : "off";
   const setImageCount = (next: number) => onUpdateData({ n: Math.max(1, Math.min(10, Math.round(next) || 1)) });
   const setOutputCompression = (value: string) => {
     if (!value.trim()) {
@@ -3316,26 +3304,6 @@ function GeneratorNodeBody({
           </SelectTrigger>
           <SelectContent>
             {canvasImageBackgroundOptions.map((option) => (
-              <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <Select value={moderationValue} onValueChange={(moderation) => onUpdateData({ moderation: moderation === "auto" ? "" : moderation })}>
-          <SelectTrigger className={canvasSelectClass} aria-label="审核策略">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {canvasImageModerationOptions.map((option) => (
-              <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <Select value={partialImagesValue} onValueChange={(partialImages) => onUpdateData({ partial_images: partialImages === "off" ? undefined : Number(partialImages) })}>
-          <SelectTrigger className={canvasSelectClass} aria-label="预览帧">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {canvasImagePartialImageOptions.map((option) => (
               <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
             ))}
           </SelectContent>

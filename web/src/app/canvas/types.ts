@@ -45,8 +45,6 @@ export type SmartCanvasItemData = {
   output_format?: "png" | "jpeg" | "webp";
   output_compression?: number;
   background?: string;
-  moderation?: string;
-  partial_images?: number;
   duration?: number;
   aspect_ratio?: string;
   resolution?: string;
