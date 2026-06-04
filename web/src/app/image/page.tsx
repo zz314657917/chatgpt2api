@@ -39,6 +39,7 @@ import type { BananaPrompt } from "@/app/image/banana-prompts";
 import { consumeSimilarImageIntent } from "@/app/image/similar-image-intent";
 import { ImageSidebar } from "@/app/image/components/image-sidebar";
 import { ImageLightbox } from "@/components/image-lightbox";
+import { ImageOutputControls } from "@/components/image-output-controls";
 import { ManagedImageAssetSidebar } from "@/components/managed-image-asset-sidebar";
 import { Sub2APIKeyRequiredDialog } from "@/components/sub2api-key-picker";
 import { Button } from "@/components/ui/button";
@@ -97,12 +98,9 @@ import {
   type ManagedImageSummary,
 } from "@/lib/api";
 import {
-  IMAGE_OUTPUT_FORMAT_OPTIONS,
   isImageOutputFormat,
-  isImageQuality,
   supportsImageOutputCompression,
   type ImageOutputFormat,
-  type ImageQuality,
 } from "@/lib/image-parameters";
 import { fetchAuthenticatedImageBlob } from "@/lib/authenticated-image";
 import { clearImageManagerCache } from "@/lib/image-manager-cache";
@@ -151,8 +149,6 @@ const IMAGE_CUSTOM_WIDTH_STORAGE_KEY = "chatgpt2api:image_last_custom_width";
 const IMAGE_CUSTOM_HEIGHT_STORAGE_KEY = "chatgpt2api:image_last_custom_height";
 const IMAGE_OUTPUT_FORMAT_STORAGE_KEY = "chatgpt2api:image_last_output_format";
 const IMAGE_OUTPUT_COMPRESSION_STORAGE_KEY = "chatgpt2api:image_last_output_compression";
-const IMAGE_QUALITY_STORAGE_KEY = "chatgpt2api:image_last_quality";
-const IMAGE_BACKGROUND_STORAGE_KEY = "chatgpt2api:image_last_background";
 const QUOTA_REFRESH_EVENT = "chatgpt2api:quota-refresh";
 const DEFAULT_IMAGE_OUTPUT_FORMAT: ImageOutputFormat = "png";
 const REFERENCE_IMAGE_MAX_SIDE = 2048;
@@ -179,8 +175,6 @@ type EditingTurnDraft = {
   customRatio: string;
   customWidth: string;
   customHeight: string;
-  quality: "auto" | ImageQuality;
-  background: string;
   outputFormat: ImageOutputFormat;
   outputCompression: string;
   visibility: ImageVisibility;
@@ -570,14 +564,6 @@ function imageOutputCompressionForModel(model: ImageModel, format: ImageOutputFo
   return imageOutputCompressionForFormat(format, value);
 }
 
-function imageQualityForTask(value: "auto" | ImageQuality | undefined): ImageQuality | undefined {
-  return isImageQuality(value) ? value : undefined;
-}
-
-function imageToolOptionsForTask(turn: Pick<ImageTurn, "background">) {
-  return turn.background && turn.background !== "auto" ? { background: turn.background } : {};
-}
-
 function managedImageReferenceUrl(item: ManagedImageSummary) {
   return item.path ? getManagedImageUrlFromPath(item.path) : item.preview_url || item.thumbnail_url || "";
 }
@@ -951,22 +937,6 @@ function getStoredImageOutputCompression(): string {
   return normalized === undefined ? "" : String(normalized);
 }
 
-function getStoredImageQuality(): "auto" | ImageQuality {
-  if (typeof window === "undefined") {
-    return "auto";
-  }
-  const storedQuality = window.localStorage.getItem(IMAGE_QUALITY_STORAGE_KEY);
-  return isImageQuality(storedQuality) ? storedQuality : "auto";
-}
-
-function getStoredOptionalImageParameter(key: string, allowed: Set<string>) {
-  if (typeof window === "undefined") {
-    return "auto";
-  }
-  const value = window.localStorage.getItem(key) || "auto";
-  return allowed.has(value) ? value : "auto";
-}
-
 function serializeImageSizeSelection(selection: ImageSizeSelection): StoredImageSizeSelection {
   return {
     mode: selection.mode,
@@ -1056,11 +1026,11 @@ function hasEnoughBilling(session: NonNullable<ReturnType<typeof useAuthGuard>["
   return !billing || billing.unlimited || Math.max(0, Number(billing.available) || 0) >= estimated;
 }
 
-function imageBillingEstimate(model: ImageModel, count: number, sizeOrResolution: string, quality: "auto" | ImageQuality) {
-  const estimatedPrice = estimateImageDisplayPriceUSD(model, count, sizeOrResolution, quality);
+function imageBillingEstimate(model: ImageModel, count: number, sizeOrResolution: string) {
+  const estimatedPrice = estimateImageDisplayPriceUSD(model, count, sizeOrResolution, "auto");
   return {
     price: estimatedPrice,
-    units: estimateImageBillingUnits(model, count, sizeOrResolution, quality),
+    units: estimateImageBillingUnits(model, count, sizeOrResolution, "auto"),
   };
 }
 
@@ -1413,8 +1383,6 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
   const [imageCustomRatio, setImageCustomRatio] = useState(() => getStoredImageSizeSelection().customRatio);
   const [imageCustomWidth, setImageCustomWidth] = useState(() => getStoredImageSizeSelection().customWidth);
   const [imageCustomHeight, setImageCustomHeight] = useState(() => getStoredImageSizeSelection().customHeight);
-  const [imageQuality, setImageQuality] = useState<"auto" | ImageQuality>(getStoredImageQuality);
-  const [imageBackground, setImageBackground] = useState(() => getStoredOptionalImageParameter(IMAGE_BACKGROUND_STORAGE_KEY, new Set(["auto", "transparent", "opaque"])));
   const [imageOutputFormat, setImageOutputFormat] = useState<ImageOutputFormat>(getStoredImageOutputFormat);
   const [imageOutputCompression, setImageOutputCompression] = useState(getStoredImageOutputCompression);
   const [defaultImageVisibility, setDefaultImageVisibility] = useState<ImageVisibility>("private");
@@ -1588,7 +1556,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
       (imageModel === "auto" || imageModel === "gpt-image-2"
         ? "1K"
         : imagePriceSizeFromRequest(estimateSizeRequest.size));
-    return imageBillingEstimate(imageModel, composerMode === "chat" ? 1 : parsedCount, estimateResolution, imageQuality);
+    return imageBillingEstimate(imageModel, composerMode === "chat" ? 1 : parsedCount, estimateResolution);
   }, [
     composerMode,
     imageAspectRatio,
@@ -1596,7 +1564,6 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     imageCustomRatio,
     imageCustomWidth,
     imageModel,
-    imageQuality,
     imageResolution,
     imageSizeMode,
     parsedCount,
@@ -1722,8 +1689,6 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         setImageCustomRatio(storedSelection.customRatio);
         setImageCustomWidth(storedSelection.customWidth);
         setImageCustomHeight(storedSelection.customHeight);
-        setImageQuality(getStoredImageQuality());
-        setImageBackground(getStoredOptionalImageParameter(IMAGE_BACKGROUND_STORAGE_KEY, new Set(["auto", "transparent", "opaque"])));
         setImageOutputFormat(getStoredImageOutputFormat());
         setImageOutputCompression(getStoredImageOutputCompression());
 
@@ -1930,16 +1895,6 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
       return;
     }
 
-    if (imageQuality === "auto") {
-      window.localStorage.removeItem(IMAGE_QUALITY_STORAGE_KEY);
-    } else {
-      window.localStorage.setItem(IMAGE_QUALITY_STORAGE_KEY, imageQuality);
-    }
-    if (imageBackground === "auto") {
-      window.localStorage.removeItem(IMAGE_BACKGROUND_STORAGE_KEY);
-    } else {
-      window.localStorage.setItem(IMAGE_BACKGROUND_STORAGE_KEY, imageBackground);
-    }
     window.localStorage.setItem(IMAGE_OUTPUT_FORMAT_STORAGE_KEY, imageOutputFormat);
     const normalizedCompression = normalizeOutputCompressionValue(imageOutputCompression);
     if (normalizedCompression === undefined || !supportsImageOutputCompression(imageOutputFormat)) {
@@ -1947,7 +1902,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
       return;
     }
     window.localStorage.setItem(IMAGE_OUTPUT_COMPRESSION_STORAGE_KEY, String(normalizedCompression));
-  }, [imageBackground, imageOutputCompression, imageOutputFormat, imageQuality]);
+  }, [imageOutputCompression, imageOutputFormat]);
 
   useEffect(() => {
     if (selectedConversationId && !conversations.some((conversation) => conversation.id === selectedConversationId)) {
@@ -2137,8 +2092,6 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     promptApplyRequestIdRef.current += 1;
     setImagePrompt("");
     setImageCount("1");
-    setImageQuality("auto");
-    setImageBackground("auto");
     setImageOutputFormat(DEFAULT_IMAGE_OUTPUT_FORMAT);
     setImageOutputCompression("");
     setDefaultImageVisibility("private");
@@ -2179,8 +2132,6 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     setImageCustomRatio(presetSizeSelection.customRatio);
     setImageCustomWidth(presetSizeSelection.customWidth);
     setImageCustomHeight(presetSizeSelection.customHeight);
-    setImageQuality("auto");
-    setImageBackground("auto");
     setImageOutputFormat(DEFAULT_IMAGE_OUTPUT_FORMAT);
     setImageOutputCompression("");
     setDefaultImageVisibility("private");
@@ -2217,8 +2168,6 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     setComposerMode("image");
     setImagePrompt(prompt.prompt);
     setImageCount("1");
-    setImageQuality("auto");
-    setImageBackground("auto");
     setImageOutputFormat(DEFAULT_IMAGE_OUTPUT_FORMAT);
     setImageOutputCompression("");
     setDefaultImageVisibility("private");
@@ -2700,8 +2649,6 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
       customRatio: targetTurn.mode === "chat" ? DEFAULT_IMAGE_CUSTOM_RATIO : sizeSelection.customRatio,
       customWidth: targetTurn.mode === "chat" ? DEFAULT_IMAGE_CUSTOM_WIDTH : sizeSelection.customWidth,
       customHeight: targetTurn.mode === "chat" ? DEFAULT_IMAGE_CUSTOM_HEIGHT : sizeSelection.customHeight,
-      quality: targetTurn.quality || "auto",
-      background: targetTurn.background || "auto",
       outputFormat: targetTurn.outputFormat || DEFAULT_IMAGE_OUTPUT_FORMAT,
       outputCompression:
         targetTurn.outputCompression === undefined || targetTurn.outputCompression === null
@@ -2881,8 +2828,6 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
           taskOutputFormat === undefined
             ? undefined
             : imageOutputCompressionForModel(activeTurn.model, taskOutputFormat, activeTurn.outputCompression);
-        const taskImageQuality = imageQualityForTask(activeTurn.quality);
-        const taskToolOptions = imageToolOptionsForTask(activeTurn);
         const taskImageResolution = imageResolutionPresetForModel(activeTurn.model, activeTurnSizeRequest.selection);
         const fallbackReferenceImage = activeTurn.mode === "chat" ? undefined : getFallbackReferenceImage(snapshot, activeTurn.id);
         const pendingTaskGroups = activeTurn.images.reduce<Array<{ taskId: string; count: number }>>(
@@ -2921,14 +2866,14 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
               activeTurn.prompt,
               activeTurn.model,
               activeTurnSizeRequest.size,
-              taskImageQuality,
+              undefined,
               group.count,
               taskMessages,
               activeTurn.visibility || "private",
               taskImageResolution,
               taskOutputFormat,
               taskOutputCompression,
-              taskToolOptions,
+              undefined,
               conversationId,
               fallbackReferenceImage,
             );
@@ -2938,14 +2883,14 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
             activeTurn.prompt,
             activeTurn.model,
             activeTurnSizeRequest.size,
-            taskImageQuality,
+            undefined,
             group.count,
             taskMessages,
             activeTurn.visibility || "private",
             taskImageResolution,
             taskOutputFormat,
             taskOutputCompression,
-            taskToolOptions,
+            undefined,
             conversationId,
             fallbackReferenceImage,
           );
@@ -3417,7 +3362,6 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         draftOutputFormat === undefined
           ? undefined
           : imageOutputCompressionForModel(draft.model, draftOutputFormat, draft.outputCompression);
-      const draftQuality = imageQualityForTask(draft.quality);
       const draftImageResolution = imageResolutionPresetForModel(effectiveDraftModel, draftSizeRequest?.selection);
       if (mode !== "chat" && isHighResolutionImageRequest(draftImageSize, draftImageResolution)) {
         if (regenerate) {
@@ -3447,10 +3391,10 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
               count: imageCount,
               size: draftImageSize,
               sizeSelection: mode === "chat" ? undefined : draftStoredSizeSelection,
-              quality: mode === "chat" ? undefined : draftQuality,
+              quality: undefined,
               outputFormat: draftOutputFormat,
               outputCompression: draftOutputCompression,
-              background: mode !== "chat" && draft.background !== "auto" ? draft.background : undefined,
+              background: undefined,
               visibility: mode === "chat" ? "private" : draft.visibility,
             };
             if (!regenerate) {
@@ -3560,7 +3504,6 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         effectiveOutputFormat === undefined
           ? undefined
           : imageOutputCompressionForModel(effectiveModel, effectiveOutputFormat, imageOutputCompression);
-      const effectiveImageQuality = imageQualityForTask(imageQuality);
       const effectiveImageResolution = imageResolutionPresetForModel(effectiveModel, currentImageSizeRequest?.selection);
       const isHighResolutionRequest =
         effectiveImageMode !== "chat" &&
@@ -3583,10 +3526,10 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         count: requestedCount,
         size: effectiveImageMode === "chat" ? "" : currentImageSize,
         sizeSelection: effectiveImageMode === "chat" ? undefined : currentImageSizeSelection,
-        quality: effectiveImageMode === "chat" ? undefined : effectiveImageQuality,
+        quality: undefined,
         outputFormat: effectiveOutputFormat,
         outputCompression: effectiveImageMode === "chat" ? undefined : effectiveOutputCompression,
-        background: effectiveImageMode !== "chat" && imageBackground !== "auto" ? imageBackground : undefined,
+        background: undefined,
         visibility: effectiveImageMode === "chat" ? "private" : defaultImageVisibility,
         images: Array.from({ length: requestedCount }, (_, index): StoredImage => {
           const imageId = `${turnId}-${index}`;
@@ -4002,105 +3945,24 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                           </>
                         ) : null}
                         {editingDraftOutputControls ? (
-                          <>
-                            <label className="flex flex-col gap-2 text-sm font-medium text-stone-700">
-                              质量
-                              <Select
-                                value={editingTurnDraft.quality}
-                                onValueChange={(value) =>
-                                  setEditingTurnDraft((current) =>
-                                    current && (value === "auto" || isImageQuality(value))
-                                      ? { ...current, quality: value }
-                                      : current,
-                                  )
-                                }
-                              >
-                                <SelectTrigger>
-                                  <SelectValue />
-                                </SelectTrigger>
-                                <SelectContent>
-                                  <SelectGroup>
-                                    <SelectItem value="auto">自动</SelectItem>
-                                    <SelectItem value="low">速度优先</SelectItem>
-                                    <SelectItem value="medium">标准</SelectItem>
-                                    <SelectItem value="high">高品质</SelectItem>
-                                  </SelectGroup>
-                                </SelectContent>
-                              </Select>
-                            </label>
-                            <label className="flex flex-col gap-2 text-sm font-medium text-stone-700">
-                              背景
-                              <Select
-                                value={editingTurnDraft.background}
-                                onValueChange={(value) =>
-                                  setEditingTurnDraft((current) =>
-                                    current && (value === "auto" || value === "transparent" || value === "opaque")
-                                      ? { ...current, background: value }
-                                      : current,
-                                  )
-                                }
-                              >
-                                <SelectTrigger>
-                                  <SelectValue />
-                                </SelectTrigger>
-                                <SelectContent>
-                                  <SelectGroup>
-                                    <SelectItem value="auto">Auto</SelectItem>
-                                    <SelectItem value="transparent">透明</SelectItem>
-                                    <SelectItem value="opaque">不透明</SelectItem>
-                                  </SelectGroup>
-                                </SelectContent>
-                              </Select>
-                            </label>
-                            <label className="flex flex-col gap-2 text-sm font-medium text-stone-700">
-                              格式
-                              <Select
-                                value={editingTurnDraft.outputFormat}
-                                onValueChange={(value) =>
-                                  setEditingTurnDraft((current) =>
-                                    current && isImageOutputFormat(value)
-                                      ? {
-                                          ...current,
-                                          outputFormat: value,
-                                          outputCompression: supportsImageOutputCompression(value) ? current.outputCompression : "",
-                                        }
-                                      : current,
-                                  )
-                                }
-                              >
-                                <SelectTrigger>
-                                  <SelectValue />
-                                </SelectTrigger>
-                                <SelectContent>
-                                  <SelectGroup>
-                                    {IMAGE_OUTPUT_FORMAT_OPTIONS.map((option) => (
-                                      <SelectItem key={option.value} value={option.value}>
-                                        {option.label}
-                                      </SelectItem>
-                                    ))}
-                                  </SelectGroup>
-                                </SelectContent>
-                              </Select>
-                            </label>
-                            <label className="flex flex-col gap-2 text-sm font-medium text-stone-700">
-                              压缩率
-                              <Input
-                                type="number"
-                                inputMode="numeric"
-                                min="0"
-                                max="100"
-                                step="1"
-                                value={editingTurnDraft.outputCompression}
-                                disabled={!supportsImageOutputCompression(editingTurnDraft.outputFormat)}
-                                onChange={(event) =>
-                                  setEditingTurnDraft((current) =>
-                                    current ? { ...current, outputCompression: event.target.value } : current,
-                                  )
-                                }
-                                placeholder={supportsImageOutputCompression(editingTurnDraft.outputFormat) ? "0-100" : "仅 JPEG"}
-                              />
-                            </label>
-                          </>
+                          <ImageOutputControls
+                            outputFormat={editingTurnDraft.outputFormat}
+                            outputCompression={editingTurnDraft.outputCompression}
+                            onOutputFormatChange={(outputFormat) =>
+                              setEditingTurnDraft((current) =>
+                                current ? { ...current, outputFormat } : current,
+                              )
+                            }
+                            onOutputCompressionChange={(outputCompression) =>
+                              setEditingTurnDraft((current) =>
+                                current ? { ...current, outputCompression } : current,
+                              )
+                            }
+                            fieldClassName="flex flex-col gap-2 text-sm font-medium text-stone-700"
+                            selectTriggerClassName=""
+                            inputClassName=""
+                            compressionPlaceholderDisabled="仅 JPEG"
+                          />
                         ) : null}
                         {editingDraftEffectiveSizeSelection.mode !== "auto" ? (
                           <>
@@ -4238,8 +4100,6 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                 imageCustomRatio={imageCustomRatio}
                 imageCustomWidth={imageCustomWidth}
                 imageCustomHeight={imageCustomHeight}
-                imageQuality={imageQuality}
-                imageBackground={imageBackground}
                 imageOutputFormat={imageOutputFormat}
                 imageOutputCompression={imageOutputCompression}
                 highResolutionHint={highResolutionHint}
@@ -4258,8 +4118,6 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                 onImageCustomRatioChange={setImageCustomRatio}
                 onImageCustomWidthChange={setImageCustomWidth}
                 onImageCustomHeightChange={setImageCustomHeight}
-                onImageQualityChange={setImageQuality}
-                onImageBackgroundChange={setImageBackground}
                 onImageOutputFormatChange={setImageOutputFormat}
                 onImageOutputCompressionChange={setImageOutputCompression}
                 onOpenPromptMarket={() => setIsPromptMarketOpen(true)}

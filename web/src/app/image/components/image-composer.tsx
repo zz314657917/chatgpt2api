@@ -35,7 +35,6 @@ import { hasImageResultDragPayload, parseImageResultDragPayload } from "@/app/im
 import { hasManagedImageDragPayload, parseManagedImageDragPayload } from "@/components/managed-image-drag";
 import {
   CUSTOM_IMAGE_ASPECT_RATIO,
-  IMAGE_QUALITY_OPTIONS,
   IMAGE_ASPECT_RATIO_OPTIONS,
   PIXEL_ICON_SIZE_OPTIONS,
   IMAGE_RESOLUTION_OPTIONS,
@@ -48,7 +47,6 @@ import {
   isPixelIconSize,
   parseImageRatio,
   type ImageOutputFormat,
-  type ImageQuality,
   type ImageAspectRatio,
   type ImageResolution,
   type ImageSizeMode,
@@ -75,8 +73,6 @@ type ImageComposerProps = {
   imageCustomRatio: string;
   imageCustomWidth: string;
   imageCustomHeight: string;
-  imageQuality: "auto" | ImageQuality;
-  imageBackground: string;
   imageOutputFormat: ImageOutputFormat;
   imageOutputCompression: string;
   highResolutionHint?: ReactNode;
@@ -95,8 +91,6 @@ type ImageComposerProps = {
   onImageCustomRatioChange: (value: string) => void;
   onImageCustomWidthChange: (value: string) => void;
   onImageCustomHeightChange: (value: string) => void;
-  onImageQualityChange: (value: "auto" | ImageQuality) => void;
-  onImageBackgroundChange: (value: string) => void;
   onImageOutputFormatChange: (value: ImageOutputFormat) => void;
   onImageOutputCompressionChange: (value: string) => void;
   onOpenPromptMarket: () => void;
@@ -167,17 +161,6 @@ type ImageSettingsMenuOption<Value extends string> = {
   description?: string;
   section?: string;
 };
-
-const IMAGE_QUALITY_SETTINGS_OPTIONS = [
-  { value: "auto", label: "自动", description: "不指定质量，由上游选择默认质量。" },
-  ...IMAGE_QUALITY_OPTIONS,
-] as const satisfies ReadonlyArray<ImageSettingsMenuOption<"auto" | ImageQuality>>;
-
-const IMAGE_BACKGROUND_OPTIONS = [
-  { value: "auto", label: "Auto", description: "不指定背景参数。" },
-  { value: "transparent", label: "透明", description: "请求透明背景，具体效果以上游能力为准。" },
-  { value: "opaque", label: "不透明", description: "请求不透明背景。" },
-] as const satisfies ReadonlyArray<ImageSettingsMenuOption<string>>;
 
 const IMAGE_ASPECT_RATIO_SETTINGS_OPTIONS = [
   ...IMAGE_ASPECT_RATIO_OPTIONS.filter((option) => option.value !== CUSTOM_IMAGE_ASPECT_RATIO).map((option) => ({
@@ -338,8 +321,6 @@ export function ImageComposer({
   imageCustomRatio,
   imageCustomWidth,
   imageCustomHeight,
-  imageQuality,
-  imageBackground,
   imageOutputFormat,
   imageOutputCompression,
   highResolutionHint,
@@ -358,8 +339,6 @@ export function ImageComposer({
   onImageCustomRatioChange,
   onImageCustomWidthChange,
   onImageCustomHeightChange,
-  onImageQualityChange,
-  onImageBackgroundChange,
   onImageOutputFormatChange,
   onImageOutputCompressionChange,
   onOpenPromptMarket,
@@ -374,8 +353,6 @@ export function ImageComposer({
   const [isModelMenuOpen, setIsModelMenuOpen] = useState(false);
   const [isAspectRatioMenuOpen, setIsAspectRatioMenuOpen] = useState(false);
   const [isResolutionMenuOpen, setIsResolutionMenuOpen] = useState(false);
-  const [isQualityMenuOpen, setIsQualityMenuOpen] = useState(false);
-  const [isBackgroundMenuOpen, setIsBackgroundMenuOpen] = useState(false);
   const [isImageSettingsOpen, setIsImageSettingsOpen] = useState(false);
   const [promptAreaHeight, setPromptAreaHeight] = useState(PROMPT_AREA_DEFAULT_HEIGHT);
   const [isPromptAreaResizing, setIsPromptAreaResizing] = useState(false);
@@ -397,8 +374,6 @@ export function ImageComposer({
       : IMAGE_ASPECT_RATIO_SETTINGS_OPTIONS.find((option) => option.value === imageAspectRatio)?.label || "Auto";
   const imageResolutionLabel =
     IMAGE_RESOLUTION_OPTIONS.find((option) => option.value === imageResolution)?.label || "Auto";
-  const imageQualityLabel = IMAGE_QUALITY_SETTINGS_OPTIONS.find((option) => option.value === imageQuality)?.label || "自动";
-  const imageBackgroundLabel = IMAGE_BACKGROUND_OPTIONS.find((option) => option.value === imageBackground)?.label || "Auto";
   const structuredImageParameters = supportsStructuredImageParameters(imageModel);
   const resolutionPresetsSupported = supportsImageResolutionPresets(imageModel);
   const outputControlsSupported = supportsImageOutputControls(imageModel);
@@ -1037,8 +1012,6 @@ export function ImageComposer({
                                   setIsModelMenuOpen(false);
                                   if (open) {
                                     setIsResolutionMenuOpen(false);
-                                    setIsQualityMenuOpen(false);
-                                    setIsBackgroundMenuOpen(false);
                                   }
                                 }}
                                 onValueChange={(value) => {
@@ -1063,8 +1036,6 @@ export function ImageComposer({
                                     setIsModelMenuOpen(false);
                                     if (open) {
                                       setIsAspectRatioMenuOpen(false);
-                                      setIsQualityMenuOpen(false);
-                                      setIsBackgroundMenuOpen(false);
                                     }
                                   }}
                                   onValueChange={onImageResolutionChange}
@@ -1128,47 +1099,6 @@ export function ImageComposer({
                                 : "当前图片线路只会把比例作为构图偏好，实际像素以上游返回为准；格式由后端保存结果时处理。"}
                           </p>
                         ) : null}
-                        <div className={imageSettingsFieldClass}>
-                          <span className="shrink-0 font-medium text-[#45515e] dark:text-muted-foreground">质量</span>
-                          <ImageSettingsPopoverMenu
-                            label="质量"
-                            value={imageQuality}
-                            valueLabel={imageQualityLabel}
-                            options={IMAGE_QUALITY_SETTINGS_OPTIONS}
-                            open={isQualityMenuOpen}
-                            onOpenChange={(open) => {
-                              setIsQualityMenuOpen(open);
-                              setIsModelMenuOpen(false);
-                              if (open) {
-                                setIsAspectRatioMenuOpen(false);
-                                setIsResolutionMenuOpen(false);
-                                setIsBackgroundMenuOpen(false);
-                              }
-                            }}
-                            onValueChange={onImageQualityChange}
-                          />
-                        </div>
-                        <div className={imageSettingsFieldClass}>
-                          <span className="shrink-0 font-medium text-[#45515e] dark:text-muted-foreground">背景</span>
-                          <ImageSettingsPopoverMenu
-                            label="背景"
-                            value={imageBackground}
-                            valueLabel={imageBackgroundLabel}
-                            options={IMAGE_BACKGROUND_OPTIONS}
-                            open={isBackgroundMenuOpen}
-                            onOpenChange={(open) => {
-                              setIsBackgroundMenuOpen(open);
-                              setIsModelMenuOpen(false);
-                              if (open) {
-                                setIsAspectRatioMenuOpen(false);
-                                setIsResolutionMenuOpen(false);
-                                setIsQualityMenuOpen(false);
-                              }
-                            }}
-                            onValueChange={onImageBackgroundChange}
-                            align="start"
-                          />
-                        </div>
                         {outputControlsSupported ? (
                           <ImageOutputControls
                             outputFormat={imageOutputFormat}
