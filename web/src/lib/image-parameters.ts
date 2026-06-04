@@ -15,10 +15,10 @@ export const IMAGE_ASPECT_RATIO_OPTIONS = [
 ] as const;
 
 export const PIXEL_ICON_SIZE_OPTIONS = [
-  { value: "16x64", label: "16x64 (像素图标)" },
-  { value: "32x64", label: "32x64 (像素图标)" },
+  { value: "8x8", label: "8x8 (像素图标)" },
+  { value: "16x16", label: "16x16 (像素图标)" },
+  { value: "32x32", label: "32x32 (像素图标)" },
   { value: "64x64", label: "64x64 (像素图标)" },
-  { value: "128x128", label: "128x128 (像素图标)" },
 ] as const;
 
 export const IMAGE_ASPECT_RATIO_MENU_OPTIONS = [
@@ -202,7 +202,7 @@ export function normalizeImageSize(size: string) {
 }
 
 export function parseImageSizeDimensions(size: string) {
-  const trimmed = size.trim();
+  const trimmed = normalizePixelIconSizeAlias(size);
   const match = (isPixelIconSize(trimmed) ? trimmed : normalizeImageSize(size)).match(SIZE_PATTERN);
   if (!match) {
     return null;
@@ -237,6 +237,21 @@ export function parseImageRatio(ratio: string) {
 
 export function isPixelIconSize(value: unknown): value is PixelIconSize {
   return typeof value === "string" && PIXEL_ICON_SIZE_VALUES.has(value);
+}
+
+function normalizePixelIconSizeAlias(value: string) {
+  switch (value.trim().toLowerCase()) {
+    case "8:8":
+      return "8x8";
+    case "16:16":
+      return "16x16";
+    case "32:32":
+      return "32x32";
+    case "64:64":
+      return "64x64";
+    default:
+      return value.trim();
+  }
 }
 
 export function getActiveImageAspectRatio({
@@ -352,7 +367,7 @@ export function buildImageSize({
 }
 
 export function getImageAspectRatioFromSize(size: string): ImageAspectRatio {
-  const trimmed = size.trim();
+  const trimmed = normalizePixelIconSizeAlias(size);
   if (isPixelIconSize(trimmed)) {
     return trimmed;
   }
@@ -402,7 +417,7 @@ export function getImageResolutionFromSize(size: string): ImageResolution {
 }
 
 export function getImageSizeSelectionFromSize(size: string): ImageSizeSelection {
-  const trimmed = size.trim();
+  const trimmed = normalizePixelIconSizeAlias(size);
   const normalized = isPixelIconSize(trimmed) ? trimmed : normalizeImageSize(size);
   const customSize = parseImageSizeDimensions(normalized);
   const aspectRatio = getImageAspectRatioFromSize(normalized);

@@ -1516,6 +1516,14 @@ func NormalizeImageGenerationSize(size string) string {
 		return "2048x2048"
 	case "4k":
 		return "2880x2880"
+	case "8:8":
+		return "8x8"
+	case "16:16":
+		return "16x16"
+	case "32:32":
+		return "32x32"
+	case "64:64":
+		return "64x64"
 	default:
 		return strings.TrimSpace(size)
 	}

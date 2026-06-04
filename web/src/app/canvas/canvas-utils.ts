@@ -44,7 +44,7 @@ export function normalizeCanvasImageResolution(value?: string) {
 }
 
 export function isPixelIconGeneratorNode(item?: SmartCanvasItem | null) {
-  return item?.type === "image_generation" && /^(16x64|32x64|64x64|128x128) 像素图标$/.test(item.name || "");
+  return item?.type === "image_generation" && /^(8x8|16x16|32x32|64x64) 像素图标$/.test(item.name || "");
 }
 
 export function createItemId(type: SmartCanvasItem["type"]) {
@@ -835,6 +835,22 @@ function normalizeItemData(data?: SmartCanvasItemData): SmartCanvasItemData {
   return sanitizeSmartItemData(data);
 }
 
+function normalizeCanvasImageSize(value?: string) {
+  const size = cleanImageText(value);
+  switch (size.toLowerCase()) {
+    case "8:8":
+      return "8x8";
+    case "16:16":
+      return "16x16";
+    case "32:32":
+      return "32x32";
+    case "64:64":
+      return "64x64";
+    default:
+      return size || "1024x1024";
+  }
+}
+
 function sanitizeSmartItemData(data?: SmartCanvasItemData): SmartCanvasItemData {
   if (!data) {
     return {};
@@ -843,7 +859,7 @@ function sanitizeSmartItemData(data?: SmartCanvasItemData): SmartCanvasItemData 
     ...data,
     prompt: typeof data.prompt === "string" ? data.prompt : "",
     model: typeof data.model === "string" && data.model ? data.model : "auto",
-    size: typeof data.size === "string" && data.size ? data.size : "1024x1024",
+    size: normalizeCanvasImageSize(data.size),
     image_resolution: normalizeCanvasImageResolution(data.image_resolution),
     duration: Number.isFinite(Number(data.duration)) ? Math.max(5, Math.min(15, Number(data.duration))) : undefined,
     aspect_ratio: typeof data.aspect_ratio === "string" && data.aspect_ratio ? data.aspect_ratio : "16:9",

@@ -1166,6 +1166,7 @@ func TestNormalizeImageGenerationSizeTiers(t *testing.T) {
 		{size: " 2K ", want: "2048x2048"},
 		{size: "4k", want: "2880x2880"},
 		{size: "1536x2048", want: "1536x2048"},
+		{size: "64:64", want: "64x64"},
 	}
 
 	for _, tt := range tests {

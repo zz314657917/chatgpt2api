@@ -43,8 +43,8 @@ assert.equal(
   "",
 );
 assert.equal(buildImageSize(ratioSelection({ aspectRatio: "", resolution: "4k" })), "2880x2880");
-assert.equal(buildImageSize(ratioSelection({ aspectRatio: "16x64", resolution: "auto" })), "16x64");
-assert.equal(buildImageSize(ratioSelection({ aspectRatio: "128x128", resolution: "4k" })), "128x128");
+assert.equal(buildImageSize(ratioSelection({ aspectRatio: "8x8", resolution: "auto" })), "8x8");
+assert.equal(buildImageSize(ratioSelection({ aspectRatio: "64x64", resolution: "4k" })), "64x64");
 assert.equal(normalizeImageResolutionPreset("1k"), "1080p");
 assert.equal(normalizeImageResolutionPreset("1080p"), "1080p");
 assert.equal(normalizeImageResolutionPreset("2K"), "2k");
@@ -64,13 +64,21 @@ assert.equal(supportsImageOutputCompression("png"), false);
 assert.equal(supportsImageOutputCompression("webp"), false);
 assert.equal(isHighResolutionImageSize("1088x1088"), false);
 assert.equal(isHighResolutionImageSize("2048x2048"), true);
-assert.equal(isHighResolutionImageSize("16x64"), false);
-assert.deepEqual(getImageSizeSelectionFromSize("16x64"), {
+assert.equal(isHighResolutionImageSize("8x8"), false);
+assert.deepEqual(getImageSizeSelectionFromSize("8x8"), {
   mode: "ratio",
-  aspectRatio: "16x64",
+  aspectRatio: "8x8",
   resolution: "auto",
   customRatio: "16:9",
-  customWidth: "16",
+  customWidth: "8",
+  customHeight: "8",
+});
+assert.deepEqual(getImageSizeSelectionFromSize("64:64"), {
+  mode: "ratio",
+  aspectRatio: "64x64",
+  resolution: "auto",
+  customRatio: "16:9",
+  customWidth: "64",
   customHeight: "64",
 });
 assert.deepEqual(getImageSizeSelectionFromSize("2.39:1"), {
