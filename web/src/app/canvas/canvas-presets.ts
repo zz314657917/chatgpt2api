@@ -188,10 +188,10 @@ function createPresetLayout(presetId: SmartCanvasPresetId): Pick<SmartCanvasDocu
       name: "可选 AI 提词",
     };
     const sizes = [
-      { value: "16x64", x: 930, y: 80 },
-      { value: "32x64", x: 1880, y: 80 },
-      { value: "64x64", x: 930, y: 560 },
-      { value: "128x128", x: 1880, y: 560 },
+      { value: "8x8", x: 930, y: 80 },
+      { value: "16x16", x: 1880, y: 80 },
+      { value: "32x32", x: 930, y: 560 },
+      { value: "64x64", x: 1880, y: 560 },
     ];
     const nodes: SmartCanvasDocument["nodes"] = [prompt, llm];
     const edges: SmartCanvasDocument["edges"] = [createSmartEdge(prompt.id, llm.id)];
