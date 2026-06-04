@@ -41,6 +41,7 @@ import {
 } from "lucide-react";
 
 import { AuthenticatedImage } from "@/components/authenticated-image";
+import { ImageOutputControls } from "@/components/image-output-controls";
 import { ManagedImageAssetSidebar, type ManagedImageAssetSidebarProps } from "@/components/managed-image-asset-sidebar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -52,14 +53,11 @@ import { Textarea } from "@/components/ui/textarea";
 import type { CanvasImageRef, CanvasModelOption, CanvasVideoRef, CreationTask, ImageVisibility } from "@/lib/api";
 import {
   IMAGE_ASPECT_RATIO_OPTIONS,
-  IMAGE_OUTPUT_FORMAT_OPTIONS,
   IMAGE_RESOLUTION_OPTIONS,
   PIXEL_ICON_SIZE_OPTIONS,
   isPixelIconSize,
   normalizeImageOutputFormat,
-  supportsImageOutputCompression,
   type ImageAspectRatio,
-  type ImageOutputFormat,
   type ImageResolution,
 } from "@/lib/image-parameters";
 import { cn } from "@/lib/utils";
@@ -3151,7 +3149,6 @@ function GeneratorNodeBody({
     : canvasImageResolutionOptions;
   const outputFormat = normalizeImageOutputFormat(item.data?.output_format);
   const outputCompression = typeof item.data?.output_compression === "number" ? item.data.output_compression : undefined;
-  const compressionDisabled = !supportsImageOutputCompression(outputFormat);
   const setImageCount = (next: number) => onUpdateData({ n: Math.max(1, Math.min(10, Math.round(next) || 1)) });
   const setOutputCompression = (value: string) => {
     if (!value.trim()) {
@@ -3284,25 +3281,17 @@ function GeneratorNodeBody({
             ))}
           </SelectContent>
         </Select>
-        <Select
-          value={outputFormat}
-          onValueChange={(value) => {
-            const nextFormat = value as ImageOutputFormat;
-            onUpdateData({
-              output_format: nextFormat,
-              ...(!supportsImageOutputCompression(nextFormat) ? { output_compression: undefined } : {}),
-            });
-          }}
-        >
-          <SelectTrigger className={canvasSelectClass} aria-label="图片输出格式">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {IMAGE_OUTPUT_FORMAT_OPTIONS.map((option) => (
-              <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <ImageOutputControls
+          outputFormat={outputFormat}
+          outputCompression={outputCompression}
+          onOutputFormatChange={(output_format) => onUpdateData({ output_format })}
+          onOutputCompressionChange={setOutputCompression}
+          fieldClassName={cn("flex h-9 min-w-0 items-center justify-between gap-2 rounded-xl border px-3 text-xs", canvasFieldClass)}
+          labelClassName={cn("text-[11px] font-bold", canvasSubtleTextClass)}
+          selectTriggerClassName="h-8 min-w-0 flex-1 justify-end gap-1 border-0 bg-transparent px-0 py-0 text-right text-xs font-bold shadow-none focus-visible:ring-0 [&_svg]:size-4 [&_svg]:opacity-60 [&>span]:flex-none"
+          inputClassName="h-8 min-w-0 border-0 bg-transparent px-0 text-right text-xs font-bold shadow-none focus-visible:ring-0 disabled:cursor-not-allowed"
+          compressionLabel="压缩"
+        />
         <div className={cn("grid h-9 grid-cols-[28px_1fr_28px] overflow-hidden rounded-xl border", canvasFieldClass)}>
           <button
             type="button"
@@ -3335,28 +3324,6 @@ function GeneratorNodeBody({
             <ChevronRight className="size-3.5" />
           </button>
         </div>
-        <label
-          className={cn(
-            "flex h-9 min-w-0 items-center justify-between gap-2 rounded-xl border px-3 text-xs",
-            canvasFieldClass,
-            compressionDisabled && "opacity-55",
-          )}
-          title={compressionDisabled ? "只有 JPEG 支持压缩率参数" : "JPEG 压缩率，0-100"}
-        >
-          <span className={cn("shrink-0 text-[11px] font-bold", canvasSubtleTextClass)}>压缩</span>
-          <Input
-            type="number"
-            inputMode="numeric"
-            min="0"
-            max="100"
-            step="1"
-            value={outputCompression ?? ""}
-            onChange={(event) => setOutputCompression(event.target.value)}
-            disabled={compressionDisabled}
-            placeholder={compressionDisabled ? "N/A" : "0-100"}
-            className="h-8 min-w-0 border-0 bg-transparent px-0 text-right text-xs font-bold shadow-none focus-visible:ring-0 disabled:cursor-not-allowed"
-          />
-        </label>
       </div>
       {outputImages.length > 0 ? <CanvasImageStrip images={outputImages} limit={3} onOpen={onOpenImage} className="grid-cols-3" lightweight={lightweightMedia} /> : null}
       {item.data?.error ? <div className="rounded-lg bg-rose-500/10 px-2 py-1.5 text-xs text-rose-600 dark:text-rose-200">{item.data.error}</div> : null}
