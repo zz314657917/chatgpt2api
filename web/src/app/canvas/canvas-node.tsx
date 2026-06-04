@@ -49,11 +49,10 @@ import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import type { CanvasImageRef, CanvasModelOption, CanvasVideoRef, CreationTask, ImageQuality, ImageVisibility } from "@/lib/api";
+import type { CanvasImageRef, CanvasModelOption, CanvasVideoRef, CreationTask, ImageVisibility } from "@/lib/api";
 import {
   IMAGE_ASPECT_RATIO_OPTIONS,
   IMAGE_OUTPUT_FORMAT_OPTIONS,
-  IMAGE_QUALITY_OPTIONS,
   IMAGE_RESOLUTION_OPTIONS,
   PIXEL_ICON_SIZE_OPTIONS,
   isPixelIconSize,
@@ -158,15 +157,7 @@ const canvasImageRatioOptions = [
   ...IMAGE_ASPECT_RATIO_OPTIONS.filter((option) => option.value !== "" && option.value !== "custom").map((option) => ({ value: option.value, label: option.value })),
   ...PIXEL_ICON_SIZE_OPTIONS.map((option) => ({ value: option.value, label: option.value })),
 ] as const satisfies ReadonlyArray<{ value: Exclude<ImageAspectRatio, "" | "custom">; label: string }>;
-const canvasImageQualityOptions = [
-  { value: "auto", label: "自动" },
-  ...IMAGE_QUALITY_OPTIONS.map((option) => ({ value: option.value, label: option.label })),
-] as const satisfies ReadonlyArray<{ value: "auto" | ImageQuality; label: string }>;
-const canvasImageBackgroundOptions = [
-  { value: "auto", label: "Auto" },
-  { value: "transparent", label: "透明" },
-  { value: "opaque", label: "不透明" },
-] as const;
+type CanvasImageRatioValue = "auto" | Exclude<ImageAspectRatio, "" | "custom">;
 const canvasVideoRatioOptions = [
   { value: "16:9", label: "16:9" },
   { value: "9:16", label: "9:16" },
@@ -269,7 +260,7 @@ function connectableNodeMenuItems(node?: SmartCanvasItem | null, direction: "ups
     : canConnectSmartCanvasNodes(node, { type: item.type }));
 }
 
-function canvasImageRatioValue(value?: string) {
+function canvasImageRatioValue(value?: string): Exclude<ImageAspectRatio, "" | "custom"> {
   const normalized = String(value || "").trim();
   switch (normalized) {
     case "1024x1024":
@@ -289,8 +280,12 @@ function canvasImageRatioValue(value?: string) {
     case "1536x864":
       return "16:9";
     default:
-      return canvasImageRatioOptions.some((option) => option.value === normalized) ? normalized : "1:1";
+      return isCanvasImageRatioValue(normalized) ? normalized : "1:1";
   }
+}
+
+function isCanvasImageRatioValue(value: string): value is Exclude<ImageAspectRatio, "" | "custom"> {
+  return canvasImageRatioOptions.some((option) => option.value === value);
 }
 
 function imageNodeGridLayout(width: number, height: number, imageCount: number): { limit: number; style: CSSProperties } {
@@ -2596,6 +2591,10 @@ function ImageNodeBody({
   const images = item.data?.images || [];
   const [showAllImages, setShowAllImages] = useState(false);
   const imageGrid = imageNodeGridLayout(width, height, images.length);
+  const uploadStatus = item.data?.upload_status;
+  const uploadProgress = Math.max(0, Math.min(100, Number(item.data?.upload_progress || 0)));
+  const uploading = uploadStatus === "uploading";
+  const uploadError = uploadStatus === "error" || item.data?.status === "error";
   return (
     <div className="space-y-3 p-3 pb-4">
       {images.length > 0 ? (
@@ -2612,6 +2611,32 @@ function ImageNodeBody({
             style={imageGrid.style}
           />
         </div>
+      ) : uploading ? (
+        <div className="flex flex-col justify-center rounded-xl border border-sky-400/35 bg-sky-500/8 p-4 dark:border-sky-400/25 dark:bg-sky-400/10" style={{ height }}>
+          <div className="flex items-center gap-3">
+            <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-sky-500/12 text-sky-700 dark:bg-sky-400/12 dark:text-sky-200">
+              <LoaderCircle className="size-4 animate-spin" />
+            </span>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center justify-between gap-2 text-[11px]">
+                <span className="truncate font-bold text-foreground dark:text-slate-100">正在上传图片</span>
+                <span className="shrink-0 font-mono font-bold tabular-nums text-sky-700 dark:text-sky-200">{uploadProgress}%</span>
+              </div>
+              <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-sky-950/10 dark:bg-slate-950/60">
+                <div className="h-full rounded-full bg-sky-500 transition-[width] duration-200" style={{ width: `${uploadProgress}%` }} />
+              </div>
+            </div>
+          </div>
+          <div className={cn("mt-3 truncate pl-12 text-[11px] font-semibold", canvasSubtleTextClass)}>
+            {item.name || "图片上传中"}
+          </div>
+        </div>
+      ) : uploadError ? (
+        <div className="flex flex-col items-center justify-center rounded-xl border border-rose-300/60 bg-rose-50/70 px-4 text-center text-rose-700 dark:border-rose-400/25 dark:bg-rose-950/20 dark:text-rose-200" style={{ height }}>
+          <CircleAlert className="mb-2 size-7" />
+          <span className="text-xs font-bold">上传失败</span>
+          <span className="mt-1 line-clamp-2 text-[11px]">{item.data?.error || "请重新拖入图片"}</span>
+        </div>
       ) : (
         <div className={cn("flex flex-col items-center justify-center rounded-xl border", canvasDashedClass)} style={{ height }}>
           <ImagePlus className="mb-2 size-7" />
@@ -2619,7 +2644,7 @@ function ImageNodeBody({
         </div>
       )}
       <div className={cn("min-w-0 truncate pr-8 text-xs", canvasLabelClass)} title={images[0]?.name || item.name || `${images.length} 张图片`}>
-        {images[0]?.name || item.name || `${images.length} 张图片`}
+        {uploading ? `上传中 ${uploadProgress}%` : images[0]?.name || item.name || `${images.length} 张图片`}
       </div>
       <Dialog open={showAllImages} onOpenChange={setShowAllImages}>
         <DialogContent className={cn("w-[min(92vw,780px)] max-w-none rounded-2xl p-0", canvasPanelClass)}>
@@ -3115,12 +3140,18 @@ function GeneratorNodeBody({
   const outputImages = item.data?.output?.images || [];
   const nodeRunning = isActiveTask(item.data?.status);
   const imageCount = Math.max(1, Math.min(10, Number(item.data?.n || 1)));
-  const ratioValue = canvasImageRatioValue(item.data?.size);
-  const imageResolutionValue = normalizeCanvasImageResolution(item.data?.image_resolution) || "unspecified";
+  const hasInputImages = images.length > 0;
+  const ratioValue: CanvasImageRatioValue = hasInputImages && (!item.data?.size_user_modified || !String(item.data?.size || "").trim())
+    ? "auto"
+    : canvasImageRatioValue(item.data?.size);
+  const pixelIconSizeSelected = isPixelIconSize(ratioValue);
+  const imageResolutionValue = pixelIconSizeSelected ? "pixel" : normalizeCanvasImageResolution(item.data?.image_resolution) || "unspecified";
+  const imageResolutionOptions = hasInputImages && item.data?.image_resolution_user_modified !== true
+    ? canvasImageResolutionOptions.map((option) => option.value === "unspecified" ? { ...option, label: "保持原图清晰度" } : option)
+    : canvasImageResolutionOptions;
   const outputFormat = normalizeImageOutputFormat(item.data?.output_format);
   const outputCompression = typeof item.data?.output_compression === "number" ? item.data.output_compression : undefined;
   const compressionDisabled = !supportsImageOutputCompression(outputFormat);
-  const backgroundValue = canvasImageBackgroundOptions.some((option) => option.value === item.data?.background) ? String(item.data?.background) : "auto";
   const setImageCount = (next: number) => onUpdateData({ n: Math.max(1, Math.min(10, Math.round(next) || 1)) });
   const setOutputCompression = (value: string) => {
     if (!value.trim()) {
@@ -3217,32 +3248,38 @@ function GeneratorNodeBody({
         </Select>
       </div>
       <div className="grid grid-cols-2 gap-2">
-        <Select value={imageResolutionValue} onValueChange={(imageResolution) => onUpdateData({ image_resolution: imageResolution === "unspecified" ? "" : imageResolution })}>
-          <SelectTrigger className={canvasSelectClass}>
+        <Select
+          value={imageResolutionValue}
+          onValueChange={(imageResolution) => onUpdateData({
+            image_resolution: imageResolution === "unspecified" ? "" : imageResolution,
+            image_resolution_user_modified: true,
+          })}
+          disabled={pixelIconSizeSelected}
+        >
+          <SelectTrigger className={canvasSelectClass} title={pixelIconSizeSelected ? "像素图标尺寸已固定宽高，不再叠加分辨率" : undefined}>
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            {canvasImageResolutionOptions.map((option) => (
+            {pixelIconSizeSelected ? <SelectItem value="pixel">固定像素</SelectItem> : null}
+            {imageResolutionOptions.map((option) => (
               <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
             ))}
           </SelectContent>
         </Select>
-        <Select value={ratioValue} onValueChange={(size) => onUpdateData({ size, ...(isPixelIconSize(size) ? { image_resolution: "" } : {}) })}>
+        <Select
+          value={ratioValue}
+          onValueChange={(size) => onUpdateData({
+            size: size === "auto" ? "" : size,
+            size_user_modified: true,
+            ...(isPixelIconSize(size) ? { image_resolution: "", image_resolution_user_modified: true } : {}),
+          })}
+        >
           <SelectTrigger className={canvasSelectClass}>
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
+            {hasInputImages ? <SelectItem value="auto">保持原图比例</SelectItem> : null}
             {canvasImageRatioOptions.map((option) => (
-              <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <Select value={String(item.data?.quality || "auto")} onValueChange={(quality) => onUpdateData({ quality })}>
-          <SelectTrigger className={canvasSelectClass}>
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {canvasImageQualityOptions.map((option) => (
               <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
             ))}
           </SelectContent>
@@ -3298,16 +3335,6 @@ function GeneratorNodeBody({
             <ChevronRight className="size-3.5" />
           </button>
         </div>
-        <Select value={backgroundValue} onValueChange={(background) => onUpdateData({ background: background === "auto" ? "" : background })}>
-          <SelectTrigger className={canvasSelectClass} aria-label="图片背景">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {canvasImageBackgroundOptions.map((option) => (
-              <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
         <label
           className={cn(
             "flex h-9 min-w-0 items-center justify-between gap-2 rounded-xl border px-3 text-xs",

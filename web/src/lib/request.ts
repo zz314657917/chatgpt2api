@@ -157,10 +157,11 @@ type RequestOptions = {
     redirectOnUnauthorized?: boolean;
     skipStoredAuthorization?: boolean;
     signal?: AbortSignal;
+    onUploadProgress?: AxiosRequestConfig["onUploadProgress"];
 };
 
 export async function httpRequest<T>(path: string, options: RequestOptions = {}) {
-    const {method = "GET", body, headers, redirectOnUnauthorized = true, skipStoredAuthorization = false, signal} = options;
+    const {method = "GET", body, headers, redirectOnUnauthorized = true, skipStoredAuthorization = false, signal, onUploadProgress} = options;
     const config: RequestConfig = {
         url: path,
         method,
@@ -169,6 +170,7 @@ export async function httpRequest<T>(path: string, options: RequestOptions = {})
         redirectOnUnauthorized,
         skipStoredAuthorization,
         signal,
+        onUploadProgress,
     };
     const response = await request.request<T>(config);
     return response.data;

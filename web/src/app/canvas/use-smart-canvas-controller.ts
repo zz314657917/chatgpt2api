@@ -30,7 +30,6 @@ import {
   type CanvasDocument,
   type CanvasImageRef,
   type CreationTask,
-  type ImageQuality,
   type ImageVisibility,
   type ManagedImageSummary,
 } from "@/lib/api";
@@ -137,6 +136,9 @@ type SmartCanvasNodeClipboard = {
 };
 
 type SmartCanvasGenerationNode = SmartCanvasItem & { type: "image_generation" | "video_generation" };
+type PendingImageUploadNode = {
+  nodeId: string;
+};
 
 function userPresetScope() {
   const session = getCachedAuthSession();
@@ -375,20 +377,26 @@ function mergeLoopSlotStatuses(
   return next;
 }
 
-function generatorImageResolution(generator: SmartCanvasItem) {
+function generatorImageResolution(generator: SmartCanvasItem, hasInputImages = false) {
   if (isPixelIconSize(normalizeCanvasImageSize(generator.data?.size))) {
+    return undefined;
+  }
+  if (hasInputImages && generator.data?.image_resolution_user_modified !== true) {
     return undefined;
   }
   return normalizeCanvasImageResolution(generator.data?.image_resolution) || undefined;
 }
 
-function generatorImageSize(generator: SmartCanvasItem) {
+function generatorImageSize(generator: SmartCanvasItem, hasInputImages = false) {
+  if (hasInputImages) {
+    if (generator.data?.size_user_modified !== true) {
+      return undefined;
+    }
+    if (!String(generator.data?.size || "").trim()) {
+      return undefined;
+    }
+  }
   return normalizeCanvasImageSize(generator.data?.size);
-}
-
-function generatorImageQuality(generator: SmartCanvasItem): ImageQuality | undefined {
-  const value = String(generator.data?.quality || "").trim().toLowerCase();
-  return value === "low" || value === "medium" || value === "high" ? value : undefined;
 }
 
 function generatorOutputFormat(generator: SmartCanvasItem) {
@@ -398,11 +406,6 @@ function generatorOutputFormat(generator: SmartCanvasItem) {
 function generatorOutputCompression(generator: SmartCanvasItem) {
   const format = generatorOutputFormat(generator);
   return supportsImageOutputCompression(format) ? normalizeImageOutputCompression(generator.data?.output_compression) : undefined;
-}
-
-function generatorToolOptions(generator: SmartCanvasItem) {
-  const background = String(generator.data?.background || "").trim();
-  return background ? { background } : {};
 }
 
 function generatorImageCount(generator: SmartCanvasItem) {
@@ -514,6 +517,15 @@ function uniqueTaskId(prefix: string) {
     return `${prefix}-${crypto.randomUUID()}`;
   }
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function uploadProgressPercent(progress: { loaded: number; total?: number; progress?: number }) {
+  const ratio = typeof progress.progress === "number"
+    ? progress.progress
+    : progress.total
+      ? progress.loaded / Math.max(1, progress.total)
+      : 0;
+  return Math.max(1, Math.min(99, Math.round(ratio * 100)));
 }
 
 function canvasItemCenterOffset(type: SmartCanvasItem["type"]) {
@@ -1782,7 +1794,10 @@ export function useSmartCanvasController() {
     createImageNodeLinkedToGenerator(images, generator);
   }, [createImageNodeLinkedToGenerator]);
 
-  const uploadFilesToRefs = useCallback(async (files: File[]) => {
+  const uploadFilesToRefs = useCallback(async (
+    files: File[],
+    options: { onProgress?: (progress: number) => void } = {},
+  ) => {
     const imageFiles = imageFilesFromList(files);
     if (imageFiles.length === 0) {
       toast.error("仅支持图片文件");
@@ -1790,7 +1805,11 @@ export function useSmartCanvasController() {
     }
     setUploading(true);
     try {
-      const items = await uploadManagedImages(imageFiles, "private");
+      const items = await uploadManagedImages(imageFiles, "private", {
+        onUploadProgress: (progress) => {
+          options.onProgress?.(uploadProgressPercent(progress));
+        },
+      });
       await loadAssets();
       return managedImagesToRefs(items);
     } catch (error) {
@@ -1800,6 +1819,65 @@ export function useSmartCanvasController() {
       setUploading(false);
     }
   }, [loadAssets]);
+
+  const updatePendingImageUploadNode = useCallback((nodeId: string, patch: Partial<SmartCanvasItem["data"]>, dirty = false, historyLabel?: string) => {
+    updateCanvas((current) => ({
+      ...current,
+      nodes: current.nodes.map((item) => item.id === nodeId
+        ? {
+            ...item,
+            data: {
+              ...item.data,
+              ...patch,
+              updated_at: new Date().toISOString(),
+            },
+          }
+        : item),
+    }), dirty, historyLabel);
+  }, [updateCanvas]);
+
+  const createPendingImageUploadNode = useCallback((files: File[], point: { x: number; y: number }, targetNodeId?: string): PendingImageUploadNode => {
+    const rect = boardRef.current?.getBoundingClientRect();
+    const world = rect
+      ? screenToWorld(point, rect, viewportRef.current)
+      : { x: 120, y: 120 };
+    const current = canvasRef.current;
+    const targetNode = targetNodeId ? current?.nodes.find((node) => node.id === targetNodeId) : null;
+    const selectedNode = selectedItemId ? current?.nodes.find((node) => node.id === selectedItemId) : null;
+    const targetGenerator = isGenerationNode(targetNode)
+      ? targetNode
+      : isGenerationNode(selectedNode)
+        ? selectedNode
+        : null;
+    const offset = canvasItemCenterOffset("image");
+    const item = createImageItem([], targetGenerator
+      ? {
+          x: Number(targetGenerator.position?.x || world.x) - 330,
+          y: world.y - 120,
+        }
+      : {
+          x: world.x + offset.x,
+          y: world.y + offset.y,
+        });
+    const now = new Date().toISOString();
+    item.name = files.length > 1 ? `${files.length} 张图片上传中` : "图片上传中";
+    item.data = {
+      ...item.data,
+      upload_status: "uploading",
+      upload_progress: 1,
+      created_at: now,
+      updated_at: now,
+    };
+    updateCanvas((current) => ({
+      ...current,
+      nodes: [...current.nodes, item],
+      edges: targetGenerator
+        ? [...current.edges, createSmartEdge(item.id, targetGenerator.id)]
+        : current.edges,
+    }), true, files.length > 1 ? `上传 ${files.length} 张图片` : "上传图片");
+    selectSingleItem(item.id);
+    return { nodeId: item.id };
+  }, [selectSingleItem, selectedItemId, updateCanvas]);
 
   const addImagesNearGenerator = useCallback((refs: CanvasImageRef[], target: SmartCanvasItem, point?: { x: number; y: number }) => {
     const normalizedRefs = dedupeCanvasImageRefs(refs);
@@ -1847,15 +1925,31 @@ export function useSmartCanvasController() {
       toast.error("仅支持图片文件");
       return;
     }
-    const refs = await uploadFilesToRefs(files);
-    if (targetGeneratorId) {
-      const target = canvasRef.current?.nodes.find((node) => node.id === targetGeneratorId);
-      if (isGenerationNode(target) && addImagesNearGenerator(refs, target, { x: event.clientX, y: event.clientY })) {
-        return;
-      }
+    const pending = createPendingImageUploadNode(files, { x: event.clientX, y: event.clientY }, targetGeneratorId);
+    const refs = await uploadFilesToRefs(files, {
+      onProgress: (progress) => updatePendingImageUploadNode(pending.nodeId, {
+        upload_progress: progress,
+        upload_status: "uploading",
+      }),
+    });
+    if (refs.length === 0) {
+      updatePendingImageUploadNode(pending.nodeId, {
+        upload_progress: 0,
+        upload_status: "error",
+        status: "error",
+        error: "上传图片失败",
+      }, true);
+      return;
     }
-    addImagesToCanvas(refs, { x: event.clientX, y: event.clientY });
-  }, [addImagesNearGenerator, addImagesToCanvas, addManagedImagePayload, uploadFilesToRefs]);
+    updatePendingImageUploadNode(pending.nodeId, {
+      images: refs,
+      visibility: refs.some((ref) => ref.visibility === "public") ? "public" : "private",
+      upload_progress: 100,
+      upload_status: undefined,
+      status: undefined,
+      error: "",
+    }, true);
+  }, [addManagedImagePayload, createPendingImageUploadNode, updatePendingImageUploadNode, uploadFilesToRefs]);
 
   const handleBoardDragOver = useCallback((event: ReactDragEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -2894,15 +2988,15 @@ export function useSmartCanvasController() {
               files,
               submittedPrompt,
               generator.data?.model || "auto",
-              generatorImageSize(generator),
-              generatorImageQuality(generator),
+              generatorImageSize(generator, true),
+              undefined,
               taskCount,
               undefined,
               generatorImageVisibility(generator),
-              generatorImageResolution(generator),
+              generatorImageResolution(generator, true),
               generatorOutputFormat(generator),
               generatorOutputCompression(generator),
-              generatorToolOptions(generator),
+              undefined,
             );
           } else {
             task = await createImageGenerationTask(
@@ -2910,14 +3004,14 @@ export function useSmartCanvasController() {
               submittedPrompt,
               generator.data?.model || "auto",
               generatorImageSize(generator),
-              generatorImageQuality(generator),
+              undefined,
               taskCount,
               undefined,
               generatorImageVisibility(generator),
               generatorImageResolution(generator),
               generatorOutputFormat(generator),
               generatorOutputCompression(generator),
-              generatorToolOptions(generator),
+              undefined,
             );
           }
           taskIds.push(task.id);
@@ -3064,15 +3158,15 @@ export function useSmartCanvasController() {
           files,
           submittedPrompt,
           generator.data?.model || "auto",
-          generatorImageSize(generator),
-          generatorImageQuality(generator),
+          generatorImageSize(generator, true),
+          undefined,
           generatorImageCount(generator),
           undefined,
           generatorImageVisibility(generator),
-          generatorImageResolution(generator),
+          generatorImageResolution(generator, true),
           generatorOutputFormat(generator),
           generatorOutputCompression(generator),
-          generatorToolOptions(generator),
+          undefined,
         );
       } else {
         task = await createImageGenerationTask(
@@ -3080,14 +3174,14 @@ export function useSmartCanvasController() {
           submittedPrompt,
           generator.data?.model || "auto",
           generatorImageSize(generator),
-          generatorImageQuality(generator),
+          undefined,
           generatorImageCount(generator),
           undefined,
           generatorImageVisibility(generator),
           generatorImageResolution(generator),
           generatorOutputFormat(generator),
           generatorOutputCompression(generator),
-          generatorToolOptions(generator),
+          undefined,
         );
       }
       const output = creationTaskToOutput(task);

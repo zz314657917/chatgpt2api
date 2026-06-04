@@ -41,7 +41,9 @@ export type SmartCanvasItemData = {
   prompt?: string;
   model?: string;
   size?: string;
+  size_user_modified?: boolean;
   image_resolution?: string;
+  image_resolution_user_modified?: boolean;
   output_format?: "png" | "jpeg" | "webp";
   output_compression?: number;
   background?: string;
@@ -75,6 +77,8 @@ export type SmartCanvasItemData = {
   output?: CanvasNodeOutput;
   status?: CreationTask["status"];
   error?: string;
+  upload_status?: "uploading" | "error";
+  upload_progress?: number;
   task_id?: string;
   started_at?: string;
   stop_requested?: boolean;
