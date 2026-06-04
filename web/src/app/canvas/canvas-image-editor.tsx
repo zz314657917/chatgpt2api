@@ -19,7 +19,7 @@ import type { CanvasImageRef } from "@/lib/api";
 import { fetchAuthenticatedImageBlob } from "@/lib/authenticated-image";
 import { cn } from "@/lib/utils";
 
-import { DEFAULT_CROP, DEFAULT_OUTPAINT, MASK_BRUSH_ALPHA, MIN_CROP_SIZE, cropAspectOptions, editModes } from "./canvas-image-editor-config";
+import { DEFAULT_CROP, DEFAULT_OUTPAINT, DEFAULT_RESIZE, MASK_BRUSH_ALPHA, MAX_RESIZE_SIDE, MIN_CROP_SIZE, MIN_RESIZE_SIDE, cropAspectOptions, editModes } from "./canvas-image-editor-config";
 import { SmartCanvasImageEditorToolPanel } from "./canvas-image-editor-tool-panel";
 import type {
   BrushTool,
@@ -30,6 +30,7 @@ import type {
   MaskTool,
   OutpaintBackground,
   OutpaintBox,
+  ResizeSize,
   SmartCanvasCropBox,
 } from "./canvas-image-editor-types";
 import { baseFileName, canvasToFile, circledNumber, clamp, sortedUniquePositions } from "./canvas-image-editor-utils";
@@ -70,6 +71,33 @@ type SmartCanvasImageEditorProps = {
   onSubmitAngle: (values: SmartCanvasAngleControlValues) => Promise<string>;
 };
 
+function clampResizeSide(value: number) {
+  const safeValue = Number.isFinite(value) ? value : MIN_RESIZE_SIDE;
+  return Math.round(clamp(safeValue, MIN_RESIZE_SIDE, MAX_RESIZE_SIDE));
+}
+
+function fitResizeSize(width: number, height: number) {
+  let nextWidth = Math.max(MIN_RESIZE_SIDE, Math.round(Number.isFinite(width) ? width : MIN_RESIZE_SIDE));
+  let nextHeight = Math.max(MIN_RESIZE_SIDE, Math.round(Number.isFinite(height) ? height : MIN_RESIZE_SIDE));
+  const shrink = Math.min(MAX_RESIZE_SIDE / nextWidth, MAX_RESIZE_SIDE / nextHeight, 1);
+  if (shrink < 1) {
+    nextWidth = Math.max(MIN_RESIZE_SIDE, Math.round(nextWidth * shrink));
+    nextHeight = Math.max(MIN_RESIZE_SIDE, Math.round(nextHeight * shrink));
+  }
+  return {
+    width: clampResizeSide(nextWidth),
+    height: clampResizeSide(nextHeight),
+  };
+}
+
+function fitLockedResizeSize(side: keyof ResizeSize, value: number, ratio: number) {
+  const safeRatio = Number.isFinite(ratio) && ratio > 0 ? ratio : 1;
+  const safeValue = clampResizeSide(value);
+  const width = side === "width" ? safeValue : safeValue * safeRatio;
+  const height = side === "height" ? safeValue : safeValue / safeRatio;
+  return fitResizeSize(width, height);
+}
+
 export function SmartCanvasImageEditor({
   image,
   open,
@@ -85,6 +113,8 @@ export function SmartCanvasImageEditor({
   const [mode, setMode] = useState<ImageEditMode>("preview");
   const [cropBox, setCropBox] = useState<SmartCanvasCropBox>(DEFAULT_CROP);
   const [cropAspect, setCropAspect] = useState<CropAspect>("free");
+  const [resizeSize, setResizeSize] = useState<ResizeSize>(DEFAULT_RESIZE);
+  const [resizeLocked, setResizeLocked] = useState(true);
   const [outpaintBox, setOutpaintBox] = useState<OutpaintBox>(DEFAULT_OUTPAINT);
   const [outpaintBackground, setOutpaintBackground] = useState<OutpaintBackground>("white");
   const [zoom, setZoom] = useState(1);
@@ -192,6 +222,8 @@ export function SmartCanvasImageEditor({
     setMode("preview");
     setCropBox(DEFAULT_CROP);
     setCropAspect("free");
+    setResizeSize(DEFAULT_RESIZE);
+    setResizeLocked(true);
     setOutpaintBox(DEFAULT_OUTPAINT);
     setOutpaintBackground("white");
     setZoom(1);
@@ -264,6 +296,13 @@ export function SmartCanvasImageEditor({
     canvas.height = bitmap.height;
     canvas.getContext("2d")?.clearRect(0, 0, canvas.width, canvas.height);
     setDrawHistory([]);
+  }, [bitmap]);
+
+  useEffect(() => {
+    if (!bitmap) {
+      return;
+    }
+    setResizeSize({ width: bitmap.width, height: bitmap.height });
   }, [bitmap]);
 
   const pushDrawHistory = useCallback(() => {
@@ -732,6 +771,57 @@ export function SmartCanvasImageEditor({
     setOutpaintBox({ left: safeValue, top: safeValue, right: safeValue, bottom: safeValue });
   }, []);
 
+  const updateResizeSize = useCallback((side: keyof ResizeSize, value: number) => {
+    setResizeSize((current) => {
+      if (resizeLocked) {
+        const ratio = current.width / Math.max(1, current.height);
+        return fitLockedResizeSize(side, value, ratio);
+      }
+      return {
+        ...current,
+        [side]: clampResizeSide(value),
+      };
+    });
+  }, [resizeLocked]);
+
+  const applyResizeScale = useCallback((scale: number) => {
+    if (!bitmap) {
+      return;
+    }
+    const safeScale = Number.isFinite(scale) && scale > 0 ? scale : 1;
+    setResizeSize(fitResizeSize(bitmap.width * safeScale, bitmap.height * safeScale));
+  }, [bitmap]);
+
+  const applyResizePreset = useCallback((size: ResizeSize) => {
+    setResizeSize(fitResizeSize(size.width, size.height));
+  }, []);
+
+  const resetResizeSize = useCallback(() => {
+    if (!bitmap) {
+      setResizeSize(DEFAULT_RESIZE);
+      return;
+    }
+    setResizeSize({ width: bitmap.width, height: bitmap.height });
+  }, [bitmap]);
+
+  const makeResizeFile = useCallback(async () => {
+    if (!bitmap) {
+      throw new Error("图片尚未加载完成");
+    }
+    const safeSize = fitResizeSize(resizeSize.width, resizeSize.height);
+    const canvas = document.createElement("canvas");
+    canvas.width = safeSize.width;
+    canvas.height = safeSize.height;
+    const context = canvas.getContext("2d");
+    if (!context) {
+      throw new Error("浏览器不支持图片缩放");
+    }
+    context.imageSmoothingEnabled = true;
+    context.imageSmoothingQuality = "high";
+    context.drawImage(bitmap, 0, 0, bitmap.width, bitmap.height, 0, 0, safeSize.width, safeSize.height);
+    return canvasToFile(canvas, `${baseFileName(image)}-${safeSize.width}x${safeSize.height}.png`);
+  }, [bitmap, image, resizeSize.height, resizeSize.width]);
+
   const makeCropFile = useCallback(async () => {
     if (!bitmap) {
       throw new Error("图片尚未加载完成");
@@ -888,15 +978,17 @@ export function SmartCanvasImageEditor({
     }
     setApplying(true);
     try {
-      const files = mode === "crop"
-        ? [await makeCropFile()]
-        : mode === "outpaint"
-          ? [await makeOutpaintFile()]
-          : mode === "mask"
-            ? [await makeMaskFile()]
-            : mode === "brush"
-              ? [await makeBrushFile()]
-              : await makeGridFiles();
+      const files = mode === "resize"
+        ? [await makeResizeFile()]
+        : mode === "crop"
+          ? [await makeCropFile()]
+          : mode === "outpaint"
+            ? [await makeOutpaintFile()]
+            : mode === "mask"
+              ? [await makeMaskFile()]
+              : mode === "brush"
+                ? [await makeBrushFile()]
+                : await makeGridFiles();
       await onApplyEdit(image, files);
       onOpenChange(false);
     } finally {
@@ -910,6 +1002,7 @@ export function SmartCanvasImageEditor({
     makeGridFiles,
     makeMaskFile,
     makeOutpaintFile,
+    makeResizeFile,
     mode,
     onApplyEdit,
     onOpenChange,
@@ -1016,6 +1109,13 @@ export function SmartCanvasImageEditor({
                 setCropAspect("free");
                 setCropBox(DEFAULT_CROP);
               }}
+              resizeSize={resizeSize}
+              resizeLocked={resizeLocked}
+              onResizeSizeChange={updateResizeSize}
+              onResizeLockedChange={setResizeLocked}
+              onApplyResizeScale={applyResizeScale}
+              onApplyResizePreset={applyResizePreset}
+              onResetResizeSize={resetResizeSize}
               outpaintBox={outpaintBox}
               outpaintNatural={outpaintNatural}
               outpaintBackground={outpaintBackground}
@@ -1128,6 +1228,13 @@ export function SmartCanvasImageEditor({
                     />
                   </div>
                 ) : null}
+                {mode === "resize" ? (
+                  <div className="pointer-events-none absolute inset-0 rounded-2xl border-2 border-sky-300/95 shadow-[0_0_0_1px_rgba(14,165,233,0.35),0_16px_36px_rgba(15,23,42,0.20)]">
+                    <span className="absolute left-3 top-3 rounded-full bg-slate-950/75 px-3 py-1 text-xs font-black text-white">
+                      输出 {resizeSize.width} × {resizeSize.height}
+                    </span>
+                  </div>
+                ) : null}
                 {mode === "outpaint" ? (
                   <div className="absolute inset-0 z-30 rounded-2xl border-2 border-white/95 shadow-[0_0_0_1px_rgba(15,23,42,0.28),0_16px_36px_rgba(15,23,42,0.18)]">
                     <span className="absolute left-3 top-3 rounded-full bg-slate-950/75 px-3 py-1 text-xs font-black text-white">
@@ -1170,6 +1277,7 @@ export function SmartCanvasImageEditor({
             className="h-9 rounded-full px-4 text-xs font-bold dark:border-slate-700 dark:bg-slate-950 dark:text-slate-300 dark:hover:bg-slate-800"
             onClick={() => {
               setCropBox(DEFAULT_CROP);
+              resetResizeSize();
               setOutpaintBox(DEFAULT_OUTPAINT);
               setZoom(1);
               setGridLines([]);

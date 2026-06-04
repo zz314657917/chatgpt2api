@@ -1,11 +1,14 @@
-import { Brush, Crop, Cuboid, Eye, Grid3X3, Maximize2, Paintbrush, type LucideIcon } from "lucide-react";
+import { Brush, Crop, Cuboid, Eye, Grid3X3, Maximize2, Paintbrush, Scaling, type LucideIcon } from "lucide-react";
 
-import type { CropAspect, ImageEditMode, OutpaintBackground, OutpaintBox, SmartCanvasCropBox } from "./canvas-image-editor-types";
+import type { CropAspect, ImageEditMode, OutpaintBackground, OutpaintBox, ResizeSize, SmartCanvasCropBox } from "./canvas-image-editor-types";
 
 export const DEFAULT_CROP: SmartCanvasCropBox = { x: 10, y: 10, w: 80, h: 80 };
+export const DEFAULT_RESIZE: ResizeSize = { width: 1024, height: 1024 };
 export const DEFAULT_OUTPAINT: OutpaintBox = { left: 15, top: 15, right: 15, bottom: 15 };
 export const MIN_CROP_SIZE = 8;
 export const MASK_BRUSH_ALPHA = 115;
+export const MIN_RESIZE_SIDE = 1;
+export const MAX_RESIZE_SIDE = 8192;
 
 export const cropAspectOptions: Array<{ value: CropAspect; label: string; ratio?: number }> = [
   { value: "free", label: "自由" },
@@ -37,6 +40,14 @@ export const editModes: Array<{
     title: "预览图片",
     description: "查看完整原图，滚轮缩放",
     action: "",
+  },
+  {
+    value: "resize",
+    label: "缩放",
+    icon: Scaling,
+    title: "缩放图片",
+    description: "输入目标像素尺寸，输出指定大小图片",
+    action: "应用缩放",
   },
   {
     value: "crop",
