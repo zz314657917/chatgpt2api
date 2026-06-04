@@ -1,9 +1,9 @@
-import { Brush, Circle, Eraser, ListOrdered, Paintbrush, RectangleHorizontal, Undo2 } from "lucide-react";
+import { Brush, Circle, Eraser, ListOrdered, Lock, Paintbrush, RectangleHorizontal, Undo2, Unlock } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
-import { cropAspectOptions, editModes, outpaintBackgroundOptions } from "./canvas-image-editor-config";
+import { MAX_RESIZE_SIDE, MIN_RESIZE_SIDE, cropAspectOptions, editModes, outpaintBackgroundOptions } from "./canvas-image-editor-config";
 import { NumberField, ToolSection } from "./canvas-image-editor-fields";
 import type {
   BrushTool,
@@ -14,6 +14,7 @@ import type {
   MaskTool,
   OutpaintBackground,
   OutpaintBox,
+  ResizeSize,
   SmartCanvasCropBox,
 } from "./canvas-image-editor-types";
 import { clamp } from "./canvas-image-editor-utils";
@@ -29,6 +30,13 @@ export type SmartCanvasImageEditorToolPanelProps = {
   onSetCropPixelSize: (side: "width" | "height", value: number) => void;
   onCenterCropBox: () => void;
   onResetCrop: () => void;
+  resizeSize: ResizeSize;
+  resizeLocked: boolean;
+  onResizeSizeChange: (side: keyof ResizeSize, value: number) => void;
+  onResizeLockedChange: (locked: boolean) => void;
+  onApplyResizeScale: (scale: number) => void;
+  onApplyResizePreset: (size: ResizeSize) => void;
+  onResetResizeSize: () => void;
   outpaintBox: OutpaintBox;
   outpaintNatural: { width: number; height: number };
   outpaintBackground: OutpaintBackground;
@@ -71,6 +79,13 @@ export function SmartCanvasImageEditorToolPanel({
   onSetCropPixelSize,
   onCenterCropBox,
   onResetCrop,
+  resizeSize,
+  resizeLocked,
+  onResizeSizeChange,
+  onResizeLockedChange,
+  onApplyResizeScale,
+  onApplyResizePreset,
+  onResetResizeSize,
   outpaintBox,
   outpaintNatural,
   outpaintBackground,
@@ -109,6 +124,49 @@ export function SmartCanvasImageEditorToolPanel({
         <div className="text-[11px] font-black uppercase tracking-[0.18em] text-muted-foreground dark:text-slate-500">工具参数</div>
         <div className="mt-1 text-base font-black text-foreground dark:text-slate-100">{panelTitle}</div>
       </div>
+
+      {mode === "resize" ? (
+        <>
+          <ToolSection title="目标尺寸">
+            <div className="grid grid-cols-2 gap-2">
+              <NumberField label="宽 px" value={resizeSize.width} min={MIN_RESIZE_SIDE} max={MAX_RESIZE_SIDE} onChange={(value) => onResizeSizeChange("width", value)} />
+              <NumberField label="高 px" value={resizeSize.height} min={MIN_RESIZE_SIDE} max={MAX_RESIZE_SIDE} onChange={(value) => onResizeSizeChange("height", value)} />
+            </div>
+            <div className="mt-2 flex gap-2">
+              <Button type="button" size="sm" variant={resizeLocked ? "default" : "outline"} className="h-8 flex-1 rounded-xl text-xs" onClick={() => onResizeLockedChange(!resizeLocked)}>
+                {resizeLocked ? <Lock className="size-3.5" /> : <Unlock className="size-3.5" />}
+                {resizeLocked ? "等比" : "自由"}
+              </Button>
+              <Button type="button" size="sm" variant="outline" className="h-8 flex-1 rounded-xl text-xs" onClick={onResetResizeSize}>
+                原尺寸
+              </Button>
+            </div>
+          </ToolSection>
+          <ToolSection title="倍率">
+            <div className="grid grid-cols-3 gap-1.5">
+              {[0.5, 1, 2].map((scale) => (
+                <button key={scale} type="button" className="h-8 rounded-xl border border-border bg-muted/60 text-xs font-black text-muted-foreground transition hover:bg-accent hover:text-foreground dark:border-slate-700 dark:bg-slate-900/70 dark:text-slate-300 dark:hover:bg-slate-800" onClick={() => onApplyResizeScale(scale)}>
+                  {scale === 1 ? "1×" : `${scale}×`}
+                </button>
+              ))}
+            </div>
+          </ToolSection>
+          <ToolSection title="预设">
+            <div className="grid grid-cols-2 gap-1.5">
+              {[16, 32, 64, 128, 512, 1024, 1536, 2048].map((side) => (
+                <button key={side} type="button" className="h-8 rounded-xl border border-border bg-muted/60 text-xs font-black text-muted-foreground transition hover:bg-accent hover:text-foreground dark:border-slate-700 dark:bg-slate-900/70 dark:text-slate-300 dark:hover:bg-slate-800" onClick={() => onApplyResizePreset({ width: side, height: side })}>
+                  {side}x{side}
+                </button>
+              ))}
+            </div>
+          </ToolSection>
+          <ToolSection title="输出">
+            <div className="rounded-xl border border-dashed border-border px-3 py-2 text-xs font-bold text-muted-foreground dark:border-slate-700 dark:text-slate-400">
+              {resizeSize.width || 0} × {resizeSize.height || 0}
+            </div>
+          </ToolSection>
+        </>
+      ) : null}
 
       {mode === "crop" ? (
         <>
