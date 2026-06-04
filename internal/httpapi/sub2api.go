@@ -432,6 +432,8 @@ func sub2APIImageSize(payload map[string]any) string {
 	size := firstNonEmpty(util.Clean(payload["size"]), util.Clean(payload["requested_size"]), util.Clean(payload["image_resolution"]))
 	size = protocol.NormalizeImageGenerationSize(size)
 	switch strings.ToLower(strings.TrimSpace(size)) {
+	case "8x8", "16x16", "32x32", "64x64", "128x128":
+		return "1:1"
 	case "1:1":
 		return "1024x1024"
 	case "16:9":
