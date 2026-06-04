@@ -98,6 +98,9 @@ function fitLockedResizeSize(side: keyof ResizeSize, value: number, ratio: numbe
   return fitResizeSize(width, height);
 }
 
+const PREVIEW_MIN_DISPLAY_SIDE = 420;
+const PREVIEW_MAX_AUTO_UPSCALE = 16;
+
 export function SmartCanvasImageEditor({
   image,
   open,
@@ -155,12 +158,15 @@ export function SmartCanvasImageEditor({
     }
     const maxW = Math.min(1300, typeof window === "undefined" ? 1300 : window.innerWidth - 96);
     const maxH = Math.min(760, typeof window === "undefined" ? 760 : window.innerHeight - 220);
-    const fit = Math.min(maxW / bitmap.width, maxH / bitmap.height, 1);
+    const containScale = Math.min(maxW / bitmap.width, maxH / bitmap.height);
+    const previewTargetSide = Math.min(PREVIEW_MIN_DISPLAY_SIDE, maxW * 0.72, maxH * 0.72);
+    const previewScale = Math.max(1, Math.min(PREVIEW_MAX_AUTO_UPSCALE, previewTargetSide / Math.min(bitmap.width, bitmap.height)));
+    const fit = isPreviewMode ? Math.min(containScale, previewScale) : Math.min(containScale, 1);
     return {
       width: Math.max(1, Math.round(bitmap.width * fit)),
       height: Math.max(1, Math.round(bitmap.height * fit)),
     };
-  }, [bitmap]);
+  }, [bitmap, isPreviewMode]);
 
   const outpaintDisplay = useMemo(() => {
     const width = displaySize.width * (1 + outpaintBox.left / 100 + outpaintBox.right / 100);
