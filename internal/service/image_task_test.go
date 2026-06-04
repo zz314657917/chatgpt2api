@@ -204,6 +204,38 @@ func TestImageTaskServiceAllowsTenQueuedOutputs(t *testing.T) {
 	}
 }
 
+func TestImageTaskServiceNormalizesPixelIconSizeAliases(t *testing.T) {
+	handlerCalls := make(chan map[string]any, 1)
+	handler := func(ctx context.Context, identity Identity, payload map[string]any) (map[string]any, error) {
+		handlerCalls <- payload
+		return map[string]any{"data": []map[string]any{{"url": "https://example.test/image.png"}}}, nil
+	}
+	svc := newTestImageTaskService(t, handler, handler, handler, func() int { return 30 })
+	identity := Identity{ID: "alice", Name: "Alice", Role: "user"}
+
+	task, err := svc.SubmitGeneration(context.Background(), identity, "pixel-icon", "draw", "gpt-image-2", "16:16", "high", "https://base.test", 1, nil)
+	if err != nil {
+		t.Fatalf("SubmitGeneration() error = %v", err)
+	}
+	if task["size"] != "16x16" {
+		t.Fatalf("queued task size = %#v, want 16x16", task["size"])
+	}
+	select {
+	case payload := <-handlerCalls:
+		if payload["size"] != "16x16" {
+			t.Fatalf("handler payload size = %#v, want 16x16 in %#v", payload["size"], payload)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for handler payload")
+	}
+	waitForTaskStatus(t, svc, identity, "pixel-icon", TaskStatusSuccess)
+	got := svc.ListTasks(identity, []string{"pixel-icon"})
+	item := got["items"].([]map[string]any)[0]
+	if item["size"] != "16x16" {
+		t.Fatalf("listed task size = %#v, want 16x16 in %#v", item["size"], item)
+	}
+}
+
 func TestImageTaskServiceClampsQueuedOutputsToTen(t *testing.T) {
 	handlerCalls := make(chan map[string]any, 1)
 	handler := func(ctx context.Context, identity Identity, payload map[string]any) (map[string]any, error) {
