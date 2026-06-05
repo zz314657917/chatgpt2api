@@ -895,6 +895,7 @@ func (a *App) handleImages(w http.ResponseWriter, r *http.Request) {
 			Tags:             imageTagsFromQuery(r.URL.Query()),
 		}, scope)
 		a.decorateImageList(payload)
+		payload["retention_days"] = a.config.ImageRetentionDays()
 		util.WriteJSON(w, http.StatusOK, payload)
 	case http.MethodDelete:
 		body, err := readJSONMap(r)
