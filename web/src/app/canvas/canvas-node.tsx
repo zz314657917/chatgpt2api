@@ -13,6 +13,7 @@ import {
   CircleDot,
   Clapperboard,
   Clock3,
+  Copy,
   Eraser,
   Repeat2,
   FileText,
@@ -70,6 +71,7 @@ import {
   type SmartCanvasFlowTemplateId,
   type SmartCanvasHelpTopic,
 } from "./canvas-help";
+import { buildSmartCanvasErrorDetail } from "./canvas-error-details";
 import { SMART_CANVAS_PRESETS, type SmartCanvasPresetLike, type SmartCanvasPresetId } from "./canvas-presets";
 import type { SmartCanvasUserPreset } from "./canvas-user-presets";
 import {
@@ -115,10 +117,21 @@ const NODE_SIZE: Record<SmartCanvasItem["type"], { w: number; h: number }> = {
   result: { w: 440, h: 245 },
 };
 const EMPTY_SMART_CANVAS_NODES: SmartCanvasItem[] = [];
+const EMPTY_SMART_CANVAS_EDGES: SmartCanvasDocument["edges"] = [];
 const CANVAS_NODE_MENU_WIDTH = 224;
 const CANVAS_NODE_MENU_GAP = 12;
+const CANVAS_GRAPH_KEY_SEPARATOR = "\u001f";
 
 type SmartCanvasNodeSizeMap = Record<string, { w: number; h: number }>;
+type SmartCanvasNodeLookup = ReadonlyMap<string, SmartCanvasItem>;
+type SmartCanvasGraphIndexes = {
+  nodesById: Map<string, SmartCanvasItem>;
+  dependencyKeysByNodeId: Map<string, string>;
+};
+type SmartCanvasObjectIdentityTracker = {
+  nextId: number;
+  ids: WeakMap<object, number>;
+};
 type SmartCanvasNodeMenuState = {
   x: number;
   y: number;
@@ -1408,6 +1421,7 @@ export function SmartCanvasBoard({
   const [showZoomBadge, setShowZoomBadge] = useState(false);
   const previousZoomRef = useRef(viewport.zoom);
   const zoomBadgeTimerRef = useRef<number | null>(null);
+  const graphIdentityTrackerRef = useRef<SmartCanvasObjectIdentityTracker>({ nextId: 1, ids: new WeakMap() });
   const openNodeMenu = useCallback((screen: { x: number; y: number }, nodeId?: string, direction: "upstream" | "downstream" = "downstream") => {
     const rect = boardRef.current?.getBoundingClientRect();
     if (!rect) {
@@ -1464,7 +1478,12 @@ export function SmartCanvasBoard({
       cleanup();
       if (shouldOpenMenu) {
         ignoreNextBoardClickRef.current = true;
-        window.setTimeout(() => openNodeMenu({ x: pointerEvent.clientX, y: pointerEvent.clientY }, sourceId, "downstream"), 0);
+        window.setTimeout(() => {
+          if (pointerEvent.defaultPrevented) {
+            return;
+          }
+          openNodeMenu({ x: pointerEvent.clientX, y: pointerEvent.clientY }, sourceId, "downstream");
+        }, 0);
       }
     };
 
@@ -1487,7 +1506,7 @@ export function SmartCanvasBoard({
       ?.getAttribute("data-canvas-node-id") || "";
     const shouldOpenPortMenu = connectState.kind === "link" && connectState.pointerId === event.pointerId && !targetInputId;
     onPointerUp(event);
-    if (shouldOpenPortMenu) {
+    if (shouldOpenPortMenu && !event.defaultPrevented) {
       ignoreNextBoardClickRef.current = true;
       window.setTimeout(() => openNodeMenu({ x: event.clientX, y: event.clientY }, connectState.sourceId, "downstream"), 0);
     }
@@ -1497,6 +1516,10 @@ export function SmartCanvasBoard({
     outputPortPressRef.current = null;
     onPointerUp(event);
   }, [onPointerUp]);
+  const handleOpenUpstreamMenu = useCallback((event: ReactPointerEvent<HTMLElement>, nodeId: string) => {
+    ignoreNextBoardClickRef.current = true;
+    openNodeMenu({ x: event.clientX, y: event.clientY }, nodeId, "upstream");
+  }, [openNodeMenu]);
   useEffect(() => () => outputPortCleanupRef.current?.(), []);
   useEffect(() => {
     if (!portMenuRequest) {
@@ -1522,6 +1545,19 @@ export function SmartCanvasBoard({
         pointer: connectState.pointer,
       }
     : null;
+  const canvasNodes = canvas?.nodes || EMPTY_SMART_CANVAS_NODES;
+  const canvasEdges = canvas?.edges || EMPTY_SMART_CANVAS_EDGES;
+  const graphIndexes = useMemo(
+    () => buildSmartCanvasGraphIndexes(canvasNodes, canvasEdges, graphIdentityTrackerRef.current),
+    [canvasEdges, canvasNodes],
+  );
+  const selectedNodeIds = useMemo(() => {
+    const ids = new Set(selectedItemIds);
+    if (selectedItemId) {
+      ids.add(selectedItemId);
+    }
+    return ids;
+  }, [selectedItemId, selectedItemIds]);
   const viewBounds = useMemo(() => {
     const rect = boardRef.current?.getBoundingClientRect();
     if (!rect) {
@@ -1536,11 +1572,18 @@ export function SmartCanvasBoard({
     };
   }, [boardRef, viewport]);
   const renderNodes = useMemo(() => {
-    const nodes = canvas?.nodes || EMPTY_SMART_CANVAS_NODES;
-    return nodes.filter((item) => isNodeInViewBounds(item, nodeSizes, viewBounds) || selectedItemIds.includes(item.id) || item.id === selectedItemId);
-  }, [canvas?.nodes, nodeSizes, selectedItemId, selectedItemIds, viewBounds]);
+    return canvasNodes.filter((item) => isNodeInViewBounds(item, nodeSizes, viewBounds) || selectedNodeIds.has(item.id));
+  }, [canvasNodes, nodeSizes, selectedNodeIds, viewBounds]);
   const renderNodeIds = useMemo(() => new Set(renderNodes.map((item) => item.id)), [renderNodes]);
-  const renderEdges = useMemo(() => (canvas?.edges || []).filter((edge) => renderNodeIds.has(edge.source) || renderNodeIds.has(edge.target)), [canvas?.edges, renderNodeIds]);
+  const renderEdges = useMemo(() => canvasEdges.filter((edge) => renderNodeIds.has(edge.source) || renderNodeIds.has(edge.target)), [canvasEdges, renderNodeIds]);
+  const previewSourceId = previewEdge?.source || "";
+  const previewPointer = previewEdge?.pointer || null;
+  const previewSnapTargetId = useMemo(() => {
+    if (!previewSourceId || !previewPointer) {
+      return "";
+    }
+    return nearestCanvasInputNodeId(previewSourceId, previewPointer, canvasNodes, graphIndexes.nodesById, nodeSizes);
+  }, [canvasNodes, graphIndexes.nodesById, nodeSizes, previewPointer, previewSourceId]);
   useEffect(() => {
     if (Math.abs(previousZoomRef.current - viewport.zoom) < 0.001) {
       return;
@@ -1616,22 +1659,23 @@ export function SmartCanvasBoard({
               <SmartCanvasEdgePath
                 key={edge.id}
                 edge={edge}
-                nodes={canvas?.nodes || EMPTY_SMART_CANVAS_NODES}
+                nodesById={graphIndexes.nodesById}
                 nodeSizes={nodeSizes}
-                selected={selectedItemIds.includes(edge.source) || selectedItemIds.includes(edge.target) || edge.source === selectedItemId || edge.target === selectedItemId}
+                selected={selectedNodeIds.has(edge.source) || selectedNodeIds.has(edge.target)}
               />
             ))}
-            {previewEdge ? <SmartCanvasPreviewEdge sourceId={previewEdge.source} pointer={previewEdge.pointer} nodes={canvas?.nodes || []} nodeSizes={nodeSizes} /> : null}
+            {previewEdge ? <SmartCanvasPreviewEdge sourceId={previewEdge.source} pointer={previewEdge.pointer} snapTargetId={previewSnapTargetId} nodesById={graphIndexes.nodesById} nodeSizes={nodeSizes} /> : null}
           </svg>
           {renderEdges.map((edge) => (
-            <EdgeDeleteButton key={`${edge.id}-delete`} edge={edge} nodes={canvas?.nodes || EMPTY_SMART_CANVAS_NODES} nodeSizes={nodeSizes} onDelete={onDeleteEdge} />
+            <EdgeDeleteButton key={`${edge.id}-delete`} edge={edge} nodesById={graphIndexes.nodesById} nodeSizes={nodeSizes} onDelete={onDeleteEdge} />
           ))}
           {renderNodes.map((item) => (
             <SmartCanvasNode
               key={item.id}
               canvas={canvas as SmartCanvasDocument}
               item={item}
-              selected={item.id === selectedItemId || selectedItemIds.includes(item.id)}
+              graphDependencyKey={graphIndexes.dependencyKeysByNodeId.get(item.id) || ""}
+              selected={selectedNodeIds.has(item.id)}
               imageModels={imageModels}
               textModels={textModels}
               videoModels={videoModels}
@@ -1639,28 +1683,25 @@ export function SmartCanvasBoard({
               lightweightMedia={lightweightMedia}
               mentionOpen={mentionOpen && item.id === selectedItemId}
               mentionItems={mentionItems}
-              onPointerDown={(event) => onItemPointerDown(event, item)}
-              onResizePointerDown={(event) => onResizeItemPointerDown(event, item)}
-              onSelect={(multi) => onSelectItem(item.id, multi)}
+              onItemPointerDown={onItemPointerDown}
+              onResizeItemPointerDown={onResizeItemPointerDown}
+              onSelectItem={onSelectItem}
               onOpenImage={onOpenImage}
-              onDeleteImage={(image) => onDeleteImage(item.id, image)}
-              onUpdateData={(patch) => onUpdateItemData(item.id, patch)}
-              onRunGenerator={() => onRunGenerator(item.id)}
-              onRunLlm={() => onRunLlm(item.id)}
-              onStopLoop={() => onStopLoop(item.id)}
-              onStopNode={() => onStopNode(item.id)}
-              onOpenNodeHelp={() => onOpenNodeHelp(item.type)}
-              onConnectLlmImagesToGenerator={() => onConnectLlmImagesToGenerator(item.id)}
-              onConnectLlmImagesToLoop={() => onConnectLlmImagesToLoop(item.id)}
-              onDeleteItem={() => onDeleteItem(item.id)}
-              onStartConnect={(event) => handleOutputPortPointerDown(event, item.id)}
-              onFinishConnect={(event) => onFinishConnect(event, item.id)}
-              onOpenUpstreamMenu={(event) => {
-                ignoreNextBoardClickRef.current = true;
-                openNodeMenu({ x: event.clientX, y: event.clientY }, item.id, "upstream");
-              }}
+              onDeleteImage={onDeleteImage}
+              onUpdateItemData={onUpdateItemData}
+              onRunGenerator={onRunGenerator}
+              onRunLlm={onRunLlm}
+              onStopLoop={onStopLoop}
+              onStopNode={onStopNode}
+              onOpenNodeHelp={onOpenNodeHelp}
+              onConnectLlmImagesToGenerator={onConnectLlmImagesToGenerator}
+              onConnectLlmImagesToLoop={onConnectLlmImagesToLoop}
+              onDeleteItem={onDeleteItem}
+              onStartConnect={handleOutputPortPointerDown}
+              onFinishConnect={onFinishConnect}
+              onOpenUpstreamMenu={handleOpenUpstreamMenu}
               onMentionToggle={onMentionToggle}
-              onAddMention={(image) => onAddMentionToPrompt(item.id, image)}
+              onAddMentionToPrompt={onAddMentionToPrompt}
               onCreateNodeFromPort={onCreateNodeFromPort}
               onCreateNodeHelpTemplate={onCreateNodeHelpTemplate}
               onMeasure={handleMeasureNode}
@@ -1681,7 +1722,7 @@ export function SmartCanvasBoard({
             x={contextMenu.x}
             y={contextMenu.y}
             onClose={() => setContextMenu(null)}
-            node={contextMenu.nodeId ? canvas?.nodes.find((item) => item.id === contextMenu.nodeId) || null : null}
+            node={contextMenu.nodeId ? graphIndexes.nodesById.get(contextMenu.nodeId) || null : null}
             direction={contextMenu.direction}
             onUpload={contextMenu.nodeId
               ? undefined
@@ -2186,19 +2227,126 @@ function isNodeInViewBounds(item: SmartCanvasItem, nodeSizes: SmartCanvasNodeSiz
   return x + size.w >= bounds.left && x <= bounds.right && y + size.h >= bounds.top && y <= bounds.bottom;
 }
 
+function smartCanvasObjectKey(value: object | undefined, tracker: SmartCanvasObjectIdentityTracker) {
+  if (!value) {
+    return "";
+  }
+  const existing = tracker.ids.get(value);
+  if (existing) {
+    return String(existing);
+  }
+  const next = tracker.nextId++;
+  tracker.ids.set(value, next);
+  return String(next);
+}
+
+function buildSmartCanvasGraphIndexes(
+  nodes: SmartCanvasItem[],
+  edges: { source: string; target: string }[],
+  tracker: SmartCanvasObjectIdentityTracker,
+): SmartCanvasGraphIndexes {
+  const nodesById = new Map(nodes.map((node) => [node.id, node]));
+  const incomingByTarget = new Map<string, string[]>();
+  const outgoingBySource = new Map<string, string[]>();
+  for (const edge of edges) {
+    const incoming = incomingByTarget.get(edge.target) || [];
+    incoming.push(edge.source);
+    incomingByTarget.set(edge.target, incoming);
+    const outgoing = outgoingBySource.get(edge.source) || [];
+    outgoing.push(edge.target);
+    outgoingBySource.set(edge.source, outgoing);
+  }
+  const allEdgeKey = edges.map((edge) => `${edge.source}->${edge.target}`).join(CANVAS_GRAPH_KEY_SEPARATOR);
+  const dependencyKeysByNodeId = new Map<string, string>();
+  const edgeSignature = (nodeId: string) => [
+    ...(incomingByTarget.get(nodeId) || []).map((source) => `${source}->${nodeId}`),
+    ...(outgoingBySource.get(nodeId) || []).map((target) => `${nodeId}->${target}`),
+  ].sort().join(",");
+  const addNode = (ids: Set<string>, nodeId: string) => {
+    if (nodeId) {
+      ids.add(nodeId);
+    }
+  };
+
+  for (const node of nodes) {
+    const dependencyIds = new Set<string>();
+    addNode(dependencyIds, node.id);
+    const directIncoming = incomingByTarget.get(node.id) || [];
+    const directOutgoing = outgoingBySource.get(node.id) || [];
+    directIncoming.forEach((id) => addNode(dependencyIds, id));
+    directOutgoing.forEach((id) => addNode(dependencyIds, id));
+    if (node.type === "group") {
+      (node.data?.group_item_ids || []).forEach((id) => addNode(dependencyIds, id));
+    }
+    if (node.type === "llm" || node.type === "loop" || node.type === "image_generation" || node.type === "video_generation") {
+      for (const incomingId of directIncoming) {
+        const incomingNode = nodesById.get(incomingId);
+        if (incomingNode?.type === "group") {
+          (incomingNode.data?.group_item_ids || []).forEach((id) => addNode(dependencyIds, id));
+        }
+        if (incomingNode?.type === "llm" || incomingNode?.type === "loop") {
+          (incomingByTarget.get(incomingId) || []).forEach((id) => addNode(dependencyIds, id));
+        }
+      }
+    }
+    const nodeKeys = Array.from(dependencyIds)
+      .sort()
+      .map((id) => {
+        const target = nodesById.get(id);
+        return `${id}:${smartCanvasObjectKey(target, tracker)}:${edgeSignature(id)}`;
+      });
+    const graphKey = node.type === "group" ? allEdgeKey : edgeSignature(node.id);
+    dependencyKeysByNodeId.set(node.id, `${graphKey}${CANVAS_GRAPH_KEY_SEPARATOR}${nodeKeys.join(CANVAS_GRAPH_KEY_SEPARATOR)}`);
+  }
+
+  return { nodesById, dependencyKeysByNodeId };
+}
+
+function nearestCanvasInputNodeId(
+  sourceId: string,
+  pointer: { x: number; y: number },
+  nodes: SmartCanvasItem[],
+  nodesById: SmartCanvasNodeLookup,
+  nodeSizes: SmartCanvasNodeSizeMap,
+) {
+  const source = nodesById.get(sourceId);
+  if (!source) {
+    return "";
+  }
+  let best: { id: string; distance: number } | null = null;
+  for (const node of nodes) {
+    if (node.id === sourceId || !canConnectSmartCanvasNodes(source, node)) {
+      continue;
+    }
+    const size = nodeSizes[node.id] || NODE_SIZE[node.type];
+    const port = inputPortPoint(node, nodeSizes);
+    const leftDistance = pointer.x - port.x;
+    const verticalDistance = Math.abs(pointer.y - port.y);
+    const nearLeftEdge = leftDistance >= -72 && leftDistance <= Math.max(72, size.w * 0.32);
+    if (!nearLeftEdge || verticalDistance > Math.max(72, size.h * 0.48)) {
+      continue;
+    }
+    const distance = Math.hypot(Math.max(0, Math.abs(leftDistance) - 16), verticalDistance);
+    if (!best || distance < best.distance) {
+      best = { id: node.id, distance };
+    }
+  }
+  return best?.id || "";
+}
+
 function SmartCanvasEdgePath({
   edge,
-  nodes,
+  nodesById,
   nodeSizes,
   selected,
 }: {
   edge: { id: string; source: string; target: string };
-  nodes: SmartCanvasItem[];
+  nodesById: SmartCanvasNodeLookup;
   nodeSizes: SmartCanvasNodeSizeMap;
   selected: boolean;
 }) {
-  const source = nodes.find((node) => node.id === edge.source);
-  const target = nodes.find((node) => node.id === edge.target);
+  const source = nodesById.get(edge.source);
+  const target = nodesById.get(edge.target);
   if (!source || !target) {
     return null;
   }
@@ -2217,20 +2365,34 @@ function SmartCanvasEdgePath({
   );
 }
 
-function SmartCanvasPreviewEdge({ sourceId, pointer, nodes, nodeSizes }: { sourceId: string; pointer: { x: number; y: number }; nodes: SmartCanvasItem[]; nodeSizes: SmartCanvasNodeSizeMap }) {
-  const source = nodes.find((node) => node.id === sourceId);
+function SmartCanvasPreviewEdge({
+  sourceId,
+  pointer,
+  snapTargetId,
+  nodesById,
+  nodeSizes,
+}: {
+  sourceId: string;
+  pointer: { x: number; y: number };
+  snapTargetId: string;
+  nodesById: SmartCanvasNodeLookup;
+  nodeSizes: SmartCanvasNodeSizeMap;
+}) {
+  const source = nodesById.get(sourceId);
   if (!source) {
     return null;
   }
   const a = outputPortPoint(source, nodeSizes);
+  const snapTarget = snapTargetId ? nodesById.get(snapTargetId) : null;
+  const b = snapTarget ? inputPortPoint(snapTarget, nodeSizes) : pointer;
   return (
-    <path d={bezierPath(a, pointer)} fill="none" stroke="#38bdf8" strokeDasharray="6 6" strokeWidth={2.5} strokeLinecap="round" opacity={0.9} />
+    <path d={bezierPath(a, b)} fill="none" stroke="#38bdf8" strokeDasharray={snapTarget ? undefined : "6 6"} strokeWidth={snapTarget ? 3 : 2.5} strokeLinecap="round" opacity={snapTarget ? 1 : 0.9} />
   );
 }
 
-function EdgeDeleteButton({ edge, nodes, nodeSizes, onDelete }: { edge: { id: string; source: string; target: string }; nodes: SmartCanvasItem[]; nodeSizes: SmartCanvasNodeSizeMap; onDelete: (id: string) => void }) {
-  const source = nodes.find((node) => node.id === edge.source);
-  const target = nodes.find((node) => node.id === edge.target);
+function EdgeDeleteButton({ edge, nodesById, nodeSizes, onDelete }: { edge: { id: string; source: string; target: string }; nodesById: SmartCanvasNodeLookup; nodeSizes: SmartCanvasNodeSizeMap; onDelete: (id: string) => void }) {
+  const source = nodesById.get(edge.source);
+  const target = nodesById.get(edge.target);
   if (!source || !target) {
     return null;
   }
@@ -2255,6 +2417,7 @@ function EdgeDeleteButton({ edge, nodes, nodeSizes, onDelete }: { edge: { id: st
 type SmartCanvasNodeProps = {
   canvas: SmartCanvasDocument;
   item: SmartCanvasItem;
+  graphDependencyKey: string;
   selected: boolean;
   imageModels: CanvasModelOption[];
   textModels: CanvasModelOption[];
@@ -2263,25 +2426,25 @@ type SmartCanvasNodeProps = {
   lightweightMedia: boolean;
   mentionOpen: boolean;
   mentionItems: CanvasImageRef[];
-  onPointerDown: (event: ReactPointerEvent<HTMLDivElement>) => void;
-  onResizePointerDown: (event: ReactPointerEvent<HTMLElement>) => void;
-  onSelect: (multi?: boolean) => void;
+  onItemPointerDown: (event: ReactPointerEvent<HTMLDivElement>, item: SmartCanvasItem) => void;
+  onResizeItemPointerDown: (event: ReactPointerEvent<HTMLElement>, item: SmartCanvasItem) => void;
+  onSelectItem: (id: string, multi?: boolean) => void;
   onOpenImage: (image: CanvasImageRef) => void;
-  onDeleteImage: (image: CanvasImageRef) => void;
-  onUpdateData: (patch: Partial<SmartCanvasItem["data"]>) => void;
-  onRunGenerator: () => void;
-  onRunLlm: () => void;
-  onStopLoop: () => void;
-  onStopNode: () => void;
-  onOpenNodeHelp: () => void;
-  onConnectLlmImagesToGenerator: () => void;
-  onConnectLlmImagesToLoop: () => void;
-  onDeleteItem: () => void;
-  onStartConnect: (event: ReactPointerEvent<HTMLElement>) => void;
-  onFinishConnect: (event: ReactPointerEvent<HTMLElement>) => void;
-  onOpenUpstreamMenu: (event: ReactPointerEvent<HTMLElement>) => void;
+  onDeleteImage: (nodeId: string, image: CanvasImageRef) => void;
+  onUpdateItemData: (id: string, patch: Partial<SmartCanvasItem["data"]>) => void;
+  onRunGenerator: (id: string) => void;
+  onRunLlm: (id: string) => void;
+  onStopLoop: (id: string) => void;
+  onStopNode: (id: string) => void;
+  onOpenNodeHelp: (nodeType: SmartCanvasItemType) => void;
+  onConnectLlmImagesToGenerator: (generatorId: string) => void;
+  onConnectLlmImagesToLoop: (loopId: string) => void;
+  onDeleteItem: (id: string) => void;
+  onStartConnect: (event: ReactPointerEvent<HTMLElement>, sourceId: string) => void;
+  onFinishConnect: (event: ReactPointerEvent<HTMLElement>, targetId: string) => void;
+  onOpenUpstreamMenu: (event: ReactPointerEvent<HTMLElement>, nodeId: string) => void;
   onMentionToggle: () => void;
-  onAddMention: (image: CanvasImageRef) => void;
+  onAddMentionToPrompt: (nodeId: string, image: CanvasImageRef) => void;
   onCreateNodeFromPort: (nodeId: string, type: SmartCanvasItem["type"], point?: { x: number; y: number }, direction?: "upstream" | "downstream") => void;
   onCreateNodeHelpTemplate: (nodeId: string) => void;
   onMeasure: (id: string, size: { w: number; h: number }) => void;
@@ -2290,6 +2453,7 @@ type SmartCanvasNodeProps = {
 export const SmartCanvasNode = memo(function SmartCanvasNode({
   canvas,
   item,
+  graphDependencyKey: _graphDependencyKey,
   selected,
   imageModels,
   textModels,
@@ -2298,12 +2462,12 @@ export const SmartCanvasNode = memo(function SmartCanvasNode({
   lightweightMedia,
   mentionOpen,
   mentionItems,
-  onPointerDown,
-  onResizePointerDown,
-  onSelect,
+  onItemPointerDown,
+  onResizeItemPointerDown,
+  onSelectItem,
   onOpenImage,
   onDeleteImage,
-  onUpdateData,
+  onUpdateItemData,
   onRunGenerator,
   onRunLlm,
   onStopLoop,
@@ -2316,7 +2480,7 @@ export const SmartCanvasNode = memo(function SmartCanvasNode({
   onFinishConnect,
   onOpenUpstreamMenu,
   onMentionToggle,
-  onAddMention,
+  onAddMentionToPrompt,
   onCreateNodeFromPort,
   onCreateNodeHelpTemplate,
   onMeasure,
@@ -2367,34 +2531,34 @@ export const SmartCanvasNode = memo(function SmartCanvasNode({
         minHeight,
         zIndex,
       }}
-      onPointerDown={onPointerDown}
+      onPointerDown={(event) => onItemPointerDown(event, item)}
       onClick={(event) => {
         event.stopPropagation();
-        onSelect(event.ctrlKey || event.metaKey);
+        onSelectItem(item.id, event.ctrlKey || event.metaKey);
       }}
       onContextMenu={(event) => {
         event.preventDefault();
         event.stopPropagation();
       }}
     >
-      {canInput ? <Port side="in" onPointerUp={onFinishConnect} onOpenMenu={onOpenUpstreamMenu} /> : null}
-      {canOutput ? <Port side="out" onPointerDown={onStartConnect} /> : null}
+      {canInput ? <Port side="in" onPointerUp={(event) => onFinishConnect(event, item.id)} onOpenMenu={(event) => onOpenUpstreamMenu(event, item.id)} /> : null}
+      {canOutput ? <Port side="out" onPointerDown={(event) => onStartConnect(event, item.id)} /> : null}
       <NodeHeader
         item={item}
-        onOpenHelp={onOpenNodeHelp}
-        onDelete={onDeleteItem}
+        onOpenHelp={() => onOpenNodeHelp(item.type)}
+        onDelete={() => onDeleteItem(item.id)}
       />
       {item.type === "image" ? (
         <>
           <ImageNodeBody
             item={item}
             onOpenImage={onOpenImage}
-            onDeleteImage={onDeleteImage}
+            onDeleteImage={(image) => onDeleteImage(item.id, image)}
             width={width}
             height={Math.max(100, minHeight - 88)}
             lightweight={lightweightMedia}
           />
-          <ResizeHandle onPointerDown={onResizePointerDown} />
+          <ResizeHandle onPointerDown={(event) => onResizeItemPointerDown(event, item)} />
         </>
       ) : item.type === "prompt" ? (
         <PromptNodeBody
@@ -2402,9 +2566,9 @@ export const SmartCanvasNode = memo(function SmartCanvasNode({
           lightweight={lightweightMedia}
           mentionOpen={mentionOpen}
           mentionItems={mentionItems}
-          onUpdateData={onUpdateData}
+          onUpdateData={(patch) => onUpdateItemData(item.id, patch)}
           onMentionToggle={onMentionToggle}
-          onAddMention={onAddMention}
+          onAddMention={(image) => onAddMentionToPrompt(item.id, image)}
         />
       ) : item.type === "group" ? (
         <>
@@ -2414,7 +2578,7 @@ export const SmartCanvasNode = memo(function SmartCanvasNode({
             onOpenImage={onOpenImage}
             lightweight={lightweightMedia}
           />
-          <ResizeHandle onPointerDown={onResizePointerDown} />
+          <ResizeHandle onPointerDown={(event) => onResizeItemPointerDown(event, item)} />
         </>
       ) : item.type === "llm" ? (
         <LlmNodeBody
@@ -2423,18 +2587,18 @@ export const SmartCanvasNode = memo(function SmartCanvasNode({
           models={textModels}
           running={running}
           lightweight={lightweightMedia}
-          onUpdateData={onUpdateData}
-          onRunLlm={onRunLlm}
-          onStopNode={onStopNode}
+          onUpdateData={(patch) => onUpdateItemData(item.id, patch)}
+          onRunLlm={() => onRunLlm(item.id)}
+          onStopNode={() => onStopNode(item.id)}
         />
       ) : item.type === "loop" ? (
         <LoopNodeBody
           canvas={canvas}
           item={item}
           lightweight={lightweightMedia}
-          onConnectLlmImagesToLoop={onConnectLlmImagesToLoop}
-          onStopLoop={onStopLoop}
-          onUpdateData={onUpdateData}
+          onConnectLlmImagesToLoop={() => onConnectLlmImagesToLoop(item.id)}
+          onStopLoop={() => onStopLoop(item.id)}
+          onUpdateData={(patch) => onUpdateItemData(item.id, patch)}
         />
       ) : item.type === "image_generation" ? (
         <GeneratorNodeBody
@@ -2442,12 +2606,12 @@ export const SmartCanvasNode = memo(function SmartCanvasNode({
           item={item}
           models={imageModels}
           running={running}
-          onUpdateData={onUpdateData}
-          onRunGenerator={onRunGenerator}
-          onStopNode={onStopNode}
-          onConnectLlmImagesToGenerator={onConnectLlmImagesToGenerator}
+          onUpdateData={(patch) => onUpdateItemData(item.id, patch)}
+          onRunGenerator={() => onRunGenerator(item.id)}
+          onStopNode={() => onStopNode(item.id)}
+          onConnectLlmImagesToGenerator={() => onConnectLlmImagesToGenerator(item.id)}
           onOpenImage={onOpenImage}
-          onDeleteDirectImage={onDeleteImage}
+          onDeleteDirectImage={(image) => onDeleteImage(item.id, image)}
           lightweightMedia={lightweightMedia}
         />
       ) : item.type === "video_generation" ? (
@@ -2456,20 +2620,55 @@ export const SmartCanvasNode = memo(function SmartCanvasNode({
           item={item}
           models={videoModels}
           running={running}
-          onUpdateData={onUpdateData}
-          onRunGenerator={onRunGenerator}
-          onStopNode={onStopNode}
-          onConnectLlmImagesToGenerator={onConnectLlmImagesToGenerator}
+          onUpdateData={(patch) => onUpdateItemData(item.id, patch)}
+          onRunGenerator={() => onRunGenerator(item.id)}
+          onStopNode={() => onStopNode(item.id)}
+          onConnectLlmImagesToGenerator={() => onConnectLlmImagesToGenerator(item.id)}
           onOpenImage={onOpenImage}
-          onDeleteDirectImage={onDeleteImage}
+          onDeleteDirectImage={(image) => onDeleteImage(item.id, image)}
           lightweightMedia={lightweightMedia}
         />
       ) : (
-        <OutputNodeBody item={item} onOpenImage={onOpenImage} onDeleteImage={onDeleteImage} onStopNode={onStopNode} lightweight={lightweightMedia} />
+        <OutputNodeBody item={item} onOpenImage={onOpenImage} onDeleteImage={(image) => onDeleteImage(item.id, image)} onStopNode={() => onStopNode(item.id)} lightweight={lightweightMedia} />
       )}
     </div>
   );
-});
+}, areSmartCanvasNodePropsEqual);
+
+function areSmartCanvasNodePropsEqual(previous: SmartCanvasNodeProps, next: SmartCanvasNodeProps) {
+  return previous.item === next.item &&
+    previous.graphDependencyKey === next.graphDependencyKey &&
+    previous.selected === next.selected &&
+    previous.imageModels === next.imageModels &&
+    previous.textModels === next.textModels &&
+    previous.videoModels === next.videoModels &&
+    previous.running === next.running &&
+    previous.lightweightMedia === next.lightweightMedia &&
+    previous.mentionOpen === next.mentionOpen &&
+    previous.mentionItems === next.mentionItems &&
+    previous.onItemPointerDown === next.onItemPointerDown &&
+    previous.onResizeItemPointerDown === next.onResizeItemPointerDown &&
+    previous.onSelectItem === next.onSelectItem &&
+    previous.onOpenImage === next.onOpenImage &&
+    previous.onDeleteImage === next.onDeleteImage &&
+    previous.onUpdateItemData === next.onUpdateItemData &&
+    previous.onRunGenerator === next.onRunGenerator &&
+    previous.onRunLlm === next.onRunLlm &&
+    previous.onStopLoop === next.onStopLoop &&
+    previous.onStopNode === next.onStopNode &&
+    previous.onOpenNodeHelp === next.onOpenNodeHelp &&
+    previous.onConnectLlmImagesToGenerator === next.onConnectLlmImagesToGenerator &&
+    previous.onConnectLlmImagesToLoop === next.onConnectLlmImagesToLoop &&
+    previous.onDeleteItem === next.onDeleteItem &&
+    previous.onStartConnect === next.onStartConnect &&
+    previous.onFinishConnect === next.onFinishConnect &&
+    previous.onOpenUpstreamMenu === next.onOpenUpstreamMenu &&
+    previous.onMentionToggle === next.onMentionToggle &&
+    previous.onAddMentionToPrompt === next.onAddMentionToPrompt &&
+    previous.onCreateNodeFromPort === next.onCreateNodeFromPort &&
+    previous.onCreateNodeHelpTemplate === next.onCreateNodeHelpTemplate &&
+    previous.onMeasure === next.onMeasure;
+}
 
 function suggestedNodeTypeForItem(item: SmartCanvasItem): Exclude<SmartCanvasItem["type"], "image"> {
   if (item.type === "llm") {
@@ -2521,6 +2720,65 @@ function nodeUsageHint(item: SmartCanvasItem) {
     case "result":
       return "Output 节点展示生成结果，也可以把结果继续连接到 API生成或视频生成做二次创作。";
   }
+}
+
+function formatCanvasNodeTime(value?: string) {
+  if (!value) {
+    return "";
+  }
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) {
+    return value;
+  }
+  return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+}
+
+function CanvasRunInsight({ item, compact = false }: { item: SmartCanvasItem; compact?: boolean }) {
+  const status = item.data?.status;
+  const blockedBy = item.data?.blocked_by_name || item.data?.blocked_by || "";
+  const taskId = item.data?.task_id || item.data?.output?.task_id || "";
+  const startedAt = formatCanvasNodeTime(item.data?.started_at || item.data?.created_at);
+  const updatedAt = formatCanvasNodeTime(item.data?.updated_at);
+  const errorInput = {
+    ...item,
+    data: {
+      ...item.data,
+      error: item.data?.last_run_error_detail || item.data?.error,
+    },
+  };
+  const detail = item.data?.error || item.data?.last_run_error_detail || blockedBy
+    ? buildSmartCanvasErrorDetail(errorInput)
+    : null;
+  const meta = [
+    taskId ? `任务 ${taskId.slice(0, 8)}` : "",
+    startedAt ? `开始 ${startedAt}` : "",
+    updatedAt ? `更新 ${updatedAt}` : "",
+  ].filter(Boolean);
+  const hasInsight = Boolean(status || blockedBy || detail || meta.length > 0);
+
+  if (!hasInsight) {
+    return null;
+  }
+
+  return (
+    <div
+      className={cn(
+        "rounded-lg border px-2 py-1.5 text-[11px] leading-5",
+        detail
+          ? "border-rose-500/18 bg-rose-500/8 text-rose-700 dark:border-rose-400/20 dark:bg-rose-400/10 dark:text-rose-100"
+          : "border-sky-500/15 bg-sky-500/8 text-sky-700 dark:border-sky-400/20 dark:bg-sky-400/10 dark:text-sky-100",
+      )}
+      title={taskId ? `任务 ID：${taskId}` : undefined}
+    >
+      <div className="flex min-w-0 items-center justify-between gap-2">
+        <span className="truncate font-black">{detail?.title || (status ? statusLabel(status) : "运行信息")}</span>
+        {status ? <span className="shrink-0 font-semibold">{statusLabel(status)}</span> : null}
+      </div>
+      {blockedBy ? <div className="truncate">阻断来源：{blockedBy}</div> : null}
+      {detail?.message ? <div className={cn(compact ? "line-clamp-1" : "line-clamp-2", "whitespace-pre-wrap break-words")}>{detail.message}</div> : null}
+      {meta.length > 0 ? <div className="truncate opacity-80">{meta.join(" · ")}</div> : null}
+    </div>
+  );
 }
 
 function NodeHeader({
@@ -2804,8 +3062,23 @@ function LlmNodeBody({
   const upstreamImages = dedupeCanvasImageRefs(upstream.flatMap((node) => nodeInputImagesForCanvas(canvas, node)));
   const outputText = item.data?.output?.text || "";
   const nodeRunning = isActiveTask(item.data?.status);
+  const [outputCopied, setOutputCopied] = useState(false);
   const availableModels = models.filter((model) => canvasModelHasCapability(model, "chat") || model.kind === "text" || model.kind === "both" || model.id === "auto");
   const hasInput = upstreamTexts.length > 0 || upstreamImages.length > 0 || Boolean((item.data?.prompt || "").trim());
+  const copyOutputText = useCallback(async () => {
+    if (!outputText) return;
+    try {
+      await navigator.clipboard.writeText(outputText);
+      setOutputCopied(true);
+      window.setTimeout(() => setOutputCopied(false), 1200);
+    } catch {
+      setOutputCopied(false);
+    }
+  }, [outputText]);
+
+  useEffect(() => {
+    setOutputCopied(false);
+  }, [outputText]);
 
   return (
     <div className="space-y-3 p-3" data-node-interactive="true" onPointerDown={stopNodeInteraction}>
@@ -2871,7 +3144,24 @@ function LlmNodeBody({
       </div>
 
       <div>
-        <div className={cn("mb-1 text-[11px] font-black uppercase tracking-[0.14em]", canvasLabelClass)}>Output</div>
+        <div className="mb-1 flex items-center justify-between gap-2">
+          <div className={cn("text-[11px] font-black uppercase tracking-[0.14em]", canvasLabelClass)}>Output</div>
+          {outputText && !nodeRunning ? (
+            <Button
+              type="button"
+              size="icon"
+              variant="ghost"
+              className={cn("size-7 rounded-lg", canvasIconButtonClass)}
+              data-node-interactive="true"
+              onPointerDown={stopNodeInteraction}
+              onClick={() => void copyOutputText()}
+              title={outputCopied ? "已复制" : "复制提示词输出"}
+              aria-label={outputCopied ? "已复制" : "复制提示词输出"}
+            >
+              {outputCopied ? <Check className="size-3.5 text-emerald-500" /> : <Copy className="size-3.5" />}
+            </Button>
+          ) : null}
+        </div>
         <div className={cn("min-h-24 rounded-xl border p-3 text-xs leading-relaxed", outputText ? "border-border bg-background/70 text-foreground dark:border-slate-700 dark:bg-slate-950/45 dark:text-slate-100" : canvasDashedClass)}>
           {nodeRunning ? (
             <div className="flex items-center justify-between gap-2">
@@ -2891,14 +3181,16 @@ function LlmNodeBody({
               </Button>
             </div>
           ) : outputText ? (
-            <div className="line-clamp-5 whitespace-pre-wrap break-words">{outputText}</div>
+            <div className="max-h-40 overflow-y-auto overscroll-contain whitespace-pre-wrap break-words pr-1 select-text" onWheel={(event) => event.stopPropagation()}>
+              {outputText}
+            </div>
           ) : (
             "运行后会输出文本，可连接到 API生成 节点"
           )}
         </div>
       </div>
 
-      {item.data?.error ? <div className="rounded-lg bg-rose-500/10 px-2 py-1.5 text-xs text-rose-600 dark:text-rose-200">{item.data.error}</div> : null}
+      <CanvasRunInsight item={item} />
       {nodeRunning ? (
         <Button
           type="button"
@@ -3071,7 +3363,7 @@ function LoopNodeBody({
       ) : null}
 
       {outputImages.length > 0 ? <CanvasImageStrip images={outputImages} limit={4} className="grid-cols-4" lightweight={lightweight} /> : null}
-      {item.data?.error ? <div className="rounded-lg bg-rose-500/10 px-2 py-1.5 text-xs text-rose-600 dark:text-rose-200">{item.data.error}</div> : null}
+      <CanvasRunInsight item={item} />
     </div>
   );
 }
@@ -3326,7 +3618,7 @@ function GeneratorNodeBody({
         </div>
       </div>
       {outputImages.length > 0 ? <CanvasImageStrip images={outputImages} limit={3} onOpen={onOpenImage} className="grid-cols-3" lightweight={lightweightMedia} /> : null}
-      {item.data?.error ? <div className="rounded-lg bg-rose-500/10 px-2 py-1.5 text-xs text-rose-600 dark:text-rose-200">{item.data.error}</div> : null}
+      <CanvasRunInsight item={item} />
       {nodeRunning ? (
         <Button
           type="button"
@@ -3587,7 +3879,7 @@ function VideoGeneratorNodeBody({
       </div>
 
       {outputVideos.length > 0 ? <CanvasVideoStrip videos={outputVideos} limit={1} /> : null}
-      {item.data?.error ? <div className="rounded-lg bg-rose-500/10 px-2 py-1.5 text-xs text-rose-600 dark:text-rose-200">{item.data.error}</div> : null}
+      <CanvasRunInsight item={item} />
       {nodeRunning ? (
         <Button
           type="button"
@@ -3654,7 +3946,9 @@ function OutputNodeBody({
           连接生成节点后显示输出
         </div>
       )}
-      {item.data?.error ? <div className="mt-2 rounded-lg bg-rose-500/10 px-2 py-1.5 text-xs text-rose-600 dark:text-rose-200">{item.data.error}</div> : null}
+      <div className="mt-2">
+        <CanvasRunInsight item={item} />
+      </div>
       <Dialog open={showAllImages} onOpenChange={setShowAllImages}>
         <DialogContent className={cn("w-[min(92vw,780px)] max-w-none rounded-2xl p-0", canvasPanelClass)}>
           <DialogTitle className="sr-only">全部输出图片</DialogTitle>
@@ -3950,8 +4244,10 @@ function Port({
       type="button"
       data-port={side}
       className={cn(
-        "absolute top-1/2 z-30 flex size-4 -translate-y-1/2 items-center justify-center rounded-full border-2 border-sky-500 bg-background shadow-[0_0_0_4px_rgba(255,255,255,0.85)] transition hover:scale-110 hover:bg-sky-400 dark:border-slate-300 dark:bg-slate-900 dark:shadow-[0_0_0_4px_rgba(15,23,42,0.75)]",
-        side === "in" ? "-left-2" : "-right-2",
+        "absolute top-1/2 z-30 flex size-8 -translate-y-1/2 items-center justify-center rounded-full transition hover:scale-105",
+        "before:block before:size-4 before:rounded-full before:border-2 before:border-sky-500 before:bg-background before:shadow-[0_0_0_4px_rgba(255,255,255,0.85)] before:transition before:content-[''] hover:before:bg-sky-400",
+        "dark:before:border-slate-300 dark:before:bg-slate-900 dark:before:shadow-[0_0_0_4px_rgba(15,23,42,0.75)]",
+        side === "in" ? "-left-4" : "-right-4",
       )}
       onPointerDown={onPointerDown}
       onPointerUp={(event) => {
@@ -4232,6 +4528,22 @@ export function SmartCanvasOperationHistoryPanel({
 
 function RunRecordCard({ run }: { run: SmartCanvasRunRecord }) {
   const modeLabel = run.mode === "video" ? "视频生成" : run.mode === "edit" ? "图生图" : "文生图";
+  const detail = run.error
+    ? buildSmartCanvasErrorDetail({
+        status: run.status,
+        error: run.error,
+        task_id: run.taskId,
+        prompt: run.prompt,
+        model: run.model,
+        created_at: run.createdAt,
+        updated_at: run.updatedAt,
+      })
+    : null;
+  const times = [
+    run.startedAt ? `开始 ${formatCanvasNodeTime(run.startedAt)}` : "",
+    run.updatedAt ? `更新 ${formatCanvasNodeTime(run.updatedAt)}` : "",
+    run.taskId ? `任务 ${run.taskId.slice(0, 8)}` : "",
+  ].filter(Boolean);
   return (
     <div className="rounded-xl border border-border bg-background/70 p-2 dark:border-slate-800 dark:bg-slate-950/55">
       <div className="flex items-center justify-between gap-2">
@@ -4241,9 +4553,10 @@ function RunRecordCard({ run }: { run: SmartCanvasRunRecord }) {
         </div>
         <StatusBadge status={run.status} />
       </div>
+      {times.length > 0 ? <div className={cn("mt-1 truncate text-[11px]", canvasSubtleTextClass)}>{times.join(" · ")}</div> : null}
       {run.videos.length > 0 ? <CanvasVideoStrip videos={run.videos} limit={1} className="mt-2" /> : null}
       {run.images.length > 0 ? <CanvasImageStrip images={run.images} limit={3} className="mt-2 grid-cols-3" /> : null}
-      {run.error ? <div className="mt-2 text-[11px] text-rose-300">{run.error}</div> : null}
+      {detail ? <div className="mt-2 rounded-lg border border-rose-500/18 bg-rose-500/8 px-2 py-1.5 text-[11px] leading-5 text-rose-700 dark:border-rose-400/20 dark:bg-rose-400/10 dark:text-rose-100">{detail.message}</div> : null}
     </div>
   );
 }

@@ -34,6 +34,7 @@ import {
   type SmartCanvasSaveState,
   type SmartCanvasViewport,
 } from "./types";
+import { cloneSmartCanvasHistorySnapshot } from "./canvas-history";
 
 export const DEFAULT_SMART_VIEWPORT: SmartCanvasViewport = { x: 0, y: 0, zoom: 1 };
 export const DEFAULT_COMPOSER: SmartCanvasComposer = {
@@ -383,7 +384,7 @@ export function createHistoryEntry(label: string, snapshot: SmartCanvasDocument)
   const id = typeof crypto !== "undefined" && "randomUUID" in crypto
     ? `history-${crypto.randomUUID()}`
     : `history-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-  const normalizedSnapshot = normalizeSmartCanvas(snapshot) || createEmptySmartCanvas(snapshot.name || "未命名画布");
+  const normalizedSnapshot = normalizeSmartCanvas(cloneSmartCanvasHistorySnapshot(snapshot)) || createEmptySmartCanvas(snapshot.name || "未命名画布");
   return {
     id,
     label,
@@ -921,6 +922,9 @@ function sanitizeSmartItemData(data?: SmartCanvasItemData): SmartCanvasItemData 
     output: normalizeOutput(data.output),
     status: data.status,
     error: typeof data.error === "string" ? data.error : "",
+    blocked_by: typeof data.blocked_by === "string" ? data.blocked_by : "",
+    blocked_by_name: typeof data.blocked_by_name === "string" ? data.blocked_by_name : "",
+    last_run_error_detail: typeof data.last_run_error_detail === "string" ? data.last_run_error_detail : "",
     upload_status: data.upload_status === "uploading" || data.upload_status === "error" ? data.upload_status : undefined,
     upload_progress: Number.isFinite(Number(data.upload_progress)) ? Math.max(0, Math.min(100, Number(data.upload_progress))) : undefined,
     task_id: typeof data.task_id === "string" ? data.task_id : "",
