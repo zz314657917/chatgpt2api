@@ -124,6 +124,7 @@ import {
 
 const MANAGED_IMAGE_DRAG_TYPE = "application/x-chatgpt2api-managed-image";
 const CANVAS_ASSET_PAGE_SIZE = 50;
+const SMART_CANVAS_PORT_SNAP_RADIUS = 44;
 const CROP_NODE_OFFSET = { x: 32, y: 32 };
 const DEFAULT_ANGLE_CONTROL_VALUES: SmartCanvasAngleControlValues = { horizontal: 0, vertical: 15, zoom: 5 };
 const DETAIL_ENHANCE_PROMPT = "请对这张图片进行细节增强和高清修复，提升清晰度、纹理细节、边缘锐度和整体质感，同时严格保留原始构图、主体、颜色关系和风格，不新增无关元素。";
@@ -133,6 +134,15 @@ type SmartCanvasAssetLibraryScope = "mine" | "public";
 type SmartCanvasNodeClipboard = {
   nodes: SmartCanvasItem[];
   edges: SmartCanvasDocument["edges"];
+};
+
+type SmartCanvasPortSnapCandidate = {
+  id: string;
+  distance: number;
+};
+
+type SmartCanvasUpdateOptions = {
+  history?: "auto" | "skip";
 };
 
 type SmartCanvasGenerationNode = SmartCanvasItem & { type: "image_generation" | "video_generation" };
@@ -211,6 +221,21 @@ function buildAngleControlPrompt(values: SmartCanvasAngleControlValues) {
     `镜头缩放强度为 ${Math.round(values.zoom)} / 10。`,
     "只改变观察角度和镜头距离，不要新增无关元素，不要改变主体结构。",
   ].join("\n");
+}
+
+function canvasRunErrorDetail(status?: CreationTask["status"], error?: string) {
+  return status === "error" || status === "cancelled" ? error || "" : "";
+}
+
+function canvasBlockedData(blockedBy: string, blockedByName: string, message: string) {
+  return {
+    status: "error" as const,
+    error: message,
+    blocked_by: blockedBy,
+    blocked_by_name: blockedByName,
+    last_run_error_detail: message,
+    updated_at: new Date().toISOString(),
+  };
 }
 
 function generatorInputImages(canvas: SmartCanvasDocument, generator: SmartCanvasItem) {
@@ -741,6 +766,55 @@ function getCanvasNodeIdAtPoint(point: { x: number; y: number }, port?: "in" | "
   return target?.closest("[data-canvas-node-id]")?.getAttribute("data-canvas-node-id") || "";
 }
 
+function getCanvasNodeIdByPortSnap(
+  canvas: SmartCanvasDocument | null,
+  sourceId: string,
+  point: { x: number; y: number },
+  rect: DOMRect | undefined,
+  viewport: SmartCanvasViewport,
+) {
+  const directTargetId = getCanvasNodeIdAtPoint(point, "in");
+  if (directTargetId) {
+    return directTargetId;
+  }
+  if (!canvas || !rect || !sourceId) {
+    return "";
+  }
+  const source = canvas.nodes.find((item) => item.id === sourceId);
+  if (!source) {
+    return "";
+  }
+  const candidates: SmartCanvasPortSnapCandidate[] = [];
+  for (const node of canvas.nodes) {
+    if (node.id === sourceId || !canConnectSmartCanvasNodes(source, node)) {
+      continue;
+    }
+    const size = nodeSizeForType(node.type);
+    const nodeWidth = Number(node.data?.width || size.w);
+    const nodeHeight = Number(node.data?.height || size.h);
+    const portWorld = {
+      x: Number(node.position?.x || 0),
+      y: Number(node.position?.y || 0) + nodeHeight / 2,
+    };
+    const portScreen = {
+      x: rect.left + viewport.x + portWorld.x * viewport.zoom,
+      y: rect.top + viewport.y + portWorld.y * viewport.zoom,
+    };
+    const leftEdgeDistance = point.x - portScreen.x;
+    const verticalDistance = Math.abs(point.y - portScreen.y);
+    const nearLeftEdge = leftEdgeDistance >= -SMART_CANVAS_PORT_SNAP_RADIUS && leftEdgeDistance <= Math.max(SMART_CANVAS_PORT_SNAP_RADIUS, nodeWidth * viewport.zoom * 0.32);
+    if (!nearLeftEdge || verticalDistance > Math.max(SMART_CANVAS_PORT_SNAP_RADIUS, nodeHeight * viewport.zoom * 0.48)) {
+      continue;
+    }
+    candidates.push({
+      id: node.id,
+      distance: Math.hypot(Math.max(0, Math.abs(leftEdgeDistance) - 10), verticalDistance),
+    });
+  }
+  candidates.sort((a, b) => a.distance - b.distance);
+  return candidates[0]?.id || "";
+}
+
 function cloneCanvasItem(item: SmartCanvasItem): SmartCanvasItem {
   return {
     ...item,
@@ -841,6 +915,9 @@ export function useSmartCanvasController() {
   const loopStopRequestsRef = useRef(new Set<string>());
   const dragStateRef = useRef<SmartCanvasDragState>({ kind: "none" });
   const connectStateRef = useRef<SmartCanvasConnectState>({ kind: "none" });
+  const selectedItemIdRef = useRef("");
+  const selectedItemIdsRef = useRef<string[]>([]);
+  const lightweightMediaTimerRef = useRef<number | null>(null);
   const applyingHistoryRef = useRef(false);
   const historyCommitBaseRef = useRef<SmartCanvasDocument | null>(null);
   const nodeClipboardRef = useRef<SmartCanvasNodeClipboard | null>(null);
@@ -872,6 +949,14 @@ export function useSmartCanvasController() {
   useEffect(() => {
     viewportRef.current = viewport;
   }, [viewport]);
+
+  useEffect(() => {
+    selectedItemIdRef.current = selectedItemId;
+  }, [selectedItemId]);
+
+  useEffect(() => {
+    selectedItemIdsRef.current = selectedItemIds;
+  }, [selectedItemIds]);
 
   useEffect(() => {
     if (saveState === "saving" && saveStateRef.current === "dirty") {
@@ -909,7 +994,22 @@ export function useSmartCanvasController() {
     setLightweightCanvasMedia(next.kind !== "none" || dragStateRef.current.kind !== "none");
   }, []);
 
+  const keepCanvasMediaLightweight = useCallback((durationMs = 360) => {
+    setLightweightCanvasMedia(true);
+    if (lightweightMediaTimerRef.current !== null) {
+      window.clearTimeout(lightweightMediaTimerRef.current);
+    }
+    lightweightMediaTimerRef.current = window.setTimeout(() => {
+      lightweightMediaTimerRef.current = null;
+      if (dragStateRef.current.kind === "none" && connectStateRef.current.kind === "none") {
+        setLightweightCanvasMedia(false);
+      }
+    }, durationMs);
+  }, []);
+
   const selectSingleItem = useCallback((id: string) => {
+    selectedItemIdRef.current = id;
+    selectedItemIdsRef.current = id ? [id] : [];
     setSelectedItemId(id);
     setSelectedItemIds(id ? [id] : []);
   }, []);
@@ -918,25 +1018,32 @@ export function useSmartCanvasController() {
     if (!id) {
       return;
     }
-    const baseSelection = selectedItemIds.length > 0 ? selectedItemIds : selectedItemId ? [selectedItemId] : [];
+    const currentSelectedIds = selectedItemIdsRef.current;
+    const currentSelectedId = selectedItemIdRef.current;
+    const baseSelection = currentSelectedIds.length > 0 ? currentSelectedIds : currentSelectedId ? [currentSelectedId] : [];
     const next = baseSelection.includes(id)
       ? baseSelection.filter((itemId) => itemId !== id)
       : [...baseSelection, id];
-    setSelectedItemId(next.includes(id) ? id : next[0] || "");
+    const nextPrimary = next.includes(id) ? id : next[0] || "";
+    selectedItemIdRef.current = nextPrimary;
+    selectedItemIdsRef.current = next;
+    setSelectedItemId(nextPrimary);
     setSelectedItemIds(next);
-  }, [selectedItemId, selectedItemIds]);
+  }, []);
 
   const selectItem = useCallback((id: string, multi?: boolean) => {
     if (multi) {
       toggleSelectedItem(id);
       return;
     }
-    if (selectedItemIds.length > 1 && selectedItemIds.includes(id)) {
+    const currentSelectedIds = selectedItemIdsRef.current;
+    if (currentSelectedIds.length > 1 && currentSelectedIds.includes(id)) {
+      selectedItemIdRef.current = id;
       setSelectedItemId(id);
       return;
     }
     selectSingleItem(id);
-  }, [selectSingleItem, selectedItemIds, toggleSelectedItem]);
+  }, [selectSingleItem, toggleSelectedItem]);
 
   useEffect(() => {
     const html = document.documentElement;
@@ -1214,21 +1321,26 @@ export function useSmartCanvasController() {
       window.clearTimeout(autosaveTimerRef.current);
       autosaveTimerRef.current = null;
     }
+    if (lightweightMediaTimerRef.current !== null) {
+      window.clearTimeout(lightweightMediaTimerRef.current);
+      lightweightMediaTimerRef.current = null;
+    }
     if (saveStateRef.current === "dirty" || saveStateRef.current === "error") {
       void saveNow(canvasRef.current);
     }
   }, [saveNow]);
 
-  const updateCanvas = useCallback((updater: (current: SmartCanvasDocument) => SmartCanvasDocument, dirty = true, historyLabel?: string) => {
+  const updateCanvas = useCallback((updater: (current: SmartCanvasDocument) => SmartCanvasDocument, dirty = true, historyLabel?: string, options: SmartCanvasUpdateOptions = {}) => {
     const previous = canvasRef.current || createEmptySmartCanvas();
     const nextCanvas = updater(previous);
     canvasRef.current = nextCanvas;
     setCanvas(nextCanvas);
     dispatchSmartCanvasQueueChanged(nextCanvas);
-    if (!historyLabel && !applyingHistoryRef.current) {
+    const shouldUpdateHistory = options.history !== "skip" && !applyingHistoryRef.current;
+    if (!historyLabel && shouldUpdateHistory) {
       setHistory((current) => replaceSmartCanvasHistoryPresent(current, nextCanvas));
     }
-    if (historyLabel && !applyingHistoryRef.current) {
+    if (historyLabel && shouldUpdateHistory) {
       const historyBase = historyCommitBaseRef.current || previous;
       historyCommitBaseRef.current = null;
       setHistory((current) => pushSmartCanvasHistory(
@@ -1237,6 +1349,15 @@ export function useSmartCanvasController() {
       ));
       setHistoryEntries((entries) => [createHistoryEntry(historyLabel, nextCanvas), ...entries].slice(0, 30));
     }
+    if (dirty) {
+      markDirty();
+    }
+  }, [markDirty]);
+
+  const commitViewport = useCallback((next: SmartCanvasViewport, dirty = true) => {
+    const current = canvasRef.current || createEmptySmartCanvas();
+    const nextCanvas = { ...current, viewport: next };
+    canvasRef.current = nextCanvas;
     if (dirty) {
       markDirty();
     }
@@ -1538,7 +1659,7 @@ export function useSmartCanvasController() {
             const startPosition = activeDrag.startPositions[item.id] || { x: Number(item.position?.x || 0), y: Number(item.position?.y || 0) };
             return { ...item, position: { x: startPosition.x + dx, y: startPosition.y + dy } };
           }),
-        }), false);
+        }), false, undefined, { history: "skip" });
       }
       if (activeDrag.kind === "resize") {
         const dx = (event.clientX - activeDrag.startClientX) / viewportRef.current.zoom;
@@ -1555,7 +1676,7 @@ export function useSmartCanvasController() {
                 },
               }
             : item),
-        }), false);
+        }), false, undefined, { history: "skip" });
       }
     };
 
@@ -1580,13 +1701,20 @@ export function useSmartCanvasController() {
         }
       }
       if (activeDrag.kind === "pan") {
-        updateCanvas((current) => ({ ...current, viewport: viewportRef.current }), true);
+        commitViewport(viewportRef.current, true);
       }
       if (activeConnect.kind === "link") {
-        const targetId = getCanvasNodeIdAtPoint({ x: event.clientX, y: event.clientY }, "in");
-        if (targetId) {
-          appendEdge(activeConnect.sourceId, targetId);
-        } else {
+        const targetId = getCanvasNodeIdByPortSnap(
+          canvasRef.current,
+          activeConnect.sourceId,
+          { x: event.clientX, y: event.clientY },
+          boardRef.current?.getBoundingClientRect(),
+          viewportRef.current,
+        );
+        if (targetId && appendEdge(activeConnect.sourceId, targetId)) {
+          event.preventDefault();
+        }
+        if (!targetId) {
           setPortMenuRequest({
             id: Date.now(),
             nodeId: activeConnect.sourceId,
@@ -1605,7 +1733,7 @@ export function useSmartCanvasController() {
     window.addEventListener("pointermove", handleWindowPointerMove);
     window.addEventListener("pointerup", handleWindowPointerUp);
     window.addEventListener("pointercancel", handleWindowPointerUp);
-  }, [appendEdge, setActiveConnectState, setActiveDragState, updateCanvas]);
+  }, [appendEdge, commitViewport, setActiveConnectState, setActiveDragState, updateCanvas]);
 
   const addImagesToCanvas = useCallback((images: CanvasImageRef[], point?: { x: number; y: number }) => {
     const refs = dedupeCanvasImageRefs(images);
@@ -2030,7 +2158,9 @@ export function useSmartCanvasController() {
     }
     event.stopPropagation();
     const multiSelect = event.ctrlKey || event.metaKey;
-    const currentSelection = selectedItemIds.length > 0 ? selectedItemIds : selectedItemId ? [selectedItemId] : [];
+    const currentSelectedIds = selectedItemIdsRef.current;
+    const currentSelectedId = selectedItemIdRef.current;
+    const currentSelection = currentSelectedIds.length > 0 ? currentSelectedIds : currentSelectedId ? [currentSelectedId] : [];
     if (multiSelect) {
       setActiveDragState({ kind: "none" });
       return;
@@ -2052,6 +2182,8 @@ export function useSmartCanvasController() {
       }),
     );
     historyCommitBaseRef.current = canvasRef.current;
+    selectedItemIdRef.current = item.id;
+    selectedItemIdsRef.current = activeSelection;
     setSelectedItemId(item.id);
     setSelectedItemIds(activeSelection);
     setActiveDragState({
@@ -2065,7 +2197,7 @@ export function useSmartCanvasController() {
       startPositions,
     });
     bindWindowPointerSession(event.pointerId);
-  }, [bindWindowPointerSession, selectedItemId, selectedItemIds, setActiveDragState]);
+  }, [bindWindowPointerSession, setActiveDragState]);
 
   const handleResizeItemPointerDown = useCallback((event: ReactPointerEvent<HTMLElement>, item: SmartCanvasItem) => {
     if (event.button !== 0) {
@@ -2122,7 +2254,7 @@ export function useSmartCanvasController() {
           const startPosition = dragState.startPositions[item.id] || { x: Number(item.position?.x || 0), y: Number(item.position?.y || 0) };
           return { ...item, position: { x: startPosition.x + dx, y: startPosition.y + dy } };
         }),
-      }), false);
+      }), false, undefined, { history: "skip" });
     }
     if (dragState.kind === "resize" && dragState.pointerId === event.pointerId) {
       const dx = (event.clientX - dragState.startClientX) / viewportRef.current.zoom;
@@ -2139,7 +2271,7 @@ export function useSmartCanvasController() {
               },
             }
           : item),
-      }), false);
+      }), false, undefined, { history: "skip" });
     }
   }, [connectState, dragState, setActiveConnectState, updateCanvas]);
 
@@ -2156,12 +2288,18 @@ export function useSmartCanvasController() {
       }
     }
     if (dragState.kind === "pan" && dragState.pointerId === event.pointerId) {
-      updateCanvas((current) => ({ ...current, viewport: viewportRef.current }), true);
+      commitViewport(viewportRef.current, true);
     }
     if (connectState.kind === "link" && connectState.pointerId === event.pointerId) {
-      const targetId = getCanvasNodeIdAtPoint({ x: event.clientX, y: event.clientY }, "in");
-      if (targetId) {
-        appendEdge(connectState.sourceId, targetId);
+      const targetId = getCanvasNodeIdByPortSnap(
+        canvasRef.current,
+        connectState.sourceId,
+        { x: event.clientX, y: event.clientY },
+        boardRef.current?.getBoundingClientRect(),
+        viewportRef.current,
+      );
+      if (targetId && appendEdge(connectState.sourceId, targetId)) {
+        event.preventDefault();
       }
       setActiveConnectState({ kind: "none" });
     }
@@ -2171,27 +2309,24 @@ export function useSmartCanvasController() {
       // Capture may already be released by the browser.
     }
     setActiveDragState({ kind: "none" });
-  }, [appendEdge, connectState, dragState, setActiveConnectState, setActiveDragState, updateCanvas]);
+  }, [appendEdge, commitViewport, connectState, dragState, setActiveConnectState, setActiveDragState, updateCanvas]);
 
   const handleWheel = useCallback((event: ReactWheelEvent<HTMLDivElement>) => {
     event.preventDefault();
+    keepCanvasMediaLightweight();
     const rect = event.currentTarget.getBoundingClientRect();
     const factor = event.deltaY > 0 ? 0.92 : 1.08;
     const next = zoomViewportAt(viewportRef.current, rect, { x: event.clientX, y: event.clientY }, viewportRef.current.zoom * factor);
     setViewport(next);
     viewportRef.current = next;
-    updateCanvas((current) => ({ ...current, viewport: next }), false);
-    markDirty();
-  }, [markDirty, updateCanvas]);
+    commitViewport(next, true);
+  }, [commitViewport, keepCanvasMediaLightweight]);
 
-  const updateViewport = useCallback((next: SmartCanvasViewport, commit = false, label = "移动画布") => {
+  const updateViewport = useCallback((next: SmartCanvasViewport, _commit = false, _label = "移动画布") => {
     setViewport(next);
     viewportRef.current = next;
-    updateCanvas((current) => ({ ...current, viewport: next }), commit, commit ? undefined : label);
-    if (!commit) {
-      markDirty();
-    }
-  }, [markDirty, updateCanvas]);
+    commitViewport(next, true);
+  }, [commitViewport]);
 
   const zoomBy = useCallback((factor: number) => {
     const rect = boardRef.current?.getBoundingClientRect();
@@ -2201,8 +2336,8 @@ export function useSmartCanvasController() {
     const next = zoomViewportAt(viewportRef.current, rect, { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }, viewportRef.current.zoom * factor);
     setViewport(next);
     viewportRef.current = next;
-    updateCanvas((current) => ({ ...current, viewport: next }), true);
-  }, [updateCanvas]);
+    commitViewport(next, true);
+  }, [commitViewport]);
 
   const fitContent = useCallback(() => {
     const current = canvasRef.current;
@@ -2211,6 +2346,7 @@ export function useSmartCanvasController() {
       const next = { ...DEFAULT_SMART_VIEWPORT };
       setViewport(next);
       viewportRef.current = next;
+      commitViewport(next, true);
       return;
     }
     const xs = current.nodes.map((item) => Number(item.position?.x || 0));
@@ -2227,8 +2363,8 @@ export function useSmartCanvasController() {
     };
     setViewport(next);
     viewportRef.current = next;
-    updateCanvas((doc) => ({ ...doc, viewport: next }), true);
-  }, [updateCanvas]);
+    commitViewport(next, true);
+  }, [commitViewport]);
 
   const focusItem = useCallback((itemId: string) => {
     const current = canvasRef.current;
@@ -2327,14 +2463,15 @@ export function useSmartCanvasController() {
   }, [bindWindowPointerSession, setActiveConnectState]);
 
   const finishConnect = useCallback((event: ReactPointerEvent<HTMLElement>, targetId: string) => {
-    if (connectState.kind !== "link") {
+    const activeConnect = connectStateRef.current;
+    if (activeConnect.kind !== "link") {
       return;
     }
     event.preventDefault();
     event.stopPropagation();
-    appendEdge(connectState.sourceId, targetId);
+    appendEdge(activeConnect.sourceId, targetId);
     setActiveConnectState({ kind: "none" });
-  }, [appendEdge, connectState, setActiveConnectState]);
+  }, [appendEdge, setActiveConnectState]);
 
   const imageRefsToFiles = useCallback(async (refs: CanvasImageRef[]) => {
     const files: File[] = [];
@@ -2403,6 +2540,7 @@ export function useSmartCanvasController() {
       output,
       status: task.status,
       error: task.error,
+      last_run_error_detail: canvasRunErrorDetail(task.status, task.error),
       task_id: task.id,
       created_at: task.created_at || new Date().toISOString(),
       updated_at: task.updated_at,
@@ -2450,12 +2588,13 @@ export function useSmartCanvasController() {
                   output,
                   status: task.status,
                   error: task.error,
+                  last_run_error_detail: canvasRunErrorDetail(task.status, task.error),
                   task_id: task.id,
                   updated_at: task.updated_at,
                 },
               }
             : item),
-        }), !active, !active ? `完成${label}` : undefined);
+        }), !active, !active ? `完成${label}` : undefined, active ? { history: "skip" } : undefined);
       }
       void loadAssets();
     } catch (error) {
@@ -2463,7 +2602,7 @@ export function useSmartCanvasController() {
       updateCanvas((current) => ({
         ...current,
         nodes: current.nodes.map((item) => item.id === outputId
-          ? { ...item, data: { ...item.data, status: "error", error: message, task_id: taskId, updated_at: new Date().toISOString() } }
+          ? { ...item, data: { ...item.data, status: "error", error: message, last_run_error_detail: message, task_id: taskId, updated_at: new Date().toISOString() } }
           : item),
       }), true, `${label}失败`);
       toast.error(message);
@@ -2613,6 +2752,7 @@ export function useSmartCanvasController() {
                   output,
                   status: task.status,
                   error: task.error,
+                  last_run_error_detail: canvasRunErrorDetail(task.status, task.error),
                   task_id: task.id,
                   started_at: item.data?.started_at || taskStartedAt,
                   updated_at: task.updated_at,
@@ -2633,6 +2773,7 @@ export function useSmartCanvasController() {
                   output,
                   status: task.status,
                   error: task.error,
+                  last_run_error_detail: canvasRunErrorDetail(task.status, task.error),
                   task_id: task.id,
                   started_at: item.data?.started_at || taskStartedAt,
                   updated_at: task.updated_at,
@@ -2641,7 +2782,7 @@ export function useSmartCanvasController() {
             }
             return item;
           }),
-        }), !active, !active ? "完成 API 生成" : undefined);
+        }), !active, !active ? "完成 API 生成" : undefined, active ? { history: "skip" } : undefined);
       }
       void loadAssets();
     } catch (error) {
@@ -2651,7 +2792,7 @@ export function useSmartCanvasController() {
         nodes: current.nodes.map((item) => item.id === generatorId || outputIds.includes(item.id)
           ? hasLoopOutput(item)
             ? item
-            : { ...item, data: { ...item.data, status: "error", error: message, task_id: taskId, updated_at: new Date().toISOString() } }
+            : { ...item, data: { ...item.data, status: "error", error: message, last_run_error_detail: message, task_id: taskId, updated_at: new Date().toISOString() } }
           : item),
       }), true, "API 生成失败");
       toast.error(message);
@@ -2686,19 +2827,20 @@ export function useSmartCanvasController() {
                   output,
                   status: task.status,
                   error: task.error,
+                  last_run_error_detail: canvasRunErrorDetail(task.status, task.error),
                   task_id: task.id,
                   updated_at: task.updated_at,
                 },
               }
             : item),
-        }), !active, !active ? "完成 AI 提示词" : undefined);
+        }), !active, !active ? "完成 AI 提示词" : undefined, active ? { history: "skip" } : undefined);
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : "同步 AI 提示词任务失败";
       updateCanvas((current) => ({
         ...current,
         nodes: current.nodes.map((item) => item.id === nodeId
-          ? { ...item, data: { ...item.data, status: "error", error: message, task_id: taskId, updated_at: new Date().toISOString() } }
+          ? { ...item, data: { ...item.data, status: "error", error: message, last_run_error_detail: message, task_id: taskId, updated_at: new Date().toISOString() } }
           : item),
       }), true, "AI 提示词失败");
       toast.error(message);
@@ -2720,7 +2862,14 @@ export function useSmartCanvasController() {
     const inputText = llmInputText(current, node);
     const inputImages = llmInputImages(current, node);
     if (!inputText && inputImages.length === 0) {
-      toast.error("请连接提示词/图片节点，或在 AI 提示词节点里补充输入");
+      const message = "请连接提示词/图片节点，或在 AI 提示词节点里补充输入";
+      updateCanvas((doc) => ({
+        ...doc,
+        nodes: doc.nodes.map((item) => item.id === node.id
+          ? { ...item, data: { ...item.data, ...canvasBlockedData("input", "上游输入", message) } }
+          : item),
+      }), true, "AI 提示词阻断");
+      toast.error(message);
       return;
     }
     setRunning(true);
@@ -2778,6 +2927,7 @@ export function useSmartCanvasController() {
                 output,
                 status: task.status,
                 error: task.error,
+                last_run_error_detail: canvasRunErrorDetail(task.status, task.error),
                 task_id: task.id,
                 updated_at: task.updated_at,
               },
@@ -2790,7 +2940,7 @@ export function useSmartCanvasController() {
       updateCanvas((doc) => ({
         ...doc,
         nodes: doc.nodes.map((item) => item.id === node.id
-          ? { ...item, data: { ...item.data, status: "error", error: message, updated_at: new Date().toISOString() } }
+          ? { ...item, data: { ...item.data, status: "error", error: message, last_run_error_detail: message, updated_at: new Date().toISOString() } }
           : item),
       }), true, "AI 提示词失败");
       toast.error(message);
@@ -2826,12 +2976,26 @@ export function useSmartCanvasController() {
       .filter(Boolean)
       .join("\n\n");
     if (!submittedPrompt) {
-      toast.error("请给循环节点连接 Prompt/LLM，或在 API生成节点里补充提示词");
+      const message = "请给循环节点连接 Prompt/LLM，或在 API生成节点里补充提示词";
+      updateCanvas((doc) => ({
+        ...doc,
+        nodes: doc.nodes.map((item) => item.id === loop.id || item.id === generator.id
+          ? { ...item, data: { ...item.data, ...canvasBlockedData("prompt", "Prompt/LLM", message) } }
+          : item),
+      }), true, "循环阻断");
+      toast.error(message);
       return;
     }
     const sourceImages = loopInputImages(current, loop);
     if (loopMode === "images" && sourceImages.length === 0) {
-      toast.error("逐图循环需要连接至少 1 张图片");
+      const message = "逐图循环需要连接至少 1 张图片";
+      updateCanvas((doc) => ({
+        ...doc,
+        nodes: doc.nodes.map((item) => item.id === loop.id
+          ? { ...item, data: { ...item.data, ...canvasBlockedData("image", "图片输入", message) } }
+          : item),
+      }), true, "循环阻断");
+      toast.error(message);
       return;
     }
     const iterations = loopMode === "images" ? sourceImages.slice(0, 10).map((image) => [image]) : [sourceImages];
@@ -2954,7 +3118,7 @@ export function useSmartCanvasController() {
             : [...edges, createSmartEdge(generator.id, outputNode.id)];
         }
         return { ...doc, nodes, edges };
-      }, status !== "running", status === "running" ? undefined : "完成循环");
+      }, status !== "running", status === "running" ? undefined : "完成循环", status === "running" ? { history: "skip" } : undefined);
     };
 
     setRunning(true);
@@ -3104,7 +3268,14 @@ export function useSmartCanvasController() {
     }
     const submittedPrompt = generatorPromptText(current, generator);
     if (!submittedPrompt) {
-      toast.error(generator.type === "video_generation" ? "请连接 Prompt 节点，或在视频生成节点里补充提示词" : "请连接 Prompt 节点，或在 API生成节点里补充提示词");
+      const message = generator.type === "video_generation" ? "请连接 Prompt 节点，或在视频生成节点里补充提示词" : "请连接 Prompt 节点，或在 API生成节点里补充提示词";
+      updateCanvas((doc) => ({
+        ...doc,
+        nodes: doc.nodes.map((item) => item.id === generator.id
+          ? { ...item, data: { ...item.data, ...canvasBlockedData("prompt", "Prompt 节点", message) } }
+          : item),
+      }), true, generator.type === "video_generation" ? "视频生成阻断" : "API 生成阻断");
+      toast.error(message);
       return;
     }
     const inputRefs = generatorInputImages(current, generator);
@@ -3199,6 +3370,7 @@ export function useSmartCanvasController() {
             output,
             status: task.status,
             error: task.error,
+            last_run_error_detail: canvasRunErrorDetail(task.status, task.error),
             task_id: task.id,
             started_at: item.id === generator.id ? item.data?.started_at || startedAt || task.created_at : startedAt,
             updated_at: task.updated_at,
@@ -3224,6 +3396,7 @@ export function useSmartCanvasController() {
             output,
             status: task.status,
             error: task.error,
+            last_run_error_detail: canvasRunErrorDetail(task.status, task.error),
             task_id: task.id,
             started_at: startedAt,
             updated_at: task.updated_at,
@@ -3238,7 +3411,7 @@ export function useSmartCanvasController() {
       updateCanvas((doc) => ({
         ...doc,
         nodes: doc.nodes.map((item) => item.id === generator.id
-          ? { ...item, data: { ...item.data, status: "error", error: message, updated_at: new Date().toISOString() } }
+          ? { ...item, data: { ...item.data, status: "error", error: message, last_run_error_detail: message, updated_at: new Date().toISOString() } }
           : item),
       }), true, "API 生成失败");
       toast.error(message);
@@ -3282,6 +3455,7 @@ export function useSmartCanvasController() {
               ...item.data,
               status: "cancelled",
               error: "循环已中断",
+              last_run_error_detail: "循环已中断",
               stop_requested: true,
               updated_at: new Date().toISOString(),
             },
@@ -3323,6 +3497,7 @@ export function useSmartCanvasController() {
               ...item.data,
               status: "cancelled",
               error: `${label}已中断`,
+              last_run_error_detail: `${label}已中断`,
               stop_requested: true,
               updated_at: new Date().toISOString(),
             },
@@ -3474,6 +3649,10 @@ export function useSmartCanvasController() {
     }
   }, [canvases, renameCanvas]);
 
+  const toggleMention = useCallback(() => {
+    setMentionOpen((open) => !open);
+  }, []);
+
   const deleteItem = useCallback((id: string) => {
     if (!id) {
       return;
@@ -3485,10 +3664,13 @@ export function useSmartCanvasController() {
         .map((item) => pruneGroupReferences(item, new Set([id]))),
       edges: current.edges.filter((edge) => edge.source !== id && edge.target !== id),
     }), true, "删除节点");
-    const remainingSelection = selectedItemIds.filter((itemId) => itemId !== id);
+    const remainingSelection = selectedItemIdsRef.current.filter((itemId) => itemId !== id);
+    const nextPrimary = selectedItemIdRef.current === id ? remainingSelection[0] || "" : selectedItemIdRef.current;
+    selectedItemIdsRef.current = remainingSelection;
+    selectedItemIdRef.current = nextPrimary;
     setSelectedItemIds(remainingSelection);
-    setSelectedItemId((current) => current === id ? remainingSelection[0] || "" : current);
-  }, [selectedItemIds, updateCanvas]);
+    setSelectedItemId(nextPrimary);
+  }, [updateCanvas]);
 
   const deleteImageFromItem = useCallback((id: string, image: CanvasImageRef) => {
     if (!id) {
@@ -3859,7 +4041,7 @@ export function useSmartCanvasController() {
     addAssetToComposer,
     addMentionImageToPrompt,
     handleUploadInputChange,
-    toggleMention: () => setMentionOpen((open) => !open),
+    toggleMention,
     openUploadDialog: () => openUploadDialogAt(),
     openUploadDialogAt,
     stopDraggingImages: () => setDraggingImages(false),

@@ -77,6 +77,9 @@ export type SmartCanvasItemData = {
   output?: CanvasNodeOutput;
   status?: CreationTask["status"];
   error?: string;
+  blocked_by?: string;
+  blocked_by_name?: string;
+  last_run_error_detail?: string;
   upload_status?: "uploading" | "error";
   upload_progress?: number;
   task_id?: string;

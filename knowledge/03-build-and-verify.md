@@ -68,7 +68,7 @@ Sub2API launch/redeem、登录态桥接、图片任务路由或对象存储类�
 2. `cd web && npm run build`
 3. `go test ./...`
 4. `git diff --check`
-5. 如本地预览环境可用，至少补 `/canvas` 的最小人工或浏览器回读
+5. 如本地预览环境可用，按 `knowledge/07-canvas-manual-checklist.md` 至少补 `/canvas` 的最小人工或浏览器回读
 
 `/image` 分辨率预设、图片参数共享配置、Sub2API 图片 payload 规范类修改：
 
@@ -109,7 +109,7 @@ Sub2API launch/redeem、登录态桥接、图片任务路由或对象存储类�
 ## 当前验证缺口
 
 - 仓库目前缺少一份更细的“Sub2API image workspace 最小人工闭环”记录，尤其是 launch -> `/image` -> continued edit 的真实页面验证入口。
-- 仓库目前也缺少一份更细的“`/canvas` 最小人工闭环”记录，尤其是建画布、拖入图片、节点运行、Output 回填、自动保存和重新打开恢复。
+- `/canvas` 最小人工闭环已整理到 `knowledge/07-canvas-manual-checklist.md`，覆盖建画布、拖入图片、节点运行、Output 回填、自动保存和重新打开恢复。
 - 当前知识库已能指向命令，但对“哪些改动必须同时验证前后端”之前表达不够稳定，后续应继续按 `/image`、`/canvas`、登录态桥接、对象存储、策略开关这些场景细化。
 - 对 embedded session recovery / bound key preservation 这类修复，知识库目前还缺一份更细的最小人工检查清单，例如“从 launch 进入后刷新页面、模拟前端 token 失效、确认 cookie 恢复后仍保留已绑定 key”。
 - 对视频节点与 composer 分辨率预设这类 6 月初新增主线，仓库还缺更细的最小人工检查清单，例如“无绑定时视频节点隐藏、有绑定时可见；`/image` 里切换预设后 payload 不回退到旧字段”。
