@@ -615,6 +615,7 @@ export type ManagedImageListResult = {
   next_cursor: string;
   has_more: boolean;
   page_size: number;
+  retention_days: number;
 };
 
 export type SystemLog = {
@@ -2075,6 +2076,7 @@ export async function fetchManagedImages(
     next_cursor?: string | null;
     has_more?: boolean | null;
     page_size?: number | null;
+    retention_days?: number | string | null;
   }>(
     `/api/images${params.toString() ? `?${params.toString()}` : ""}`,
     { signal: options.signal },
@@ -2085,6 +2087,7 @@ export async function fetchManagedImages(
     next_cursor: typeof data.next_cursor === "string" ? data.next_cursor : "",
     has_more: data.has_more === true,
     page_size: Number(data.page_size ?? filters.page_size ?? 50) || 50,
+    retention_days: Math.max(1, Number(data.retention_days) || 7),
   };
 }
 

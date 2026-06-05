@@ -1,7 +1,7 @@
 "use client";
 
 import { forwardRef, useCallback, useEffect, useMemo, useRef, useState, type HTMLAttributes } from "react";
-import { Check, Copy, Download, Eye, Globe2, ImageIcon, LoaderCircle, Lock, MoreHorizontal, RefreshCw, Search, SlidersHorizontal, Sparkles, Tag, Trash2, X } from "lucide-react";
+import { Check, Copy, Download, Eye, Globe2, ImageIcon, Info, LoaderCircle, Lock, MoreHorizontal, RefreshCw, Search, SlidersHorizontal, Sparkles, Tag, Trash2, X } from "lucide-react";
 import { VirtuosoGrid, type VirtuosoGridHandle } from "react-virtuoso";
 import { useLocation, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
@@ -408,6 +408,7 @@ function ImageManagerContent({
   const [loadError, setLoadError] = useState("");
   const [isAutoRefreshing, setIsAutoRefreshing] = useState(false);
   const [items, setItems] = useState<ManagedImageSummary[]>(() => initialCache?.items ?? []);
+  const [imageRetentionDays, setImageRetentionDays] = useState(7);
   const [nextCursor, setNextCursor] = useState(() => initialCache?.nextCursor ?? "");
   const [hasMoreItems, setHasMoreItems] = useState(() => initialCache?.hasMore ?? false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
@@ -561,6 +562,7 @@ function ImageManagerContent({
       );
       updateImageManagerCache(currentCacheKey, data.items, data.next_cursor, data.has_more);
       setItems(data.items);
+      setImageRetentionDays(data.retention_days);
       setNextCursor(data.next_cursor);
       setHasMoreItems(data.has_more);
       setSelectedImageIds({});
@@ -600,8 +602,10 @@ function ImageManagerContent({
         return incoming && incoming.path === item.path && JSON.stringify(incoming) === JSON.stringify(item);
       });
       if (hasSameItems) {
+        setImageRetentionDays(data.retention_days);
         return;
       }
+      setImageRetentionDays(data.retention_days);
       setItems((current) => {
         const next = data.items.map((item) => ({ ...current.find((currentItem) => currentItem.path === item.path), ...item }));
         if (next.length === current.length && next.every((item, index) => item.path === current[index]?.path && JSON.stringify(item) === JSON.stringify(current[index]))) {
@@ -648,6 +652,7 @@ function ImageManagerContent({
         updateImageManagerCache(currentCacheKey, next, data.next_cursor, data.has_more);
         return next;
       });
+      setImageRetentionDays(data.retention_days);
       setNextCursor(data.next_cursor);
       setHasMoreItems(data.has_more);
     } catch (error) {
@@ -1381,7 +1386,15 @@ function ImageManagerContent({
 
   return (
     <section className="flex h-full min-h-0 flex-col gap-5 pb-20 sm:pb-24">
-      <PageHeader eyebrow="Images" title="图片库" />
+      <div className="flex min-w-0 flex-col gap-2">
+        <PageHeader eyebrow="Images" title="图片库" />
+        {galleryView === "mine" ? (
+          <div className="inline-flex w-fit max-w-full items-center gap-2 rounded-full border border-border bg-background/70 px-3 py-1.5 text-xs leading-5 text-muted-foreground shadow-sm">
+            <Info className="size-3.5 shrink-0" />
+            <span className="min-w-0">个人图库仅保留最近 {imageRetentionDays} 天，过期图片会自动清理。</span>
+          </div>
+        ) : null}
+      </div>
 
       <div className="grid min-w-0 gap-4 lg:grid-cols-[300px_minmax(0,1fr)] xl:grid-cols-[320px_minmax(0,1fr)]">
         <aside className="min-w-0 rounded-[18px] border border-border bg-background/80 p-3 shadow-[0_6px_20px_rgba(15,23,42,0.04)] sm:p-4 lg:sticky lg:top-24 lg:self-start">
