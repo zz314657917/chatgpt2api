@@ -3062,23 +3062,36 @@ function LlmNodeBody({
   const upstreamImages = dedupeCanvasImageRefs(upstream.flatMap((node) => nodeInputImagesForCanvas(canvas, node)));
   const outputText = item.data?.output?.text || "";
   const nodeRunning = isActiveTask(item.data?.status);
-  const [outputCopied, setOutputCopied] = useState(false);
+  const [outputCopyState, setOutputCopyState] = useState<"idle" | "copied" | "failed">("idle");
+  const [outputDialogOpen, setOutputDialogOpen] = useState(false);
+  const outputCopyResetTimerRef = useRef<number | null>(null);
   const availableModels = models.filter((model) => canvasModelHasCapability(model, "chat") || model.kind === "text" || model.kind === "both" || model.id === "auto");
   const hasInput = upstreamTexts.length > 0 || upstreamImages.length > 0 || Boolean((item.data?.prompt || "").trim());
+  const outputCharacterCount = outputText.length.toLocaleString("zh-CN");
   const copyOutputText = useCallback(async () => {
     if (!outputText) return;
+    if (outputCopyResetTimerRef.current !== null) {
+      window.clearTimeout(outputCopyResetTimerRef.current);
+    }
     try {
       await navigator.clipboard.writeText(outputText);
-      setOutputCopied(true);
-      window.setTimeout(() => setOutputCopied(false), 1200);
+      setOutputCopyState("copied");
+      outputCopyResetTimerRef.current = window.setTimeout(() => setOutputCopyState("idle"), 1200);
     } catch {
-      setOutputCopied(false);
+      setOutputCopyState("failed");
+      outputCopyResetTimerRef.current = window.setTimeout(() => setOutputCopyState("idle"), 2200);
     }
   }, [outputText]);
 
   useEffect(() => {
-    setOutputCopied(false);
+    setOutputCopyState("idle");
   }, [outputText]);
+
+  useEffect(() => () => {
+    if (outputCopyResetTimerRef.current !== null) {
+      window.clearTimeout(outputCopyResetTimerRef.current);
+    }
+  }, []);
 
   return (
     <div className="space-y-3 p-3" data-node-interactive="true" onPointerDown={stopNodeInteraction}>
@@ -3147,19 +3160,37 @@ function LlmNodeBody({
         <div className="mb-1 flex items-center justify-between gap-2">
           <div className={cn("text-[11px] font-black uppercase tracking-[0.14em]", canvasLabelClass)}>Output</div>
           {outputText && !nodeRunning ? (
-            <Button
-              type="button"
-              size="icon"
-              variant="ghost"
-              className={cn("size-7 rounded-lg", canvasIconButtonClass)}
-              data-node-interactive="true"
-              onPointerDown={stopNodeInteraction}
-              onClick={() => void copyOutputText()}
-              title={outputCopied ? "已复制" : "复制提示词输出"}
-              aria-label={outputCopied ? "已复制" : "复制提示词输出"}
-            >
-              {outputCopied ? <Check className="size-3.5 text-emerald-500" /> : <Copy className="size-3.5" />}
-            </Button>
+            <div className="flex min-w-0 items-center gap-1">
+              <span className={cn("truncate text-[10px] font-semibold", outputCopyState === "failed" ? "text-rose-600 dark:text-rose-300" : canvasSubtleTextClass)}>
+                {outputCopyState === "failed" ? "复制失败，请手动选择文本" : `${outputCharacterCount} 字符`}
+              </span>
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                className={cn("h-7 shrink-0 rounded-lg px-2 text-[11px] font-black", canvasIconButtonClass)}
+                data-node-interactive="true"
+                onPointerDown={stopNodeInteraction}
+                onClick={() => setOutputDialogOpen(true)}
+                title="查看完整提示词输出"
+              >
+                <FileText className="size-3.5" />
+                全文
+              </Button>
+              <Button
+                type="button"
+                size="icon"
+                variant="ghost"
+                className={cn("size-7 shrink-0 rounded-lg", canvasIconButtonClass)}
+                data-node-interactive="true"
+                onPointerDown={stopNodeInteraction}
+                onClick={() => void copyOutputText()}
+                title={outputCopyState === "copied" ? "已复制" : "复制提示词输出"}
+                aria-label={outputCopyState === "copied" ? "已复制" : "复制提示词输出"}
+              >
+                {outputCopyState === "copied" ? <Check className="size-3.5 text-emerald-500" /> : <Copy className="size-3.5" />}
+              </Button>
+            </div>
           ) : null}
         </div>
         <div className={cn("min-h-24 rounded-xl border p-3 text-xs leading-relaxed", outputText ? "border-border bg-background/70 text-foreground dark:border-slate-700 dark:bg-slate-950/45 dark:text-slate-100" : canvasDashedClass)}>
@@ -3188,6 +3219,34 @@ function LlmNodeBody({
             "运行后会输出文本，可连接到 API生成 节点"
           )}
         </div>
+        <Dialog open={outputDialogOpen} onOpenChange={setOutputDialogOpen}>
+          <DialogContent className={cn("w-[min(92vw,760px)] max-w-none rounded-2xl p-0", canvasPanelClass)} data-node-interactive="true" onPointerDown={stopNodeInteraction}>
+            <div className="border-b border-border px-4 py-3 dark:border-slate-800">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <DialogTitle className="text-base font-black">提示词输出全文</DialogTitle>
+                  <DialogDescription className={cn("mt-1 text-xs", canvasSubtleTextClass)}>
+                    {outputCharacterCount} 字符
+                  </DialogDescription>
+                </div>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className={cn("h-8 shrink-0 rounded-lg px-2 text-xs font-black", canvasGhostButtonClass)}
+                  onClick={() => void copyOutputText()}
+                >
+                  {outputCopyState === "copied" ? <Check className="size-3.5 text-emerald-500" /> : <Copy className="size-3.5" />}
+                  {outputCopyState === "copied" ? "已复制" : "复制"}
+                </Button>
+              </div>
+              {outputCopyState === "failed" ? <div className="mt-2 text-xs font-semibold text-rose-600 dark:text-rose-300">复制失败，请手动选择文本。</div> : null}
+            </div>
+            <div className="max-h-[min(68vh,560px)] overflow-y-auto overscroll-contain p-4 text-sm leading-relaxed" onWheel={(event) => event.stopPropagation()}>
+              <pre className="whitespace-pre-wrap break-words font-sans text-foreground select-text dark:text-slate-100">{outputText}</pre>
+            </div>
+          </DialogContent>
+        </Dialog>
       </div>
 
       <CanvasRunInsight item={item} />
