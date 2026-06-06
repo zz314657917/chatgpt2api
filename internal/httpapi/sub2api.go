@@ -12,6 +12,8 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/textproto"
+	"net/url"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -601,6 +603,18 @@ func sub2APIEndpointURL(baseURL, endpoint string) string {
 	return baseURL + "/" + endpoint
 }
 
+func sub2APITaskStatusEndpoint(baseURL, taskID string) string {
+	taskID = strings.TrimSpace(taskID)
+	if taskID == "" {
+		return ""
+	}
+	endpoint := "tasks/" + url.PathEscape(taskID) + "?language=zh"
+	if !strings.HasSuffix(strings.TrimRight(strings.TrimSpace(baseURL), "/"), "/v1") {
+		endpoint = "v1/" + endpoint
+	}
+	return endpoint
+}
+
 func (a *App) formatSub2APIImageResult(ctx context.Context, result map[string]any, identity service.Identity, payload map[string]any) (map[string]any, error) {
 	if taskID := sub2APIImageTaskID(result); taskID != "" {
 		binding, ok := a.sub2APIBindingForIdentity(identity)
@@ -675,7 +689,7 @@ func (a *App) pollSub2APIImageTask(ctx context.Context, binding service.Sub2APIB
 		return nil, err
 	}
 	for {
-		result, err := a.getSub2APIJSON(ctx, binding, "tasks/"+taskID)
+		result, err := a.getSub2APIJSON(ctx, binding, sub2APITaskStatusEndpoint(binding.GatewayBaseURL, taskID))
 		if err != nil {
 			return nil, err
 		}
@@ -767,19 +781,19 @@ func sub2APIImageItemURL(item map[string]any) string {
 func sub2APIErrorMessageFromPayload(result map[string]any) string {
 	for _, key := range []string{"message", "error", "detail"} {
 		if nested := util.Clean(util.StringMap(result[key])["message"]); nested != "" {
-			return nested
+			return sanitizeSub2APIUserMessage(nested)
 		}
 		if value := util.Clean(result[key]); value != "" {
-			return value
+			return sanitizeSub2APIUserMessage(value)
 		}
 	}
 	for _, container := range []map[string]any{util.StringMap(result["data"]), util.StringMap(result["result"])} {
 		for _, key := range []string{"message", "error", "detail"} {
 			if nested := util.Clean(util.StringMap(container[key])["message"]); nested != "" {
-				return nested
+				return sanitizeSub2APIUserMessage(nested)
 			}
 			if value := util.Clean(container[key]); value != "" {
-				return value
+				return sanitizeSub2APIUserMessage(value)
 			}
 		}
 	}
@@ -811,10 +825,10 @@ func sub2APIErrorMessage(data []byte) string {
 	if json.Unmarshal(data, &payload) == nil {
 		for _, key := range []string{"message", "error", "detail"} {
 			if nested := util.Clean(util.StringMap(payload[key])["message"]); nested != "" {
-				return nested
+				return sanitizeSub2APIUserMessage(nested)
 			}
 			if value := util.Clean(payload[key]); value != "" {
-				return value
+				return sanitizeSub2APIUserMessage(value)
 			}
 		}
 	}
@@ -825,7 +839,7 @@ func sub2APIErrorMessage(data []byte) string {
 	if text == "" {
 		return "empty response"
 	}
-	return text
+	return sanitizeSub2APIUserMessage(text)
 }
 
 func sub2APIImageRequestErrorMessage(status int, upstreamMessage string) string {
@@ -856,15 +870,21 @@ func sub2APIRequestErrorMessage(endpoint string, status int, upstreamMessage str
 func sub2APIReadableErrorMessage(message string) string {
 	text := strings.TrimSpace(message)
 	if !strings.HasPrefix(text, "map[") {
-		return text
+		return sanitizeSub2APIUserMessage(text)
 	}
 	body := strings.TrimSuffix(strings.TrimPrefix(text, "map["), "]")
 	for _, key := range []string{"message", "error", "detail"} {
 		if value := sub2APIMapStringField(body, key); value != "" {
-			return value
+			return sanitizeSub2APIUserMessage(value)
 		}
 	}
-	return text
+	return sanitizeSub2APIUserMessage(text)
+}
+
+var sub2APIUserVisibleBrandPattern = regexp.MustCompile(`(?i)\b(?:api[\s_-]*mart|apimart)\b`)
+
+func sanitizeSub2APIUserMessage(message string) string {
+	return strings.TrimSpace(sub2APIUserVisibleBrandPattern.ReplaceAllString(message, "上游服务"))
 }
 
 func sub2APIMapStringField(body string, key string) string {
