@@ -32,7 +32,7 @@ This repository is a Go backend with a Vite/React admin UI. The backend entry po
 
 Use `gofmt` for Go code and keep package names short, lowercase, and domain-oriented. Place tests beside the code they exercise as `*_test.go`. Frontend code uses TypeScript, React 19, Vite, Oxlint, Tailwind CSS, and shadcn-style components. Prefer kebab-case filenames for React components (`image-composer.tsx`) and PascalCase exports. Reuse helpers from `web/src/lib/` and primitives from `web/src/components/ui/` before adding abstractions.
 
-Admin async creation-task routes use `/api/creation-tasks` as the resource root. Submit task-type-specific work through explicit child resources: `image-generations`, `image-edits`, and `chat-completions`. Do not introduce image-named task aliases or chat routes under image-named resources.
+Admin async creation-task routes use `/api/creation-tasks` as the resource root. Submit task-type-specific work through explicit child resources: `image-generations`, `image-edits`, `chat-completions`, and `video-generations`. Do not introduce image-named task aliases or chat routes under image-named resources.
 
 ## jshook Reverse-Engineering Notes
 

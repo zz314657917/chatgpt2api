@@ -137,8 +137,11 @@ func TestReleaseWorkflowUsesSingleGoReleaserConfig(t *testing.T) {
 	if strings.Contains(workflow, ".goreleaser.simple.yaml") {
 		t.Fatal("release workflow must not reference .goreleaser.simple.yaml")
 	}
-	if !strings.Contains(workflow, "args: release --clean --skip=validate") {
+	if !strings.Contains(workflow, "args: release --clean") {
 		t.Fatal("release workflow must run the main GoReleaser release path")
+	}
+	if strings.Contains(workflow, "--skip=validate") {
+		t.Fatal("release workflow must not skip GoReleaser validation")
 	}
 }
 

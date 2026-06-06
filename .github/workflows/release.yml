@@ -49,6 +49,10 @@ jobs:
         working-directory: web
         run: bun install --frozen-lockfile
 
+      - name: Lint frontend
+        working-directory: web
+        run: bun run lint
+
       - name: Build frontend
         working-directory: web
         run: bun run build
@@ -87,6 +91,9 @@ jobs:
 
       - name: Configure git for Go modules
         run: git config --global url."https://${{ secrets.GITHUB_TOKEN }}@github.com/".insteadOf "https://github.com/"
+
+      - name: Test backend
+        run: go test ./...
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -130,7 +137,7 @@ jobs:
         uses: goreleaser/goreleaser-action@v7
         with:
           version: "~> v2"
-          args: release --clean --skip=validate
+          args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG_MESSAGE: ${{ steps.meta.outputs.body }}

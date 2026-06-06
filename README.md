@@ -491,6 +491,7 @@ Authorization: Bearer <session-or-api-token>
 | `POST` | `/api/creation-tasks/image-generations` | 提交图片生成任务 |
 | `POST` | `/api/creation-tasks/image-edits` | 提交图片编辑任务 |
 | `POST` | `/api/creation-tasks/chat-completions` | 提交文本/对话补全任务 |
+| `POST` | `/api/creation-tasks/video-generations` | 提交视频生成任务 |
 | `POST` | `/api/creation-tasks/{id}/cancel` | 取消任务 |
 
 权限系统中，异步创作任务对应的 API 权限为 `GET /api/creation-tasks` 和 `POST /api/creation-tasks`，并按子路径生效。

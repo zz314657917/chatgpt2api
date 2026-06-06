@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -68,7 +69,7 @@ func TestSub2APIImageBatchesPassesRequestedCountInOneCall(t *testing.T) {
 	app := &App{}
 	callCount := 0
 	var gotN int
-	result, err := app.callSub2APIImageBatches(context.Background(), service.Identity{}, map[string]any{"model": util.ImageModelGPT, "n": 10}, func(payload map[string]any) (map[string]any, error) {
+	result, err := app.callSub2APIImageBatches(context.Background(), service.Identity{}, map[string]any{"model": util.ImageModelGPT, "n": 10}, func(_ context.Context, payload map[string]any) (map[string]any, error) {
 		callCount++
 		gotN = util.ToInt(payload["n"], 0)
 		return map[string]any{
@@ -94,7 +95,7 @@ func TestSub2APIOfficialImageBatchesSplitAtFourOutputs(t *testing.T) {
 	app := &App{engine: &protocol.Engine{Config: testSub2APIImageConfig{root: t.TempDir()}}}
 	var mu sync.Mutex
 	var calls []int
-	result, err := app.callSub2APIImageBatches(context.Background(), service.Identity{}, map[string]any{"model": util.ImageModelGPTOfficial, "n": 10}, func(payload map[string]any) (map[string]any, error) {
+	result, err := app.callSub2APIImageBatches(context.Background(), service.Identity{}, map[string]any{"model": util.ImageModelGPTOfficial, "n": 10}, func(_ context.Context, payload map[string]any) (map[string]any, error) {
 		n := util.ToInt(payload["n"], 0)
 		mu.Lock()
 		calls = append(calls, n)
@@ -151,5 +152,81 @@ func TestSub2APIOfficialImageBatchSizeHonorsLowerOutputBatchLimit(t *testing.T) 
 	}
 	if got := sub2APIImageBatchRequests(10, sub2APIImageBatchSize(payload)); len(got) != 5 || got[0].count != 2 || got[4].index != 9 || got[4].count != 2 {
 		t.Fatalf("sub2APIImageBatchRequests() = %#v, want five batches of 2", got)
+	}
+}
+
+func TestSub2APIImageBatchSizeHonorsLowerOutputBatchLimitForAllModels(t *testing.T) {
+	payload := map[string]any{"model": util.ImageModelGPT, "image_output_batch_limit": 2}
+	if got := sub2APIImageBatchSize(payload); got != 2 {
+		t.Fatalf("sub2APIImageBatchSize() = %d, want 2", got)
+	}
+	if got := sub2APIImageBatchRequests(10, sub2APIImageBatchSize(payload)); len(got) != 5 || got[0].count != 2 || got[4].index != 9 || got[4].count != 2 {
+		t.Fatalf("sub2APIImageBatchRequests() = %#v, want five batches of 2", got)
+	}
+}
+
+func TestSub2APIImageBatchesAcquireSlotsSequentially(t *testing.T) {
+	app := &App{engine: &protocol.Engine{Config: testSub2APIImageConfig{root: t.TempDir()}}}
+	active := 0
+	maxActive := 0
+	var acquired []int
+	payload := map[string]any{
+		"model":                    "gpt-image-2",
+		"n":                        5,
+		"image_output_batch_limit": 2,
+		protocol.ImageOutputSlotAcquirerPayloadKey: func(_ context.Context, index int) (func(), error) {
+			active++
+			if active > maxActive {
+				maxActive = active
+			}
+			acquired = append(acquired, index)
+			return func() {
+				active--
+			}, nil
+		},
+	}
+	var calls []int
+	result, err := app.callSub2APIImageBatches(context.Background(), service.Identity{}, payload, func(_ context.Context, batchPayload map[string]any) (map[string]any, error) {
+		n := util.ToInt(batchPayload["n"], 0)
+		calls = append(calls, n)
+		data := make([]map[string]any, 0, n)
+		for offset := 0; offset < n; offset++ {
+			data = append(data, map[string]any{"b64_json": sub2APITestPNGBase64, "revised_prompt": fmt.Sprintf("batch-%d-image-%d", len(calls), offset+1)})
+		}
+		return map[string]any{"created": 123, "data": data}, nil
+	})
+	if err != nil {
+		t.Fatalf("callSub2APIImageBatches() error = %v", err)
+	}
+	if fmt.Sprint(calls) != "[2 2 1]" {
+		t.Fatalf("gateway batch sizes = %#v, want [2 2 1]", calls)
+	}
+	if fmt.Sprint(acquired) != "[1 2 3 4 5]" {
+		t.Fatalf("acquired slots = %#v, want [1 2 3 4 5]", acquired)
+	}
+	if maxActive != 2 {
+		t.Fatalf("max active slots = %d, want 2", maxActive)
+	}
+	if data := util.AsMapSlice(result["data"]); len(data) != 5 {
+		t.Fatalf("result data len = %d, want 5: %#v", len(data), data)
+	}
+}
+
+func TestSub2APIImageBatchesCancelContextAfterBatchFailure(t *testing.T) {
+	app := &App{}
+	expected := errors.New("gateway failed")
+	var seenCancelled bool
+	_, err := app.callSub2APIImageBatches(context.Background(), service.Identity{}, map[string]any{"model": util.ImageModelGPTOfficial, "n": 5}, func(ctx context.Context, payload map[string]any) (map[string]any, error) {
+		if util.ToInt(payload["n"], 0) == 4 {
+			return nil, expected
+		}
+		seenCancelled = ctx.Err() != nil
+		return map[string]any{"created": 123, "data": []map[string]any{{"b64_json": "a"}}}, nil
+	})
+	if !errors.Is(err, expected) {
+		t.Fatalf("callSub2APIImageBatches() error = %v, want %v", err, expected)
+	}
+	if seenCancelled {
+		t.Fatal("later batch was called after first batch failed")
 	}
 }

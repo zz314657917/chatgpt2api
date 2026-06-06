@@ -18,7 +18,7 @@ This directory stores project-local context that is useful across Codex sessions
 - The repository is a Go backend with a Vite/React admin UI.
 - Backend packages live under `internal/`; frontend source lives under `web/src/`.
 - ChatGPT web reverse-engineering notes and validation scripts belong under `jshook/`.
-- Admin async creation-task routes use `/api/creation-tasks` with explicit child resources: `image-generations`, `image-edits`, and `chat-completions`.
+- Admin async creation-task routes use `/api/creation-tasks` with explicit child resources: `image-generations`, `image-edits`, `chat-completions`, and `video-generations`.
 - The project currently targets ChatGPT web account capabilities and OpenAI-compatible image/text endpoints.
 - The current product-facing default is no longer a generic ChatGPT web wrapper only; it now includes a Sub2API-launched standalone image workspace and a white-label profile experience.
 

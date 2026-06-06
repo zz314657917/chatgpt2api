@@ -52,6 +52,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import type { CanvasImageRef, CanvasModelOption, CanvasVideoRef, CreationTask, ImageVisibility } from "@/lib/api";
+import { supportsImageOutputControls } from "@/lib/api";
 import {
   IMAGE_ASPECT_RATIO_OPTIONS,
   IMAGE_RESOLUTION_OPTIONS,
@@ -3492,6 +3493,7 @@ function GeneratorNodeBody({
   const llmReferenceImageCountLabel = missingLlmReferenceImages.length === 1 ? "一张图" : `${missingLlmReferenceImages.length} 张图`;
   const outputImages = item.data?.output?.images || [];
   const nodeRunning = isActiveTask(item.data?.status);
+  const imageModel = item.data?.model || "auto";
   const imageCount = Math.max(1, Math.min(10, Number(item.data?.n || 1)));
   const hasInputImages = images.length > 0;
   const ratioValue: CanvasImageRatioValue = hasInputImages && (!item.data?.size_user_modified || !String(item.data?.size || "").trim())
@@ -3502,6 +3504,7 @@ function GeneratorNodeBody({
   const imageResolutionOptions = hasInputImages && item.data?.image_resolution_user_modified !== true
     ? canvasImageResolutionOptions.map((option) => option.value === "unspecified" ? { ...option, label: "保持原图清晰度" } : option)
     : canvasImageResolutionOptions;
+  const outputControlsSupported = supportsImageOutputControls(imageModel);
   const outputFormat = normalizeImageOutputFormat(item.data?.output_format);
   const outputCompression = typeof item.data?.output_compression === "number" ? item.data.output_compression : undefined;
   const setImageCount = (next: number) => onUpdateData({ n: Math.max(1, Math.min(10, Math.round(next) || 1)) });
@@ -3588,7 +3591,7 @@ function GeneratorNodeBody({
             <SelectItem value="api">API</SelectItem>
           </SelectContent>
         </Select>
-        <Select value={item.data?.model || "auto"} onValueChange={(model) => onUpdateData({ model })}>
+        <Select value={imageModel} onValueChange={(model) => onUpdateData({ model })}>
           <SelectTrigger className={canvasSelectClass}>
             <SelectValue placeholder="模型" />
           </SelectTrigger>
@@ -3636,17 +3639,19 @@ function GeneratorNodeBody({
             ))}
           </SelectContent>
         </Select>
-        <ImageOutputControls
-          outputFormat={outputFormat}
-          outputCompression={outputCompression}
-          onOutputFormatChange={(output_format) => onUpdateData({ output_format })}
-          onOutputCompressionChange={setOutputCompression}
-          fieldClassName={cn("flex h-9 min-w-0 items-center justify-between gap-2 rounded-xl border px-3 text-xs", canvasFieldClass)}
-          labelClassName={cn("text-[11px] font-bold", canvasSubtleTextClass)}
-          selectTriggerClassName="h-8 min-w-0 flex-1 justify-end gap-1 border-0 bg-transparent px-0 py-0 text-right text-xs font-bold shadow-none focus-visible:ring-0 [&_svg]:size-4 [&_svg]:opacity-60 [&>span]:flex-none"
-          inputClassName="h-8 min-w-0 border-0 bg-transparent px-0 text-right text-xs font-bold shadow-none focus-visible:ring-0 disabled:cursor-not-allowed"
-          compressionLabel="压缩"
-        />
+        {outputControlsSupported ? (
+          <ImageOutputControls
+            outputFormat={outputFormat}
+            outputCompression={outputCompression}
+            onOutputFormatChange={(output_format) => onUpdateData({ output_format })}
+            onOutputCompressionChange={setOutputCompression}
+            fieldClassName={cn("flex h-9 min-w-0 items-center justify-between gap-2 rounded-xl border px-3 text-xs", canvasFieldClass)}
+            labelClassName={cn("text-[11px] font-bold", canvasSubtleTextClass)}
+            selectTriggerClassName="h-8 min-w-0 flex-1 justify-end gap-1 border-0 bg-transparent px-0 py-0 text-right text-xs font-bold shadow-none focus-visible:ring-0 [&_svg]:size-4 [&_svg]:opacity-60 [&>span]:flex-none"
+            inputClassName="h-8 min-w-0 border-0 bg-transparent px-0 text-right text-xs font-bold shadow-none focus-visible:ring-0 disabled:cursor-not-allowed"
+            compressionLabel="压缩"
+          />
+        ) : null}
         <div className={cn("grid h-9 grid-cols-[28px_1fr_28px] overflow-hidden rounded-xl border", canvasFieldClass)}>
           <button
             type="button"
