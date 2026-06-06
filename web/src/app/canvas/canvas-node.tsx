@@ -2750,6 +2750,9 @@ function CanvasRunInsight({ item, compact = false }: { item: SmartCanvasItem; co
   const detail = item.data?.error || item.data?.last_run_error_detail || blockedBy
     ? buildSmartCanvasErrorDetail(errorInput)
     : null;
+  const currentStatusLabel = status ? statusLabel(status) : "";
+  const insightTitle = detail?.title || currentStatusLabel || "运行信息";
+  const showStatusSupplement = Boolean(currentStatusLabel && currentStatusLabel !== insightTitle);
   const meta = [
     taskId ? `任务 ${taskId.slice(0, 8)}` : "",
     startedAt ? `开始 ${startedAt}` : "",
@@ -2772,8 +2775,8 @@ function CanvasRunInsight({ item, compact = false }: { item: SmartCanvasItem; co
       title={taskId ? `任务 ID：${taskId}` : undefined}
     >
       <div className="flex min-w-0 items-center justify-between gap-2">
-        <span className="truncate font-black">{detail?.title || (status ? statusLabel(status) : "运行信息")}</span>
-        {status ? <span className="shrink-0 font-semibold">{statusLabel(status)}</span> : null}
+        <span className="truncate font-black">{insightTitle}</span>
+        {showStatusSupplement ? <span className="shrink-0 font-semibold">{currentStatusLabel}</span> : null}
       </div>
       {blockedBy ? <div className="truncate">阻断来源：{blockedBy}</div> : null}
       {detail?.message ? <div className={cn(compact ? "line-clamp-1" : "line-clamp-2", "whitespace-pre-wrap break-words")}>{detail.message}</div> : null}
