@@ -49,6 +49,7 @@ import {
   type SmartCanvasFlowTemplateId,
   type SmartCanvasHelpTopic,
 } from "./canvas-help";
+import { hasCanvasImageDragPayload, parseCanvasImageDragPayload } from "./canvas-image-drag";
 import { dispatchSmartCanvasQueueChanged } from "./canvas-events";
 import { createSmartCanvasFromPreset, type SmartCanvasPresetId } from "./canvas-presets";
 import {
@@ -2043,6 +2044,15 @@ export function useSmartCanvasController() {
     event.preventDefault();
     setDraggingImages(false);
     const targetGeneratorId = getCanvasNodeIdAtPoint({ x: event.clientX, y: event.clientY });
+    const canvasImagePayload = parseCanvasImageDragPayload(event.dataTransfer);
+    if (canvasImagePayload) {
+      const target = targetGeneratorId ? canvasRef.current?.nodes.find((node) => node.id === targetGeneratorId) : null;
+      if (isGenerationNode(target) && addImagesNearGenerator(canvasImagePayload.images, target, { x: event.clientX, y: event.clientY })) {
+        return;
+      }
+      addImagesToCanvas(canvasImagePayload.images, { x: event.clientX, y: event.clientY });
+      return;
+    }
     const managedImagePayload = event.dataTransfer.getData(MANAGED_IMAGE_DRAG_TYPE);
     if (managedImagePayload) {
       addManagedImagePayload(managedImagePayload, { x: event.clientX, y: event.clientY }, targetGeneratorId);
@@ -2077,11 +2087,12 @@ export function useSmartCanvasController() {
       status: undefined,
       error: "",
     }, true);
-  }, [addManagedImagePayload, createPendingImageUploadNode, updatePendingImageUploadNode, uploadFilesToRefs]);
+  }, [addImagesNearGenerator, addImagesToCanvas, addManagedImagePayload, createPendingImageUploadNode, updatePendingImageUploadNode, uploadFilesToRefs]);
 
   const handleBoardDragOver = useCallback((event: ReactDragEvent<HTMLDivElement>) => {
     event.preventDefault();
-    if (event.dataTransfer.types.includes(MANAGED_IMAGE_DRAG_TYPE) || imageFilesFromList(event.dataTransfer.files).length > 0) {
+    if (hasCanvasImageDragPayload(event.dataTransfer) || event.dataTransfer.types.includes(MANAGED_IMAGE_DRAG_TYPE) || imageFilesFromList(event.dataTransfer.files).length > 0) {
+      event.dataTransfer.dropEffect = "copy";
       setDraggingImages(true);
     }
   }, []);
