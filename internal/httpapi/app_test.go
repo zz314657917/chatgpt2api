@@ -805,6 +805,23 @@ func TestSub2APIErrorMessagePrefersNestedMessage(t *testing.T) {
 	}
 }
 
+func TestSub2APIErrorMessageFiltersApimartBrand(t *testing.T) {
+	message := sub2APIRequestErrorMessage("images/generations", http.StatusBadGateway, "APIMart task failed: api-mart account unavailable")
+	if strings.Contains(strings.ToLower(message), "apimart") || strings.Contains(strings.ToLower(message), "api-mart") {
+		t.Fatalf("message should not expose upstream brand: %q", message)
+	}
+	if !strings.Contains(message, "上游服务 task failed") || !strings.Contains(message, "上游服务 account unavailable") {
+		t.Fatalf("message should preserve sanitized reason: %q", message)
+	}
+
+	payloadMessage := sub2APIErrorMessageFromPayload(map[string]any{
+		"result": map[string]any{"error": map[string]any{"message": "Api Mart timeout"}},
+	})
+	if strings.Contains(strings.ToLower(payloadMessage), "api mart") || !strings.Contains(payloadMessage, "上游服务 timeout") {
+		t.Fatalf("payload message should be sanitized: %q", payloadMessage)
+	}
+}
+
 func TestSub2APIImagePayloadNormalizesRatioSizes(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -2667,7 +2684,7 @@ func TestSub2APIImageCreationTaskUsesOfficialFallbackAndPollsTask(t *testing.T) 
 				"status":  "submitted",
 				"task_id": "task-apimart",
 			})
-		case r.Method == http.MethodGet && r.URL.Path == "/tasks/task-apimart":
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/tasks/task-apimart" && r.URL.Query().Get("language") == "zh":
 			util.WriteJSON(w, http.StatusOK, map[string]any{
 				"status":    "completed",
 				"created":   123,
@@ -2755,7 +2772,7 @@ func TestSub2APIVideoCreationTaskUsesApimartTasksEndpoint(t *testing.T) {
 				"status":  "submitted",
 				"task_id": "task-video-apimart",
 			})
-		case r.Method == http.MethodGet && r.URL.Path == "/tasks/task-video-apimart":
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/tasks/task-video-apimart" && r.URL.Query().Get("language") == "zh":
 			taskPolls++
 			util.WriteJSON(w, http.StatusOK, map[string]any{
 				"status": "completed",
@@ -2817,12 +2834,32 @@ func TestSub2APIVideoCreationTaskUsesApimartTasksEndpoint(t *testing.T) {
 		t.Fatalf("gateway video request should use APIMart size instead of aspect_ratio: %#v", generationPayload)
 	}
 	if taskPolls == 0 {
-		t.Fatalf("expected task polling through /tasks/{task_id}")
+		t.Fatalf("expected task polling through /v1/tasks/{task_id}")
 	}
 	items := util.AsMapSlice(listed["items"])
 	data := util.AsMapSlice(items[0]["data"])
 	if len(data) != 1 || util.Clean(data[0]["video_url"]) != "https://cdn.example/video.mp4" {
 		t.Fatalf("sub2api video task data = %#v", items[0])
+	}
+}
+
+func TestSub2APITaskStatusEndpoint(t *testing.T) {
+	tests := []struct {
+		name   string
+		base   string
+		taskID string
+		want   string
+	}{
+		{name: "gateway root", base: "https://api.apimart.ai", taskID: "task-123", want: "v1/tasks/task-123?language=zh"},
+		{name: "gateway v1", base: "https://api.apimart.ai/v1", taskID: "task-123", want: "tasks/task-123?language=zh"},
+		{name: "escape task id", base: "https://api.apimart.ai", taskID: "task/with space", want: "v1/tasks/task%2Fwith%20space?language=zh"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := sub2APITaskStatusEndpoint(tt.base, tt.taskID); got != tt.want {
+				t.Fatalf("sub2APITaskStatusEndpoint() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 

@@ -266,7 +266,7 @@ func (a *App) pollSub2APIVideoTask(ctx context.Context, binding service.Sub2APIB
 		return nil, err
 	}
 	for {
-		result, err := a.getSub2APIJSON(ctx, binding, "tasks/"+taskID)
+		result, err := a.getSub2APIJSON(ctx, binding, sub2APITaskStatusEndpoint(binding.GatewayBaseURL, taskID))
 		if err != nil {
 			return nil, err
 		}
