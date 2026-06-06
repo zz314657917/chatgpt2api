@@ -712,6 +712,28 @@ func TestImageTaskServiceLimitsUserDefaultConcurrentCreationUnits(t *testing.T) 
 	waitForTaskStatus(t, svc, alice, "chat-1", TaskStatusSuccess)
 }
 
+func TestImageTaskServicePassesUserConcurrentLimitAsOutputBatchLimit(t *testing.T) {
+	gotLimit := make(chan int, 1)
+	handler := func(ctx context.Context, identity Identity, payload map[string]any) (map[string]any, error) {
+		gotLimit <- ImageOutputBatchLimit(payload)
+		return map[string]any{"data": []map[string]any{{"url": "https://example.test/image.png"}}}, nil
+	}
+	svc := newTestImageTaskService(t, handler, handler, handler, func() int { return 30 }, func() int { return 2 })
+	alice := Identity{ID: "alice", Name: "Alice", Role: AuthRoleUser}
+	if _, err := svc.SubmitGeneration(context.Background(), alice, "task-1", "draw", "gpt-image-2-official", "1024x1024", "high", "https://base.test", 1, nil); err != nil {
+		t.Fatalf("SubmitGeneration() error = %v", err)
+	}
+	select {
+	case limit := <-gotLimit:
+		if limit != 2 {
+			t.Fatalf("ImageOutputBatchLimit() = %d, want 2", limit)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for image handler")
+	}
+	waitForTaskStatus(t, svc, alice, "task-1", TaskStatusSuccess)
+}
+
 func TestImageTaskServiceCancelQueuedTaskWaitingForCreationUnit(t *testing.T) {
 	enteredQueued := make(chan struct{})
 	queuedStarted := make(chan struct{}, 1)

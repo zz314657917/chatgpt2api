@@ -2,11 +2,39 @@ package httpapi
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"sync"
 	"testing"
 
+	"chatgpt2api/internal/protocol"
 	"chatgpt2api/internal/service"
 	"chatgpt2api/internal/util"
 )
+
+const sub2APITestPNGBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+
+type testSub2APIImageConfig struct {
+	root string
+}
+
+func (c testSub2APIImageConfig) ImagesDir() string {
+	path := filepath.Join(c.root, "images")
+	_ = os.MkdirAll(path, 0o755)
+	return path
+}
+
+func (c testSub2APIImageConfig) ImageMetadataDir() string {
+	path := filepath.Join(c.root, "image_metadata")
+	_ = os.MkdirAll(path, 0o755)
+	return path
+}
+
+func (testSub2APIImageConfig) BaseURL() string {
+	return "https://example.test"
+}
 
 func TestSub2APIChatModelRoutesAutoToDefaultChatModel(t *testing.T) {
 	tests := []struct {
@@ -40,7 +68,7 @@ func TestSub2APIImageBatchesPassesRequestedCountInOneCall(t *testing.T) {
 	app := &App{}
 	callCount := 0
 	var gotN int
-	result, err := app.callSub2APIImageBatches(context.Background(), service.Identity{}, map[string]any{"n": 10}, func(payload map[string]any) (map[string]any, error) {
+	result, err := app.callSub2APIImageBatches(context.Background(), service.Identity{}, map[string]any{"model": util.ImageModelGPT, "n": 10}, func(payload map[string]any) (map[string]any, error) {
 		callCount++
 		gotN = util.ToInt(payload["n"], 0)
 		return map[string]any{
@@ -59,5 +87,69 @@ func TestSub2APIImageBatchesPassesRequestedCountInOneCall(t *testing.T) {
 	}
 	if result == nil {
 		t.Fatal("result is nil")
+	}
+}
+
+func TestSub2APIOfficialImageBatchesSplitAtFourOutputs(t *testing.T) {
+	app := &App{engine: &protocol.Engine{Config: testSub2APIImageConfig{root: t.TempDir()}}}
+	var mu sync.Mutex
+	var calls []int
+	result, err := app.callSub2APIImageBatches(context.Background(), service.Identity{}, map[string]any{"model": util.ImageModelGPTOfficial, "n": 10}, func(payload map[string]any) (map[string]any, error) {
+		n := util.ToInt(payload["n"], 0)
+		mu.Lock()
+		calls = append(calls, n)
+		mu.Unlock()
+		data := make([]map[string]any, 0, n)
+		for offset := 0; offset < n; offset++ {
+			data = append(data, map[string]any{"b64_json": sub2APITestPNGBase64, "revised_prompt": fmt.Sprintf("image-%d", offset+1)})
+		}
+		return map[string]any{"created": 123, "data": data}, nil
+	})
+	if err != nil {
+		t.Fatalf("callSub2APIImageBatches() error = %v", err)
+	}
+	sort.Ints(calls)
+	if fmt.Sprint(calls) != "[2 4 4]" {
+		t.Fatalf("gateway batch sizes = %#v, want [2 4 4]", calls)
+	}
+	data := util.AsMapSlice(result["data"])
+	if len(data) != 10 {
+		t.Fatalf("result data len = %d, want 10: %#v", len(data), data)
+	}
+	for index := 0; index < 8; index += 4 {
+		for offset := 0; offset < 4; offset++ {
+			if got := util.Clean(data[index+offset]["revised_prompt"]); got != fmt.Sprintf("image-%d", offset+1) {
+				t.Fatalf("result data[%d] = %#v, want image-%d", index+offset, data[index+offset], offset+1)
+			}
+		}
+	}
+	if got := util.Clean(data[8]["revised_prompt"]); got != "image-1" {
+		t.Fatalf("result data[8] = %#v, want image-1", data[8])
+	}
+	if got := util.Clean(data[9]["revised_prompt"]); got != "image-2" {
+		t.Fatalf("result data[9] = %#v, want image-2", data[9])
+	}
+}
+
+func TestSub2APIImageBatchRequests(t *testing.T) {
+	got := sub2APIImageBatchRequests(10, 4)
+	want := []sub2APIImageBatchRequest{{index: 1, count: 4}, {index: 5, count: 4}, {index: 9, count: 2}}
+	if len(got) != len(want) {
+		t.Fatalf("sub2APIImageBatchRequests() = %#v, want %#v", got, want)
+	}
+	for index := range want {
+		if got[index] != want[index] {
+			t.Fatalf("sub2APIImageBatchRequests() = %#v, want %#v", got, want)
+		}
+	}
+}
+
+func TestSub2APIOfficialImageBatchSizeHonorsLowerOutputBatchLimit(t *testing.T) {
+	payload := map[string]any{"model": util.ImageModelGPTOfficial, "image_output_batch_limit": 2}
+	if got := sub2APIImageBatchSize(payload); got != 2 {
+		t.Fatalf("sub2APIImageBatchSize() = %d, want 2", got)
+	}
+	if got := sub2APIImageBatchRequests(10, sub2APIImageBatchSize(payload)); len(got) != 5 || got[0].count != 2 || got[4].index != 9 || got[4].count != 2 {
+		t.Fatalf("sub2APIImageBatchRequests() = %#v, want five batches of 2", got)
 	}
 }

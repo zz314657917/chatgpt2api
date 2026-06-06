@@ -199,7 +199,10 @@ func (a *App) callSub2APIImageEdits(ctx context.Context, identity service.Identi
 	})
 }
 
-const sub2APIImageBatchLimit = 10
+const (
+	sub2APIImageBatchLimit         = 10
+	sub2APIOfficialImageBatchLimit = 4
+)
 
 const (
 	sub2APIImageTaskPollInitialDelay = 500 * time.Millisecond
@@ -208,26 +211,82 @@ const (
 
 func (a *App) callSub2APIImageBatches(ctx context.Context, identity service.Identity, payload map[string]any, call func(map[string]any) (map[string]any, error)) (map[string]any, error) {
 	requested := sub2APIImageRequestedCount(payload)
+	batchSize := sub2APIImageBatchSize(payload)
 	progress := sub2APIImageProgressCallback(payload)
 	acquire := sub2APIImageOutputSlotAcquirer(payload)
 	created := time.Now().Unix()
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	result := a.callSub2APIImageBatch(ctx, identity, payload, call, acquire, 1, requested)
-	if result.err != nil {
-		cancel()
-		return sub2APIImageBatchResult(created, sub2APIIndexedImageData([]sub2APIImageBatchOutput{result}, true, requested)), result.err
+	batches := sub2APIImageBatchRequests(requested, batchSize)
+	if len(batches) == 1 {
+		result := a.callSub2APIImageBatch(ctx, identity, payload, call, acquire, batches[0].index, batches[0].count)
+		if result.err != nil {
+			cancel()
+			return sub2APIImageBatchResult(created, sub2APIIndexedImageData([]sub2APIImageBatchOutput{result}, true, requested)), result.err
+		}
+		if result.created != 0 {
+			created = result.created
+		}
+		if progress != nil {
+			data := sub2APIIndexedImageData([]sub2APIImageBatchOutput{result}, true, requested)
+			if len(data) > 0 {
+				progress(data)
+			}
+		}
+		return sub2APIImageBatchResult(created, sub2APIIndexedImageData([]sub2APIImageBatchOutput{result}, false, requested)), nil
 	}
-	if result.created != 0 {
-		created = result.created
+	resultsCh := make(chan sub2APIImageBatchOutput, len(batches))
+	for _, batch := range batches {
+		go func(batch sub2APIImageBatchRequest) {
+			resultsCh <- a.callSub2APIImageBatch(ctx, identity, payload, call, acquire, batch.index, batch.count)
+		}(batch)
 	}
-	if progress != nil {
-		data := sub2APIIndexedImageData([]sub2APIImageBatchOutput{result}, true, requested)
-		if len(data) > 0 {
-			progress(data)
+	results := make([]sub2APIImageBatchOutput, 0, len(batches))
+	var firstErr error
+	for range batches {
+		result := <-resultsCh
+		results = append(results, result)
+		if result.created != 0 && (created == 0 || result.created < created) {
+			created = result.created
+		}
+		if result.err != nil && firstErr == nil {
+			firstErr = result.err
+			cancel()
+		}
+		if result.err == nil && progress != nil {
+			data := sub2APIIndexedImageData(results, true, requested)
+			if len(data) > 0 {
+				progress(data)
+			}
 		}
 	}
-	return sub2APIImageBatchResult(created, sub2APIIndexedImageData([]sub2APIImageBatchOutput{result}, false, requested)), nil
+	if firstErr != nil {
+		return sub2APIImageBatchResult(created, sub2APIIndexedImageData(results, true, requested)), firstErr
+	}
+	return sub2APIImageBatchResult(created, sub2APIIndexedImageData(results, false, requested)), nil
+}
+
+type sub2APIImageBatchRequest struct {
+	index int
+	count int
+}
+
+func sub2APIImageBatchRequests(requested, batchSize int) []sub2APIImageBatchRequest {
+	if requested < 1 {
+		requested = 1
+	}
+	if batchSize < 1 {
+		batchSize = requested
+	}
+	requests := make([]sub2APIImageBatchRequest, 0, (requested+batchSize-1)/batchSize)
+	for index := 1; index <= requested; index += batchSize {
+		count := batchSize
+		if remaining := requested - index + 1; remaining < count {
+			count = remaining
+		}
+		requests = append(requests, sub2APIImageBatchRequest{index: index, count: count})
+	}
+	return requests
 }
 
 type sub2APIImageBatchOutput struct {
@@ -334,6 +393,17 @@ func sub2APIImageRequestedCount(payload map[string]any) int {
 		return sub2APIImageBatchLimit
 	}
 	return count
+}
+
+func sub2APIImageBatchSize(payload map[string]any) int {
+	if sub2APIImageModel(payload["model"]) == util.ImageModelGPTOfficial {
+		limit := sub2APIOfficialImageBatchLimit
+		if configured := service.ImageOutputBatchLimit(payload); configured > 0 && configured < limit {
+			limit = configured
+		}
+		return limit
+	}
+	return sub2APIImageBatchLimit
 }
 
 func sub2APIImageProgressCallback(payload map[string]any) protocol.ImageOutputProgressCallback {
