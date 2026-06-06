@@ -31,6 +31,24 @@ func TestCanvasModelOptionsHideCodexImageRoute(t *testing.T) {
 	})
 }
 
+func TestAddBuiltInCanvasImageModelsIncludesOfficialRoute(t *testing.T) {
+	items := addBuiltInCanvasImageModels(canvasModelOptionsFromCatalog(map[string]any{
+		"items": []map[string]any{
+			{"id": util.ImageModelGPT, "name": "remote gpt-image-2", "capabilities": []string{"image"}, "enabled": true},
+			{"id": util.ImageModelCodex, "name": util.ImageModelCodex, "capabilities": []string{"image"}, "enabled": true},
+			{"id": "gpt-image-1.5", "name": "gpt-image-1.5", "capabilities": []string{"image"}, "enabled": true},
+		},
+	}))
+
+	assertCanvasModelIDs(t, items, map[string]bool{
+		util.ImageModelGPT:         true,
+		util.ImageModelGPTOfficial: true,
+		util.ImageModelCodex:       false,
+		"gpt-image-1.5":            true,
+	})
+	assertCanvasModelCapabilities(t, items, util.ImageModelGPTOfficial, "image")
+}
+
 func TestCanvasModelOptionsDoNotExposeVideoWithoutSub2APIBinding(t *testing.T) {
 	modelListItems := canvasModelOptionsFromModelList(map[string]any{
 		"data": []map[string]any{
@@ -81,6 +99,19 @@ func assertCanvasModelIDs(t *testing.T, items []canvasModelOption, wants map[str
 			t.Fatalf("model %q presence = %v, want %v in %#v", id, seen[id], want, items)
 		}
 	}
+}
+
+func assertCanvasModelCapabilities(t *testing.T, items []canvasModelOption, id string, capability string) {
+	t.Helper()
+	for _, item := range items {
+		if item.ID == id {
+			if !hasCanvasTestCapability(item.Capabilities, capability) {
+				t.Fatalf("model %q capabilities = %#v, want %q in %#v", id, item.Capabilities, capability, items)
+			}
+			return
+		}
+	}
+	t.Fatalf("model %q not found in %#v", id, items)
 }
 
 func hasCanvasTestCapability(capabilities []string, want string) bool {

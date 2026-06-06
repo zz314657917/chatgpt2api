@@ -378,10 +378,10 @@ func (a *App) canvasUploadedImages(identity service.Identity, node service.Canva
 func (a *App) canvasModelCatalog(ctx context.Context, identity service.Identity) []canvasModelOption {
 	if binding, ok := a.sub2APIBindingForIdentity(identity); ok {
 		if result, err := a.getSub2APIModelCatalog(ctx, binding); err == nil {
-			return canvasModelOptionsFromCatalog(result)
+			return addBuiltInCanvasImageModels(canvasModelOptionsFromCatalog(result))
 		}
 		if result, err := a.getSub2APIModels(ctx, binding); err == nil {
-			return canvasModelOptionsFromModelList(result, false, true)
+			return addBuiltInCanvasImageModels(canvasModelOptionsFromModelList(result, false, true))
 		}
 	}
 	result, err := a.engine.ListModels(ctx)
@@ -413,6 +413,22 @@ func canvasModelOptionsFromCatalog(result map[string]any) []canvasModelOption {
 			Kind:         canvasModelKindFromCapabilities(capabilities),
 			Capabilities: capabilities,
 			Enabled:      canvasModelEnabled(item["enabled"]),
+		}
+	}
+	return sortedCanvasModelOptions(seen)
+}
+
+func addBuiltInCanvasImageModels(items []canvasModelOption) []canvasModelOption {
+	seen := make(map[string]canvasModelOption, len(items)+2)
+	for _, item := range items {
+		if item.ID == "" || shouldHideCanvasModel(item.ID) {
+			continue
+		}
+		seen[item.ID] = item
+	}
+	for _, id := range []string{util.ImageModelGPT, util.ImageModelGPTOfficial} {
+		if _, ok := seen[id]; !ok {
+			seen[id] = newCanvasModelOption(id, id, false)
 		}
 	}
 	return sortedCanvasModelOptions(seen)
