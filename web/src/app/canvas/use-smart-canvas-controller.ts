@@ -26,10 +26,12 @@ import {
   fetchCreationTasks,
   fetchManagedImages,
   saveCanvas,
+  supportsImageOutputControls,
   uploadManagedImages,
   type CanvasDocument,
   type CanvasImageRef,
   type CreationTask,
+  type ImageModel,
   type ImageVisibility,
   type ManagedImageSummary,
 } from "@/lib/api";
@@ -425,13 +427,20 @@ function generatorImageSize(generator: SmartCanvasItem, hasInputImages = false) 
   return normalizeCanvasImageSize(generator.data?.size);
 }
 
+function generatorImageModel(generator: SmartCanvasItem): ImageModel {
+  return generator.data?.model || "auto";
+}
+
 function generatorOutputFormat(generator: SmartCanvasItem) {
+  if (!supportsImageOutputControls(generatorImageModel(generator))) {
+    return undefined;
+  }
   return normalizeImageOutputFormat(generator.data?.output_format);
 }
 
 function generatorOutputCompression(generator: SmartCanvasItem) {
   const format = generatorOutputFormat(generator);
-  return supportsImageOutputCompression(format) ? normalizeImageOutputCompression(generator.data?.output_compression) : undefined;
+  return format && supportsImageOutputCompression(format) ? normalizeImageOutputCompression(generator.data?.output_compression) : undefined;
 }
 
 function generatorImageCount(generator: SmartCanvasItem) {
@@ -3339,7 +3348,7 @@ export function useSmartCanvasController() {
           clientTaskId,
           files,
           submittedPrompt,
-          generator.data?.model || "auto",
+          generatorImageModel(generator),
           generatorImageSize(generator, true),
           undefined,
           generatorImageCount(generator),
@@ -3354,7 +3363,7 @@ export function useSmartCanvasController() {
         task = await createImageGenerationTask(
           clientTaskId,
           submittedPrompt,
-          generator.data?.model || "auto",
+          generatorImageModel(generator),
           generatorImageSize(generator),
           undefined,
           generatorImageCount(generator),

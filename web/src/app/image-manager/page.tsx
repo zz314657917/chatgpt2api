@@ -408,7 +408,7 @@ function ImageManagerContent({
   const [loadError, setLoadError] = useState("");
   const [isAutoRefreshing, setIsAutoRefreshing] = useState(false);
   const [items, setItems] = useState<ManagedImageSummary[]>(() => initialCache?.items ?? []);
-  const [imageRetentionDays, setImageRetentionDays] = useState(7);
+  const [imageRetentionDays, setImageRetentionDays] = useState(() => initialCache?.retentionDays ?? 7);
   const [nextCursor, setNextCursor] = useState(() => initialCache?.nextCursor ?? "");
   const [hasMoreItems, setHasMoreItems] = useState(() => initialCache?.hasMore ?? false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
@@ -542,6 +542,7 @@ function ImageManagerContent({
       setItems(cached.items);
       setNextCursor(cached.nextCursor);
       setHasMoreItems(cached.hasMore);
+      setImageRetentionDays(cached.retentionDays);
       setSelectedImageIds({});
       setLoadError("");
       if (isFreshImageManagerCache(cached)) {
@@ -560,7 +561,7 @@ function ImageManagerContent({
         buildImageListFilters(),
         { signal: controller.signal },
       );
-      updateImageManagerCache(currentCacheKey, data.items, data.next_cursor, data.has_more);
+      updateImageManagerCache(currentCacheKey, data.items, data.next_cursor, data.has_more, data.retention_days);
       setItems(data.items);
       setImageRetentionDays(data.retention_days);
       setNextCursor(data.next_cursor);
@@ -611,7 +612,7 @@ function ImageManagerContent({
         if (next.length === current.length && next.every((item, index) => item.path === current[index]?.path && JSON.stringify(item) === JSON.stringify(current[index]))) {
           return current;
         }
-        updateImageManagerCache(currentCacheKey, next, nextCursor, hasMoreItems);
+        updateImageManagerCache(currentCacheKey, next, nextCursor, hasMoreItems, imageRetentionDays);
         return next;
       });
       setSelectedImageIds((current) => {
@@ -637,7 +638,7 @@ function ImageManagerContent({
       }
       setIsAutoRefreshing(false);
     }
-  }, [buildImageListFilters, currentCacheKey, hasMoreItems, isLoading, isMutatingImages, items, nextCursor]);
+  }, [buildImageListFilters, currentCacheKey, hasMoreItems, imageRetentionDays, isLoading, isMutatingImages, items, nextCursor]);
 
   const loadMoreImages = useCallback(async () => {
     if (isLoading || isLoadingMore || !hasMoreItems || !nextCursor) {
@@ -649,7 +650,7 @@ function ImageManagerContent({
       setItems((current) => {
         const seen = new Set(current.map((item) => item.path));
         const next = [...current, ...data.items.filter((item) => !seen.has(item.path))];
-        updateImageManagerCache(currentCacheKey, next, data.next_cursor, data.has_more);
+        updateImageManagerCache(currentCacheKey, next, data.next_cursor, data.has_more, data.retention_days);
         return next;
       });
       setImageRetentionDays(data.retention_days);
@@ -947,7 +948,7 @@ function ImageManagerContent({
               }
             : currentItem,
         );
-        updateImageManagerCache(currentCacheKey, next, nextCursor, hasMoreItems);
+        updateImageManagerCache(currentCacheKey, next, nextCursor, hasMoreItems, imageRetentionDays);
         return next;
       });
       toast.success(visibility === "public" ? "已公开到公开图库" : "已取消公开");
@@ -1007,7 +1008,7 @@ function ImageManagerContent({
             const updated = updatesByPath.get(currentItem.path);
             return updated ? { ...currentItem, ...updated } : currentItem;
           });
-          updateImageManagerCache(currentCacheKey, next, nextCursor, hasMoreItems);
+          updateImageManagerCache(currentCacheKey, next, nextCursor, hasMoreItems, imageRetentionDays);
           return next;
         });
       }
@@ -1076,7 +1077,7 @@ function ImageManagerContent({
       });
       setItems((current) => {
         const next = current.map((item) => (item.path === path ? { ...item, tags: updatedTags } : item));
-        updateImageManagerCache(currentCacheKey, next, nextCursor, hasMoreItems);
+        updateImageManagerCache(currentCacheKey, next, nextCursor, hasMoreItems, imageRetentionDays);
         return next;
       });
       setTagEditTarget(null);

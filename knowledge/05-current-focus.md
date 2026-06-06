@@ -41,7 +41,7 @@ chatgpt2api 当前不应再被理解为单纯“ChatGPT 官网能力封装服务
   - stale token 或前端 store 失效后，允许从 cookie 恢复嵌入会话，而不是直接把用户打回匿名态。
   - 从 Sub2API launch 进入时，已绑定的 Sub2API API key 不应在 session 初始化过程中被覆盖、清空或误判成未绑定。
   - 嵌入模式下的认证保持优先级高于主题 reveal、provider 名称提示等纯展示体验；后者可以降级，认证连续性不能退化。
-- 管理端异步创作任务资源仍以 `/api/creation-tasks` 为根，并通过 `image-generations`、`image-edits`、`chat-completions` 等子资源表达场景。
+- 管理端异步创作任务资源仍以 `/api/creation-tasks` 为根，并通过 `image-generations`、`image-edits`、`chat-completions`、`video-generations` 等子资源表达场景。
 - `/canvas` 当前仍是“复用现有能力的前端工作台”，不是独立后端系统：
   - 节点数据不保存 API key、`base_url`、`group_id`。
   - 图片本体继续由现有图片库和对象存储管理，画布只保存引用。

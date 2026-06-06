@@ -6,6 +6,7 @@ type ImageManagerCacheEntry = {
   items: ManagedImageSummary[];
   nextCursor: string;
   hasMore: boolean;
+  retentionDays: number;
   updatedAt: number;
 };
 
@@ -36,8 +37,8 @@ export function isFreshImageManagerCache(entry: ImageManagerCacheEntry) {
   return Date.now() - entry.updatedAt < IMAGE_MANAGER_CACHE_TTL_MS;
 }
 
-export function updateImageManagerCache(cacheKey: string, items: ManagedImageSummary[], nextCursor = "", hasMore = false) {
-  imageManagerCache.set(cacheKey, { items, nextCursor, hasMore, updatedAt: Date.now() });
+export function updateImageManagerCache(cacheKey: string, items: ManagedImageSummary[], nextCursor = "", hasMore = false, retentionDays = 7) {
+  imageManagerCache.set(cacheKey, { items, nextCursor, hasMore, retentionDays, updatedAt: Date.now() });
 }
 
 export function removeCachedManagedImages(paths: string[]) {
