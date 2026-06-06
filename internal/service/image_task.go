@@ -27,6 +27,7 @@ const (
 
 	imageOutputCallbackPayloadKey      = "image_output_callback"
 	imageOutputSlotAcquirerPayloadKey  = "image_output_slot_acquirer"
+	imageOutputBatchLimitPayloadKey    = "image_output_batch_limit"
 	imageTaskBillingBillablePayloadKey = "billing_billable"
 	imageTaskBillingChargedAmountKey   = "billing_charged_amount"
 	imageTaskBillingChargeKey          = "billing_charge_key"
@@ -633,6 +634,9 @@ func (s *ImageTaskService) runTask(ctx context.Context, key, mode string, identi
 		return
 	}
 	if isMediaTaskMode(mode) {
+		if limit := s.userConcurrentLimitValue(); identity.Role == AuthRoleUser && limit > 0 {
+			payload[imageOutputBatchLimitPayloadKey] = limit
+		}
 		payload[imageOutputCallbackPayloadKey] = func(data []map[string]any) {
 			if len(data) == 0 {
 				return
@@ -800,6 +804,13 @@ func (s *ImageTaskService) userConcurrentLimitValue() int {
 		return 0
 	}
 	return limit
+}
+
+func ImageOutputBatchLimit(payload map[string]any) int {
+	if payload == nil {
+		return 0
+	}
+	return util.ToInt(payload[imageOutputBatchLimitPayloadKey], 0)
 }
 
 func (s *ImageTaskService) AcquireCreationUnit(ctx context.Context, identity Identity) (func(), error) {
