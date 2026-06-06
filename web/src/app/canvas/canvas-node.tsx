@@ -73,6 +73,7 @@ import {
 } from "./canvas-help";
 import { buildSmartCanvasErrorDetail } from "./canvas-error-details";
 import { SMART_CANVAS_PRESETS, type SmartCanvasPresetLike, type SmartCanvasPresetId } from "./canvas-presets";
+import { setCanvasImageDragData } from "./canvas-image-drag";
 import type { SmartCanvasUserPreset } from "./canvas-user-presets";
 import {
   canConnectSmartCanvasNodes,
@@ -4199,6 +4200,14 @@ function LoopOutputSlot({
         type="button"
         className="relative aspect-square overflow-hidden rounded-xl border border-border bg-muted"
         onClick={() => onOpenImage(image)}
+        data-node-interactive="true"
+        draggable
+        onDragStart={(event) => {
+          event.stopPropagation();
+          if (!setCanvasImageDragData(event.dataTransfer, [image])) {
+            event.preventDefault();
+          }
+        }}
       >
         {lightweight ? (
           <CanvasImagePlaceholder label={canvasImageLabel(image, index)} />
@@ -4366,6 +4375,13 @@ export function CanvasImageStrip({
             }}
             title={canvasImageLabel(image, index)}
             data-node-interactive="true"
+            draggable
+            onDragStart={(event) => {
+              event.stopPropagation();
+              if (!setCanvasImageDragData(event.dataTransfer, [image])) {
+                event.preventDefault();
+              }
+            }}
           >
             {lightweight ? (
               <CanvasImagePlaceholder label={canvasImageLabel(image, index)} />
