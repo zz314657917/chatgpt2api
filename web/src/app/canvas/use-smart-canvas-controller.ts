@@ -230,6 +230,30 @@ function canvasRunErrorDetail(status?: CreationTask["status"], error?: string) {
   return status === "error" || status === "cancelled" ? error || "" : "";
 }
 
+function taskStateNodeName(status: CreationTask["status"] | undefined, doneName: string, runningName: string, errorName: string, cancelledName: string) {
+  if (status === "success") {
+    return doneName;
+  }
+  if (status === "error") {
+    return errorName;
+  }
+  if (status === "cancelled") {
+    return cancelledName;
+  }
+  if (status === "queued" || status === "running") {
+    return runningName;
+  }
+  return doneName;
+}
+
+function imageToolResultNodeName(status: CreationTask["status"] | undefined, label: string) {
+  return taskStateNodeName(status, label, `${label}中`, `${label}失败`, `${label}已中断`);
+}
+
+function generationOutputNodeName(status: CreationTask["status"] | undefined) {
+  return taskStateNodeName(status, "Output", "生成中", "生成失败", "已中断");
+}
+
 function canvasBlockedData(blockedBy: string, blockedByName: string, message: string) {
   return {
     status: "error" as const,
@@ -1958,12 +1982,13 @@ export function useSmartCanvasController() {
     }
   }, [loadAssets]);
 
-  const updatePendingImageUploadNode = useCallback((nodeId: string, patch: Partial<SmartCanvasItem["data"]>, dirty = false, historyLabel?: string) => {
+  const updatePendingImageUploadNode = useCallback((nodeId: string, patch: Partial<SmartCanvasItem["data"]>, dirty = false, historyLabel?: string, name?: string) => {
     updateCanvas((current) => ({
       ...current,
       nodes: current.nodes.map((item) => item.id === nodeId
         ? {
             ...item,
+            ...(name ? { name } : {}),
             data: {
               ...item.data,
               ...patch,
@@ -2016,6 +2041,10 @@ export function useSmartCanvasController() {
     selectSingleItem(item.id);
     return { nodeId: item.id };
   }, [selectSingleItem, selectedItemId, updateCanvas]);
+
+  const uploadedImageNodeName = useCallback((refs: CanvasImageRef[]) => {
+    return refs.length > 1 ? `${refs.length} 张图片` : refs[0]?.name || "图片";
+  }, []);
 
   const addImagesNearGenerator = useCallback((refs: CanvasImageRef[], target: SmartCanvasItem, point?: { x: number; y: number }) => {
     const normalizedRefs = dedupeCanvasImageRefs(refs);
@@ -2095,8 +2124,8 @@ export function useSmartCanvasController() {
       upload_status: undefined,
       status: undefined,
       error: "",
-    }, true);
-  }, [addImagesNearGenerator, addImagesToCanvas, addManagedImagePayload, createPendingImageUploadNode, updatePendingImageUploadNode, uploadFilesToRefs]);
+    }, true, undefined, uploadedImageNodeName(refs));
+  }, [addImagesNearGenerator, addImagesToCanvas, addManagedImagePayload, createPendingImageUploadNode, updatePendingImageUploadNode, uploadedImageNodeName, uploadFilesToRefs]);
 
   const handleBoardDragOver = useCallback((event: ReactDragEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -2545,7 +2574,7 @@ export function useSmartCanvasController() {
       y: Number(sourceItem.position?.y || 0),
     };
     const node = createOutputNode(position);
-    node.name = task.status === "success" ? imageToolLabel(type) : `${imageToolLabel(type)}中`;
+    node.name = imageToolResultNodeName(task.status, imageToolLabel(type));
     node.data = {
       ...node.data,
       prompt,
@@ -2600,7 +2629,7 @@ export function useSmartCanvasController() {
           nodes: current.nodes.map((item) => item.id === outputId
             ? {
                 ...item,
-                name: task.status === "success" ? label : `${label}中`,
+                name: imageToolResultNodeName(task.status, label),
                 data: {
                   ...item.data,
                   model: task.model || item.data?.model || "auto",
@@ -2622,7 +2651,7 @@ export function useSmartCanvasController() {
       updateCanvas((current) => ({
         ...current,
         nodes: current.nodes.map((item) => item.id === outputId
-          ? { ...item, data: { ...item.data, status: "error", error: message, last_run_error_detail: message, task_id: taskId, updated_at: new Date().toISOString() } }
+          ? { ...item, name: imageToolResultNodeName("error", label), data: { ...item.data, status: "error", error: message, last_run_error_detail: message, task_id: taskId, updated_at: new Date().toISOString() } }
           : item),
       }), true, `${label}失败`);
       toast.error(message);
@@ -2785,7 +2814,7 @@ export function useSmartCanvasController() {
               }
               return {
                 ...item,
-                name: task.status === "success" ? "Output" : "生成中",
+                name: generationOutputNodeName(task.status),
                 data: {
                   ...item.data,
                   prompt: item.data?.prompt || current.nodes.find((node) => node.id === generatorId)?.data?.prompt || "",
@@ -2812,7 +2841,7 @@ export function useSmartCanvasController() {
         nodes: current.nodes.map((item) => item.id === generatorId || outputIds.includes(item.id)
           ? hasLoopOutput(item)
             ? item
-            : { ...item, data: { ...item.data, status: "error", error: message, last_run_error_detail: message, task_id: taskId, updated_at: new Date().toISOString() } }
+            : { ...item, name: item.type === "result" ? generationOutputNodeName("error") : item.name, data: { ...item.data, status: "error", error: message, last_run_error_detail: message, task_id: taskId, updated_at: new Date().toISOString() } }
           : item),
       }), true, "API 生成失败");
       toast.error(message);
@@ -3409,6 +3438,7 @@ export function useSmartCanvasController() {
         }
         nodes = nodes.map((item) => outputIds.includes(item.id) ? {
           ...item,
+          name: generationOutputNodeName(task.status),
           data: {
             ...item.data,
             prompt: submittedPrompt,
@@ -3471,6 +3501,7 @@ export function useSmartCanvasController() {
       nodes: doc.nodes.map((item) => item.id === loopId || connectedGeneratorIds.includes(item.id) || outputIds.includes(item.id)
         ? {
             ...item,
+            name: item.type === "result" ? generationOutputNodeName("cancelled") : item.name,
             data: {
               ...item.data,
               status: "cancelled",
@@ -3513,6 +3544,11 @@ export function useSmartCanvasController() {
       nodes: doc.nodes.map((item) => scopeIds.has(item.id)
         ? {
             ...item,
+            name: item.type === "result"
+              ? item.data?.tool_type
+                ? imageToolResultNodeName("cancelled", imageToolLabel(item.data.tool_type))
+                : generationOutputNodeName("cancelled")
+              : item.name,
             data: {
               ...item.data,
               status: "cancelled",
