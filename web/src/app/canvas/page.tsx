@@ -103,6 +103,7 @@ export default function CanvasPage() {
             onSelectItem={canvas.selectItem}
             onOpenImage={canvas.openImage}
             onDeleteImage={canvas.deleteImageFromItem}
+            onRemoveImageBackground={canvas.openBackgroundRemovalEditorForItem}
             onZoomIn={() => canvas.zoomBy(1.12)}
             onZoomOut={() => canvas.zoomBy(0.88)}
             onFit={canvas.fitContent}
@@ -195,8 +196,11 @@ export default function CanvasPage() {
         anglePrompt={canvas.angleControlPrompt}
         angleResultItem={canvas.angleControlResultItem}
         runningAngle={canvas.running}
+        runningBackgroundRemoval={canvas.running}
+        initialMode={canvas.imageEditorInitialMode}
         onAngleValuesChange={canvas.setAngleControlValues}
         onSubmitAngle={canvas.runAngleControlForImageEditor}
+        onSubmitBackgroundRemoval={canvas.imageEditorSourceItemId ? canvas.runBackgroundRemovalForImageEditor : undefined}
         onOpenChange={(open) => {
           if (!open) {
             canvas.setImageEditorImage(null);

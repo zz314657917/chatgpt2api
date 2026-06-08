@@ -18,7 +18,7 @@ export type SmartCanvasItemType = "image" | "prompt" | "llm" | "loop" | "group" 
 export type SmartCanvasSaveState = "saved" | "dirty" | "saving" | "error";
 export type SmartCanvasTool = "select" | "pan";
 export type SmartCanvasPortKind = "in" | "out";
-export type SmartCanvasImageToolType = "detail_enhance" | "image_edit" | "angle_control";
+export type SmartCanvasImageToolType = "detail_enhance" | "image_edit" | "angle_control" | "background_removal";
 
 export type SmartCanvasAngleControlValues = {
   horizontal: number;

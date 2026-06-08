@@ -59,6 +59,7 @@ const TOOL_TITLES: Record<SmartCanvasImageToolType, string> = {
   detail_enhance: "细节增强失败",
   image_edit: "图片编辑失败",
   angle_control: "角度控制失败",
+  background_removal: "抠图失败",
 };
 
 const NODE_TITLES: Partial<Record<SmartCanvasItemType, string>> = {

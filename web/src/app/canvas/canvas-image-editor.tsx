@@ -67,8 +67,11 @@ type SmartCanvasImageEditorProps = {
   anglePrompt: string;
   angleResultItem: SmartCanvasItem | null;
   runningAngle: boolean;
+  runningBackgroundRemoval: boolean;
+  initialMode?: ImageEditMode;
   onAngleValuesChange: (values: SmartCanvasAngleControlValues) => void;
   onSubmitAngle: (values: SmartCanvasAngleControlValues) => Promise<string>;
+  onSubmitBackgroundRemoval?: (prompt: string) => Promise<string>;
 };
 
 function clampResizeSide(value: number) {
@@ -110,8 +113,11 @@ export function SmartCanvasImageEditor({
   anglePrompt,
   angleResultItem,
   runningAngle,
+  runningBackgroundRemoval,
+  initialMode,
   onAngleValuesChange,
   onSubmitAngle,
+  onSubmitBackgroundRemoval,
 }: SmartCanvasImageEditorProps) {
   const [mode, setMode] = useState<ImageEditMode>("preview");
   const [cropBox, setCropBox] = useState<SmartCanvasCropBox>(DEFAULT_CROP);
@@ -123,6 +129,8 @@ export function SmartCanvasImageEditor({
   const [zoom, setZoom] = useState(1);
   const [applying, setApplying] = useState(false);
   const [submittingAngle, setSubmittingAngle] = useState(false);
+  const [submittingBackgroundRemoval, setSubmittingBackgroundRemoval] = useState(false);
+  const [backgroundRemovalPrompt, setBackgroundRemovalPrompt] = useState("");
   const [angleResultLightboxOpen, setAngleResultLightboxOpen] = useState(false);
   const [bitmap, setBitmap] = useState<ImageBitmap | null>(null);
   const [bitmapError, setBitmapError] = useState("");
@@ -147,6 +155,8 @@ export function SmartCanvasImageEditor({
   const ActionIcon = modeMeta.icon;
   const isPreviewMode = mode === "preview";
   const isAngleMode = mode === "angle";
+  const isBackgroundRemovalMode = mode === "background_removal";
+  const isPreviewScaleMode = isPreviewMode || isBackgroundRemovalMode;
   const canDraw = mode === "mask" || mode === "brush" || mode === "grid";
   const updateAngleValue = useCallback((key: keyof SmartCanvasAngleControlValues, value: number) => {
     onAngleValuesChange({ ...angleValues, [key]: value });
@@ -161,12 +171,12 @@ export function SmartCanvasImageEditor({
     const containScale = Math.min(maxW / bitmap.width, maxH / bitmap.height);
     const previewTargetSide = Math.min(PREVIEW_MIN_DISPLAY_SIDE, maxW * 0.72, maxH * 0.72);
     const previewScale = Math.max(1, Math.min(PREVIEW_MAX_AUTO_UPSCALE, previewTargetSide / Math.min(bitmap.width, bitmap.height)));
-    const fit = isPreviewMode ? Math.min(containScale, previewScale) : Math.min(containScale, 1);
+    const fit = isPreviewScaleMode ? Math.min(containScale, previewScale) : Math.min(containScale, 1);
     return {
       width: Math.max(1, Math.round(bitmap.width * fit)),
       height: Math.max(1, Math.round(bitmap.height * fit)),
     };
-  }, [bitmap, isPreviewMode]);
+  }, [bitmap, isPreviewScaleMode]);
 
   const outpaintDisplay = useMemo(() => {
     const width = displaySize.width * (1 + outpaintBox.left / 100 + outpaintBox.right / 100);
@@ -225,7 +235,7 @@ export function SmartCanvasImageEditor({
       drawStateRef.current = { kind: "none" };
       return;
     }
-    setMode("preview");
+    setMode(initialMode || "preview");
     setCropBox(DEFAULT_CROP);
     setCropAspect("free");
     setResizeSize(DEFAULT_RESIZE);
@@ -235,6 +245,8 @@ export function SmartCanvasImageEditor({
     setZoom(1);
     setApplying(false);
     setSubmittingAngle(false);
+    setSubmittingBackgroundRemoval(false);
+    setBackgroundRemovalPrompt("");
     setBitmapError("");
     setBrushSize(28);
     setBrushColor("#ff2d55");
@@ -248,7 +260,7 @@ export function SmartCanvasImageEditor({
     setGridOrientation("h");
     setGridLines([]);
     clearDrawCanvas();
-  }, [clearDrawCanvas, open, src]);
+  }, [clearDrawCanvas, initialMode, open, src]);
 
   useEffect(() => {
     if (!open || !src) {
@@ -712,6 +724,21 @@ export function SmartCanvasImageEditor({
     }
   }, [angleValues, closeEditor, onSubmitAngle, submittingAngle]);
 
+  const submitBackgroundRemovalAndClose = useCallback(async () => {
+    if (submittingBackgroundRemoval || !onSubmitBackgroundRemoval) {
+      return;
+    }
+    setSubmittingBackgroundRemoval(true);
+    try {
+      const outputId = await onSubmitBackgroundRemoval(backgroundRemovalPrompt);
+      if (outputId) {
+        closeEditor();
+      }
+    } finally {
+      setSubmittingBackgroundRemoval(false);
+    }
+  }, [backgroundRemovalPrompt, closeEditor, onSubmitBackgroundRemoval, submittingBackgroundRemoval]);
+
   const updateCropPercent = useCallback((patch: Partial<SmartCanvasCropBox>) => {
     setCropBox((current) => {
       const next = { ...current, ...patch };
@@ -1036,6 +1063,15 @@ export function SmartCanvasImageEditor({
     );
   };
 
+  const actionBusy = applying ||
+    (isAngleMode && (runningAngle || submittingAngle)) ||
+    (isBackgroundRemovalMode && (runningBackgroundRemoval || submittingBackgroundRemoval));
+  const actionDisabled = isAngleMode
+    ? !src || runningAngle || submittingAngle
+    : isBackgroundRemovalMode
+      ? !src || !onSubmitBackgroundRemoval || runningBackgroundRemoval || submittingBackgroundRemoval
+      : !src || !bitmap || applying;
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
@@ -1151,6 +1187,8 @@ export function SmartCanvasImageEditor({
               onGridOrientationChange={setGridOrientation}
               onGridLinesChange={setGridLines}
               gridSplitCount={gridSplitCount}
+              backgroundRemovalPrompt={backgroundRemovalPrompt}
+              onBackgroundRemovalPromptChange={setBackgroundRemovalPrompt}
             />
             )}
             <div
@@ -1285,6 +1323,7 @@ export function SmartCanvasImageEditor({
               setCropBox(DEFAULT_CROP);
               resetResizeSize();
               setOutpaintBox(DEFAULT_OUTPAINT);
+              setBackgroundRemovalPrompt("");
               setZoom(1);
               setGridLines([]);
               clearDrawCanvas();
@@ -1311,6 +1350,10 @@ export function SmartCanvasImageEditor({
                 void submitAngleAndClose();
                 return;
               }
+              if (isBackgroundRemovalMode) {
+                void submitBackgroundRemovalAndClose();
+                return;
+              }
               if (isPreviewMode) {
                 if (src) {
                   window.open(src, "_blank", "noopener,noreferrer");
@@ -1319,9 +1362,9 @@ export function SmartCanvasImageEditor({
               }
               void applyEdit();
             }}
-            disabled={isAngleMode ? !src || runningAngle || submittingAngle : !src || !bitmap || applying}
+            disabled={actionDisabled}
           >
-            {applying || (isAngleMode && (runningAngle || submittingAngle)) ? <LoaderCircle className="size-4 animate-spin" /> : <ActionIcon className="size-4" />}
+            {actionBusy ? <LoaderCircle className="size-4 animate-spin" /> : <ActionIcon className="size-4" />}
             {isAngleMode ? "生成视角" : isPreviewMode ? "打开原图" : modeMeta.action}
           </Button>
         </div>
