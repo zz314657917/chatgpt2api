@@ -1,9 +1,9 @@
 # 生图接口文档
 
-本文档描述当前服务已实现的图片生成、图片编辑和异步创作任务接口。接口分为两组：
+本文档描述当前服务已实现的图片生成、图片编辑、视频生成和异步创作任务接口。接口分为两组：
 
 - OpenAI 兼容同步接口：`/v1/images/generations`、`/v1/images/edits`。
-- Web 端异步任务接口：`/api/creation-tasks/image-generations`、`/api/creation-tasks/image-edits`、查询与取消任务接口。
+- Web 端异步任务接口：`/api/creation-tasks/image-generations`、`/api/creation-tasks/image-edits`、`/api/creation-tasks/video-generations`、查询与取消任务接口。
 
 同步接口适合外部 OpenAI SDK 或简单脚本直接调用；异步任务接口适合 Web 创作台、轮询进度、多图并发、任务取消和结果留存。
 
@@ -240,6 +240,62 @@ curl http://localhost:3000/api/creation-tasks/image-edits \
   -F "prompt=只替换背景为雪山，主体不变" \
   -F "image=@./input.png" \
   -F "input_image_mask=data:image/png;base64,<mask-base64>"
+```
+
+## 异步视频生成任务
+
+### `POST /api/creation-tasks/video-generations`
+
+请求体格式：`application/json`
+
+必填字段：
+
+- `client_task_id`
+- `prompt`
+
+常用字段：
+
+- `model`：视频模型 ID。无 Sub2API 绑定时，前端会隐藏视频模型入口。
+- `images`：可选输入图片引用数组，通常来自图片库或画布节点。
+- `duration`：视频时长秒数，默认 `5`。
+- `aspect_ratio`：视频画幅，例如 `16:9`、`9:16`。
+- `resolution`：视频分辨率，例如 `720p`、`1080p`。
+- `enhance_prompt`：是否增强提示词。
+- `generate_audio`：是否生成音频。
+- `visibility`：结果可见性，`private` 或 `public`。
+
+示例：
+
+```bash
+curl http://localhost:3000/api/creation-tasks/video-generations \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <session-or-api-token>" \
+  -d '{
+    "client_task_id": "video-task-20260607-001",
+    "model": "doubao-seedance-2.0",
+    "prompt": "一段未来城市夜景中的产品展示视频",
+    "duration": 5,
+    "aspect_ratio": "16:9",
+    "resolution": "720p",
+    "enhance_prompt": true,
+    "generate_audio": false,
+    "visibility": "private"
+  }'
+```
+
+提交成功响应示例：
+
+```json
+{
+  "id": "video-task-20260607-001",
+  "status": "queued",
+  "mode": "video",
+  "model": "doubao-seedance-2.0",
+  "created_at": "2026-06-07 13:44:41",
+  "updated_at": "2026-06-07 13:44:41",
+  "output_statuses": ["queued"],
+  "visibility": "private"
+}
 ```
 
 ## 查询任务
