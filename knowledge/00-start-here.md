@@ -20,7 +20,7 @@ This directory stores project-local context that is useful across Codex sessions
 - ChatGPT web reverse-engineering notes and validation scripts belong under `jshook/`.
 - Admin async creation-task routes use `/api/creation-tasks` with explicit child resources: `image-generations`, `image-edits`, `chat-completions`, and `video-generations`.
 - The project currently targets ChatGPT web account capabilities and OpenAI-compatible image/text endpoints.
-- The current product-facing default is no longer a generic ChatGPT web wrapper only; it now includes a Sub2API-launched standalone image workspace and a white-label profile experience.
+- The current product-facing default is no longer a generic ChatGPT web wrapper only; it now includes a Sub2API-launched standalone image workspace, a white-label profile experience, and a `/canvas` workflow that has recently become more stateful and video-aware.
 
 ## Current Known Capability Notes
 
@@ -29,6 +29,7 @@ This directory stores project-local context that is useful across Codex sessions
 - Adding Grok support would be a new integration decision, not a currently supported capability.
 - Recent image-workspace changes added a stronger default policy surface: continued edit flow, drag-result-into-editor flow, draft preservation, per-user image retention cap, and image workspace policy hardening.
 - Stable image behavior now needs to be understood together across backend routes, image task/service logic, config limits, and the React image workspace page, not only from git history.
+- Recent `/canvas` and `/image` changes have shifted the default continuation cost again: gallery retention notice, shared output controls, pixel-icon output normalization, dragged-node image reuse, image resize editing, and safer creation-task / polling behavior are now part of the active mental model, not just isolated patches.
 
 ## Knowledge Hygiene
 

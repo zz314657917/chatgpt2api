@@ -1,28 +1,28 @@
 ---
-phase: done
-current_sprint: image-composer-asset-library
+phase: build
+current_sprint: canvas-image-followups-and-task-stability
 total_sprints: 4
-pending_action: close-image-composer-asset-library
+pending_action: close-canvas-image-followups-and-task-stability
 project_type: web
 qa_mode: browser
 approval_required: false
-last_verified: 2026-06-03
+last_verified: 2026-06-07
 ---
 
 # Workflow Status
 
 - 当前阶段：`build`
-- 当前 Sprint：`canvas-video-and-composer-followups`
-- 当前目标：把近 3 天已进入主线的 `/canvas` 视频生成节点、无 Sub2API 绑定时的视频模型 fail-closed、`/image` 分辨率预设，以及新一轮 canvas/image workflow 修复收口成当前默认 Sprint 语境。
+- 当前 Sprint：`canvas-image-followups-and-task-stability`
+- 当前目标：把近 3 天已进入主线的 `/canvas` workflow 优化、拖拽图片复用、LLM output / model route 调整、图片输出控件共享、gallery retention notice，以及 creation task / APIMart task status 稳定性修复收口成当前默认 Sprint 语境。
 - Task contract：暂无单独 contract；当前以近期主线提交和 `knowledge/tasks/current-task.md` 为事实源。
-- 本次结论：进行中。现有 workflow status 不能再停留在 2026-05-31 的 `image-composer-asset-library done`，否则会漏掉 6 月初的新主线。
+- 本次结论：进行中。现有 workflow status 不能再停留在 2026-06-03 的视频节点 / composer 预设语境，否则会漏掉 6 月 6-7 日这轮 canvas/image followups 与 task stability 主线。
 - 验证命令：
   - `cd web && npm.cmd run lint`
   - `cd web && npm.cmd run build`
   - `go test ./...`
   - `git diff --check`
-- 浏览器验收：当前应至少补 `/canvas` 视频节点与 `/image` 分辨率预设的最小页面回读；是否已完成需以后续任务记录为准。
-- 未完全自动化覆盖：当前状态文件尚未沉淀 6 月初这轮视频节点和 composer 预设的人工闭环。
+- 浏览器验收：当前应至少补 `/canvas` 节点工作流回读、拖拽图片再利用、输出控件展示，以及 `/image` gallery retention notice 与输出参数联动的最小页面回读；是否已完成需以后续任务记录为准。
+- 未完全自动化覆盖：当前状态文件尚未沉淀这轮 canvas/image followups、task stability 和 APIMart 任务状态修复的人工闭环。
 - 下一合法动作：补当前 Sprint 的最小验证与收口记录，或补单独 contract 后继续推进。
 
 ## Previous Canvas Sprint 4

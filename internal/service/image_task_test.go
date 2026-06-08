@@ -734,6 +734,88 @@ func TestImageTaskServicePassesUserConcurrentLimitAsOutputBatchLimit(t *testing.
 	waitForTaskStatus(t, svc, alice, "task-1", TaskStatusSuccess)
 }
 
+func TestImageTaskServiceBatchedHandlerRespectsUserConcurrentLimit(t *testing.T) {
+	var mu sync.Mutex
+	active := 0
+	maxActive := 0
+	var acquired []int
+	handler := func(ctx context.Context, identity Identity, payload map[string]any) (map[string]any, error) {
+		acquire, ok := payload["image_output_slot_acquirer"].(func(context.Context, int) (func(), error))
+		if !ok {
+			return nil, errors.New("image output slot acquirer missing")
+		}
+		count := imageTaskCount(payload)
+		batchLimit := ImageOutputBatchLimit(payload)
+		if batchLimit < 1 {
+			batchLimit = count
+		}
+		data := make([]map[string]any, 0, count)
+		for start := 1; start <= count; start += batchLimit {
+			end := start + batchLimit - 1
+			if end > count {
+				end = count
+			}
+			releases := make([]func(), 0, end-start+1)
+			for index := start; index <= end; index++ {
+				release, err := acquire(ctx, index)
+				if err != nil {
+					for releaseIndex := len(releases) - 1; releaseIndex >= 0; releaseIndex-- {
+						releases[releaseIndex]()
+					}
+					return nil, err
+				}
+				releases = append(releases, release)
+				mu.Lock()
+				active++
+				if active > maxActive {
+					maxActive = active
+				}
+				acquired = append(acquired, index)
+				mu.Unlock()
+			}
+			for index := start; index <= end; index++ {
+				data = append(data, map[string]any{"url": "https://example.test/image.png"})
+			}
+			mu.Lock()
+			active -= len(releases)
+			mu.Unlock()
+			for releaseIndex := len(releases) - 1; releaseIndex >= 0; releaseIndex-- {
+				releases[releaseIndex]()
+			}
+		}
+		return map[string]any{"data": data}, nil
+	}
+	svc := newTestImageTaskService(t, handler, handler, handler, func() int { return 30 }, func() int { return 2 })
+	alice := Identity{ID: "alice", Name: "Alice", Role: AuthRoleUser}
+
+	if _, err := svc.SubmitGeneration(context.Background(), alice, "task-batched", "draw", "gpt-image-2", "1024x1024", "high", "https://base.test", 5, nil); err != nil {
+		t.Fatalf("SubmitGeneration() error = %v", err)
+	}
+	waitForTaskStatus(t, svc, alice, "task-batched", TaskStatusSuccess)
+	mu.Lock()
+	gotMaxActive := maxActive
+	gotAcquired := append([]int(nil), acquired...)
+	mu.Unlock()
+	if gotMaxActive != 2 {
+		t.Fatalf("max active outputs = %d, want 2", gotMaxActive)
+	}
+	if len(gotAcquired) != 5 {
+		t.Fatalf("acquired slots = %#v, want five slots", gotAcquired)
+	}
+	for index, got := range gotAcquired {
+		if got != index+1 {
+			t.Fatalf("acquired slots = %#v, want sequential indexes 1..5", gotAcquired)
+		}
+	}
+	item, ok := svc.GetTask(alice, "task-batched")
+	if !ok {
+		t.Fatal("task-batched not found")
+	}
+	if data := util.AsMapSlice(item["data"]); len(data) != 5 {
+		t.Fatalf("data len = %d, want 5: %#v", len(data), data)
+	}
+}
+
 func TestImageTaskServiceCancelQueuedTaskWaitingForCreationUnit(t *testing.T) {
 	enteredQueued := make(chan struct{})
 	queuedStarted := make(chan struct{}, 1)
