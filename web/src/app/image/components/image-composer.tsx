@@ -4,6 +4,7 @@ import {
   Bot,
   Check,
   ChevronDown,
+  Eraser,
   Image as ImageIcon,
   ImagePlus,
   MessageCircle,
@@ -99,6 +100,7 @@ type ImageComposerProps = {
   onImageResultDrop: (imageIds: string[]) => void | Promise<void>;
   onManagedImageDrop: (asset: ManagedImageSummary) => void | Promise<void>;
   onRemoveReferenceImage: (index: number) => void;
+  onRemoveReferenceBackground?: (index: number) => void;
 };
 
 const PROMPT_AREA_MIN_HEIGHT = 74;
@@ -347,6 +349,7 @@ export function ImageComposer({
   onImageResultDrop,
   onManagedImageDrop,
   onRemoveReferenceImage,
+  onRemoveReferenceBackground,
 }: ImageComposerProps) {
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [lightboxIndex, setLightboxIndex] = useState(0);
@@ -664,7 +667,7 @@ export function ImageComposer({
       {referenceImages.length > 0 ? (
         <div className="hide-scrollbar mb-2 flex max-h-20 gap-2 overflow-x-auto px-1 py-1 sm:mb-3">
           {referenceImages.map((image, index) => (
-            <div key={`${image.name}-${index}`} className="relative size-14 shrink-0 sm:size-16">
+            <div key={`${image.name}-${index}`} className="group relative size-14 shrink-0 sm:size-16">
               <button
                 type="button"
                 onClick={() => {
@@ -680,6 +683,22 @@ export function ImageComposer({
                   className="h-full w-full object-cover"
                 />
               </button>
+              {onRemoveReferenceBackground ? (
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    event.currentTarget.blur();
+                    onRemoveReferenceBackground(index);
+                  }}
+                  className="pointer-events-none absolute inset-x-1 bottom-1 z-10 inline-flex h-6 items-center justify-center gap-1 rounded-full bg-white/95 px-1.5 text-[11px] font-medium text-stone-800 opacity-0 shadow-sm ring-1 ring-black/5 transition hover:bg-white hover:text-stone-950 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100"
+                  aria-label={`自动抠图参考图 ${image.name || index + 1}`}
+                  title="自动抠图"
+                >
+                  <Eraser className="size-3" />
+                  <span>抠图</span>
+                </button>
+              ) : null}
               <button
                 type="button"
                 onClick={(event) => {

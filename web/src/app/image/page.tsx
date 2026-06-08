@@ -153,6 +153,7 @@ const IMAGE_OUTPUT_FORMAT_STORAGE_KEY = "chatgpt2api:image_last_output_format";
 const IMAGE_OUTPUT_COMPRESSION_STORAGE_KEY = "chatgpt2api:image_last_output_compression";
 const QUOTA_REFRESH_EVENT = "chatgpt2api:quota-refresh";
 const DEFAULT_IMAGE_OUTPUT_FORMAT: ImageOutputFormat = "png";
+const AI_BACKGROUND_REMOVAL_PROMPT = "AI 抠图：自动识别图片中的主要主体，移除背景并输出透明背景 PNG。保持主体形状、纹理、颜色和像素细节，避免新增或重绘无关内容。注意：这是 AI 编辑，可能会重绘图片内容。";
 const REFERENCE_IMAGE_MAX_SIDE = 2048;
 const REFERENCE_IMAGE_JPEG_QUALITY = 0.86;
 const IMAGE_ASSET_PAGE_SIZE = 50;
@@ -187,6 +188,12 @@ type PublishImageTarget = {
   conversationId: string;
   turnId: string;
   imageIndex: number;
+};
+
+type BackgroundRemovalDraft = {
+  conversationId: string | null;
+  image: StoredReferenceImage;
+  prompt: string;
 };
 
 type PublishRecipeOptions = {
@@ -331,6 +338,14 @@ function referenceImageUploadFile(image: StoredReferenceImage, turnId: string, i
 
 function imageFileExtensionForOutputFormat(format?: ImageOutputFormat) {
   return format === "jpeg" ? "jpg" : format || "png";
+}
+
+function buildAiBackgroundRemovalPrompt(instruction: string) {
+  const trimmed = instruction.trim();
+  if (!trimmed) {
+    return AI_BACKGROUND_REMOVAL_PROMPT;
+  }
+  return `${AI_BACKGROUND_REMOVAL_PROMPT}\n用户补充要求：${trimmed}`;
 }
 
 function imageMimeTypeForOutputFormat(format?: ImageOutputFormat) {
@@ -1444,6 +1459,8 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
   const [composerDockHeight, setComposerDockHeight] = useState(0);
   const [visibilityMutatingImageKey, setVisibilityMutatingImageKey] = useState("");
   const [publishImageTarget, setPublishImageTarget] = useState<PublishImageTarget | null>(null);
+  const [backgroundRemovalDraft, setBackgroundRemovalDraft] = useState<BackgroundRemovalDraft | null>(null);
+  const [backgroundRemovalSubmitting, setBackgroundRemovalSubmitting] = useState(false);
   const [publishRecipeOptions, setPublishRecipeOptions] = useState<PublishRecipeOptions>({
     sharePromptParameters: false,
     shareReferenceImages: false,
@@ -2948,7 +2965,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
               taskImageResolution,
               taskOutputFormat,
               taskOutputCompression,
-              undefined,
+              activeTurn.background ? { background: activeTurn.background } : undefined,
               conversationId,
               fallbackReferenceImage,
             );
@@ -2965,7 +2982,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
             taskImageResolution,
             taskOutputFormat,
             taskOutputCompression,
-            undefined,
+            activeTurn.background ? { background: activeTurn.background } : undefined,
             conversationId,
             fallbackReferenceImage,
           );
@@ -3096,6 +3113,114 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
       }
     }
   }, [conversations, runConversationQueue]);
+
+  const handleRemoveReferenceBackground = useCallback((index: number) => {
+    const image = referenceImages[index];
+    if (!image) {
+      toast.error("未找到对应的参考图");
+      return;
+    }
+
+    setBackgroundRemovalDraft({
+      conversationId: selectedConversationId,
+      image: {
+        ...image,
+        source: image.source || "upload",
+        clientReferenceId: createId(),
+        uploadStatus: "pending",
+        serverReferenceId: undefined,
+        uploadError: undefined,
+      },
+      prompt: "",
+    });
+  }, [referenceImages, selectedConversationId]);
+
+  const handleSubmitAiBackgroundRemoval = useCallback(
+    async () => {
+      if (!backgroundRemovalDraft) {
+        return;
+      }
+      const prompt = buildAiBackgroundRemovalPrompt(backgroundRemovalDraft.prompt);
+      const { conversationId, image } = backgroundRemovalDraft;
+      const targetConversation = conversationId
+        ? conversationsRef.current.find((conversation) => conversation.id === conversationId) ?? null
+        : null;
+      const now = new Date().toISOString();
+      const targetConversationId = targetConversation?.id ?? createId();
+      const turnId = createId();
+      const visibility = defaultImageVisibility || "private";
+      const referenceImage: StoredReferenceImage = {
+        ...image,
+        source: "conversation",
+        clientReferenceId: createId(),
+        uploadStatus: "pending",
+        serverReferenceId: undefined,
+        uploadError: undefined,
+      };
+      const draftTurn: ImageTurn = {
+        id: turnId,
+        prompt,
+        model: effectiveImageModel,
+        mode: "edit",
+        referenceImages: [referenceImage],
+        count: 1,
+        size: "",
+        sizeSelection: undefined,
+        quality: undefined,
+        outputFormat: "png",
+        outputCompression: undefined,
+        background: "transparent",
+        visibility,
+        images: [
+          {
+            id: `${turnId}-0`,
+            taskId: imageTaskBatchId(turnId, 0),
+            taskStatus: "queued",
+            status: "loading",
+            visibility,
+            outputFormat: "png",
+          },
+        ],
+        createdAt: now,
+        status: "queued",
+      };
+
+      setBackgroundRemovalSubmitting(true);
+      try {
+        await updateConversation(targetConversationId, (current) => {
+          const conversation = current ?? targetConversation;
+          return conversation ? {
+            ...conversation,
+            updatedAt: now,
+            turns: [...conversation.turns, draftTurn],
+          } : {
+            id: targetConversationId,
+            title: buildConversationTitle(prompt),
+            createdAt: now,
+            updatedAt: now,
+            turns: [draftTurn],
+          };
+        });
+        setSelectedConversationId(targetConversationId);
+        setImageOutputFormat("png");
+        setImageOutputCompression("");
+        setBackgroundRemovalDraft(null);
+        void runConversationQueue(targetConversationId);
+        toast.success("已加入 AI 抠图队列，结果可能会重绘");
+      } catch (error) {
+        toast.error(formatCreationTaskError(error, "提交 AI 抠图失败"));
+      } finally {
+        setBackgroundRemovalSubmitting(false);
+      }
+    },
+    [
+      backgroundRemovalDraft,
+      defaultImageVisibility,
+      effectiveImageModel,
+      runConversationQueue,
+      updateConversation,
+    ],
+  );
 
   const handleCancelTurn = useCallback(
     async (conversationId: string, turnId: string) => {
@@ -4197,6 +4322,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                 onImageResultDrop={handleImageResultDrop}
                 onManagedImageDrop={handleManagedImageReference}
                 onRemoveReferenceImage={handleRemoveReferenceImage}
+                onRemoveReferenceBackground={handleRemoveReferenceBackground}
               />
             </div>
           </div>
@@ -4237,6 +4363,81 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         onOpenChange={setIsPromptMarketOpen}
         onApplyPrompt={handleApplyMarketPrompt}
       />
+
+      {backgroundRemovalDraft ? (
+        <Dialog
+          open
+          onOpenChange={(open) => {
+            if (!open && !backgroundRemovalSubmitting) {
+              setBackgroundRemovalDraft(null);
+            }
+          }}
+        >
+          <DialogContent showCloseButton={!backgroundRemovalSubmitting} className="rounded-2xl p-6 sm:max-w-[640px]">
+            <DialogHeader className="gap-2">
+              <DialogTitle>AI 抠图</DialogTitle>
+              <DialogDescription className="text-sm leading-6">
+                参考下方图片自动识别主体并移除背景，输出透明 PNG。
+              </DialogDescription>
+            </DialogHeader>
+            <div className="grid gap-4 py-1">
+              <button
+                type="button"
+                className="group relative overflow-hidden rounded-2xl border border-stone-200 bg-[linear-gradient(45deg,#e7e5e4_25%,transparent_25%),linear-gradient(-45deg,#e7e5e4_25%,transparent_25%),linear-gradient(45deg,transparent_75%,#e7e5e4_75%),linear-gradient(-45deg,transparent_75%,#e7e5e4_75%)] bg-[length:20px_20px] bg-[position:0_0,0_10px,10px_-10px,-10px_0]"
+                onClick={() =>
+                  openLightbox(
+                    [{
+                      id: backgroundRemovalDraft.image.clientReferenceId || backgroundRemovalDraft.image.name || "background-removal-reference",
+                      src: backgroundRemovalDraft.image.dataUrl,
+                    }],
+                    0,
+                  )
+                }
+                aria-label="预览待抠图图片"
+              >
+                <img
+                  src={backgroundRemovalDraft.image.dataUrl}
+                  alt={backgroundRemovalDraft.image.name || "待抠图图片"}
+                  className="mx-auto max-h-[320px] w-full object-contain"
+                />
+                <span className="pointer-events-none absolute bottom-3 left-3 rounded-full bg-black/65 px-3 py-1 text-xs font-bold text-white opacity-0 transition group-hover:opacity-100">
+                  点击预览
+                </span>
+              </button>
+              <label className="text-sm font-medium text-stone-700" htmlFor="background-removal-prompt">
+                抠图说明
+              </label>
+              <Textarea
+                id="background-removal-prompt"
+                value={backgroundRemovalDraft.prompt}
+                onChange={(event) =>
+                  setBackgroundRemovalDraft((current) =>
+                    current ? { ...current, prompt: event.target.value } : current,
+                  )
+                }
+                placeholder="可选，例如：保留所有主体和细节，边缘尽量自然。"
+                className="min-h-28 resize-y"
+                disabled={backgroundRemovalSubmitting}
+              />
+              <p className="text-xs leading-5 text-stone-500">
+                AI 会判断主体边界，复杂照片效果更稳定；结果可能轻微重绘图片细节。
+              </p>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setBackgroundRemovalDraft(null)} disabled={backgroundRemovalSubmitting}>
+                取消
+              </Button>
+              <Button
+                onClick={() => void handleSubmitAiBackgroundRemoval()}
+                disabled={backgroundRemovalSubmitting}
+              >
+                {backgroundRemovalSubmitting ? <LoaderCircle className="size-4 animate-spin" /> : null}
+                AI 抠图
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      ) : null}
 
       {publishImageTarget ? (
         <Dialog open onOpenChange={(open) => (!open && !visibilityMutatingImageKey ? setPublishImageTarget(null) : null)}>

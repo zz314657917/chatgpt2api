@@ -124,6 +124,7 @@ import {
   type SmartCanvasTool,
   type SmartCanvasViewport,
 } from "./types";
+import type { ImageEditMode } from "./canvas-image-editor-types";
 
 const MANAGED_IMAGE_DRAG_TYPE = "application/x-chatgpt2api-managed-image";
 const CANVAS_ASSET_PAGE_SIZE = 50;
@@ -131,6 +132,7 @@ const SMART_CANVAS_PORT_SNAP_RADIUS = 44;
 const CROP_NODE_OFFSET = { x: 32, y: 32 };
 const DEFAULT_ANGLE_CONTROL_VALUES: SmartCanvasAngleControlValues = { horizontal: 0, vertical: 15, zoom: 5 };
 const DETAIL_ENHANCE_PROMPT = "请对这张图片进行细节增强和高清修复，提升清晰度、纹理细节、边缘锐度和整体质感，同时严格保留原始构图、主体、颜色关系和风格，不新增无关元素。";
+const AI_BACKGROUND_REMOVAL_PROMPT = "AI 抠图：自动识别图片中的主要主体，移除背景并输出透明背景 PNG。保持主体形状、纹理、颜色和像素细节，避免新增或重绘无关内容。注意：这是 AI 编辑，可能会重绘图片内容。";
 
 type SmartCanvasAssetLibraryScope = "mine" | "public";
 
@@ -171,6 +173,9 @@ function imageToolLabel(type: SmartCanvasImageToolType) {
   }
   if (type === "angle_control") {
     return "角度控制";
+  }
+  if (type === "background_removal") {
+    return "抠图";
   }
   return "图片编辑";
 }
@@ -224,6 +229,14 @@ function buildAngleControlPrompt(values: SmartCanvasAngleControlValues) {
     `镜头缩放强度为 ${Math.round(values.zoom)} / 10。`,
     "只改变观察角度和镜头距离，不要新增无关元素，不要改变主体结构。",
   ].join("\n");
+}
+
+function buildAiBackgroundRemovalPrompt(instruction: string) {
+  const trimmed = instruction.trim();
+  if (!trimmed) {
+    return AI_BACKGROUND_REMOVAL_PROMPT;
+  }
+  return `${AI_BACKGROUND_REMOVAL_PROMPT}\n用户补充要求：${trimmed}`;
 }
 
 function canvasRunErrorDetail(status?: CreationTask["status"], error?: string) {
@@ -916,6 +929,7 @@ export function useSmartCanvasController() {
   const [mentionOpen, setMentionOpen] = useState(false);
   const [imageEditorImage, setImageEditorImage] = useState<CanvasImageRef | null>(null);
   const [imageEditorSourceItemId, setImageEditorSourceItemId] = useState("");
+  const [imageEditorInitialMode, setImageEditorInitialMode] = useState<ImageEditMode>("preview");
   const [angleControlValues, setAngleControlValues] = useState<SmartCanvasAngleControlValues>(DEFAULT_ANGLE_CONTROL_VALUES);
   const [angleControlResultItemId, setAngleControlResultItemId] = useState("");
   const [canvasPickerOpen, setCanvasPickerOpen] = useState(false);
@@ -2491,6 +2505,7 @@ export function useSmartCanvasController() {
       const key = canvasImageKey(image);
       const sourceItem = canvasRef.current?.nodes.find((item) => imageToolImagesFromItem(item).some((candidate) => canvasImageKey(candidate) === key));
       setImageEditorSourceItemId(sourceItem?.id || "");
+      setImageEditorInitialMode("preview");
       setAngleControlResultItemId("");
     }
   }, []);
@@ -2676,7 +2691,24 @@ export function useSmartCanvasController() {
         throw new Error("没有可读取的输入图片");
       }
       const clientTaskId = uniqueTaskId(`smart-canvas-${type}`);
-      const task = await createImageEditTask(clientTaskId, files, prompt, "auto", "1024x1024", undefined, 1, undefined, sourceImageVisibility(selected.item));
+      const taskOptions = type === "background_removal" ? { background: "transparent" } : undefined;
+      const taskOutputFormat = type === "background_removal" ? "png" : undefined;
+      const taskSize = type === "background_removal" ? "" : "1024x1024";
+      const task = await createImageEditTask(
+        clientTaskId,
+        files,
+        prompt,
+        "auto",
+        taskSize,
+        undefined,
+        1,
+        undefined,
+        sourceImageVisibility(selected.item),
+        undefined,
+        taskOutputFormat,
+        undefined,
+        taskOptions,
+      );
       const outputId = createImageToolResultNode(selected.item, selected.image, type, prompt, task, parameters);
       void pollTaskIntoToolResult(task.id, outputId, imageToolLabel(type));
       toast.success(`${imageToolLabel(type)}任务已提交`);
@@ -2715,6 +2747,37 @@ export function useSmartCanvasController() {
     void runImageEditToolForItem(itemId, "detail_enhance", DETAIL_ENHANCE_PROMPT);
   }, [runImageEditToolForItem]);
 
+  const openBackgroundRemovalEditorForItem = useCallback((itemId: string) => {
+    selectSingleItem(itemId);
+    const selected = getSingleImageFromItem(itemId);
+    if (!selected) {
+      return;
+    }
+    setImageEditorImage(selected.image);
+    setImageEditorSourceItemId(selected.item.id);
+    setImageEditorInitialMode("background_removal");
+    setAngleControlResultItemId("");
+  }, [getSingleImageFromItem, selectSingleItem]);
+
+  const runBackgroundRemovalForImageEditor = useCallback((instruction: string) => {
+    if (!imageEditorImage) {
+      toast.info("请先打开一张图片");
+      return Promise.resolve("");
+    }
+    const sourceItem = imageEditorSourceItemId
+      ? canvasRef.current?.nodes.find((item) => item.id === imageEditorSourceItemId) || null
+      : findItemContainingImage(imageEditorImage);
+    if (!sourceItem) {
+      toast.error("未找到图片所在节点");
+      return Promise.resolve("");
+    }
+    return runImageEditTool(
+      { item: sourceItem, image: imageEditorImage },
+      "background_removal",
+      buildAiBackgroundRemovalPrompt(instruction),
+    );
+  }, [findItemContainingImage, imageEditorImage, imageEditorSourceItemId, runImageEditTool]);
+
   const openSelectedImageEditor = useCallback(() => {
     const selected = getSelectedSingleImage();
     if (!selected) {
@@ -2722,6 +2785,7 @@ export function useSmartCanvasController() {
     }
     setImageEditorImage(selected.image);
     setImageEditorSourceItemId(selected.item.id);
+    setImageEditorInitialMode("preview");
     setAngleControlResultItemId("");
   }, [getSelectedSingleImage]);
 
@@ -2733,6 +2797,7 @@ export function useSmartCanvasController() {
     }
     setImageEditorImage(selected.image);
     setImageEditorSourceItemId(selected.item.id);
+    setImageEditorInitialMode("preview");
     setAngleControlResultItemId("");
   }, [getSingleImageFromItem, selectSingleItem]);
 
@@ -4000,6 +4065,7 @@ export function useSmartCanvasController() {
     mentionItems,
     imageEditorImage,
     imageEditorSourceItemId,
+    imageEditorInitialMode,
     angleControlValues,
     angleControlPrompt,
     angleControlResultItem,
@@ -4072,9 +4138,11 @@ export function useSmartCanvasController() {
     setAngleControlValues,
     runDetailEnhanceSelected,
     runDetailEnhanceForItem,
+    openBackgroundRemovalEditorForItem,
     openSelectedImageEditor,
     openImageEditorForItem,
     runAngleControlForImageEditor,
+    runBackgroundRemovalForImageEditor,
     runLlmNode,
     runGeneratorNode,
     stopLoopNode,

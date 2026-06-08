@@ -1,4 +1,4 @@
-import { Brush, Crop, Cuboid, Eye, Grid3X3, Maximize2, Paintbrush, Scaling, type LucideIcon } from "lucide-react";
+import { Brush, Crop, Cuboid, Eraser, Eye, Grid3X3, Maximize2, Paintbrush, Scaling, type LucideIcon } from "lucide-react";
 
 import type { CropAspect, ImageEditMode, OutpaintBackground, OutpaintBox, ResizeSize, SmartCanvasCropBox } from "./canvas-image-editor-types";
 
@@ -88,6 +88,14 @@ export const editModes: Array<{
     title: "宫格切分",
     description: "按行列或自定义切线拆分图片",
     action: "应用切分",
+  },
+  {
+    value: "background_removal",
+    label: "抠图",
+    icon: Eraser,
+    title: "AI 抠图",
+    description: "自动识别主体并移除背景，输出透明 PNG",
+    action: "开始抠图",
   },
   {
     value: "angle",

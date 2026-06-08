@@ -1338,6 +1338,7 @@ type SmartCanvasBoardProps = {
   onSelectItem: (id: string, multi?: boolean) => void;
   onOpenImage: (image: CanvasImageRef) => void;
   onDeleteImage: (nodeId: string, image: CanvasImageRef) => void;
+  onRemoveImageBackground: (nodeId: string) => void;
   onZoomIn: () => void;
   onZoomOut: () => void;
   onFit: () => void;
@@ -1392,6 +1393,7 @@ export function SmartCanvasBoard({
   onSelectItem,
   onOpenImage,
   onDeleteImage,
+  onRemoveImageBackground,
   onZoomIn,
   onZoomOut,
   onFit,
@@ -1690,6 +1692,7 @@ export function SmartCanvasBoard({
               onSelectItem={onSelectItem}
               onOpenImage={onOpenImage}
               onDeleteImage={onDeleteImage}
+              onRemoveImageBackground={onRemoveImageBackground}
               onUpdateItemData={onUpdateItemData}
               onRunGenerator={onRunGenerator}
               onRunLlm={onRunLlm}
@@ -2433,6 +2436,7 @@ type SmartCanvasNodeProps = {
   onSelectItem: (id: string, multi?: boolean) => void;
   onOpenImage: (image: CanvasImageRef) => void;
   onDeleteImage: (nodeId: string, image: CanvasImageRef) => void;
+  onRemoveImageBackground: (nodeId: string) => void;
   onUpdateItemData: (id: string, patch: Partial<SmartCanvasItem["data"]>) => void;
   onRunGenerator: (id: string) => void;
   onRunLlm: (id: string) => void;
@@ -2469,6 +2473,7 @@ export const SmartCanvasNode = memo(function SmartCanvasNode({
   onSelectItem,
   onOpenImage,
   onDeleteImage,
+  onRemoveImageBackground,
   onUpdateItemData,
   onRunGenerator,
   onRunLlm,
@@ -2653,6 +2658,7 @@ function areSmartCanvasNodePropsEqual(previous: SmartCanvasNodeProps, next: Smar
     previous.onSelectItem === next.onSelectItem &&
     previous.onOpenImage === next.onOpenImage &&
     previous.onDeleteImage === next.onDeleteImage &&
+    previous.onRemoveImageBackground === next.onRemoveImageBackground &&
     previous.onUpdateItemData === next.onUpdateItemData &&
     previous.onRunGenerator === next.onRunGenerator &&
     previous.onRunLlm === next.onRunLlm &&
@@ -4429,6 +4435,33 @@ export function CanvasImageStrip({
                 }}
               >
                 +{overflow}
+              </span>
+            ) : null}
+            {onOpen ? (
+              <span
+                role="button"
+                tabIndex={0}
+                className={cn(
+                  "absolute top-1 z-10 inline-flex h-6 items-center gap-1 rounded-full border border-border bg-background/95 px-2 text-[11px] font-black text-sky-700 opacity-0 shadow-sm transition hover:border-sky-300 hover:bg-white hover:text-sky-900 group-hover:opacity-100 dark:border-slate-700 dark:bg-slate-950/90 dark:text-sky-200 dark:hover:border-sky-400/50 dark:hover:bg-slate-900",
+                  onDelete ? "right-8" : "right-1",
+                )}
+                data-node-interactive="true"
+                title="编辑图片"
+                aria-label="编辑图片"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onOpen(image);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    onOpen(image);
+                  }
+                }}
+              >
+                <Pencil className="size-3" />
+                编辑
               </span>
             ) : null}
             {onDelete ? (

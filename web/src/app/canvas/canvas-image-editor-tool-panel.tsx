@@ -66,6 +66,8 @@ export type SmartCanvasImageEditorToolPanelProps = {
   onGridOrientationChange: (orientation: GridOrientation) => void;
   onGridLinesChange: (lines: GridLine[]) => void;
   gridSplitCount: number;
+  backgroundRemovalPrompt: string;
+  onBackgroundRemovalPromptChange: (prompt: string) => void;
 };
 
 export function SmartCanvasImageEditorToolPanel({
@@ -115,6 +117,8 @@ export function SmartCanvasImageEditorToolPanel({
   onGridOrientationChange,
   onGridLinesChange,
   gridSplitCount,
+  backgroundRemovalPrompt,
+  onBackgroundRemovalPromptChange,
 }: SmartCanvasImageEditorToolPanelProps) {
   const panelTitle = editModes.find((item) => item.value === mode)?.label || "工具";
 
@@ -343,6 +347,29 @@ export function SmartCanvasImageEditorToolPanel({
             <input className="w-full accent-sky-500" type="range" min={0} max={80} value={gridGap} onChange={(event) => onGridGapChange(Number(event.target.value))} />
             <div className="mt-2 rounded-xl bg-primary px-3 py-2 text-center text-xs font-black text-primary-foreground">
               将生成 {gridSplitCount} 张
+            </div>
+          </ToolSection>
+        </>
+      ) : null}
+
+      {mode === "background_removal" ? (
+        <>
+          <ToolSection title="AI 抠图">
+            <p className="rounded-xl bg-muted/70 px-3 py-2 text-xs font-semibold leading-relaxed text-muted-foreground dark:bg-slate-900/80 dark:text-slate-400">
+              自动识别图片主体并移除背景，输出透明 PNG。AI 会判断主体边界，复杂照片效果通常比本地边缘抠图更稳定。
+            </p>
+          </ToolSection>
+          <ToolSection title="补充要求">
+            <textarea
+              value={backgroundRemovalPrompt}
+              onChange={(event) => onBackgroundRemovalPromptChange(event.target.value)}
+              placeholder="可选，例如：保留所有苹果和水滴，边缘尽量自然。"
+              className="min-h-28 w-full resize-y rounded-xl border border-border bg-background px-3 py-2 text-xs font-semibold leading-5 text-foreground outline-none transition focus:border-sky-400 focus:ring-2 focus:ring-sky-400/20 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+            />
+          </ToolSection>
+          <ToolSection title="输出">
+            <div className="rounded-xl border border-dashed border-border px-3 py-2 text-xs font-bold text-muted-foreground dark:border-slate-700 dark:text-slate-400">
+              透明背景 PNG · 会生成新的结果节点
             </div>
           </ToolSection>
         </>
