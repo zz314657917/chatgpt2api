@@ -89,6 +89,13 @@ function buildManagedImageDownloadName(item: ManagedImageSummary, index: number)
   return `managed-image-${String(index + 1).padStart(2, "0")}.png`;
 }
 
+function imageDownloadErrorMessage(error: unknown) {
+  if (error instanceof TypeError && error.message === "Failed to fetch") {
+    return "下载图片失败：无法读取图片文件，请检查图片地址或登录状态";
+  }
+  return error instanceof Error ? error.message : "下载图片失败";
+}
+
 async function downloadManagedImage(item: ManagedImageDetail, index: number) {
   let objectUrl = "";
 
@@ -103,7 +110,7 @@ async function downloadManagedImage(item: ManagedImageDetail, index: number) {
       });
     objectUrl = URL.createObjectURL(blob);
   } catch (error) {
-    throw error instanceof Error ? error : new Error("下载图片失败");
+    throw new Error(imageDownloadErrorMessage(error));
   }
 
   const link = document.createElement("a");
@@ -814,7 +821,7 @@ function ImageManagerContent({
         }
       }
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "下载图片失败");
+      toast.error(imageDownloadErrorMessage(error));
     } finally {
       setDownloadingKey(null);
     }

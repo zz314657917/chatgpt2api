@@ -56,7 +56,34 @@ function trustedImageOrigins() {
 }
 
 function isManagedImagePath(pathname: string) {
-  return MANAGED_IMAGE_PREFIXES.some((prefix) => pathname.startsWith(prefix));
+  return managedImagePathname(pathname) !== "";
+}
+
+function managedImagePathname(pathname: string) {
+  const normalized = pathname.startsWith("/") ? pathname : `/${pathname}`;
+  for (const prefix of MANAGED_IMAGE_PREFIXES) {
+    const index = normalized.indexOf(prefix);
+    if (index >= 0) {
+      return normalized.slice(index);
+    }
+  }
+  return "";
+}
+
+function withAPIBaseManagedPath(managedPath: string, search: string) {
+  const apiBase = apiBaseURL();
+  if (!apiBase) {
+    return `${managedPath}${search}`;
+  }
+  try {
+    const url = new URL(apiBase);
+    const basePath = url.pathname.replace(/\/$/, "");
+    url.pathname = `${basePath}${managedPath}`;
+    url.search = search;
+    return url.toString();
+  } catch {
+    return `${apiBase.replace(/\/$/, "")}${managedPath}${search}`;
+  }
 }
 
 function normalizeManagedCachePath(value: string) {
@@ -157,14 +184,16 @@ export function resolveImageRequestURL(src: string) {
   const apiBase = apiBaseURL();
   if (!isAbsoluteURL(value) && value.startsWith("/") && apiBase) {
     const relativeCandidate = new URL(value, apiBase);
-    if (isManagedImagePath(relativeCandidate.pathname)) {
-      return relativeCandidate.toString();
+    const managedPath = managedImagePathname(relativeCandidate.pathname);
+    if (managedPath) {
+      return withAPIBaseManagedPath(managedPath, relativeCandidate.search);
     }
   }
 
   const candidate = new URL(value, browserBase);
-  if (apiBase && isManagedImagePath(candidate.pathname)) {
-    return new URL(`${candidate.pathname}${candidate.search}`, apiBase).toString();
+  const managedPath = managedImagePathname(candidate.pathname);
+  if (apiBase && managedPath) {
+    return withAPIBaseManagedPath(managedPath, candidate.search);
   }
 
   return candidate.toString();

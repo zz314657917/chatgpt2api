@@ -69,6 +69,13 @@ function imageDownloadName(image: LightboxImage, blobType?: string) {
   return `image-${image.id}.${extension}`;
 }
 
+function imageDownloadErrorMessage(error: unknown) {
+  if (error instanceof TypeError && error.message === "Failed to fetch") {
+    return "下载图片失败：无法读取图片文件，请检查图片地址或登录状态";
+  }
+  return error instanceof Error ? error.message : "下载图片失败";
+}
+
 export function ImageLightbox({
   images,
   currentIndex,
@@ -176,7 +183,7 @@ export function ImageLightbox({
         link.click();
         link.remove();
       } catch (error) {
-        toast.error(error instanceof Error ? error.message : "下载图片失败");
+        toast.error(imageDownloadErrorMessage(error));
       } finally {
         if (objectURL) {
           window.setTimeout(() => URL.revokeObjectURL(objectURL), 1000);
