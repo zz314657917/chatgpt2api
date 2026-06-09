@@ -1,12 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ChevronDown, ChevronUp, LogOut, MoonStar, Sun, UserCircle2 } from "lucide-react";
+import { ChevronDown, ChevronUp, Clock3, LogOut, MoonStar, Sun, UserCircle2, UserPlus, WalletCards } from "lucide-react";
 import { motion, useReducedMotion, type Transition } from "motion/react";
 import { Link, NavLink, useLocation, useNavigate } from "react-router-dom";
 
 import { ImageTaskQueue } from "@/components/image-task-queue";
-import { Sub2APIKeyMenu } from "@/components/sub2api-key-picker";
 import webConfig from "@/constants/common-env";
 import {
   AUTH_SESSION_CHANGE_EVENT,
@@ -20,8 +19,8 @@ import {
 } from "@/store/auth";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { logout, type BillingState } from "@/lib/api";
-import { useAppMeta } from "@/lib/use-app-meta";
+import { fetchAuthProviders, fetchSub2APIWalletSummary, logout, type BillingState } from "@/lib/api";
+import { accountDisplayLabel, accountDisplayName } from "@/lib/session-display";
 import { cn } from "@/lib/utils";
 import {
   applyColorTheme,
@@ -37,6 +36,7 @@ const navItems = [
   { href: "/image-manager", label: "图片库" },
 ];
 const profileNavItem = { href: "/profile", label: "个人中心" };
+const teamNavItem = { href: "/profile?tab=team", label: "团队空间" };
 const PRIMARY_NAV_ID = "primary-navigation";
 const NAV_ACTIVE_LAYOUT_ID = "top-nav-active-pill";
 const navActiveTransition: Transition = {
@@ -56,14 +56,22 @@ function formatBillingQuota(billing?: BillingState | null) {
   if (billing.unlimited) {
     return "无限";
   }
+  if (billing.unit === "cny_milli") {
+    return `¥${(Math.max(0, Number(billing.available) || 0) / 1000).toFixed(2)}`;
+  }
   return String(Math.max(0, Number(billing.available) || 0));
 }
 
 function sessionQuotaLabel(session: StoredAuthSession | null) {
-  if (session?.provider === "sub2api") {
-    return "统一账户";
-  }
   return formatBillingQuota(session?.billing);
+}
+
+function formatWalletBalance(value: unknown) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return value === undefined || value === null || value === "" ? "--" : String(value);
+  }
+  return Math.max(0, numeric).toFixed(2);
 }
 
 function ThemeToggleButton({
@@ -159,18 +167,68 @@ function AccountMenu({
   onLogout: () => Promise<void>;
 }) {
   const [open, setOpen] = useState(false);
-  const displayName = session.name || roleLabel;
+  const [rechargeURL, setRechargeURL] = useState("");
+  const [walletQuota, setWalletQuota] = useState("");
+  const displayName = accountDisplayName(session, roleLabel === "管理员" ? roleLabel : "落叶AI用户");
+  const quotaLabel = walletQuota || availableQuota;
   const initial = (displayName.trim() || "U").slice(0, 1).toUpperCase();
   const profileActive = isActivePath(pathname, profileNavItem.href);
+  const usageActive = pathname === "/profile" && new URLSearchParams(window.location.search).get("tab") === "usage";
+  const teamActive = pathname === "/profile" && new URLSearchParams(window.location.search).get("tab") === "team";
+
+  useEffect(() => {
+    let active = true;
+    void Promise.allSettled([fetchSub2APIWalletSummary(), fetchAuthProviders()])
+      .then(([walletResult, providersResult]) => {
+        if (!active) {
+          return;
+        }
+        const wallet = walletResult.status === "fulfilled" ? walletResult.value : null;
+        const providers = providersResult.status === "fulfilled" ? providersResult.value : null;
+        const walletBalance = wallet?.available ?? wallet?.balance;
+        if (walletBalance !== undefined && walletBalance !== null && walletBalance !== "") {
+          setWalletQuota(formatWalletBalance(walletBalance));
+        }
+        const sub2api = providers?.sub2api;
+        setRechargeURL(String(wallet?.recharge_url || sub2api?.recharge_url || sub2api?.launch_url || "").trim());
+      })
+      .catch(() => {
+        if (active) {
+          setRechargeURL("");
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const openRecharge = () => {
+    if (rechargeURL) {
+      window.open(rechargeURL, "_blank", "noopener,noreferrer");
+      return;
+    }
+    window.open("https://ai.3zapi.top", "_blank", "noopener,noreferrer");
+  };
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
+    <div className="flex min-w-0 items-center gap-1.5">
+      <Link
+        to={teamNavItem.href}
+        className={cn(
+          "inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full border border-border px-2.5 text-sm font-medium shadow-none transition hover:bg-accent hover:text-accent-foreground",
+          teamActive ? "border-emerald-500/30 bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300" : "text-foreground",
+        )}
+      >
+        <UserPlus className="size-4" />
+        <span className="hidden sm:inline">团队</span>
+      </Link>
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger asChild>
         <Button
           type="button"
           variant="outline"
           className={cn(
-            "h-9 rounded-full px-2.5 shadow-none",
+            "h-9 gap-1.5 rounded-full px-2 pr-1.5 shadow-none",
             profileActive ? "border-[#1456f0]/30 bg-[#edf4ff] text-[#1456f0] dark:bg-sky-950/30 dark:text-sky-300" : "",
           )}
           aria-label="账号菜单"
@@ -178,16 +236,16 @@ function AccountMenu({
           <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">
             {initial}
           </span>
-          <span className="hidden max-w-[120px] truncate lg:inline">{displayName}</span>
-          <ChevronDown />
+          <span className="hidden max-w-[92px] truncate lg:inline">{displayName}</span>
+          <ChevronDown className="size-3.5" />
         </Button>
-      </PopoverTrigger>
-      <PopoverContent
-        align="end"
-        sideOffset={8}
-        className="w-72 border-border bg-card p-2 text-card-foreground shadow-[0_20px_60px_-30px_rgba(15,23,42,0.45)] dark:border-border dark:bg-card"
-      >
-        <div className="flex flex-col gap-2">
+        </PopoverTrigger>
+        <PopoverContent
+          align="end"
+          sideOffset={8}
+          className="w-72 border-border bg-card p-2 text-card-foreground shadow-[0_20px_60px_-30px_rgba(15,23,42,0.45)] dark:border-border dark:bg-card"
+        >
+          <div className="flex flex-col gap-2">
           <div className="rounded-xl bg-muted/50 p-3">
             <div className="flex min-w-0 items-center gap-3">
               <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary text-sm font-semibold text-primary-foreground">
@@ -195,9 +253,9 @@ function AccountMenu({
               </span>
               <div className="min-w-0 flex-1">
                 <div className="truncate text-sm font-semibold text-foreground">{displayName}</div>
-                <code className="block truncate font-mono text-xs text-muted-foreground">
-                  {session.subjectId || session.role}
-                </code>
+                <div className="block truncate text-xs text-muted-foreground">
+                  {accountDisplayLabel(session)}
+                </div>
               </div>
             </div>
           </div>
@@ -208,8 +266,8 @@ function AccountMenu({
               <div className="truncate font-medium text-foreground">{roleLabel}</div>
             </div>
             <div className="rounded-lg bg-muted/40 px-2 py-1.5">
-              <div className="text-muted-foreground">额度</div>
-              <div className="truncate font-medium text-foreground">{availableQuota}</div>
+              <div className="text-muted-foreground">余额</div>
+              <div className="truncate font-medium text-foreground">{quotaLabel}</div>
             </div>
             <div className="rounded-lg bg-muted/40 px-2 py-1.5">
               <div className="text-muted-foreground">版本</div>
@@ -218,8 +276,19 @@ function AccountMenu({
           </div>
 
           <div className="grid gap-2">
+            <button
+              type="button"
+              className="flex items-center justify-center gap-2 rounded-xl px-3 py-2 text-sm font-medium text-foreground transition hover:bg-accent hover:text-accent-foreground"
+              onClick={() => {
+                setOpen(false);
+                openRecharge();
+              }}
+            >
+              <WalletCards className="size-4" />
+              充值
+            </button>
             <Link
-              to={profileNavItem.href}
+              to={`${profileNavItem.href}?tab=profile`}
               className={cn(
                 "flex items-center justify-center gap-2 rounded-xl px-3 py-2 text-sm font-medium transition hover:bg-accent hover:text-accent-foreground",
                 profileActive ? "bg-[#edf4ff] text-[#1456f0] dark:bg-sky-950/30 dark:text-sky-300" : "text-foreground",
@@ -227,7 +296,29 @@ function AccountMenu({
               onClick={() => setOpen(false)}
             >
               <UserCircle2 className="size-4" />
-              个人中心
+              个人资料
+            </Link>
+            <Link
+              to={`${profileNavItem.href}?tab=usage`}
+              className={cn(
+                "flex items-center justify-center gap-2 rounded-xl px-3 py-2 text-sm font-medium transition hover:bg-accent hover:text-accent-foreground",
+                usageActive ? "bg-[#edf4ff] text-[#1456f0] dark:bg-sky-950/30 dark:text-sky-300" : "text-foreground",
+              )}
+              onClick={() => setOpen(false)}
+            >
+              <Clock3 className="size-4" />
+              使用记录
+            </Link>
+            <Link
+              to={teamNavItem.href}
+              className={cn(
+                "flex items-center justify-center gap-2 rounded-xl px-3 py-2 text-sm font-medium transition hover:bg-accent hover:text-accent-foreground",
+                teamActive ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300" : "text-foreground",
+              )}
+              onClick={() => setOpen(false)}
+            >
+              <UserPlus className="size-4" />
+              团队空间
             </Link>
           </div>
 
@@ -242,16 +333,16 @@ function AccountMenu({
             <LogOut className="size-4" />
             退出登录
           </button>
-        </div>
-      </PopoverContent>
-    </Popover>
+          </div>
+        </PopoverContent>
+      </Popover>
+    </div>
   );
 }
 
 export function TopNav() {
   const location = useLocation();
   const navigate = useNavigate();
-  const appMeta = useAppMeta();
   const pathname = location.pathname.replace(/\/+$/, "") || "/";
   const [session, setSession] = useState<StoredAuthSession | null | undefined>(() => getCachedAuthSession());
   const [theme, setTheme] = useState<ColorTheme>(() => getPreferredColorTheme());
@@ -352,23 +443,19 @@ export function TopNav() {
               aria-hidden="true"
               className="size-7 rounded-[10px] shadow-[0_4px_10px_rgba(184,90,127,0.16)]"
             />
-            <span className="truncate">{appMeta.app_title || "落叶AI"}</span>
+            <span className="truncate">落叶AI</span>
             {navCollapsed ? <ChevronDown aria-hidden="true" /> : <ChevronUp aria-hidden="true" />}
           </Button>
           <div className="ml-auto flex shrink-0 items-center gap-1 lg:hidden">
-            {canAccessImageTasks ? <ImageTaskQueue className="size-8 px-0" /> : null}
             <ThemeToggleButton theme={theme} onToggle={handleThemeToggle} />
-            {session.provider === "sub2api" ? (
-              <Sub2APIKeyMenu session={session} />
-            ) : (
-              <AccountMenu
-                session={session}
-                roleLabel={roleLabel}
-                availableQuota={availableQuota}
-                pathname={pathname}
-                onLogout={handleLogout}
-              />
-            )}
+            {canAccessImageTasks ? <ImageTaskQueue className="size-8 px-0" /> : null}
+            <AccountMenu
+              session={session}
+              roleLabel={roleLabel}
+              availableQuota={availableQuota}
+              pathname={pathname}
+              onLogout={handleLogout}
+            />
           </div>
         </div>
         <nav
@@ -384,19 +471,15 @@ export function TopNav() {
           ))}
         </nav>
         <div className="hidden items-center justify-end gap-1.5 lg:flex">
-          {canAccessImageTasks ? <ImageTaskQueue /> : null}
           <ThemeToggleButton theme={theme} onToggle={handleThemeToggle} />
-          {session.provider === "sub2api" ? (
-            <Sub2APIKeyMenu session={session} />
-          ) : (
-            <AccountMenu
-              session={session}
-              roleLabel={roleLabel}
-              availableQuota={availableQuota}
-              pathname={pathname}
-              onLogout={handleLogout}
-            />
-          )}
+          {canAccessImageTasks ? <ImageTaskQueue /> : null}
+          <AccountMenu
+            session={session}
+            roleLabel={roleLabel}
+            availableQuota={availableQuota}
+            pathname={pathname}
+            onLogout={handleLogout}
+          />
         </div>
       </div>
     </header>

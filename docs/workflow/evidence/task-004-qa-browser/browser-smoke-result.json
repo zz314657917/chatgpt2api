@@ -1,0 +1,51 @@
+{
+  "baseURL": "http://127.0.0.1:18082",
+  "created_at": "2026-06-08T17:56:55.227Z",
+  "all_passed": true,
+  "results": [
+    {
+      "name": "unauthenticated /image redirects to Sub2API launch",
+      "ok": true,
+      "detail": "http://127.0.0.1:18082/login -> http://127.0.0.1:18082/login -> http://127.0.0.1:18082/auth/sub2api/launch?token=qa-token -> http://127.0.0.1:18082/auth/sub2api/launch?token=qa-token -> http://127.0.0.1:18082/image"
+    },
+    {
+      "name": "launch token returns to /image",
+      "ok": true,
+      "detail": "http://127.0.0.1:18082/image"
+    },
+    {
+      "name": "top nav balance visible",
+      "ok": true,
+      "detail": "\n    落叶AI任务队列切换界面主题¥123.45充值QQA User创作台无限画布社媒运营图片库任务队列切换界面主题¥123.45充值QQA User新建对话还没有图片记录，输入提示词后会在这里显示。历史记录 (0)新建生图预设Turn ideas into images选择一组真实案例预设快速开始，也可以直接在下方输入自己的画面描述。9:161 张轮廓宇宙海报高审美叙事海报、角色宇宙主题视觉、收藏版概念海报。套用这个预设4:31 张青花瓷博物馆图鉴文博专题、器物拆解、中文信息图和展板式视觉。套用这个预设9:161 张水墨武侠主视觉安全端庄的东方武侠海报、水墨电影感、群像主视觉。套用这个预设16:91 张地平线深圳实机图游戏主视觉、次世代赛车截图、城市宣传感概念图。套用这个预设对话作画模型gpt-image-2市场参数预估价格 约 ¥0.050，仅供参考0图片库0 张素材 · 拖到输入框图片库暂无图片\n\n  \n\n"
+    },
+    {
+      "name": "recharge entry visible",
+      "ok": true,
+      "detail": "\n    落叶AI任务队列切换界面主题¥123.45充值QQA User创作台无限画布社媒运营图片库任务队列切换界面主题¥123.45充值QQA User新建对话还没有图片记录，输入提示词后会在这里显示。历史记录 (0)新建生图预设Turn ideas into images选择一组真实案例预设快速开始，也可以直接在下方输入自己的画面描述。9:161 张轮廓宇宙海报高审美叙事海报、角色宇宙主题视觉、收藏版概念海报。套用这个预设4:31 张青花瓷博物馆图鉴文博专题、器物拆解、中文信息图和展板式视觉。套用这个预设9:161 张水墨武侠主视觉安全端庄的东方武侠海报、水墨电影感、群像主视觉。套用这个预设16:91 张地平线深圳实机图游戏主视觉、次世代赛车截图、城市宣传感概念图。套用这个预设对话作画模型gpt-image-2市场参数预估价格 约 ¥0.050，仅供参考0图片库0 张素材 · 拖到输入框图片库暂无图片\n\n  \n\n"
+    },
+    {
+      "name": "ordinary image page hides forbidden API text",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "profile usage entry visible",
+      "ok": true,
+      "detail": "\n    落叶AI任务队列切换界面主题¥123.45充值QQA User创作台无限画布社媒运营图片库任务队列切换界面主题¥123.45充值QQA User落叶AI个人中心QA Usersub2api:4242普通用户账户sub2api:4242登录来源sub2api当前余额¥123.45加入时间—个人资料使用记录团队空间团队空间创建团队、邀请成员，并在个人与团队空间间切换。个人空间只使用自己的余额和创作记录。切换创建团队创建加入团队加入\n\n  \n\n"
+    },
+    {
+      "name": "team create/join/switch UI visible",
+      "ok": true,
+      "detail": "\n    落叶AI任务队列切换界面主题¥123.45充值QQA User创作台无限画布社媒运营图片库任务队列切换界面主题¥123.45充值QQA User落叶AI个人中心QA Usersub2api:4242普通用户账户sub2api:4242登录来源sub2api当前余额¥123.45加入时间—个人资料使用记录团队空间团队空间创建团队、邀请成员，并在个人与团队空间间切换。个人空间只使用自己的余额和创作记录。切换创建团队创建加入团队加入\n\n  \n\n"
+    },
+    {
+      "name": "ordinary profile hides forbidden API text",
+      "ok": true,
+      "detail": ""
+    }
+  ],
+  "artifacts": [
+    "image-authenticated.png",
+    "profile-team.png"
+  ]
+}

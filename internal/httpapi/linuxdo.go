@@ -54,12 +54,13 @@ func (a *App) handleAuthProviders(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sub2APILaunchURL := a.config.Sub2APILaunchURL()
+	independentMode := a.luoyeIndependentMode()
 	util.WriteJSON(w, http.StatusOK, map[string]any{
 		"linuxdo": map[string]any{
-			"enabled": a.config.LinuxDoOAuth().Ready(),
+			"enabled": !independentMode && a.config.LinuxDoOAuth().Ready(),
 		},
 		"registration": map[string]any{
-			"enabled": a.config.RegistrationEnabled(),
+			"enabled": !independentMode && a.config.RegistrationEnabled(),
 		},
 		"sub2api": map[string]any{
 			"enabled":    sub2APILaunchURL != "" && a.config.Sub2APIRedeemURL() != "" && a.config.Sub2APIRedeemSecret() != "",

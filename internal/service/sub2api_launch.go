@@ -18,29 +18,37 @@ import (
 )
 
 const sub2APIBindingsDocumentName = "sub2api_user_bindings.json"
+const sub2APIStudioBridgeAppID = "luoye-ai"
 
 type Sub2APILaunchConfig interface {
 	Sub2APIRedeemURL() string
 	Sub2APIRedeemSecret() string
 	Sub2APIGatewayBaseURL() string
+	Sub2APIDefaultChatGroupID() string
+	Sub2APIDefaultImageGroupID() string
+	Sub2APIDefaultVideoGroupID() string
 }
 
 type Sub2APIBinding struct {
-	OwnerID        string `json:"owner_id"`
-	Sub2APIUserID  string `json:"sub2api_user_id"`
-	UserEmail      string `json:"user_email"`
-	UserName       string `json:"user_name"`
-	SessionToken   string `json:"session_token"`
-	APIKeyID       string `json:"api_key_id"`
-	APIKey         string `json:"api_key"`
-	APIKeyName     string `json:"api_key_name"`
-	APIKeyLast4    string `json:"api_key_last4"`
-	GroupID        string `json:"group_id"`
-	GroupName      string `json:"group_name"`
-	GroupPlatform  string `json:"group_platform"`
-	GatewayBaseURL string `json:"gateway_base_url"`
-	ExpiresAt      string `json:"expires_at"`
-	UpdatedAt      string `json:"updated_at"`
+	OwnerID             string `json:"owner_id"`
+	Sub2APIUserID       string `json:"sub2api_user_id"`
+	UserEmail           string `json:"user_email"`
+	UserName            string `json:"user_name"`
+	SessionToken        string `json:"session_token"`
+	APIKeyID            string `json:"api_key_id"`
+	APIKey              string `json:"api_key"`
+	APIKeyName          string `json:"api_key_name"`
+	APIKeyLast4         string `json:"api_key_last4"`
+	GroupID             string `json:"group_id"`
+	GroupName           string `json:"group_name"`
+	GroupPlatform       string `json:"group_platform"`
+	DefaultChatGroupID  string `json:"default_chat_group_id"`
+	DefaultImageGroupID string `json:"default_image_group_id"`
+	DefaultVideoGroupID string `json:"default_video_group_id"`
+	GatewayBaseURL      string `json:"gateway_base_url"`
+	SystemDefault       bool   `json:"system_default"`
+	ExpiresAt           string `json:"expires_at"`
+	UpdatedAt           string `json:"updated_at"`
 }
 
 type Sub2APIKeyOption struct {
@@ -65,21 +73,25 @@ func (b Sub2APIBinding) HasAPIKey() bool {
 
 func (b Sub2APIBinding) PublicMap() map[string]any {
 	return map[string]any{
-		"owner_id":          b.OwnerID,
-		"sub2api_user_id":   b.Sub2APIUserID,
-		"user_email":        b.UserEmail,
-		"user_name":         b.UserName,
-		"session_token":     b.SessionToken,
-		"api_key_id":        b.APIKeyID,
-		"api_key_name":      b.APIKeyName,
-		"api_key_last4":     b.APIKeyLast4,
-		"group_id":          b.GroupID,
-		"group_name":        b.GroupName,
-		"group_platform":    b.GroupPlatform,
-		"gateway_base_url":  b.GatewayBaseURL,
-		"expires_at":        b.ExpiresAt,
-		"updated_at":        b.UpdatedAt,
-		"has_bound_api_key": b.HasAPIKey(),
+		"owner_id":               b.OwnerID,
+		"sub2api_user_id":        b.Sub2APIUserID,
+		"user_email":             b.UserEmail,
+		"user_name":              b.UserName,
+		"session_token":          b.SessionToken,
+		"api_key_id":             b.APIKeyID,
+		"api_key_name":           b.APIKeyName,
+		"api_key_last4":          b.APIKeyLast4,
+		"group_id":               b.GroupID,
+		"group_name":             b.GroupName,
+		"group_platform":         b.GroupPlatform,
+		"default_chat_group_id":  b.DefaultChatGroupID,
+		"default_image_group_id": b.DefaultImageGroupID,
+		"default_video_group_id": b.DefaultVideoGroupID,
+		"gateway_base_url":       b.GatewayBaseURL,
+		"system_default":         b.SystemDefault,
+		"expires_at":             b.ExpiresAt,
+		"updated_at":             b.UpdatedAt,
+		"has_bound_api_key":      b.HasAPIKey(),
 	}
 }
 
@@ -148,21 +160,25 @@ func (s *Sub2APIBindingStore) load() map[string]Sub2APIBinding {
 	}
 	for _, item := range items {
 		binding := normalizeSub2APIBinding(Sub2APIBinding{
-			OwnerID:        util.Clean(item["owner_id"]),
-			Sub2APIUserID:  util.Clean(item["sub2api_user_id"]),
-			UserEmail:      util.Clean(item["user_email"]),
-			UserName:       util.Clean(item["user_name"]),
-			SessionToken:   util.Clean(item["session_token"]),
-			APIKeyID:       util.Clean(item["api_key_id"]),
-			APIKey:         util.Clean(item["api_key"]),
-			APIKeyName:     util.Clean(item["api_key_name"]),
-			APIKeyLast4:    util.Clean(item["api_key_last4"]),
-			GroupID:        util.Clean(item["group_id"]),
-			GroupName:      util.Clean(item["group_name"]),
-			GroupPlatform:  util.Clean(item["group_platform"]),
-			GatewayBaseURL: util.Clean(item["gateway_base_url"]),
-			ExpiresAt:      util.Clean(item["expires_at"]),
-			UpdatedAt:      util.Clean(item["updated_at"]),
+			OwnerID:             util.Clean(item["owner_id"]),
+			Sub2APIUserID:       util.Clean(item["sub2api_user_id"]),
+			UserEmail:           util.Clean(item["user_email"]),
+			UserName:            util.Clean(item["user_name"]),
+			SessionToken:        util.Clean(item["session_token"]),
+			APIKeyID:            util.Clean(item["api_key_id"]),
+			APIKey:              util.Clean(item["api_key"]),
+			APIKeyName:          util.Clean(item["api_key_name"]),
+			APIKeyLast4:         util.Clean(item["api_key_last4"]),
+			GroupID:             util.Clean(item["group_id"]),
+			GroupName:           util.Clean(item["group_name"]),
+			GroupPlatform:       util.Clean(item["group_platform"]),
+			DefaultChatGroupID:  util.Clean(item["default_chat_group_id"]),
+			DefaultImageGroupID: util.Clean(item["default_image_group_id"]),
+			DefaultVideoGroupID: util.Clean(item["default_video_group_id"]),
+			GatewayBaseURL:      util.Clean(item["gateway_base_url"]),
+			SystemDefault:       util.ToBool(item["system_default"]),
+			ExpiresAt:           util.Clean(item["expires_at"]),
+			UpdatedAt:           util.Clean(item["updated_at"]),
 		})
 		if binding.Valid() {
 			out[binding.OwnerID] = binding
@@ -181,21 +197,25 @@ func (s *Sub2APIBindingStore) saveLocked() error {
 
 func (b Sub2APIBinding) storedMap() map[string]any {
 	return map[string]any{
-		"owner_id":         b.OwnerID,
-		"sub2api_user_id":  b.Sub2APIUserID,
-		"user_email":       b.UserEmail,
-		"user_name":        b.UserName,
-		"session_token":    b.SessionToken,
-		"api_key_id":       b.APIKeyID,
-		"api_key":          b.APIKey,
-		"api_key_name":     b.APIKeyName,
-		"api_key_last4":    b.APIKeyLast4,
-		"group_id":         b.GroupID,
-		"group_name":       b.GroupName,
-		"group_platform":   b.GroupPlatform,
-		"gateway_base_url": b.GatewayBaseURL,
-		"expires_at":       b.ExpiresAt,
-		"updated_at":       b.UpdatedAt,
+		"owner_id":               b.OwnerID,
+		"sub2api_user_id":        b.Sub2APIUserID,
+		"user_email":             b.UserEmail,
+		"user_name":              b.UserName,
+		"session_token":          b.SessionToken,
+		"api_key_id":             b.APIKeyID,
+		"api_key":                b.APIKey,
+		"api_key_name":           b.APIKeyName,
+		"api_key_last4":          b.APIKeyLast4,
+		"group_id":               b.GroupID,
+		"group_name":             b.GroupName,
+		"group_platform":         b.GroupPlatform,
+		"default_chat_group_id":  b.DefaultChatGroupID,
+		"default_image_group_id": b.DefaultImageGroupID,
+		"default_video_group_id": b.DefaultVideoGroupID,
+		"gateway_base_url":       b.GatewayBaseURL,
+		"system_default":         b.SystemDefault,
+		"expires_at":             b.ExpiresAt,
+		"updated_at":             b.UpdatedAt,
 	}
 }
 
@@ -215,7 +235,11 @@ func normalizeSub2APIBinding(binding Sub2APIBinding) Sub2APIBinding {
 	binding.GroupID = util.Clean(binding.GroupID)
 	binding.GroupName = util.Clean(binding.GroupName)
 	binding.GroupPlatform = util.Clean(binding.GroupPlatform)
+	binding.DefaultChatGroupID = util.Clean(binding.DefaultChatGroupID)
+	binding.DefaultImageGroupID = util.Clean(binding.DefaultImageGroupID)
+	binding.DefaultVideoGroupID = util.Clean(binding.DefaultVideoGroupID)
 	binding.GatewayBaseURL = strings.TrimRight(util.Clean(binding.GatewayBaseURL), "/")
+	binding.SystemDefault = util.ToBool(binding.SystemDefault)
 	binding.ExpiresAt = util.Clean(binding.ExpiresAt)
 	binding.UpdatedAt = firstNonEmpty(util.Clean(binding.UpdatedAt), util.NowISO())
 	return binding
@@ -257,14 +281,14 @@ func (s *Sub2APILaunchService) Redeem(ctx context.Context, token string) (*Sub2A
 		return nil, fmt.Errorf("sub2api launch redeem is not configured")
 	}
 
-	payload, _ := json.Marshal(map[string]any{"token": token})
+	payload, _ := json.Marshal(map[string]any{"app_id": sub2APIStudioBridgeAppID, "launch_token": token})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, redeemURL, bytes.NewReader(payload))
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Sub2API-OpenWebUI-Secret", secret)
+	setSub2APIStudioBridgeSecret(req, secret)
 
 	resp, err := s.client.Do(req)
 	if err != nil {
@@ -291,7 +315,7 @@ func (s *Sub2APILaunchService) Redeem(ctx context.Context, token string) (*Sub2A
 	if err != nil {
 		return nil, err
 	}
-	owner := AuthOwner{ID: binding.OwnerID, Name: firstNonEmpty(binding.UserName, binding.UserEmail, binding.OwnerID), Provider: AuthProviderSub2API}
+	owner := AuthOwner{ID: binding.OwnerID, Name: sub2APIPublicDisplayName(binding.UserName, binding.UserEmail), Provider: AuthProviderSub2API}
 	sessionItem, rawSessionKey, err := s.auth.UpsertSub2APISession(owner)
 	if err != nil {
 		return nil, err
@@ -373,6 +397,159 @@ func (s *Sub2APILaunchService) BindAPIKey(ctx context.Context, identity Identity
 	return binding, nil
 }
 
+func (s *Sub2APILaunchService) Balance(ctx context.Context, identity Identity) (map[string]any, error) {
+	binding, err := s.bindingForInternalUser(identity)
+	if err != nil {
+		return nil, err
+	}
+	summary, err := s.userSummary(ctx, binding)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"balance":      summary["balance"],
+		"available":    summary["balance"],
+		"unit":         firstNonEmpty(util.Clean(summary["unit"]), strings.ToLower(util.Clean(summary["currency"]))),
+		"currency":     summary["currency"],
+		"recharge_url": summary["recharge_url"],
+		"limit_state":  "ok",
+		"updated_at":   util.NowISO(),
+	}, nil
+}
+
+func (s *Sub2APILaunchService) Usage(ctx context.Context, identity Identity, limit int) (map[string]any, error) {
+	binding, err := s.bindingForInternalUser(identity)
+	if err != nil {
+		return nil, err
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 200 {
+		limit = 200
+	}
+	summary, err := s.userSummary(ctx, binding)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"items":            util.AsMapSlice(summary["usage"]),
+		"recent_recharges": util.AsMapSlice(summary["recent_recharges"]),
+		"recharge_url":     summary["recharge_url"],
+		"limit":            limit,
+	}, nil
+}
+
+func (s *Sub2APILaunchService) Reserve(ctx context.Context, payerUserID, actorUserID, teamID, taskID, mode, model, chargeKey string, amount int) error {
+	if amount <= 0 {
+		return nil
+	}
+	_, err := s.postSub2APIInternal(ctx, "charges/reserve", s.chargePayload(payerUserID, actorUserID, teamID, taskID, mode, model, chargeKey, amount))
+	return err
+}
+
+func (s *Sub2APILaunchService) Commit(ctx context.Context, payerUserID, actorUserID, teamID, taskID, mode, model, chargeKey string, amount int) error {
+	if amount <= 0 {
+		return nil
+	}
+	_, err := s.postSub2APIInternal(ctx, "charges/commit", s.chargePayload(payerUserID, actorUserID, teamID, taskID, mode, model, chargeKey, amount))
+	return err
+}
+
+func (s *Sub2APILaunchService) Refund(ctx context.Context, payerUserID, actorUserID, teamID, taskID, mode, model, chargeKey, refundForKey string, amount int) error {
+	if amount <= 0 {
+		return nil
+	}
+	if chargeKey == "" {
+		chargeKey = refundForKey
+	}
+	payload := s.chargePayload(payerUserID, actorUserID, teamID, taskID, mode, model, chargeKey, amount)
+	if refundForKey = util.Clean(refundForKey); refundForKey != "" {
+		payload["refund_for_charge_key"] = refundForKey
+	}
+	_, err := s.postSub2APIInternal(ctx, "charges/refund", payload)
+	return err
+}
+
+func (s *Sub2APILaunchService) DefaultBinding(identity Identity, mode string) (Sub2APIBinding, error) {
+	binding, err := s.bindingForInternalUser(identity)
+	if err != nil {
+		return Sub2APIBinding{}, err
+	}
+	binding.APIKey = ""
+	binding.APIKeyID = ""
+	binding.APIKeyName = ""
+	binding.APIKeyLast4 = ""
+	binding.GroupID = s.defaultGroupID(mode, binding)
+	binding.SystemDefault = true
+	return binding, nil
+}
+
+func (s *Sub2APILaunchService) InternalSecret() string {
+	if s == nil || s.config == nil {
+		return ""
+	}
+	return strings.TrimSpace(s.config.Sub2APIRedeemSecret())
+}
+
+func (s *Sub2APILaunchService) bindingForInternalUser(identity Identity) (Sub2APIBinding, error) {
+	if _, err := sub2APIUserIDFromIdentity(identity); err != nil {
+		return Sub2APIBinding{}, err
+	}
+	binding, ok := s.bindings.Get(sub2APIOwnerID(identity))
+	if !ok || strings.TrimSpace(binding.SessionToken) == "" {
+		return Sub2APIBinding{}, fmt.Errorf("sub2api session token is missing")
+	}
+	return binding, nil
+}
+
+func (s *Sub2APILaunchService) defaultGroupID(mode string, binding Sub2APIBinding) string {
+	if s == nil || s.config == nil {
+		return ""
+	}
+	switch strings.TrimSpace(mode) {
+	case "chat":
+		return firstNonEmpty(s.config.Sub2APIDefaultChatGroupID(), binding.DefaultChatGroupID)
+	case "video":
+		return firstNonEmpty(s.config.Sub2APIDefaultVideoGroupID(), binding.DefaultVideoGroupID)
+	default:
+		return firstNonEmpty(s.config.Sub2APIDefaultImageGroupID(), binding.DefaultImageGroupID)
+	}
+}
+
+func (s *Sub2APILaunchService) userSummary(ctx context.Context, binding Sub2APIBinding) (map[string]any, error) {
+	userID, err := strconv.ParseInt(strings.TrimSpace(binding.Sub2APIUserID), 10, 64)
+	if err != nil || userID <= 0 {
+		return nil, fmt.Errorf("sub2api user id is invalid")
+	}
+	return s.postSub2APIInternal(ctx, "user-summary", map[string]any{
+		"app_id":  sub2APIStudioBridgeAppID,
+		"user_id": userID,
+	})
+}
+
+func (s *Sub2APILaunchService) chargePayload(payerUserID, actorUserID, teamID, taskID, mode, model, chargeKey string, amount int) map[string]any {
+	userID, _ := strconv.ParseInt(strings.TrimPrefix(strings.TrimSpace(payerUserID), "sub2api:"), 10, 64)
+	reasonParts := []string{
+		"task=" + util.Clean(taskID),
+		"mode=" + util.Clean(mode),
+		"model=" + util.Clean(model),
+	}
+	if actor := util.Clean(actorUserID); actor != "" {
+		reasonParts = append(reasonParts, "actor="+actor)
+	}
+	if team := util.Clean(teamID); team != "" {
+		reasonParts = append(reasonParts, "team="+team)
+	}
+	return map[string]any{
+		"app_id":     sub2APIStudioBridgeAppID,
+		"user_id":    userID,
+		"charge_key": chargeKey,
+		"amount":     float64(amount),
+		"reason":     strings.Join(reasonParts, " "),
+	}
+}
+
 func (s *Sub2APILaunchService) postSub2APIInternal(ctx context.Context, endpoint string, payload map[string]any) (map[string]any, error) {
 	if s == nil || s.config == nil || s.client == nil {
 		return nil, fmt.Errorf("sub2api launch is not configured")
@@ -392,7 +569,7 @@ func (s *Sub2APILaunchService) postSub2APIInternal(ctx context.Context, endpoint
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Sub2API-OpenWebUI-Secret", secret)
+	setSub2APIStudioBridgeSecret(req, secret)
 	resp, err := s.client.Do(req)
 	if err != nil {
 		return nil, err
@@ -457,36 +634,55 @@ func sub2APIOwnerID(identity Identity) string {
 	return util.Clean(identity.ID)
 }
 
+func sub2APIPublicDisplayName(values ...string) string {
+	for _, value := range values {
+		text := util.Clean(value)
+		if text == "" || strings.HasPrefix(strings.ToLower(text), "sub2api:") {
+			continue
+		}
+		return text
+	}
+	return ""
+}
+
 func (s *Sub2APILaunchService) bindingFromRedeemBody(body map[string]any) (Sub2APIBinding, error) {
 	user := util.StringMap(body["user"])
 	apiKey := util.StringMap(body["api_key"])
-	userID := util.Clean(user["id"])
+	userID := firstNonEmpty(util.Clean(body["user_id"]), util.Clean(user["id"]))
 	apiKeyValue := util.Clean(apiKey["key"])
 	gatewayBaseURL := firstNonEmpty(s.config.Sub2APIGatewayBaseURL(), util.Clean(body["gateway_base_url"]))
 	if userID == "" {
-		return Sub2APIBinding{}, fmt.Errorf("sub2api launch redeem payload missing user.id")
+		return Sub2APIBinding{}, fmt.Errorf("sub2api launch redeem payload missing user_id")
 	}
 	if strings.TrimSpace(gatewayBaseURL) == "" {
 		return Sub2APIBinding{}, fmt.Errorf("sub2api launch redeem payload missing gateway_base_url")
 	}
 	ownerID := "sub2api:" + userID
 	return normalizeSub2APIBinding(Sub2APIBinding{
-		OwnerID:        ownerID,
-		Sub2APIUserID:  userID,
-		UserEmail:      util.Clean(user["email"]),
-		UserName:       util.Clean(user["username"]),
-		SessionToken:   util.Clean(body["session_token"]),
-		APIKeyID:       util.Clean(apiKey["id"]),
-		APIKey:         apiKeyValue,
-		APIKeyName:     util.Clean(apiKey["name"]),
-		APIKeyLast4:    firstNonEmpty(util.Clean(apiKey["last4"]), apiKeyLast4(apiKeyValue)),
-		GroupID:        util.Clean(apiKey["group_id"]),
-		GroupName:      util.Clean(apiKey["group_name"]),
-		GroupPlatform:  util.Clean(apiKey["group_platform"]),
-		GatewayBaseURL: gatewayBaseURL,
-		ExpiresAt:      util.Clean(body["expires_at"]),
-		UpdatedAt:      util.NowISO(),
+		OwnerID:             ownerID,
+		Sub2APIUserID:       userID,
+		UserEmail:           firstNonEmpty(util.Clean(body["email"]), util.Clean(user["email"])),
+		UserName:            firstNonEmpty(util.Clean(body["username"]), util.Clean(user["username"])),
+		SessionToken:        firstNonEmpty(util.Clean(body["session_token"]), "studio-bridge:"+userID),
+		APIKeyID:            util.Clean(apiKey["id"]),
+		APIKey:              apiKeyValue,
+		APIKeyName:          util.Clean(apiKey["name"]),
+		APIKeyLast4:         firstNonEmpty(util.Clean(apiKey["last4"]), apiKeyLast4(apiKeyValue)),
+		GroupID:             util.Clean(apiKey["group_id"]),
+		GroupName:           util.Clean(apiKey["group_name"]),
+		GroupPlatform:       util.Clean(apiKey["group_platform"]),
+		DefaultChatGroupID:  util.Clean(body["default_chat_group"]),
+		DefaultImageGroupID: util.Clean(body["default_image_group"]),
+		DefaultVideoGroupID: util.Clean(body["default_video_group"]),
+		GatewayBaseURL:      gatewayBaseURL,
+		ExpiresAt:           util.Clean(body["expires_at"]),
+		UpdatedAt:           util.NowISO(),
 	}), nil
+}
+
+func setSub2APIStudioBridgeSecret(req *http.Request, secret string) {
+	req.Header.Set("X-Sub2API-Studio-Secret", secret)
+	req.Header.Set("Authorization", "Bearer "+secret)
 }
 
 func apiKeyLast4(key string) string {

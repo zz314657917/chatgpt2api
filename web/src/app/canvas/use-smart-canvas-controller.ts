@@ -405,7 +405,7 @@ function nodeStopLabel(node: SmartCanvasItem) {
     return "循环";
   }
   if (isGenerationNode(node)) {
-    return node.type === "video_generation" ? "视频生成" : "API 生成";
+    return node.type === "video_generation" ? "视频生成" : "图片生成";
   }
   if (node.type === "result") {
     return node.data?.tool_type ? imageToolLabel(node.data.tool_type) : "输出任务";
@@ -504,7 +504,7 @@ function buildLlmPromptInstruction(inputText: string, imageCount: number) {
   const source = inputText.trim() || (imageCount > 0 ? "请根据输入图片提炼适合图像生成模型使用的提示词。" : "");
   return [
     "你是图像生成工作流里的提示词处理节点。",
-    "你的输出会直接传给下游 API 生成节点，不是给用户阅读的说明。",
+    "你的输出会直接传给下游图片生成节点，不是给用户阅读的说明。",
     "只输出最终可用的图像生成 prompt 本体。",
     "不要寒暄，不要解释，不要写 Markdown，不要加标题，不要使用“提示词：”“可以”“下面是”等前缀。",
     "不要输出多个方案，除非输入明确要求多条。",
@@ -1630,7 +1630,7 @@ export function useSmartCanvasController() {
         ...missingIds.map((sourceId) => createSmartEdge(sourceId, generator.id)),
       ],
     }), true, "连接 AI 提示词参考图");
-    toast.success(`已连接 ${missingIds.length} 个图片来源到${generator.type === "video_generation" ? "视频生成" : "API生成"}`);
+    toast.success(`已连接 ${missingIds.length} 个图片来源到${generator.type === "video_generation" ? "视频生成" : "图片生成"}`);
   }, [updateCanvas]);
 
   const connectLlmImagesToLoop = useCallback((loopId: string) => {
@@ -2896,7 +2896,7 @@ export function useSmartCanvasController() {
             }
             return item;
           }),
-        }), !active, !active ? "完成 API 生成" : undefined, active ? { history: "skip" } : undefined);
+        }), !active, !active ? "完成 图片生成" : undefined, active ? { history: "skip" } : undefined);
       }
       void loadAssets();
     } catch (error) {
@@ -2908,7 +2908,7 @@ export function useSmartCanvasController() {
             ? item
             : { ...item, name: item.type === "result" ? generationOutputNodeName("error") : item.name, data: { ...item.data, status: "error", error: message, last_run_error_detail: message, task_id: taskId, updated_at: new Date().toISOString() } }
           : item),
-      }), true, "API 生成失败");
+      }), true, "图片生成失败");
       toast.error(message);
     } finally {
       pollingTasksRef.current.delete(taskId);
@@ -3073,7 +3073,7 @@ export function useSmartCanvasController() {
         .map((edge) => current.nodes.find((item) => item.id === edge.target))
         .find((item) => item?.type === "image_generation");
     if (!current || !loop || loop.type !== "loop" || !generator || generator.type !== "image_generation") {
-      toast.error("请把循环节点连接到 API生成 节点");
+      toast.error("请把循环节点连接到 图片生成 节点");
       return;
     }
     if (isActiveTask(loop.data?.status) || isActiveTask(generator.data?.status)) {
@@ -3090,7 +3090,7 @@ export function useSmartCanvasController() {
       .filter(Boolean)
       .join("\n\n");
     if (!submittedPrompt) {
-      const message = "请给循环节点连接 Prompt/LLM，或在 API生成节点里补充提示词";
+      const message = "请给循环节点连接 Prompt/LLM，或在 图片生成节点里补充提示词";
       updateCanvas((doc) => ({
         ...doc,
         nodes: doc.nodes.map((item) => item.id === loop.id || item.id === generator.id
@@ -3382,13 +3382,13 @@ export function useSmartCanvasController() {
     }
     const submittedPrompt = generatorPromptText(current, generator);
     if (!submittedPrompt) {
-      const message = generator.type === "video_generation" ? "请连接 Prompt 节点，或在视频生成节点里补充提示词" : "请连接 Prompt 节点，或在 API生成节点里补充提示词";
+      const message = generator.type === "video_generation" ? "请连接 Prompt 节点，或在视频生成节点里补充提示词" : "请连接 Prompt 节点，或在 图片生成节点里补充提示词";
       updateCanvas((doc) => ({
         ...doc,
         nodes: doc.nodes.map((item) => item.id === generator.id
           ? { ...item, data: { ...item.data, ...canvasBlockedData("prompt", "Prompt 节点", message) } }
           : item),
-      }), true, generator.type === "video_generation" ? "视频生成阻断" : "API 生成阻断");
+      }), true, generator.type === "video_generation" ? "视频生成阻断" : "图片生成阻断");
       toast.error(message);
       return;
     }
@@ -3414,7 +3414,7 @@ export function useSmartCanvasController() {
             },
           } : item),
         };
-      }, true, "开始 API 生成");
+      }, true, "开始 图片生成");
       const clientTaskId = uniqueTaskId("smart-canvas-node");
       let task: CreationTask;
       if (generator.type === "video_generation") {
@@ -3518,7 +3518,7 @@ export function useSmartCanvasController() {
           },
         } : item);
         return { ...doc, nodes, edges };
-      }, true, generator.type === "video_generation" ? "提交视频生成" : "提交 API 生成");
+      }, true, generator.type === "video_generation" ? "提交视频生成" : "提交 图片生成");
       selectSingleItem(outputIds[0] || generator.id);
       void pollTaskIntoGenerator(task.id, generator.id, outputIds);
     } catch (error) {
@@ -3528,7 +3528,7 @@ export function useSmartCanvasController() {
         nodes: doc.nodes.map((item) => item.id === generator.id
           ? { ...item, data: { ...item.data, status: "error", error: message, last_run_error_detail: message, updated_at: new Date().toISOString() } }
           : item),
-      }), true, "API 生成失败");
+      }), true, "图片生成失败");
       toast.error(message);
     } finally {
       setRunning(false);

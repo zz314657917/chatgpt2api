@@ -5980,8 +5980,246 @@ func waitForHTTPTestConditionResult(ok func() bool) bool {
 	return false
 }
 
+func TestLuoyeIndependentModeDisablesLocalUserAuth(t *testing.T) {
+	app := newIndependentTestApp(t, "http://sub2.test/internal/redeem", "secret", "http://gateway.test")
+	defer app.Close()
+
+	for _, tc := range []struct {
+		path string
+		body string
+	}{
+		{path: "/auth/login", body: `{"username":"alice","password":"Password123"}`},
+		{path: "/auth/register", body: `{"username":"alice","password":"Password123"}`},
+	} {
+		req := httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(tc.body))
+		res := httptest.NewRecorder()
+		app.Handler().ServeHTTP(res, req)
+		if res.Code != http.StatusForbidden {
+			t.Fatalf("%s status = %d body = %s", tc.path, res.Code, res.Body.String())
+		}
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/auth/providers", nil)
+	res := httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("providers status = %d body = %s", res.Code, res.Body.String())
+	}
+	var providers map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &providers); err != nil {
+		t.Fatalf("providers json: %v", err)
+	}
+	if registration := util.StringMap(providers["registration"]); util.ToBool(registration["enabled"]) {
+		t.Fatalf("independent registration provider should be disabled: %#v", providers)
+	}
+	if linuxdo := util.StringMap(providers["linuxdo"]); util.ToBool(linuxdo["enabled"]) {
+		t.Fatalf("independent linuxdo provider should be disabled: %#v", providers)
+	}
+}
+
+func TestLuoyeIndependentModeRedirectsAnonymousWebPages(t *testing.T) {
+	app := newIndependentTestApp(t, "http://sub2.test/internal/redeem", "secret", "http://gateway.test")
+	defer app.Close()
+
+	req := httptest.NewRequest(http.MethodGet, "/image", nil)
+	res := httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusFound || res.Header().Get("Location") != "/login" {
+		t.Fatalf("anonymous /image status=%d location=%q body=%s", res.Code, res.Header().Get("Location"), res.Body.String())
+	}
+
+	owner := service.AuthOwner{ID: "sub2api:100", Name: "Alice", Provider: service.AuthProviderSub2API}
+	_, sessionKey, err := app.auth.UpsertSub2APISession(owner)
+	if err != nil {
+		t.Fatalf("sub2api session: %v", err)
+	}
+	req = httptest.NewRequest(http.MethodGet, "/image", nil)
+	req.AddCookie(&http.Cookie{Name: authSessionCookieName, Value: sessionKey})
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("authenticated /image status=%d location=%q body=%s", res.Code, res.Header().Get("Location"), res.Body.String())
+	}
+}
+
+func TestLuoyeIndependentSub2APIDefaultGroupAndBilling(t *testing.T) {
+	var calls []string
+	var generationPayload map[string]any
+	var generationGroupHeader string
+	var generationUserHeader string
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Sub2API-Studio-Secret") != "secret" {
+			t.Fatalf("gateway secret header = %q", r.Header.Get("X-Sub2API-Studio-Secret"))
+		}
+		generationGroupHeader = r.Header.Get("X-Sub2API-Group-ID")
+		generationUserHeader = r.Header.Get("X-Sub2API-Studio-User-ID")
+		if r.Method != http.MethodPost || r.URL.Path != "/images/generations" {
+			t.Fatalf("gateway request = %s %s", r.Method, r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&generationPayload); err != nil {
+			t.Fatalf("gateway json: %v", err)
+		}
+		util.WriteJSON(w, http.StatusOK, map[string]any{"created": 123, "data": []map[string]any{{"b64_json": "aW1hZ2U="}}})
+	}))
+	defer gateway.Close()
+
+	bridge := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Sub2API-Studio-Secret") != "secret" {
+			t.Fatalf("bridge secret header = %q", r.Header.Get("X-Sub2API-Studio-Secret"))
+		}
+		switch r.URL.Path {
+		case "/internal/redeem":
+			var payload map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatalf("bridge redeem json: %v", err)
+			}
+			if payload["app_id"] != "luoye-ai" || payload["launch_token"] != "launch-token" {
+				t.Fatalf("bridge redeem payload = %#v", payload)
+			}
+			util.WriteJSON(w, http.StatusOK, map[string]any{"code": 0, "data": map[string]any{"user_id": 42, "username": "Luoye User", "default_image_group": "image-group", "gateway_base_url": gateway.URL}})
+		case "/internal/charges/reserve", "/internal/charges/commit", "/internal/charges/refund":
+			var payload map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatalf("bridge charge json: %v", err)
+			}
+			if payload["app_id"] != "luoye-ai" || payload["user_id"] != float64(42) || payload["charge_key"] == "" {
+				t.Fatalf("bridge charge payload = %#v", payload)
+			}
+			calls = append(calls, strings.TrimPrefix(r.URL.Path, "/internal/charges/"))
+			util.WriteJSON(w, http.StatusOK, map[string]any{"code": 0, "data": map[string]any{"ok": true}})
+		case "/internal/user-summary":
+			util.WriteJSON(w, http.StatusOK, map[string]any{"code": 0, "data": map[string]any{"user_id": 42, "balance": 99, "recharge_url": "https://sub2.test/recharge"}})
+		default:
+			t.Fatalf("bridge request = %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer bridge.Close()
+
+	app := newIndependentTestApp(t, bridge.URL+"/internal/redeem", "secret", gateway.URL)
+	defer app.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "/auth/sub2api/launch", strings.NewReader(`{"token":"launch-token"}`))
+	res := httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("launch status = %d body = %s", res.Code, res.Body.String())
+	}
+	var launch map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &launch); err != nil {
+		t.Fatalf("launch json: %v", err)
+	}
+	sessionKey := util.Clean(launch["token"])
+	if sessionKey == "" {
+		t.Fatalf("launch token missing: %#v", launch)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/creation-tasks/image-generations", strings.NewReader(`{"client_task_id":"luoye-image","prompt":"draw","model":"gpt-image-2","n":1}`))
+	req.Header.Set("Authorization", "Bearer "+sessionKey)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("submit status = %d body = %s", res.Code, res.Body.String())
+	}
+	waitForHTTPTestCondition(t, func() bool {
+		req = httptest.NewRequest(http.MethodGet, "/api/creation-tasks?ids=luoye-image", nil)
+		req.Header.Set("Authorization", "Bearer "+sessionKey)
+		res = httptest.NewRecorder()
+		app.Handler().ServeHTTP(res, req)
+		var listed map[string]any
+		_ = json.Unmarshal(res.Body.Bytes(), &listed)
+		items := util.AsMapSlice(listed["items"])
+		return len(items) == 1 && items[0]["status"] == service.TaskStatusSuccess
+	})
+	if generationGroupHeader != "image-group" || generationPayload["group_id"] != "image-group" {
+		t.Fatalf("default group header=%q payload=%#v", generationGroupHeader, generationPayload)
+	}
+	if generationUserHeader != "42" {
+		t.Fatalf("gateway user header = %q", generationUserHeader)
+	}
+	if !reflect.DeepEqual(calls, []string{"reserve", "commit"}) {
+		t.Fatalf("billing calls = %#v", calls)
+	}
+}
+
+func TestTeamV1CreateJoinSwitchAndTaskContext(t *testing.T) {
+	app := newTestApp(t)
+	defer app.Close()
+	owner := service.AuthOwner{ID: "sub2api:100", Name: "Owner", Provider: service.AuthProviderSub2API}
+	_, ownerSession, err := app.auth.UpsertSub2APISession(owner)
+	if err != nil {
+		t.Fatalf("owner session: %v", err)
+	}
+	member := service.AuthOwner{ID: "sub2api:200", Name: "Member", Provider: service.AuthProviderSub2API}
+	_, memberSession, err := app.auth.UpsertSub2APISession(member)
+	if err != nil {
+		t.Fatalf("member session: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/teams", strings.NewReader(`{"name":"Design Team"}`))
+	req.Header.Set("Authorization", "Bearer "+ownerSession)
+	res := httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("create team status = %d body = %s", res.Code, res.Body.String())
+	}
+	var created map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &created); err != nil {
+		t.Fatalf("create team json: %v", err)
+	}
+	team := util.StringMap(created["team"])
+	teamID := util.Clean(team["id"])
+	inviteCode := util.Clean(team["invite_code"])
+	if teamID == "" || inviteCode == "" {
+		t.Fatalf("created team = %#v", team)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/teams/join", strings.NewReader(jsonString(map[string]any{"invite_code": inviteCode})))
+	req.Header.Set("Authorization", "Bearer "+memberSession)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("join team status = %d body = %s", res.Code, res.Body.String())
+	}
+	req = httptest.NewRequest(http.MethodPost, "/api/teams/current", strings.NewReader(jsonString(map[string]any{"team_id": teamID})))
+	req.Header.Set("Authorization", "Bearer "+memberSession)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("switch team status = %d body = %s", res.Code, res.Body.String())
+	}
+	ctx, err := app.teams.TaskContext(service.Identity{Role: service.AuthRoleUser, Provider: service.AuthProviderSub2API, OwnerID: member.ID, Name: member.Name}, teamID)
+	if err != nil {
+		t.Fatalf("task context: %v", err)
+	}
+	if ctx.TeamID != teamID || ctx.PayerUserID != owner.ID || ctx.ActorUserID != member.ID {
+		t.Fatalf("task context = %#v", ctx)
+	}
+}
+
 func newTestApp(t *testing.T) *App {
 	return newTestAppWithBillingDefaults(t, "standard", "1000", "1000", "monthly")
+}
+
+func newIndependentTestApp(t *testing.T, redeemURL, secret, gatewayURL string) *App {
+	t.Helper()
+	root := t.TempDir()
+	t.Setenv("CHATGPT2API_ROOT", root)
+	t.Setenv("CHATGPT2API_ADMIN_USERNAME", testAdminUsername)
+	t.Setenv("CHATGPT2API_ADMIN_PASSWORD", testAdminPassword)
+	t.Setenv("CHATGPT2API_LUOYE_INDEPENDENT_MODE", "true")
+	t.Setenv("CHATGPT2API_SUB2API_REDEEM_URL", redeemURL)
+	t.Setenv("CHATGPT2API_SUB2API_REDEEM_SECRET", secret)
+	t.Setenv("CHATGPT2API_SUB2API_GATEWAY_BASE_URL", gatewayURL)
+	t.Setenv("CHATGPT2API_SUB2API_DEFAULT_CHAT_GROUP_ID", "chat-group")
+	t.Setenv("CHATGPT2API_SUB2API_DEFAULT_IMAGE_GROUP_ID", "image-group")
+	t.Setenv("CHATGPT2API_SUB2API_DEFAULT_VIDEO_GROUP_ID", "video-group")
+	t.Setenv("STORAGE_BACKEND", "sqlite")
+	t.Setenv("DATABASE_URL", "")
+	app, err := NewApp()
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	return app
 }
 
 func newTestAppWithBillingDefaults(t *testing.T, billingType, standardBalance, subscriptionQuota, subscriptionPeriod string) *App {
@@ -5996,6 +6234,13 @@ func newTestAppWithBillingDefaults(t *testing.T, billingType, standardBalance, s
 	t.Setenv("CHATGPT2API_DEFAULT_SUBSCRIPTION_PERIOD", subscriptionPeriod)
 	unsetTestEnv(t, "CHATGPT2API_REGISTRATION_ENABLED")
 	unsetTestEnv(t, "CHATGPT2API_DEFAULT_LOG_VIEW")
+	unsetTestEnv(t, "CHATGPT2API_LUOYE_INDEPENDENT_MODE")
+	unsetTestEnv(t, "CHATGPT2API_SUB2API_REDEEM_URL")
+	unsetTestEnv(t, "CHATGPT2API_SUB2API_REDEEM_SECRET")
+	unsetTestEnv(t, "CHATGPT2API_SUB2API_GATEWAY_BASE_URL")
+	unsetTestEnv(t, "CHATGPT2API_SUB2API_DEFAULT_CHAT_GROUP_ID")
+	unsetTestEnv(t, "CHATGPT2API_SUB2API_DEFAULT_IMAGE_GROUP_ID")
+	unsetTestEnv(t, "CHATGPT2API_SUB2API_DEFAULT_VIDEO_GROUP_ID")
 	t.Setenv("STORAGE_BACKEND", "sqlite")
 	t.Setenv("DATABASE_URL", "")
 	app, err := NewApp()

@@ -19,6 +19,10 @@ func (a *App) handleUserKeys(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if a.luoyeIndependentMode() && identity.Role != service.AuthRoleAdmin {
+		util.WriteError(w, http.StatusForbidden, "user API keys are disabled in independent mode")
+		return
+	}
 	filter, owner, canManage := userKeyScope(identity)
 	if !canManage {
 		util.WriteError(w, http.StatusForbidden, "Linuxdo login or admin permission required")
@@ -164,6 +168,10 @@ func (a *App) handleProfilePassword(w http.ResponseWriter, r *http.Request) {
 func (a *App) handleProfileAPIKey(w http.ResponseWriter, r *http.Request) {
 	identity, ok := a.requireIdentity(w, r, "")
 	if !ok {
+		return
+	}
+	if a.luoyeIndependentMode() && identity.Role != service.AuthRoleAdmin {
+		util.WriteError(w, http.StatusForbidden, "profile API keys are disabled in independent mode")
 		return
 	}
 	filter, ok := profileAPIKeyFilter(identity)
@@ -1578,6 +1586,9 @@ func (a *App) handleCreationTasks(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.URL.Path == "/api/creation-tasks/image-generations" && r.Method == http.MethodPost {
 		body, _ := readJSONMap(r)
+		if !a.attachCreationTaskSpace(w, identity, body) {
+			return
+		}
 		task, err := a.tasks.SubmitGenerationWithOptions(r.Context(), identity, util.Clean(body["client_task_id"]), util.Clean(body["prompt"]), firstNonEmpty(util.Clean(body["model"]), util.ImageModelAuto), util.Clean(body["size"]), util.Clean(body["quality"]), a.resolveImageBaseURL(r), util.ToInt(body["n"], 1), body["messages"], imageTaskRequestMetadata(body), imageOutputOptionsFromBody(body), imageToolOptionsFromBody(body), util.Clean(body["visibility"]))
 		if err != nil {
 			writeCreationTaskSubmitError(w, err)
@@ -1588,6 +1599,9 @@ func (a *App) handleCreationTasks(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.URL.Path == "/api/creation-tasks/chat-completions" && r.Method == http.MethodPost {
 		body, _ := readJSONMap(r)
+		if !a.attachCreationTaskSpace(w, identity, body) {
+			return
+		}
 		task, err := a.tasks.SubmitChat(r.Context(), identity, util.Clean(body["client_task_id"]), util.Clean(body["prompt"]), firstNonEmpty(util.Clean(body["model"]), util.DefaultChatModel), body["messages"], protocol.IsImageChatRequest(body), util.ToInt(body["n"], 1))
 		if err != nil {
 			writeCreationTaskSubmitError(w, err)
@@ -1598,6 +1612,9 @@ func (a *App) handleCreationTasks(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.URL.Path == "/api/creation-tasks/video-generations" && r.Method == http.MethodPost {
 		body, _ := readJSONMap(r)
+		if !a.attachCreationTaskSpace(w, identity, body) {
+			return
+		}
 		images, err := a.videoInputImages(body, identity)
 		if err != nil {
 			util.WriteError(w, http.StatusBadRequest, err.Error())
@@ -1621,6 +1638,9 @@ func (a *App) handleCreationTasks(w http.ResponseWriter, r *http.Request) {
 		body, images, err := a.readImageEditTaskBody(r, identity)
 		if err != nil {
 			util.WriteError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if !a.attachCreationTaskSpace(w, identity, body) {
 			return
 		}
 		task, err := a.tasks.SubmitEditWithOptions(r.Context(), identity, util.Clean(body["client_task_id"]), util.Clean(body["prompt"]), firstNonEmpty(util.Clean(body["model"]), util.ImageModelAuto), util.Clean(body["size"]), util.Clean(body["quality"]), a.resolveImageBaseURL(r), images, util.ToInt(body["n"], 1), body["messages"], imageTaskRequestMetadata(body), imageOutputOptionsFromBody(body), imageToolOptionsFromBody(body), util.Clean(body["visibility"]))
@@ -1734,6 +1754,28 @@ func writeCreationTaskSubmitError(w http.ResponseWriter, err error) {
 		return
 	}
 	util.WriteError(w, http.StatusBadRequest, err.Error())
+}
+
+func (a *App) attachCreationTaskSpace(w http.ResponseWriter, identity service.Identity, body map[string]any) bool {
+	if body == nil {
+		return true
+	}
+	if a == nil || a.teams == nil || identity.Role != service.AuthRoleUser {
+		return true
+	}
+	ctx, err := a.teams.TaskContext(identity, util.Clean(body["team_id"]))
+	if err != nil {
+		util.WriteError(w, http.StatusBadRequest, err.Error())
+		return false
+	}
+	if ctx.TeamID != "" {
+		body["team_id"] = ctx.TeamID
+	} else {
+		delete(body, "team_id")
+	}
+	body["payer_user_id"] = ctx.PayerUserID
+	body["actor_user_id"] = ctx.ActorUserID
+	return true
 }
 
 func (a *App) handleRegister(w http.ResponseWriter, r *http.Request) {

@@ -46,14 +46,14 @@ function bindingHasKey(binding: Sub2APIBinding | null | undefined) {
 }
 
 function keyLabelFromBinding(binding: Sub2APIBinding | null | undefined) {
-  if (!bindingHasKey(binding)) {
-    return "选择 API Key";
-  }
-  return binding?.api_key_name?.trim() || "API Key";
+	if (!bindingHasKey(binding)) {
+		return "选择创作通道";
+	}
+	return binding?.api_key_name?.trim() || "创作通道";
 }
 
 function keyLabel(item: Sub2APIKeyOption) {
-  return item.name?.trim() || `Key ${item.id}`;
+	return item.name?.trim() || `通道 ${item.id}`;
 }
 
 function keyMeta(item: Sub2APIKeyOption) {
@@ -110,7 +110,7 @@ function useSub2APIKeyPicker(enabled: boolean, initialBinding?: Sub2APIBinding |
       setState((current) => ({
         ...current,
         loading: false,
-        error: error instanceof Error ? error.message : "加载 API Key 失败",
+				error: error instanceof Error ? error.message : "加载创作通道失败",
       }));
     }
   }, [enabled]);
@@ -140,9 +140,9 @@ function useSub2APIKeyPicker(enabled: boolean, initialBinding?: Sub2APIBinding |
       const result = await bindSub2APIKey(cleanID);
       setState((current) => ({ ...current, binding: result.binding, error: "" }));
       window.dispatchEvent(new CustomEvent(SUB2API_BINDING_CHANGED_EVENT, { detail: result.binding }));
-      toast.success("已切换 API Key");
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "绑定 API Key 失败";
+			toast.success("已切换创作通道");
+		} catch (error) {
+			const message = error instanceof Error ? error.message : "切换创作通道失败";
       setState((current) => ({ ...current, error: message }));
       toast.error(message);
     } finally {
@@ -169,7 +169,7 @@ function KeyList({
   if (usableItems.length === 0) {
     return (
       <div className="rounded-2xl border border-dashed border-border bg-muted/30 p-4 text-sm text-muted-foreground">
-        暂无可用 API Key
+				暂无可用创作通道
       </div>
     );
   }
@@ -195,7 +195,7 @@ function KeyList({
             </span>
             <span className="min-w-0 flex-1">
               <span className="block truncate text-sm font-semibold">{keyLabel(item)}</span>
-              <span className="block truncate text-xs text-muted-foreground">{keyMeta(item) || "API Key"}</span>
+							<span className="block truncate text-xs text-muted-foreground">{keyMeta(item) || "创作通道"}</span>
             </span>
             {active ? <Check className="size-4 shrink-0" /> : null}
           </button>
@@ -218,7 +218,7 @@ export function Sub2APIKeyMenu({ session }: { session: StoredAuthSession }) {
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <Button type="button" variant="outline" className="h-9 rounded-full px-2.5 shadow-none" aria-label="选择 API Key">
+				<Button type="button" variant="outline" className="h-9 rounded-full px-2.5 shadow-none" aria-label="选择创作通道">
           <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground">
             <KeyRound className="size-3.5" />
           </span>
@@ -229,7 +229,7 @@ export function Sub2APIKeyMenu({ session }: { session: StoredAuthSession }) {
       <PopoverContent align="end" sideOffset={8} className="w-80 p-3">
         <div className="flex items-center justify-between gap-2">
           <div>
-            <div className="text-sm font-semibold text-foreground">API Key</div>
+						<div className="text-sm font-semibold text-foreground">创作通道</div>
             <div className="text-xs text-muted-foreground">当前账号绑定</div>
           </div>
           <Button type="button" variant="ghost" size="icon" className="size-8" onClick={() => void load()}>
@@ -239,7 +239,7 @@ export function Sub2APIKeyMenu({ session }: { session: StoredAuthSession }) {
         {state.loading ? (
           <div className="mt-3 flex items-center gap-2 rounded-2xl bg-muted/40 p-4 text-sm text-muted-foreground">
             <Loader2 className="size-4 animate-spin" />
-            正在加载 API Key
+						正在加载创作通道
           </div>
         ) : (
           <div className="mt-3">
@@ -280,10 +280,10 @@ export function Sub2APIKeyRequiredDialog() {
         onInteractOutside={(event) => event.preventDefault()}
       >
         <DialogHeader>
-          <DialogTitle>选择 API Key</DialogTitle>
-          <DialogDescription>
-            当前账号还没有绑定用于生图的 API Key。选择后会保存到服务端，后续进入将自动沿用。
-          </DialogDescription>
+					<DialogTitle>选择创作通道</DialogTitle>
+					<DialogDescription>
+						当前账号还没有可用的生图通道。选择后会保存到服务端，后续进入将自动沿用。
+					</DialogDescription>
         </DialogHeader>
         {state.error ? (
           <div className="flex gap-2 rounded-xl border border-destructive/20 bg-destructive/5 p-3 text-sm text-destructive">

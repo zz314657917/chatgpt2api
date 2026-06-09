@@ -32,9 +32,19 @@ const (
 	imageTaskBillingChargedAmountKey   = "billing_charged_amount"
 	imageTaskBillingChargeKey          = "billing_charge_key"
 	imageTaskBillingUnitAmountKey      = "billing_unit_amount"
+	imageTaskBillingProviderKey        = "billing_provider"
+	imageTaskPayerUserIDPayloadKey     = "payer_user_id"
+	imageTaskActorUserIDPayloadKey     = "actor_user_id"
+	imageTaskTeamIDPayloadKey          = "team_id"
 )
 
 type ImageTaskHandler func(context.Context, Identity, map[string]any) (map[string]any, error)
+
+type ExternalTaskBilling interface {
+	ReserveTask(ctx context.Context, identity Identity, task map[string]any, amount int, ref BillingReference) error
+	CommitTask(ctx context.Context, identity Identity, task map[string]any, consumed int, ref BillingReference) error
+	RefundTask(ctx context.Context, identity Identity, task map[string]any, amount int, ref BillingReference) error
+}
 
 type ImageOutputOptions struct {
 	Format      string
@@ -67,6 +77,7 @@ type ImageTaskService struct {
 	chat                ImageTaskHandler
 	video               ImageTaskHandler
 	billing             *BillingService
+	externalBilling     ExternalTaskBilling
 	retentionGetter     func() int
 	taskTimeoutGetter   func() time.Duration
 	userConcurrentLimit func() int
@@ -198,6 +209,10 @@ func (s *ImageTaskService) SetBillingService(billing *BillingService) {
 	for _, key := range settleKeys {
 		s.settleTaskBilling(key)
 	}
+}
+
+func (s *ImageTaskService) SetExternalBilling(billing ExternalTaskBilling) {
+	s.externalBilling = billing
 }
 
 func (s *ImageTaskService) SubmitGeneration(ctx context.Context, identity Identity, clientTaskID, prompt, model, size, quality, baseURL string, n int, messages any, visibilityValues ...string) (map[string]any, error) {
@@ -556,6 +571,7 @@ func (s *ImageTaskService) submit(ctx context.Context, identity Identity, client
 	billingUnitAmount := imageTaskBillingUnitAmount(payload)
 	billingChargeAmount := count * billingUnitAmount
 	billingUser := billingUserID(identity)
+	useExternalBilling := s.externalBilling != nil && identity.Role == AuthRoleUser && identity.Provider == AuthProviderSub2API && isBillableImageTaskMode(mode, payload)
 	shouldPrechargeBilling := s.billing != nil && identity.Role == AuthRoleUser && identity.Provider != AuthProviderSub2API && billingUser != "" && isBillableImageTaskMode(mode, payload)
 	if shouldPrechargeBilling {
 		if err := s.billing.CheckAvailable(identity, billingChargeAmount); err != nil {
@@ -575,8 +591,10 @@ func (s *ImageTaskService) submit(ctx context.Context, identity Identity, client
 	}
 	billingChargedAmount := 0
 	billingChargeKey := ""
-	if shouldPrechargeBilling {
+	if shouldPrechargeBilling || useExternalBilling {
 		billingChargeKey = imageTaskBillingChargeKeyFor(owner, taskID, "precharge")
+	}
+	if shouldPrechargeBilling {
 		model := firstNonEmpty(util.Clean(payload["model"]), util.ImageModelAuto)
 		if _, err := s.billing.ChargeUserID(billingUser, billingChargeAmount, imageTaskBillingReference(mode, taskID, model, billingChargeKey)); err != nil {
 			if cleaned {
@@ -590,6 +608,21 @@ func (s *ImageTaskService) submit(ctx context.Context, identity Identity, client
 	taskCtx, cancel := context.WithCancel(context.Background())
 	outputFormat := NormalizeImageOutputFormat(util.Clean(payload["output_format"]))
 	task := map[string]any{"id": taskID, "owner_id": owner, "status": TaskStatusQueued, "mode": mode, "model": firstNonEmpty(util.Clean(payload["model"]), util.ImageModelAuto), "size": util.Clean(payload["size"]), "quality": util.Clean(payload["quality"]), "output_format": outputFormat, "visibility": util.Clean(payload["visibility"]), "count": count, "created_at": now, "updated_at": now}
+	mergeTaskContextFields(task, payload, identity)
+	if useExternalBilling {
+		task[imageTaskBillingProviderKey] = AuthProviderSub2API
+		task[imageTaskBillingChargedAmountKey] = billingChargeAmount
+		task[imageTaskBillingChargeKey] = billingChargeKey
+		task[imageTaskBillingUnitAmountKey] = billingUnitAmount
+		if err := s.externalBilling.ReserveTask(ctx, identity, task, billingChargeAmount, imageTaskBillingReference(mode, taskID, task["model"].(string), billingChargeKey)); err != nil {
+			if cleaned {
+				_ = s.saveLocked()
+			}
+			s.mu.Unlock()
+			cancel()
+			return nil, err
+		}
+	}
 	if billingChargedAmount > 0 {
 		task[imageTaskBillingChargedAmountKey] = billingChargedAmount
 		task[imageTaskBillingChargeKey] = billingChargeKey
@@ -964,11 +997,13 @@ type imageTaskBillingSettlement struct {
 	taskID       string
 	mode         string
 	model        string
+	provider     string
 	chargeKey    string
 	refundKey    string
 	charged      int
 	consumed     int
 	refundAmount int
+	task         map[string]any
 }
 
 func (s *ImageTaskService) settleTaskBilling(key string) {
@@ -977,15 +1012,42 @@ func (s *ImageTaskService) settleTaskBilling(key string) {
 		return
 	}
 	if settlement.refundAmount > 0 {
-		if s.billing == nil {
-			return
-		}
-		if _, err := s.billing.RefundUserID(settlement.owner, settlement.refundAmount, BillingReference{
+		ref := BillingReference{
 			Endpoint:     creationTaskBillingEndpoint(settlement.mode),
 			Model:        settlement.model,
 			TaskID:       settlement.taskID,
 			ChargeKey:    settlement.refundKey,
 			RefundForKey: settlement.chargeKey,
+		}
+		if settlement.provider == AuthProviderSub2API {
+			if s.externalBilling == nil {
+				return
+			}
+			if err := s.externalBilling.RefundTask(context.Background(), Identity{Role: AuthRoleUser, Provider: AuthProviderSub2API, OwnerID: settlement.owner}, settlement.task, settlement.refundAmount, ref); err != nil {
+				return
+			}
+		} else {
+			if s.billing == nil {
+				return
+			}
+			if _, err := s.billing.RefundUserID(settlement.owner, settlement.refundAmount, ref); err != nil {
+				return
+			}
+		}
+	}
+	if settlement.provider == AuthProviderSub2API && settlement.consumed > 0 {
+		if s.externalBilling == nil {
+			return
+		}
+		commitAmount := settlement.consumed
+		if settlement.charged > 0 {
+			commitAmount = settlement.charged
+		}
+		if err := s.externalBilling.CommitTask(context.Background(), Identity{Role: AuthRoleUser, Provider: AuthProviderSub2API, OwnerID: settlement.owner}, settlement.task, commitAmount, BillingReference{
+			Endpoint:  creationTaskBillingEndpoint(settlement.mode),
+			Model:     settlement.model,
+			TaskID:    settlement.taskID,
+			ChargeKey: settlement.chargeKey,
 		}); err != nil {
 			return
 		}
@@ -1026,11 +1088,13 @@ func (s *ImageTaskService) pendingTaskBillingSettlement(key string) (imageTaskBi
 		taskID:       taskID,
 		mode:         mode,
 		model:        firstNonEmpty(util.Clean(task["model"]), util.ImageModelAuto),
+		provider:     util.Clean(task[imageTaskBillingProviderKey]),
 		chargeKey:    chargeKey,
 		refundKey:    imageTaskBillingChargeKeyFor(owner, taskID, "refund"),
 		charged:      charged,
 		consumed:     consumed,
 		refundAmount: max(0, charged-consumed),
+		task:         publicTask(task),
 	}, true
 }
 
@@ -1119,6 +1183,10 @@ func (s *ImageTaskService) loadLocked() map[string]map[string]any {
 		if unitAmount := util.ToInt(task[imageTaskBillingUnitAmountKey], 0); unitAmount > 0 {
 			normalized[imageTaskBillingUnitAmountKey] = unitAmount
 		}
+		if provider := util.Clean(task[imageTaskBillingProviderKey]); provider != "" {
+			normalized[imageTaskBillingProviderKey] = provider
+		}
+		copyStoredTaskContextFields(normalized, task)
 		if consumed := util.ToInt(task["billing_consumed_amount"], -1); consumed >= 0 {
 			normalized["billing_consumed_amount"] = consumed
 		}
@@ -1325,6 +1393,7 @@ func publicTask(task map[string]any) map[string]any {
 	if consumed := util.ToInt(task["billing_consumed_amount"], -1); consumed >= 0 {
 		item["billing_consumed_amount"] = consumed
 	}
+	copyStoredTaskContextFields(item, task)
 	if unitAmount := util.ToInt(task[imageTaskBillingUnitAmountKey], 0); unitAmount > 0 {
 		item[imageTaskBillingUnitAmountKey] = unitAmount
 	}
@@ -1332,6 +1401,31 @@ func publicTask(task map[string]any) map[string]any {
 		item["visibility"] = visibility
 	}
 	return item
+}
+
+func mergeTaskContextFields(task map[string]any, payload map[string]any, identity Identity) {
+	if task == nil {
+		return
+	}
+	actor := firstNonEmpty(util.Clean(payload[imageTaskActorUserIDPayloadKey]), billingUserID(identity))
+	payer := firstNonEmpty(util.Clean(payload[imageTaskPayerUserIDPayloadKey]), actor)
+	if teamID := util.Clean(payload[imageTaskTeamIDPayloadKey]); teamID != "" {
+		task[imageTaskTeamIDPayloadKey] = teamID
+	}
+	if payer != "" {
+		task[imageTaskPayerUserIDPayloadKey] = payer
+	}
+	if actor != "" {
+		task[imageTaskActorUserIDPayloadKey] = actor
+	}
+}
+
+func copyStoredTaskContextFields(target map[string]any, source map[string]any) {
+	for _, key := range []string{imageTaskTeamIDPayloadKey, imageTaskPayerUserIDPayloadKey, imageTaskActorUserIDPayloadKey} {
+		if value := util.Clean(source[key]); value != "" {
+			target[key] = value
+		}
+	}
 }
 
 func imageTaskVisibility(values ...string) (string, error) {

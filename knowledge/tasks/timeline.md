@@ -12,7 +12,7 @@
 
 ## 2026-05-28 21:24 +08:00 - 8081 Sub2API Launch 容器配置修复
 
-- 当前阶段：8081 本地 Docker 预览恢复 Sub2API/OpenWebUI 启动登录能力。
+- 当前阶段：8081 本地 Docker 预览恢复 Sub2API/落叶AI Studio Bridge 启动登录能力。
 - 本段重点：定位到 `chatgpt2api` 容器未加载 `.env`，导致 `/auth/sub2api/launch` 返回启动兑换未配置；已有本地会话仍可直接进 `/canvas`，但新普通用户从 Sub2API 跳转会失败。
 - 已完成：用同一镜像 `chatgpt2api:local`、同一数据卷 `chatgpt2api-data`、同一端口 `127.0.0.1:8081->80` 重建容器，补上 `--env-file F:/java/chatgpt2api/.env` 和 `/app/.env:ro` 挂载。
 - 验证记录：`docker inspect chatgpt2api` 可见 `CHATGPT2API_SUB2API_REDEEM_URL/SECRET/LAUNCH_URL/GATEWAY_BASE_URL`；`http://127.0.0.1:8081/health` 返回 200；容器内访问 `http://host.docker.internal:8080/health` 返回 `{"status":"ok"}`；假 token 调 `/auth/sub2api/launch` 已变为上游 `401 launch token is invalid or expired`，不再是未配置错误。
