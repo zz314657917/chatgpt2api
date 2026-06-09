@@ -36,7 +36,8 @@ export default function Sub2APILaunchPage() {
   useEffect(() => {
     let active = true;
     const finishLaunch = async () => {
-      const token = searchParams().get("token") || "";
+      const params = searchParams();
+      const token = params.get("launch_token") || params.get("token") || "";
       if (!token) {
         await clearVerifiedAuthSession();
         if (active) {
@@ -54,7 +55,6 @@ export default function Sub2APILaunchPage() {
         const session = authSessionFromLoginResponse(data, sessionToken);
         await setVerifiedAuthSession(session);
         toast.success("已进入生图工作台");
-        const params = searchParams();
         const query = new URLSearchParams();
         if (params.get("ui_mode") === "embedded") {
           query.set("ui_mode", "embedded");

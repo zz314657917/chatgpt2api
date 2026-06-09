@@ -65,6 +65,7 @@ type App struct {
 	sub2Import   *service.Sub2APIService
 	sub2Bindings *service.Sub2APIBindingStore
 	sub2Launch   *service.Sub2APILaunchService
+	teams        *service.TeamService
 	register     *service.RegisterService
 	update       *service.UpdateService
 	cancel       context.CancelFunc
@@ -106,14 +107,14 @@ func NewApp() (*App, error) {
 	sub2Bindings := service.NewSub2APIBindingStore(documentStore)
 	imageSessions := service.NewImageConversationSessionService(filepath.Join(cfg.DataDir, "image_conversation_sessions.json"), storageBackend)
 	engine := &protocol.Engine{Accounts: accounts, Config: cfg, Storage: documentStore, Proxy: proxy, Logger: logger, ImageConversationSessions: imageSessions}
-	app := &App{config: cfg, auth: auth, accounts: accounts, billing: billing, logs: logs, logger: logger, proxy: proxy, engine: engine, images: service.NewImageService(cfg, storageBackend), canvases: service.NewCanvasService(storageBackend), social: service.NewSocialProjectService(storageBackend), announce: service.NewAnnouncementService(storageBackend), prompts: service.NewPromptFavoriteService(storageBackend), cpa: service.NewCPAConfig(storageBackend), sub2: service.NewSub2APIConfig(storageBackend), sub2Bindings: sub2Bindings, update: newUpdateService(cfg), cancel: cancel}
+	app := &App{config: cfg, auth: auth, accounts: accounts, billing: billing, logs: logs, logger: logger, proxy: proxy, engine: engine, images: service.NewImageService(cfg, storageBackend), canvases: service.NewCanvasService(storageBackend), social: service.NewSocialProjectService(storageBackend), announce: service.NewAnnouncementService(storageBackend), prompts: service.NewPromptFavoriteService(storageBackend), cpa: service.NewCPAConfig(storageBackend), sub2: service.NewSub2APIConfig(storageBackend), sub2Bindings: sub2Bindings, teams: service.NewTeamService(storageBackend), update: newUpdateService(cfg), cancel: cancel}
 	app.cpaImport = service.NewCPAImportService(app.cpa, accounts, proxy)
 	app.sub2Import = service.NewSub2APIService(app.sub2, accounts)
 	app.sub2Launch = service.NewSub2APILaunchService(auth, sub2Bindings, cfg)
 	app.register = service.NewRegisterService(accounts, storageBackend)
 	app.tasks = service.NewStoredImageTaskService(storageBackend,
 		func(ctx context.Context, identity service.Identity, payload map[string]any) (map[string]any, error) {
-			if binding, ok := app.sub2APIBindingForIdentity(identity); ok {
+			if binding, ok := app.sub2APIBindingForMode(ctx, identity, "generate"); ok {
 				return app.runLoggedSub2APIImageGenerationTask(ctx, identity, payload, binding)
 			}
 			if identity.Provider == service.AuthProviderSub2API {
@@ -125,7 +126,7 @@ func NewApp() (*App, error) {
 			})
 		},
 		func(ctx context.Context, identity service.Identity, payload map[string]any) (map[string]any, error) {
-			if binding, ok := app.sub2APIBindingForIdentity(identity); ok {
+			if binding, ok := app.sub2APIBindingForMode(ctx, identity, "edit"); ok {
 				return app.runLoggedSub2APIImageEditTask(ctx, identity, payload, binding)
 			}
 			if identity.Provider == service.AuthProviderSub2API {
@@ -138,7 +139,7 @@ func NewApp() (*App, error) {
 			})
 		},
 		func(ctx context.Context, identity service.Identity, payload map[string]any) (map[string]any, error) {
-			if binding, ok := app.sub2APIBindingForIdentity(identity); ok {
+			if binding, ok := app.sub2APIBindingForMode(ctx, identity, "chat"); ok {
 				return app.runLoggedSub2APIChatTask(ctx, identity, payload, binding)
 			}
 			if identity.Provider == service.AuthProviderSub2API {
@@ -151,12 +152,15 @@ func NewApp() (*App, error) {
 		cfg.UserDefaultRPMLimit,
 	)
 	app.tasks.SetVideoHandler(func(ctx context.Context, identity service.Identity, payload map[string]any) (map[string]any, error) {
-		if binding, ok := app.sub2APIBindingForIdentity(identity); ok {
+		if binding, ok := app.sub2APIBindingForMode(ctx, identity, "video"); ok {
 			return app.runLoggedSub2APIVideoTask(ctx, identity, payload, binding)
 		}
 		return nil, sub2APIKeyBindingRequiredError()
 	})
 	app.tasks.SetBillingService(billing)
+	if cfg.LuoyeIndependentMode() {
+		app.tasks.SetExternalBilling(app)
+	}
 	app.tasks.SetTaskTimeoutGetter(func() time.Duration {
 		return time.Duration(app.config.ImageTaskTimeoutSeconds()) * time.Second
 	})
@@ -528,6 +532,10 @@ func openAIErrorCodeForStatus(status int) any {
 }
 
 func (a *App) handleLogin(w http.ResponseWriter, r *http.Request) {
+	if a.luoyeIndependentMode() {
+		util.WriteError(w, http.StatusForbidden, "local login is disabled in independent mode")
+		return
+	}
 	body, err := readJSONMap(r)
 	if err != nil {
 		util.WriteError(w, http.StatusBadRequest, "invalid json body")
@@ -554,6 +562,10 @@ func (a *App) handleSession(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) handleAccountRegister(w http.ResponseWriter, r *http.Request) {
+	if a.luoyeIndependentMode() {
+		util.WriteError(w, http.StatusForbidden, "local registration is disabled in independent mode")
+		return
+	}
 	if !a.config.RegistrationEnabled() {
 		util.WriteError(w, http.StatusForbidden, "已关闭注册通道")
 		return
@@ -631,6 +643,11 @@ func (a *App) identityCreationRPMLimit(identity service.Identity) int {
 
 func (a *App) identityBillingState(identity service.Identity) map[string]any {
 	if identity.Provider == service.AuthProviderSub2API {
+		if a != nil && a.sub2Launch != nil {
+			if balance, err := a.sub2Launch.Balance(context.Background(), identity); err == nil {
+				return balance
+			}
+		}
 		return map[string]any{
 			"type":         service.BillingTypeStandard,
 			"unit":         service.BillingUnitImage,
@@ -656,6 +673,10 @@ func (a *App) identityBillingState(identity service.Identity) map[string]any {
 		return nil
 	}
 	return a.billing.Get(identityScope(identity))
+}
+
+func (a *App) luoyeIndependentMode() bool {
+	return a != nil && a.config != nil && a.config.LuoyeIndependentMode()
 }
 
 func (a *App) handleSettings(w http.ResponseWriter, r *http.Request) {
@@ -2902,5 +2923,40 @@ func firstNonEmpty(values ...string) string {
 }
 
 func (a *App) serveWeb(w http.ResponseWriter, r *http.Request) {
+	if a.shouldRedirectIndependentWebRequest(r) {
+		http.Redirect(w, r, "/login", http.StatusFound)
+		return
+	}
 	frontend.Handler().ServeHTTP(w, r)
+}
+
+func (a *App) shouldRedirectIndependentWebRequest(r *http.Request) bool {
+	if a == nil || r == nil || !a.luoyeIndependentMode() {
+		return false
+	}
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		return false
+	}
+	path := strings.TrimSpace(r.URL.Path)
+	if !isIndependentProtectedWebPath(path) {
+		return false
+	}
+	token := requestAuthCookieToken(r)
+	if token == "" {
+		return true
+	}
+	return a.auth.Authenticate(token) == nil
+}
+
+func isIndependentProtectedWebPath(path string) bool {
+	switch path {
+	case "", "/":
+		return true
+	}
+	for _, prefix := range []string{"/image", "/canvas", "/social", "/image-manager", "/profile"} {
+		if path == prefix || strings.HasPrefix(path, prefix+"/") {
+			return true
+		}
+	}
+	return false
 }

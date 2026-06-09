@@ -328,6 +328,22 @@ func (s *Store) Sub2APIBrandName() string {
 	return "落叶AI"
 }
 
+func (s *Store) LuoyeIndependentMode() bool {
+	return envBool("CHATGPT2API_LUOYE_INDEPENDENT_MODE", false)
+}
+
+func (s *Store) Sub2APIDefaultChatGroupID() string {
+	return strings.TrimSpace(os.Getenv("CHATGPT2API_SUB2API_DEFAULT_CHAT_GROUP_ID"))
+}
+
+func (s *Store) Sub2APIDefaultImageGroupID() string {
+	return strings.TrimSpace(os.Getenv("CHATGPT2API_SUB2API_DEFAULT_IMAGE_GROUP_ID"))
+}
+
+func (s *Store) Sub2APIDefaultVideoGroupID() string {
+	return strings.TrimSpace(os.Getenv("CHATGPT2API_SUB2API_DEFAULT_VIDEO_GROUP_ID"))
+}
+
 func (s *Store) Proxy() string {
 	return strings.TrimSpace(fmt.Sprint(s.settingValue("proxy", "")))
 }

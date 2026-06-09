@@ -1116,10 +1116,48 @@ export type AuthProviders = {
     enabled: boolean;
     launch_url?: string;
     brand_name?: string;
+    recharge_url?: string;
+    usage_url?: string;
   };
   registration?: {
     enabled: boolean;
   };
+};
+
+export type Sub2APIWalletSummary = {
+  balance?: number | string;
+  available?: number | string;
+  recharge_url?: string;
+  limit_state?: string;
+  updated_at?: string;
+};
+
+export type WorkspaceScope = {
+  type: "personal" | "team";
+  team_id?: string;
+};
+
+export type TeamMember = {
+  user_id: string;
+  name: string;
+  role?: "owner" | "member" | string;
+  joined_at?: string | null;
+};
+
+export type TeamSummary = {
+  id: string;
+  name: string;
+  invite_code?: string;
+  owner_user_id?: string;
+  owner_name?: string;
+  member_count?: number;
+  members?: TeamMember[];
+  created_at?: string | null;
+};
+
+export type TeamWorkspaceState = {
+  scope: WorkspaceScope;
+  teams: TeamSummary[];
 };
 
 export type Announcement = {
@@ -1390,6 +1428,43 @@ export async function bindSub2APIKey(apiKeyId: string) {
   return httpRequest<{ binding: Sub2APIBinding }>("/api/sub2api/binding", {
     method: "POST",
     body: { api_key_id: apiKeyId },
+  });
+}
+
+export async function fetchSub2APIWalletSummary() {
+  return httpRequest<Sub2APIWalletSummary>("/api/sub2api/balance", {
+    redirectOnUnauthorized: false,
+  });
+}
+
+export async function fetchTeamWorkspace() {
+  const data = await httpRequest<Partial<TeamWorkspaceState>>("/api/teams");
+  return {
+    scope: data.scope?.type === "team"
+      ? { type: "team" as const, team_id: String(data.scope.team_id || "") }
+      : { type: "personal" as const },
+    teams: Array.isArray(data.teams) ? data.teams : [],
+  };
+}
+
+export async function createTeam(name: string) {
+  return httpRequest<{ team: TeamSummary; workspace?: TeamWorkspaceState }>("/api/teams", {
+    method: "POST",
+    body: { name },
+  });
+}
+
+export async function joinTeam(inviteCode: string) {
+  return httpRequest<{ team: TeamSummary; workspace?: TeamWorkspaceState }>("/api/teams/join", {
+    method: "POST",
+    body: { invite_code: inviteCode },
+  });
+}
+
+export async function switchWorkspace(scope: WorkspaceScope) {
+  return httpRequest<TeamWorkspaceState>("/api/teams/current", {
+    method: "POST",
+    body: scope.type === "team" ? { type: "team", team_id: scope.team_id } : { type: "personal" },
   });
 }
 

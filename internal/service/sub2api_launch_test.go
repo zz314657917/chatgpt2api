@@ -126,3 +126,12 @@ func TestSub2APIBindingStoreIgnoresNilStringSessionToken(t *testing.T) {
 		t.Fatal("Get() returned binding with <nil> session token")
 	}
 }
+
+func TestSub2APIPublicDisplayNameSkipsInternalID(t *testing.T) {
+	if got := sub2APIPublicDisplayName("sub2api:42"); got != "" {
+		t.Fatalf("sub2APIPublicDisplayName(internal) = %q, want empty", got)
+	}
+	if got := sub2APIPublicDisplayName("", "sub2api:42", "Alice"); got != "Alice" {
+		t.Fatalf("sub2APIPublicDisplayName(fallback) = %q, want Alice", got)
+	}
+}

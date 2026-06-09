@@ -158,7 +158,7 @@ export function smartItemTitle(type: SmartCanvasItem["type"]) {
     case "group":
       return "组";
     case "image_generation":
-      return "API生成";
+      return "图片生成";
     case "video_generation":
       return "视频生成";
     case "result":
@@ -285,7 +285,7 @@ export function createGeneratorNode(position: { x: number; y: number }): SmartCa
   return {
     id: createItemId("image_generation"),
     type: "image_generation",
-    name: "API生成",
+    name: "图片生成",
     position,
     data: {
       prompt: "",

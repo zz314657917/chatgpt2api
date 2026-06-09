@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ArrowRight,
   LoaderCircle,
@@ -35,6 +35,7 @@ export default function LoginPage() {
   const [theme, setTheme] = useState<ColorTheme>(() => getPreferredColorTheme());
   const [leafNetworkBrandName, setLeafNetworkBrandName] = useState(defaultLeafNetworkBrandName);
   const [leafNetworkLoginURL, setLeafNetworkLoginURL] = useState(defaultLeafNetworkLoginURL);
+  const [isRedirecting, setIsRedirecting] = useState(false);
   const { isCheckingAuth } = useRedirectIfAuthenticated();
 
   useEffect(() => {
@@ -62,7 +63,8 @@ export default function LoginPage() {
     };
   }, []);
 
-  const handleLeafNetworkLogin = async () => {
+  const handleLeafNetworkLogin = useCallback(async () => {
+    setIsRedirecting(true);
     try {
       const providers = await fetchAuthProviders();
       const launchURL = String(providers.sub2api?.launch_url || "").trim();
@@ -74,7 +76,19 @@ export default function LoginPage() {
       // Fall through to the configured fallback URL.
     }
     window.location.href = leafNetworkLoginURL;
-  };
+  }, [leafNetworkLoginURL]);
+
+  useEffect(() => {
+    if (isCheckingAuth || isRedirecting) {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      void handleLeafNetworkLogin();
+    }, 3000);
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [handleLeafNetworkLogin, isCheckingAuth, isRedirecting]);
 
   const handleThemeToggle = () => {
     const nextTheme = theme === "dark" ? "light" : "dark";
@@ -89,12 +103,18 @@ export default function LoginPage() {
     setTheme(nextTheme);
   };
 
-  if (isCheckingAuth) {
+  if (isCheckingAuth || isRedirecting) {
     return (
       <div
         className={`${loginBackgroundClass} fixed inset-0 z-50 grid min-h-svh w-screen place-items-center overflow-hidden px-4 py-6`}
       >
-        <LoaderCircle className="size-5 animate-spin text-[#45515e] dark:text-white/60" />
+        <div className="flex flex-col items-center gap-4 text-center">
+          <LoaderCircle className="size-5 animate-spin text-[#45515e] dark:text-white/60" />
+          <div className="space-y-1">
+            <div className="text-sm font-semibold text-[#222222] dark:text-white">正在跳转至{leafNetworkBrandName}</div>
+            <div className="text-xs text-[#6b7280] dark:text-white/50">登录或注册后会自动回到落叶AI。</div>
+          </div>
+        </div>
       </div>
     );
   }
@@ -133,10 +153,10 @@ export default function LoginPage() {
               />
               <div className="grid min-w-0 leading-none">
                 <div className="truncate text-sm font-semibold tracking-[-0.02em] text-[#222222] dark:text-white">
-                  {appMeta.app_title || "chatgpt2api"}
+                  落叶AI
                 </div>
                 <div className="truncate text-[10px] font-medium tracking-[0.28em] text-[#8e8e93] uppercase dark:text-white/50">
-                  {appMeta.project_name && appMeta.project_name !== appMeta.app_title ? appMeta.project_name : "Control Center"}
+                  Creative Studio
                 </div>
               </div>
             </div>
@@ -144,7 +164,7 @@ export default function LoginPage() {
             <div className="flex flex-col gap-4">
               <div className="inline-flex w-fit items-center gap-2 rounded-full border border-[#dfe7f1] bg-white/80 px-3 py-1 text-[11px] font-semibold tracking-[0.2em] text-[#45515e] uppercase shadow-[0_4px_12px_rgba(24,40,72,0.05)] dark:border-white/10 dark:bg-white/8 dark:text-white/70 dark:shadow-[0_10px_26px_rgba(2,6,23,0.22)]">
                 <ShieldCheck className="size-3.5 text-[#1456f0] dark:text-sky-300" />
-                Secure Access
+                创作账号
               </div>
               <div className="flex flex-col gap-2 transition-all duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none">
                 <h1 className="text-[2.1rem] leading-[1.12] font-semibold tracking-[-0.04em] text-[#222222] transition-opacity duration-200 dark:text-white sm:text-[2.5rem]">

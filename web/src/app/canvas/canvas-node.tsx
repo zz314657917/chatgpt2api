@@ -257,7 +257,7 @@ function smartCanvasNodeMenuItems(): SmartCanvasNodeMenuItem[] {
     { type: "llm", label: "AI 提示词", icon: <Bot className="size-4" /> },
     { type: "loop", label: "循环节点", icon: <Repeat2 className="size-4" /> },
     { type: "group", label: "组", icon: <Layers3 className="size-4" /> },
-    { type: "image_generation", label: "API生成", icon: <WandSparkles className="size-4" /> },
+    { type: "image_generation", label: "图片生成", icon: <WandSparkles className="size-4" /> },
     { type: "video_generation", label: "视频生成", icon: <Clapperboard className="size-4" /> },
     { type: "result", label: "Output", icon: <CircleDot className="size-4" /> },
   ];
@@ -634,7 +634,7 @@ export function SmartCanvasTopBar({
           <ToolbarButton icon={<Sparkles className="size-4" />} label="AI提示词" onClick={() => onAddNode("llm")} />
           <ToolbarButton icon={<Repeat2 className="size-4" />} label="循环" onClick={() => onAddNode("loop")} />
           <ToolbarButton icon={<Layers3 className="size-4" />} label="组" onClick={() => onAddNode("group")} />
-          <ToolbarButton icon={<WandSparkles className="size-4" />} label="API生成" onClick={() => onAddNode("image_generation")} />
+          <ToolbarButton icon={<WandSparkles className="size-4" />} label="图片生成" onClick={() => onAddNode("image_generation")} />
           <ToolbarButton icon={<Clapperboard className="size-4" />} label="视频" onClick={() => onAddNode("video_generation")} />
           <ToolbarButton icon={<CircleDot className="size-4" />} label="Output" onClick={() => onAddNode("result")} />
           <ToolbarButton icon={<CircleHelp className="size-4" />} label="帮助" onClick={onHelpClick} />
@@ -1718,7 +1718,7 @@ export function SmartCanvasBoard({
             <div className={cn("rounded-3xl border p-6 text-center shadow-2xl backdrop-blur", canvasDashedClass)}>
               <Images className="mx-auto mb-3 size-9 text-muted-foreground dark:text-slate-500" />
               <div className="text-sm font-bold text-foreground dark:text-slate-200">从顶部或右键添加节点，或拖入图片开始创作</div>
-              <div className={cn("mt-1 text-xs", canvasSubtleTextClass)}>提示词、AI 提示词、API生成、Output 都可以在节点里直接编辑。</div>
+              <div className={cn("mt-1 text-xs", canvasSubtleTextClass)}>提示词、AI 提示词、图片生成、Output 都可以在节点里直接编辑。</div>
             </div>
           </div>
         ) : null}
@@ -1950,16 +1950,16 @@ export function SmartCanvasOnboardingDialog({
           <div>
             <DialogTitle className="text-xl font-black">快速认识无限画布</DialogTitle>
             <DialogDescription className={cn("mt-2 text-sm leading-6", canvasSubtleTextClass)}>
-              画布由节点和连线组成。Prompt 写想法，API生成提交任务，Output 展示结果。
+              画布由节点和连线组成。Prompt 写想法，图片生成提交任务，Output 展示结果。
             </DialogDescription>
           </div>
           <div className="grid gap-3 sm:grid-cols-3">
-            <OnboardingStep title="1. 添加节点" text="用顶部工具栏或右键空白处添加 Prompt、API生成、Output。" />
+            <OnboardingStep title="1. 添加节点" text="用顶部工具栏或右键空白处添加 Prompt、图片生成、Output。" />
             <OnboardingStep title="2. 拖线连接" text="从右侧端口拖到下游节点左侧端口，形成工作流。" />
-            <OnboardingStep title="3. 点击生成" text="在 API生成 节点设置模型和比例，然后提交生成。" />
+            <OnboardingStep title="3. 点击生成" text="在 图片生成 节点设置模型和比例，然后提交生成。" />
           </div>
           <div className="rounded-2xl border border-sky-500/20 bg-sky-500/8 p-4 text-sm font-black text-sky-800 dark:border-sky-400/20 dark:bg-sky-400/10 dark:text-sky-100">
-            {"基础链路：Prompt -> API生成 -> Output"}
+            {"基础链路：Prompt -> 图片生成 -> Output"}
           </div>
           <div className="flex flex-wrap justify-end gap-2">
             <Button type="button" variant="outline" className={cn("h-10 rounded-xl", canvasGhostButtonClass)} onClick={onDismiss}>
@@ -2699,7 +2699,7 @@ function suggestedNodeName(type: SmartCanvasItem["type"]) {
     case "group":
       return "组";
     case "image_generation":
-      return "API生成";
+      return "图片生成";
     case "video_generation":
       return "视频生成";
     case "result":
@@ -2712,21 +2712,21 @@ function suggestedNodeName(type: SmartCanvasItem["type"]) {
 function nodeUsageHint(item: SmartCanvasItem) {
   switch (item.type) {
     case "image":
-      return "图片节点保存参考图。连接到 AI 提示词可先看图提词，连接到 API生成可做图生图。";
+      return "图片节点保存参考图。连接到 AI 提示词可先看图提词，连接到 图片生成可做图生图。";
     case "prompt":
-      return "Prompt 节点写生图文本，可直接连接 API生成，也可先连接 AI 提示词优化。";
+      return "Prompt 节点写生图文本，可直接连接 图片生成，也可先连接 AI 提示词优化。";
     case "llm":
-      return "AI 提示词节点会把上游文本和图片整理成可用提示词，运行后连接 API生成。";
+      return "AI 提示词节点会把上游文本和图片整理成可用提示词，运行后连接 图片生成。";
     case "loop":
       return "循环节点的重复模式会一次生成多张，最多 10 张；逐图模式会按上游图片逐张生成。";
     case "group":
-      return "组节点会汇总组内文本和图片，连接到 API生成、AI 提示词或循环时会自动展开。";
+      return "组节点会汇总组内文本和图片，连接到 图片生成、AI 提示词或循环时会自动展开。";
     case "image_generation":
-      return "API生成节点是真正提交生图的节点。上游接 Prompt/图片/循环，下游接 Output 展示结果。";
+      return "图片生成节点是真正提交生图的节点。上游接 Prompt/图片/循环，下游接 Output 展示结果。";
     case "video_generation":
       return "视频生成节点会提交视频任务。上游接 Prompt 和图片，下游接 Output 展示视频。";
     case "result":
-      return "Output 节点展示生成结果，也可以把结果继续连接到 API生成或视频生成做二次创作。";
+      return "Output 节点展示生成结果，也可以把结果继续连接到 图片生成或视频生成做二次创作。";
   }
 }
 
@@ -2983,7 +2983,7 @@ function GroupNodeBody({
             <div>文本</div>
           </div>
         </div>
-        <div className="mt-2 leading-5">把节点拖进组框会自动加入；连接到 API生成、AI 提示词或循环时，会展开组内图片和文本。</div>
+        <div className="mt-2 leading-5">把节点拖进组框会自动加入；连接到 图片生成、AI 提示词或循环时，会展开组内图片和文本。</div>
       </div>
 
       {images.length > 0 ? <CanvasImageStrip images={images} limit={4} onOpen={onOpenImage} className="grid-cols-4" lightweight={lightweight} /> : null}
@@ -3227,7 +3227,7 @@ function LlmNodeBody({
               {outputText}
             </div>
           ) : (
-            "运行后会输出文本，可连接到 API生成 节点"
+            "运行后会输出文本，可连接到 图片生成 节点"
           )}
         </div>
         <Dialog open={outputDialogOpen} onOpenChange={setOutputDialogOpen}>
@@ -3389,7 +3389,7 @@ function LoopNodeBody({
           </div>
         </div>
         <div className="mt-2 leading-5">
-          {mode === "images" ? "按上游图片逐张提交到下游 API生成，最多 10 张。" : `按相同输入一次生成 ${count} 张。`}
+          {mode === "images" ? "按上游图片逐张提交到下游 图片生成，最多 10 张。" : `按相同输入一次生成 ${count} 张。`}
         </div>
       </div>
 
@@ -3594,7 +3594,7 @@ function GeneratorNodeBody({
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="api">API</SelectItem>
+            <SelectItem value="api">生成</SelectItem>
           </SelectContent>
         </Select>
         <Select value={imageModel} onValueChange={(model) => onUpdateData({ model })}>
@@ -3701,7 +3701,7 @@ function GeneratorNodeBody({
           onClick={onStopNode}
         >
           <X className="size-4" />
-          中断 API生成
+          中断 图片生成
         </Button>
       ) : (
         <Button
@@ -3711,7 +3711,7 @@ function GeneratorNodeBody({
           onClick={onRunGenerator}
         >
           {running ? <LoaderCircle className="size-4 animate-spin" /> : <Zap className="size-4" />}
-          API生成
+          图片生成
         </Button>
       )}
     </div>
@@ -3857,7 +3857,7 @@ function VideoGeneratorNodeBody({
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="api">API</SelectItem>
+            <SelectItem value="api">生成</SelectItem>
           </SelectContent>
         </Select>
         <Select value={modelValue || undefined} onValueChange={(model) => onUpdateData({ model, duration: canvasVideoModelProfile(model).minDuration })}>
@@ -4761,7 +4761,7 @@ function nodeTitle(item: SmartCanvasItem) {
   if (item.type === "llm") return "AI 提示词";
   if (item.type === "loop") return "循环";
   if (item.type === "group") return "Group";
-  if (item.type === "image_generation") return "API生成";
+  if (item.type === "image_generation") return "图片生成";
   if (item.type === "video_generation") return "视频生成";
   return "Output";
 }
@@ -4772,7 +4772,7 @@ function nodeTypeLabel(type: SmartCanvasItem["type"]) {
   if (type === "llm") return "AI 提示词";
   if (type === "loop") return "循环";
   if (type === "group") return "组";
-  if (type === "image_generation") return "API生成";
+  if (type === "image_generation") return "图片生成";
   if (type === "video_generation") return "视频生成";
   return "Output";
 }

@@ -2,30 +2,35 @@
 repo: chatgpt2api
 project_type: web
 qa_mode: browser
-last_verified: 2026-05-26
+last_updated: 2026-06-09
 ---
 
 # Product Spec
 
 ## 一句话需求
-- 将 `/canvas` 长期开发纳入 P/G/E 门禁，并先把 Infinite-Canvas 风格节点画布的核心交互稳定下来。
+- 将 `chatgpt2api` 改造成独立创作站“落叶AI”：普通用户只走 Sub2API 注册、登录、充值和余额扣费，进入站点后直接使用创作台、无限画布、社媒运营和图片库，不再接触 API Key / Token / OpenAI-compatible / API 选择。
 
-## 目标与非目标
-- 目标：`/canvas` 作为站内图片创作工作台，复用现有图片库、`creation-tasks`、权限、计费和 Sub2API 模型路由。
-- 目标：图片、Prompt、API生成、Output 继续作为可拖拽节点，连线表达输入和输出关系，节点内完成主要参数编辑。
-- 目标：右侧图片库和画布节点预览可优先用缩略图，编辑、裁剪、图生图提交必须读取原图引用。
-- 非目标：不引入 ComfyUI、GPU worker、RunningHub、视频生成运行时或 Infinite-Canvas 代码。
-- 非目标：Sprint 1 不新增后端接口、不改权限模型、不做旧画布迁移。
+## 目标
+- 普通用户未登录访问落叶AI时，展示短暂跳转提示并跳转到 Sub2API 登录/注册；完成后自动回跳落叶AI并建立本地会话。
+- 充值、余额、使用记录、扣费真源统一在 Sub2API；落叶AI只做创作体验和任务记录。
+- 落叶AI普通部署隐藏本地管理员登录入口，站点配置统一放到 Sub2API 管理后台。
+- 管理员在 Sub2API 中配置落叶AI应用，包括回跳域名、充值入口、默认聊天/生图/视频分组和内部通信密钥。
+- 团队模式 v1 支持创建团队、邀请码加入、个人/团队空间切换；团队空间扣队长/团队共享额度，任务记录实际操作者。
 
-## 关键约束
-- 技术约束：节点数据不能保存 API key、base_url、group_id；图片本体继续由图片库和对象存储管理。
-- 技术约束：前端实现遵循当前自研智能画布结构，不回退 React Flow。
-- 交付约束：每个 Sprint 必须有 contract、命令验证和浏览器验收项。
-- 交付约束：当前分支存在未提交 `/canvas` 改动，后续实现必须在现有改动上增量处理，不回滚。
+## 非目标
+- 不彻底删除 chatgpt2api 原管理员后台和维护能力，本轮只在普通部署中隐藏入口。
+- 不让普通用户选择或绑定 Sub2API API Key。
+- 不做企业级组织、审批流、部门层级、复杂成员权限或精细预算审批。
+- 不改支付核心回调逻辑，除非 Sub2API 需要暴露充值入口字段。
 
 ## 技术方案
-- 架构说明：前端 `/canvas` 负责节点编辑、连线、上传、自动保存、任务提交和轮询；生成继续调用现有 `creation-tasks/image-generations` 与 `creation-tasks/image-edits`。
-- 关键模块：`web/src/app/canvas/use-smart-canvas-controller.ts` 负责数据流和交互控制，`canvas-node.tsx` 负责画布节点 UI，`canvas-utils.ts` 负责数据归一化和引用策略。
+- Sub2API 增加外部创作站 bridge：登录回跳、一次性 launch token、余额/充值/使用记录内部接口、幂等 `reserve / commit / refund` 扣费接口。
+- chatgpt2api 增加落叶AI独立模式：使用 Sub2API launch token 换取本地 session；任务执行前向 Sub2API 预扣，成功确认，失败/取消退款。
+- 普通用户 UI 隐藏 API 相关概念；右上角展示用户名、余额、充值按钮，下拉仅保留个人资料、使用记录、退出登录。
+- 团队模式数据保存在 chatgpt2api：`team_id` 表示团队空间，`payer_user_id` 表示扣费用户，`actor_user_id` 表示实际操作者。
 
 ## Sprint 计划
-- Sprint 1：核心交互稳定，覆盖图片引用去重、图片库输入行为、连线输入、生成状态、Output 回填、基础保存和浏览器验收。
+- `task-001-sub2-studio-bridge`：Sub2API 外部创作站配置、登录回跳、余额/充值/使用记录、幂等扣费接口。
+- `task-002-luoye-backend`：chatgpt2api 后端接入 Sub2API 会话/钱包/默认路由并加入团队 v1 服务。
+- `task-003-luoye-frontend`：落叶AI普通用户 UI、隐藏 API 概念、充值与团队管理界面。
+- `task-004-qa-browser`：跨仓库命令验证和 Playwright 浏览器验收。

@@ -41,7 +41,6 @@ import { ImageSidebar } from "@/app/image/components/image-sidebar";
 import { ImageLightbox } from "@/components/image-lightbox";
 import { ImageOutputControls } from "@/components/image-output-controls";
 import { ManagedImageAssetSidebar } from "@/components/managed-image-asset-sidebar";
-import { Sub2APIKeyRequiredDialog } from "@/components/sub2api-key-picker";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -3787,7 +3786,6 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
 
   return (
     <>
-      <Sub2APIKeyRequiredDialog />
       <section
         className={cn(
           "relative grid h-full min-h-0 w-full grid-cols-1 gap-2 px-0 pb-[calc(env(safe-area-inset-bottom)+0.5rem)] sm:gap-3 sm:pb-3 lg:grid-cols-[280px_minmax(0,1fr)] xl:grid-cols-[300px_minmax(0,1fr)]",

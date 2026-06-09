@@ -69,6 +69,31 @@ func (a *App) handleSub2APIKeys(w http.ResponseWriter, r *http.Request) {
 	util.WriteJSON(w, http.StatusOK, map[string]any{"items": items, "binding": binding})
 }
 
+func (a *App) handleSub2APIWallet(w http.ResponseWriter, r *http.Request) {
+	identity, ok := a.requireSub2APIIdentity(w, r)
+	if !ok {
+		return
+	}
+	switch {
+	case r.URL.Path == "/api/sub2api/balance" && r.Method == http.MethodGet:
+		body, err := a.sub2Launch.Balance(r.Context(), identity)
+		if err != nil {
+			util.WriteError(w, http.StatusBadGateway, err.Error())
+			return
+		}
+		util.WriteJSON(w, http.StatusOK, body)
+	case r.URL.Path == "/api/sub2api/usage" && r.Method == http.MethodGet:
+		body, err := a.sub2Launch.Usage(r.Context(), identity, util.ToInt(r.URL.Query().Get("limit"), 20))
+		if err != nil {
+			util.WriteError(w, http.StatusBadGateway, err.Error())
+			return
+		}
+		util.WriteJSON(w, http.StatusOK, body)
+	default:
+		http.NotFound(w, r)
+	}
+}
+
 func (a *App) handleSub2APIBinding(w http.ResponseWriter, r *http.Request) {
 	identity, ok := a.requireSub2APIIdentity(w, r)
 	if !ok {
@@ -122,6 +147,20 @@ func (a *App) sub2APIBindingForIdentity(identity service.Identity) (service.Sub2
 	return binding, ok && binding.HasAPIKey()
 }
 
+func (a *App) sub2APIBindingForMode(ctx context.Context, identity service.Identity, mode string) (service.Sub2APIBinding, bool) {
+	if identity.Provider != service.AuthProviderSub2API {
+		return service.Sub2APIBinding{}, false
+	}
+	if binding, ok := a.sub2APIBindingForIdentity(identity); ok {
+		return binding, true
+	}
+	if a != nil && a.config != nil && a.config.LuoyeIndependentMode() && a.sub2Launch != nil {
+		binding, err := a.sub2Launch.DefaultBinding(identity, mode)
+		return binding, err == nil
+	}
+	return service.Sub2APIBinding{}, false
+}
+
 func sub2APIKeyBindingRequiredError() error {
 	return protocol.HTTPError{Status: http.StatusPreconditionRequired, Message: "请先选择 Sub2API API Key 后再开始创作"}
 }
@@ -165,7 +204,7 @@ func (a *App) callSub2APIChatCompletions(ctx context.Context, payload map[string
 }
 
 func (a *App) callSub2APIImageGenerations(ctx context.Context, identity service.Identity, payload map[string]any, binding service.Sub2APIBinding) (map[string]any, error) {
-	return a.callSub2APIImageBatches(ctx, identity, payload, func(ctx context.Context, batchPayload map[string]any) (map[string]any, error) {
+	return a.callSub2APIImageBatchesWithBinding(ctx, identity, payload, binding, func(ctx context.Context, batchPayload map[string]any) (map[string]any, error) {
 		body := sub2APIImageJSONPayload(batchPayload)
 		body["response_format"] = "b64_json"
 		return a.postSub2APIJSON(ctx, binding, "images/generations", body)
@@ -177,10 +216,10 @@ func (a *App) callSub2APIImageEdits(ctx context.Context, identity service.Identi
 	if len(images) == 0 {
 		return nil, protocol.HTTPError{Status: http.StatusBadRequest, Message: "image file is required"}
 	}
-	return a.callSub2APIImageBatches(ctx, identity, payload, func(ctx context.Context, batchPayload map[string]any) (map[string]any, error) {
+	return a.callSub2APIImageBatchesWithBinding(ctx, identity, payload, binding, func(ctx context.Context, batchPayload map[string]any) (map[string]any, error) {
 		var buf bytes.Buffer
 		writer := multipart.NewWriter(&buf)
-		for key, value := range sub2APIImageJSONPayload(batchPayload) {
+		for key, value := range sub2APIRequestBodyWithGroup(binding, sub2APIImageJSONPayload(batchPayload)) {
 			if value == nil {
 				continue
 			}
@@ -210,6 +249,10 @@ const (
 )
 
 func (a *App) callSub2APIImageBatches(ctx context.Context, identity service.Identity, payload map[string]any, call func(context.Context, map[string]any) (map[string]any, error)) (map[string]any, error) {
+	return a.callSub2APIImageBatchesWithBinding(ctx, identity, payload, service.Sub2APIBinding{}, call)
+}
+
+func (a *App) callSub2APIImageBatchesWithBinding(ctx context.Context, identity service.Identity, payload map[string]any, binding service.Sub2APIBinding, call func(context.Context, map[string]any) (map[string]any, error)) (map[string]any, error) {
 	requested := sub2APIImageRequestedCount(payload)
 	batchSize := sub2APIImageBatchSize(payload)
 	progress := sub2APIImageProgressCallback(payload)
@@ -220,7 +263,7 @@ func (a *App) callSub2APIImageBatches(ctx context.Context, identity service.Iden
 	batches := sub2APIImageBatchRequests(requested, batchSize)
 	results := make([]sub2APIImageBatchOutput, 0, len(batches))
 	for _, batch := range batches {
-		result := a.callSub2APIImageBatch(ctx, identity, payload, call, acquire, batch.index, batch.count)
+		result := a.callSub2APIImageBatch(ctx, identity, payload, binding, call, acquire, batch.index, batch.count)
 		results = append(results, result)
 		if result.err != nil {
 			cancel()
@@ -269,7 +312,7 @@ type sub2APIImageBatchOutput struct {
 	err     error
 }
 
-func (a *App) callSub2APIImageBatch(ctx context.Context, identity service.Identity, payload map[string]any, call func(context.Context, map[string]any) (map[string]any, error), acquire protocol.ImageOutputSlotAcquirer, index int, count int) sub2APIImageBatchOutput {
+func (a *App) callSub2APIImageBatch(ctx context.Context, identity service.Identity, payload map[string]any, binding service.Sub2APIBinding, call func(context.Context, map[string]any) (map[string]any, error), acquire protocol.ImageOutputSlotAcquirer, index int, count int) sub2APIImageBatchOutput {
 	out := sub2APIImageBatchOutput{index: index}
 	batchPayload := util.CopyMap(payload)
 	batchPayload["n"] = count
@@ -284,7 +327,7 @@ func (a *App) callSub2APIImageBatch(ctx context.Context, identity service.Identi
 		out.err = err
 		return out
 	}
-	formatted, err := a.formatSub2APIImageResult(ctx, result, identity, batchPayload)
+	formatted, err := a.formatSub2APIImageResult(ctx, result, identity, batchPayload, binding)
 	if err != nil {
 		out.err = err
 		return out
@@ -578,6 +621,7 @@ func sub2APIImageModel(value any) string {
 }
 
 func (a *App) postSub2APIJSON(ctx context.Context, binding service.Sub2APIBinding, endpoint string, body map[string]any) (map[string]any, error) {
+	body = sub2APIRequestBodyWithGroup(binding, body)
 	raw, _ := json.Marshal(body)
 	return a.doSub2APIRequest(ctx, binding, http.MethodPost, endpoint, "application/json", bytes.NewReader(raw))
 }
@@ -603,7 +647,19 @@ func (a *App) doSub2APIRequest(ctx context.Context, binding service.Sub2APIBindi
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)
 	}
-	req.Header.Set("Authorization", "Bearer "+binding.APIKey)
+	if binding.SystemDefault {
+		if secret := a.sub2Launch.InternalSecret(); secret != "" {
+			req.Header.Set("X-Sub2API-Studio-Secret", secret)
+		}
+		if binding.Sub2APIUserID != "" {
+			req.Header.Set("X-Sub2API-Studio-User-ID", binding.Sub2APIUserID)
+		}
+		if binding.GroupID != "" {
+			req.Header.Set("X-Sub2API-Group-ID", binding.GroupID)
+		}
+	} else {
+		req.Header.Set("Authorization", "Bearer "+binding.APIKey)
+	}
 	client := a.sub2APIHTTPClient()
 	resp, err := client.Do(req)
 	if err != nil {
@@ -627,6 +683,35 @@ func (a *App) doSub2APIRequest(ctx context.Context, binding service.Sub2APIBindi
 	return result, nil
 }
 
+func (a *App) ReserveTask(ctx context.Context, identity service.Identity, task map[string]any, amount int, ref service.BillingReference) error {
+	if a == nil || a.sub2Launch == nil || amount <= 0 {
+		return nil
+	}
+	return a.sub2Launch.Reserve(ctx, taskPayerUserID(task, identity), taskActorUserID(task, identity), util.Clean(task["team_id"]), util.Clean(task["id"]), util.Clean(task["mode"]), util.Clean(task["model"]), ref.ChargeKey, amount)
+}
+
+func (a *App) CommitTask(ctx context.Context, identity service.Identity, task map[string]any, consumed int, ref service.BillingReference) error {
+	if a == nil || a.sub2Launch == nil || consumed <= 0 {
+		return nil
+	}
+	return a.sub2Launch.Commit(ctx, taskPayerUserID(task, identity), taskActorUserID(task, identity), util.Clean(task["team_id"]), util.Clean(task["id"]), util.Clean(task["mode"]), util.Clean(task["model"]), ref.ChargeKey, consumed)
+}
+
+func (a *App) RefundTask(ctx context.Context, identity service.Identity, task map[string]any, amount int, ref service.BillingReference) error {
+	if a == nil || a.sub2Launch == nil || amount <= 0 {
+		return nil
+	}
+	return a.sub2Launch.Refund(ctx, taskPayerUserID(task, identity), taskActorUserID(task, identity), util.Clean(task["team_id"]), util.Clean(task["id"]), util.Clean(task["mode"]), util.Clean(task["model"]), ref.ChargeKey, ref.RefundForKey, amount)
+}
+
+func taskPayerUserID(task map[string]any, identity service.Identity) string {
+	return firstNonEmpty(util.Clean(task["payer_user_id"]), identityScope(identity))
+}
+
+func taskActorUserID(task map[string]any, identity service.Identity) string {
+	return firstNonEmpty(util.Clean(task["actor_user_id"]), identityScope(identity))
+}
+
 func (a *App) sub2APIHTTPClient() *http.Client {
 	timeout := 5 * time.Minute
 	if a != nil && a.config != nil {
@@ -646,6 +731,15 @@ func sub2APIEndpointURL(baseURL, endpoint string) string {
 	return baseURL + "/" + endpoint
 }
 
+func sub2APIRequestBodyWithGroup(binding service.Sub2APIBinding, body map[string]any) map[string]any {
+	if !binding.SystemDefault || binding.GroupID == "" {
+		return body
+	}
+	out := util.CopyMap(body)
+	out["group_id"] = binding.GroupID
+	return out
+}
+
 func sub2APITaskStatusEndpoint(baseURL, taskID string) string {
 	taskID = strings.TrimSpace(taskID)
 	if taskID == "" {
@@ -658,10 +752,19 @@ func sub2APITaskStatusEndpoint(baseURL, taskID string) string {
 	return endpoint
 }
 
-func (a *App) formatSub2APIImageResult(ctx context.Context, result map[string]any, identity service.Identity, payload map[string]any) (map[string]any, error) {
+func (a *App) formatSub2APIImageResult(ctx context.Context, result map[string]any, identity service.Identity, payload map[string]any, binding service.Sub2APIBinding) (map[string]any, error) {
 	if taskID := sub2APIImageTaskID(result); taskID != "" {
-		binding, ok := a.sub2APIBindingForIdentity(identity)
-		if !ok {
+		if !binding.Valid() {
+			var ok bool
+			binding, ok = a.sub2APIBindingForMode(ctx, identity, "generate")
+			if !ok {
+				binding, ok = a.sub2APIBindingForMode(ctx, identity, "edit")
+			}
+			if !ok {
+				return nil, &protocol.ImageGenerationError{Message: "图片上游返回异步任务，但当前用户没有可用网关绑定", StatusCode: http.StatusBadGateway, Type: "server_error", Code: "upstream_error"}
+			}
+		}
+		if !binding.Valid() {
 			return nil, &protocol.ImageGenerationError{Message: "图片上游返回异步任务，但当前用户没有可用网关绑定", StatusCode: http.StatusBadGateway, Type: "server_error", Code: "upstream_error"}
 		}
 		polled, err := a.pollSub2APIImageTask(ctx, binding, taskID)

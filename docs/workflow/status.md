@@ -1,42 +1,61 @@
 ---
-phase: build
-current_sprint: canvas-image-followups-and-task-stability
-total_sprints: 4
-pending_action: close-canvas-image-followups-and-task-stability
+phase: done
+current_sprint: luoye-ai-independent-user-edition
+total_sprints: 1
+pending_action: production-deployment-verification
 project_type: web
 qa_mode: browser
 approval_required: false
-last_verified: 2026-06-07
+last_verified: 2026-06-09
 ---
 
 # Workflow Status
 
-- 当前阶段：`build`
-- 当前 Sprint：`canvas-image-followups-and-task-stability`
-- 当前目标：把近 3 天已进入主线的 `/canvas` workflow 优化、拖拽图片复用、LLM output / model route 调整、图片输出控件共享、gallery retention notice，以及 creation task / APIMart task status 稳定性修复收口成当前默认 Sprint 语境。
-- Task contract：暂无单独 contract；当前以近期主线提交和 `knowledge/tasks/current-task.md` 为事实源。
-- 本次结论：进行中。现有 workflow status 不能再停留在 2026-06-03 的视频节点 / composer 预设语境，否则会漏掉 6 月 6-7 日这轮 canvas/image followups 与 task stability 主线。
+- 当前阶段：`done`
+- 当前 Sprint：`luoye-ai-independent-user-edition`
+- 当前目标：把 `chatgpt2api` 改造成“落叶AI”独立用户版，普通用户只走 Sub2API 注册、登录、充值和扣费，站内直接创作；同时实现团队共享额度 v1。
+- 本轮范围：
+  - Sub2API 外部创作站 bridge。
+  - chatgpt2api 落叶AI独立模式后端。
+  - chatgpt2api 落叶AI普通用户前端。
+  - 跨仓库浏览器验收。
+- Task contracts：
+  - `docs/workflow/tasks/task-001-sub2-studio-bridge.md`
+  - `docs/workflow/tasks/task-002-luoye-backend.md`
+  - `docs/workflow/tasks/task-003-luoye-frontend.md`
+  - `docs/workflow/tasks/task-004-qa-browser.md`
 - 验证命令：
   - `cd web && npm.cmd run lint`
   - `cd web && npm.cmd run build`
   - `go test ./...`
-  - `git diff --check`
-- 浏览器验收：当前应至少补 `/canvas` 节点工作流回读、拖拽图片再利用、输出控件展示，以及 `/image` gallery retention notice 与输出参数联动的最小页面回读；是否已完成需以后续任务记录为准。
-- 未完全自动化覆盖：当前状态文件尚未沉淀这轮 canvas/image followups、task stability 和 APIMart 任务状态修复的人工闭环。
-- 下一合法动作：补当前 Sprint 的最小验证与收口记录，或补单独 contract 后继续推进。
-
-## Previous Canvas Sprint 4
-
-- 当前 Sprint：`canvas-sprint-004`
-- 当前目标：收口图片多场景性能与当前画布未提交改动，新增中图预览、列表轻摘要和画布轻引用。
-- Sprint 4 contract：`docs/workflow/sprint-04-contract.md`
-- Sprint 4 结论：PASS。后端图片中图预览、列表轻摘要、详情按需读取、画布轻引用和 loop prompt 写回修复已完成。
-- 验证命令：
-  - `go test ./internal/service ./internal/httpapi`
-  - `cd web && npm.cmd run lint`
-  - `cd web && npm.cmd run build`
-  - `git diff --check`
-- 浏览器验收：8081 `/image-manager` 管理员“全部”视图可见本地 17 张图片；列表卡片使用 `/image-thumbnails/...`；打开预览后加载 `/image-previews/...`。
-- 未完全自动化覆盖：本地图片数量未触发下一页分页，未执行真实下载动作；对应接口和字段行为已由后端/前端测试与构建覆盖。
-- 下一合法动作：关闭 Sprint 4，或进入下一 Sprint Planner。
-- 状态推进规则：后续 Sprint 仍按 `contract-draft -> contract-approved -> build -> qa -> fix -> retest -> done` 推进。
+  - Sub2API 按仓库现有 backend/frontend 测试脚本执行。
+- 浏览器验收：
+  - 未登录访问 `/image` 或 `/canvas` 跳 Sub2API。
+  - 登录回跳后进入创作台。
+  - 右上角余额和充值入口可见。
+  - 普通用户 UI 不出现 API Key、Token、OpenAI-compatible、API 选择。
+  - 团队创建、加入、切换和团队任务记录可用。
+- 已完成开发 worker：
+  - `task-001-sub2-studio-bridge`
+  - `task-002-luoye-backend`
+  - `task-003-luoye-frontend`
+- 主控复核：
+  - chatgpt2api bridge 已对齐 Sub2API `studio-bridge` 实际接口：`redeem`、`user-summary`、`charges/reserve|commit|refund`。
+  - Sub2API 预扣确认使用原预扣金额，实际少消耗通过 refund 单独退回，避免幂等指纹冲突。
+  - 顶部余额/充值入口优先读取 Sub2API 钱包摘要。
+- 已执行验证：
+  - `F:/java/chatgpt2api`: `go test ./...`
+  - `F:/java/chatgpt2api/web`: `npm.cmd run lint`
+  - `F:/java/chatgpt2api/web`: `npm.cmd run build`
+  - `F:/java/chatgpt2api`: `git diff --check`
+  - `F:/mcplugins/sub2api/backend`: `go test ./...`
+  - `F:/mcplugins/sub2api/frontend`: `npm.cmd run build`
+  - `F:/mcplugins/sub2api`: `git diff --check`
+- 当前 QA：
+  - `task-004-qa-browser` 初版报告发现匿名 `/image` 验收失败。
+  - 主控修复独立模式 Web 首屏守卫：匿名访问 `/image`、`/canvas`、`/social`、`/image-manager`、`/profile` 会先进入 `/login`，再由登录页跳 Sub2API。
+  - 主控修复 Sub2API 钱包 `cny_milli` 单位透传和前端余额格式化，余额显示为 `¥123.45`。
+  - 最终本地 mock bridge 浏览器 smoke 通过，证据位于 `docs/workflow/evidence/task-004-qa-browser/browser-smoke-result.json`。
+- 未验证项：
+  - 真实 Sub2API 生产登录/注册、真实充值支付、真实扣费链路需要部署域名、密钥和支付配置后验证。
+  - Sub2API 扣费幂等当前是 Redis-backed 状态，不是生产级 SQL ledger；悬挂预扣恢复建议后续单独开 contract。

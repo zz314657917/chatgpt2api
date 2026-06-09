@@ -50,8 +50,8 @@ export const SMART_CANVAS_PRESETS: SmartCanvasPreset[] = [
   {
     id: "text-to-image",
     title: "常规文生图画布",
-    summary: "Prompt -> API生成 -> Output",
-    description: "预置提示词、API生成和结果节点，适合直接写 prompt 出图。",
+    summary: "Prompt -> 图片生成 -> Output",
+    description: "预置提示词、图片生成和结果节点，适合直接写 prompt 出图。",
     canvasName: "文生图画布",
     tags: ["文生图", "基础链路"],
     nodeTypes: ["prompt", "image_generation", "result"],
@@ -59,7 +59,7 @@ export const SMART_CANVAS_PRESETS: SmartCanvasPreset[] = [
   {
     id: "image-to-image",
     title: "图生图画布",
-    summary: "图片 + Prompt -> API生成",
+    summary: "图片 + Prompt -> 图片生成",
     description: "预置参考图、提示词、生成和输出节点，适合基于图片继续创作。",
     canvasName: "图生图画布",
     tags: ["图生图", "参考图"],
@@ -68,7 +68,7 @@ export const SMART_CANVAS_PRESETS: SmartCanvasPreset[] = [
   {
     id: "ai-prompt",
     title: "AI 提示词画布",
-    summary: "想法 -> AI 提示词 -> API生成",
+    summary: "想法 -> AI 提示词 -> 图片生成",
     description: "先让 AI 提炼可用提示词，再连接到图片生成节点。",
     canvasName: "AI 提示词画布",
     tags: ["提示词增强", "文生图"],
@@ -77,7 +77,7 @@ export const SMART_CANVAS_PRESETS: SmartCanvasPreset[] = [
   {
     id: "batch-variants",
     title: "批量变体画布",
-    summary: "Prompt -> 循环 -> API生成",
+    summary: "Prompt -> 循环 -> 图片生成",
     description: "预置循环节点，用于快速生成同一主题的多组变体。",
     canvasName: "批量变体画布",
     tags: ["批量", "变体"],
