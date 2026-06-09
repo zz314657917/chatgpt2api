@@ -25,28 +25,39 @@ type canvasModelOption struct {
 }
 
 func (a *App) handleCanvasModels(w http.ResponseWriter, r *http.Request) {
+	started := time.Now()
 	if r.Method != http.MethodGet {
 		w.WriteHeader(http.StatusMethodNotAllowed)
+		a.logFrontendCriticalRequest(r, "canvas_models", started, http.StatusMethodNotAllowed)
 		return
 	}
 	identity, ok := a.requireIdentity(w, r, "")
 	if !ok {
+		a.logFrontendCriticalRequest(r, "canvas_models", started, http.StatusUnauthorized)
 		return
 	}
 	util.WriteJSON(w, http.StatusOK, map[string]any{
 		"items": a.canvasModelCatalog(r.Context(), identity),
 	})
+	a.logFrontendCriticalRequest(r, "canvas_models", started, http.StatusOK)
 }
 
 func (a *App) handleCanvases(w http.ResponseWriter, r *http.Request) {
+	started := time.Now()
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Pragma", "no-cache")
 	identity, ok := a.requireIdentity(w, r, "")
 	if !ok {
+		if r.Method == http.MethodGet && r.URL.Path == "/api/canvases" {
+			a.logFrontendCriticalRequest(r, "canvases", started, http.StatusUnauthorized)
+		}
 		return
 	}
 	if a.canvases == nil {
 		util.WriteError(w, http.StatusServiceUnavailable, "canvas service is unavailable")
+		if r.Method == http.MethodGet && r.URL.Path == "/api/canvases" {
+			a.logFrontendCriticalRequest(r, "canvases", started, http.StatusServiceUnavailable)
+		}
 		return
 	}
 	parts := splitPath(r.URL.Path)
@@ -54,6 +65,7 @@ func (a *App) handleCanvases(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
 			util.WriteJSON(w, http.StatusOK, map[string]any{"items": a.canvases.ListCanvases(identity)})
+			a.logFrontendCriticalRequest(r, "canvases", started, http.StatusOK)
 		case http.MethodPost:
 			body, err := readCanvasBody(r)
 			if err != nil {

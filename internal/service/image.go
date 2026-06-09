@@ -243,6 +243,7 @@ type ImageListOptions struct {
 type ImageService struct {
 	config        ImageConfig
 	store         storage.JSONDocumentBackend
+	logger        *Logger
 	thumbnailMu   sync.Mutex
 	thumbnailJobs map[string]*thumbnailJob
 	indexMu       sync.RWMutex
@@ -314,6 +315,12 @@ type imageListCursor struct {
 
 func NewImageService(config ImageConfig, backend ...storage.Backend) *ImageService {
 	return &ImageService{config: config, store: firstJSONDocumentStore(backend)}
+}
+
+func (s *ImageService) SetLogger(logger *Logger) {
+	if s != nil {
+		s.logger = logger
+	}
 }
 
 func (s *ImageService) StorageGovernance() ImageStorageGovernanceSummary {
@@ -588,15 +595,22 @@ func (s *ImageService) ensureImageIndexLoaded() error {
 	if s.indexLoaded {
 		return nil
 	}
+	loadStarted := time.Now()
 	entries, err := s.loadImageIndex()
 	if err != nil {
+		s.logImageIndexEvent("image index load failed", "error", err.Error(), "duration_ms", time.Since(loadStarted).Milliseconds())
 		entries = nil
+	} else {
+		s.logImageIndexEvent("image index loaded", "items", len(entries), "duration_ms", time.Since(loadStarted).Milliseconds())
 	}
 	if len(entries) == 0 {
+		rebuildStarted := time.Now()
 		entries, err = s.rebuildImageIndexLocked()
 		if err != nil {
+			s.logImageIndexEvent("image index rebuild failed", "error", err.Error(), "duration_ms", time.Since(rebuildStarted).Milliseconds())
 			return err
 		}
+		s.logImageIndexEvent("image index rebuilt", "items", len(entries), "duration_ms", time.Since(rebuildStarted).Milliseconds())
 	}
 	s.imageIndex = make(map[string]imageIndexEntry, len(entries))
 	for _, entry := range entries {
@@ -607,6 +621,13 @@ func (s *ImageService) ensureImageIndexLoaded() error {
 	}
 	s.indexLoaded = true
 	return nil
+}
+
+func (s *ImageService) logImageIndexEvent(message string, attrs ...any) {
+	if s == nil || s.logger == nil {
+		return
+	}
+	s.logger.Info(message, attrs...)
 }
 
 func (s *ImageService) loadImageIndex() ([]imageIndexEntry, error) {
