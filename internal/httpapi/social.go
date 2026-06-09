@@ -107,7 +107,12 @@ func (a *App) handleSocialProjectGenerateCopy(w http.ResponseWriter, r *http.Req
 	model := firstNonEmpty(util.Clean(body["model"]), util.DefaultChatModel)
 	prompt := buildSocialCopyPrompt(project)
 	taskID := firstNonEmpty(util.Clean(body["client_task_id"]), "social-copy-"+util.NewHex(18))
-	task, err := a.tasks.SubmitChat(r.Context(), identity, taskID, prompt, model, socialCopyMessages(project, prompt), false)
+	metadata, err := a.socialTaskMetadata(identity, nil)
+	if err != nil {
+		util.WriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	task, err := a.tasks.SubmitChatWithMetadata(r.Context(), identity, taskID, prompt, model, socialCopyMessages(project, prompt), true, metadata)
 	if err != nil {
 		writeCreationTaskSubmitError(w, err)
 		return
@@ -140,7 +145,12 @@ func (a *App) handleSocialProjectGenerateCards(w http.ResponseWriter, r *http.Re
 		if card.VisualMode != service.SocialCardVisualAI || card.ImagePrompt == "" {
 			continue
 		}
-		taskID := fmt.Sprintf("social-card-%s-%02d-%s", util.SHA1Short(project.ID, 8), index+1, util.NewHex(8))
+		taskID := fmt.Sprintf("social-card-%s-%02d-%s", util.SHA1Short(project.ID, 8), index+1, util.SHA1Short(card.ImagePrompt, 10))
+		metadata, err := a.socialTaskMetadata(identity, map[string]any{"requested_size": socialXHSCardSize})
+		if err != nil {
+			util.WriteError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		task, err := a.tasks.SubmitGenerationWithOptions(
 			r.Context(),
 			identity,
@@ -152,7 +162,7 @@ func (a *App) handleSocialProjectGenerateCards(w http.ResponseWriter, r *http.Re
 			a.resolveImageBaseURL(r),
 			1,
 			nil,
-			map[string]any{"requested_size": socialXHSCardSize},
+			metadata,
 			service.ImageOutputOptions{Format: "png"},
 			service.ImageToolOptions{},
 			service.ImageVisibilityPrivate,
@@ -261,6 +271,17 @@ func socialCopyMessages(project service.SocialProject, prompt string) []map[stri
 		{"role": "system", "content": "你是社交媒体内容运营助手，只输出严格 JSON，不要 Markdown 代码块。"},
 		{"role": "user", "content": prompt},
 	}
+}
+
+func (a *App) socialTaskMetadata(identity service.Identity, metadata map[string]any) (map[string]any, error) {
+	out := util.CopyMap(metadata)
+	if out == nil {
+		out = map[string]any{}
+	}
+	if err := a.attachTaskSpace(identity, out, ""); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func buildSocialCopyPrompt(project service.SocialProject) string {

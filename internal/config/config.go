@@ -325,7 +325,7 @@ func (s *Store) Sub2APIBrandName() string {
 	if value := strings.TrimSpace(os.Getenv("CHATGPT2API_SUB2API_BRAND_NAME")); value != "" {
 		return value
 	}
-	return "落叶AI"
+	return "落叶创艺"
 }
 
 func (s *Store) LuoyeIndependentMode() bool {

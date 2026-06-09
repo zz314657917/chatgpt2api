@@ -102,3 +102,65 @@ func TestHandlerServesPrecompressedAssets(t *testing.T) {
 		t.Fatalf("encoded body = %q, want gzip", got)
 	}
 }
+
+func TestHandlerSkipsDisabledPrecompressedEncoding(t *testing.T) {
+	handler := handlerForFS(fstest.MapFS{
+		"index.html": {
+			Data: []byte(`<div id="root"></div>`),
+			Mode: fs.ModePerm,
+		},
+		"assets/index-abc123.js": {
+			Data: []byte(`plain`),
+			Mode: fs.ModePerm,
+		},
+		"assets/index-abc123.js.br": {
+			Data: []byte(`brotli`),
+			Mode: fs.ModePerm,
+		},
+		"assets/index-abc123.js.gz": {
+			Data: []byte(`gzip`),
+			Mode: fs.ModePerm,
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/assets/index-abc123.js", nil)
+	req.Header.Set("Accept-Encoding", "br;q=0, gzip")
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	if got := res.Header().Get("Content-Encoding"); got != "gzip" {
+		t.Fatalf("Content-Encoding = %q, want gzip", got)
+	}
+	if got := res.Body.String(); got != "gzip" {
+		t.Fatalf("encoded body = %q, want gzip", got)
+	}
+}
+
+func TestHandlerSetsVaryForAssetsWithPrecompressedVariants(t *testing.T) {
+	handler := handlerForFS(fstest.MapFS{
+		"index.html": {
+			Data: []byte(`<div id="root"></div>`),
+			Mode: fs.ModePerm,
+		},
+		"assets/index-abc123.js": {
+			Data: []byte(`plain`),
+			Mode: fs.ModePerm,
+		},
+		"assets/index-abc123.js.br": {
+			Data: []byte(`brotli`),
+			Mode: fs.ModePerm,
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/assets/index-abc123.js", nil)
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	if got := res.Header().Get("Content-Encoding"); got != "" {
+		t.Fatalf("Content-Encoding = %q, want empty", got)
+	}
+	if got := res.Header().Values("Vary"); strings.Join(got, ",") != "Accept-Encoding" {
+		t.Fatalf("Vary = %q, want Accept-Encoding", got)
+	}
+	if got := res.Body.String(); got != "plain" {
+		t.Fatalf("body = %q, want plain", got)
+	}
+}

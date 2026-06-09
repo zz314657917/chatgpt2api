@@ -14,7 +14,7 @@ task-001-sub2-studio-bridge
 你是 P/G/E 流程里的 Sub2API Developer Worker。只执行本 contract，不做架构裁决，不扩大范围。
 
 ## Goal
-为 Sub2API 增加“外部创作站/落叶AI”桥接能力：管理配置、登录回跳、内部余额/充值/使用记录查询、幂等扣费接口。
+为 Sub2API 增加“外部创作站/落叶创艺”桥接能力：管理配置、登录回跳、内部余额/充值/使用记录查询、幂等扣费接口。
 
 ## Success Criteria
 - Sub2API 管理侧可配置一个外部应用 `luoye-ai`：站点名、允许回跳域名、充值回跳 URL、默认聊天/生图/视频分组、内部通信密钥。

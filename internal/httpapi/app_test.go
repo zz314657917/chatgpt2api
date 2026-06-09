@@ -3831,6 +3831,179 @@ func TestImageManagementIsScopedByOwner(t *testing.T) {
 	}
 }
 
+func TestManagedImagesTeamLibraryAccessAndPermissions(t *testing.T) {
+	app := newTestApp(t)
+	defer app.Close()
+
+	owner := service.AuthOwner{ID: "sub2api:team-owner", Name: "team-owner", Provider: service.AuthProviderSub2API}
+	_, ownerKey, err := app.auth.UpsertSub2APISession(owner)
+	if err != nil {
+		t.Fatalf("UpsertSub2APISession(owner) error = %v", err)
+	}
+	member := service.AuthOwner{ID: "sub2api:team-member", Name: "team-member", Provider: service.AuthProviderSub2API}
+	_, memberKey, err := app.auth.UpsertSub2APISession(member)
+	if err != nil {
+		t.Fatalf("UpsertSub2APISession(member) error = %v", err)
+	}
+	manager := service.AuthOwner{ID: "sub2api:team-manager", Name: "team-manager", Provider: service.AuthProviderSub2API}
+	_, managerKey, err := app.auth.UpsertSub2APISession(manager)
+	if err != nil {
+		t.Fatalf("UpsertSub2APISession(manager) error = %v", err)
+	}
+	outsider := service.AuthOwner{ID: "sub2api:team-outsider", Name: "team-outsider", Provider: service.AuthProviderSub2API}
+	_, outsiderKey, err := app.auth.UpsertSub2APISession(outsider)
+	if err != nil {
+		t.Fatalf("UpsertSub2APISession(outsider) error = %v", err)
+	}
+	saveTestSub2APIBinding(t, app, owner.ID, "team-owner@example.com")
+	saveTestSub2APIBinding(t, app, member.ID, "team-member@example.com")
+	saveTestSub2APIBinding(t, app, manager.ID, "team-manager@example.com")
+	saveTestSub2APIBinding(t, app, outsider.ID, "team-outsider@example.com")
+
+	teamID := createHTTPTestTeam(t, app, ownerKey)
+	acceptHTTPTestInvite(t, app, managerKey, createHTTPTestInvite(t, app, ownerKey, teamID, "team-manager@example.com", "manager"))
+	acceptHTTPTestInvite(t, app, memberKey, createHTTPTestInvite(t, app, ownerKey, teamID, "team-member@example.com", "member"))
+
+	rel := "2026/04/29/team-shared.png"
+	imagePath := filepath.Join(app.config.ImagesDir(), filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(imagePath), 0o755); err != nil {
+		t.Fatalf("mkdir image dir: %v", err)
+	}
+	if err := writeHTTPTestPNG(imagePath); err != nil {
+		t.Fatalf("write image: %v", err)
+	}
+	app.images.RecordGeneratedImages([]string{rel}, owner.ID, owner.Name, service.ImageVisibilityPrivate)
+
+	req := httptest.NewRequest(http.MethodPatch, "/api/images/library-scope", strings.NewReader(jsonString(map[string]any{
+		"paths":        []string{rel},
+		"target_scope": "team",
+		"team_id":      teamID,
+	})))
+	req.Header.Set("Authorization", "Bearer "+ownerKey)
+	res := httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("move to team status = %d body = %s", res.Code, res.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/images?scope=mine", nil)
+	req.Header.Set("Authorization", "Bearer "+ownerKey)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("owner personal images status = %d body = %s", res.Code, res.Body.String())
+	}
+	var list map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &list); err != nil {
+		t.Fatalf("owner personal json: %v", err)
+	}
+	if items := logItems(list); len(items) != 0 {
+		t.Fatalf("moved team image should leave personal gallery: %#v", list)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/images?scope=team&team_id="+url.QueryEscape(teamID), nil)
+	req.Header.Set("Authorization", "Bearer "+memberKey)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("member team images status = %d body = %s", res.Code, res.Body.String())
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &list); err != nil {
+		t.Fatalf("member team images json: %v", err)
+	}
+	items := logItems(list)
+	if len(items) != 1 || items[0]["path"] != rel || items[0]["library_scope"] != service.ImageLibraryScopeTeam || items[0]["team_id"] != teamID || list["team_storage"] == nil {
+		t.Fatalf("member team images = %#v", list)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/images/detail?scope=team&team_id="+url.QueryEscape(teamID)+"&path="+url.QueryEscape(rel), nil)
+	req.Header.Set("Authorization", "Bearer "+memberKey)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("member team image detail status = %d body = %s", res.Code, res.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/images/"+rel, nil)
+	req.Header.Set("Authorization", "Bearer "+memberKey)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("member team image file status = %d body = %s", res.Code, res.Body.String())
+	}
+	if data, mimeType, err := app.imageBytesForIdentity(rel, service.Identity{Role: service.AuthRoleUser, OwnerID: member.ID, Name: member.Name}); err != nil || len(data) == 0 || !strings.HasPrefix(mimeType, "image/") {
+		t.Fatalf("member imageBytesForIdentity() data=%d mime=%q err=%v", len(data), mimeType, err)
+	}
+	if _, _, err := app.imageBytesForIdentity(rel, service.Identity{Role: service.AuthRoleUser, OwnerID: outsider.ID, Name: outsider.Name}); err == nil {
+		t.Fatalf("outsider imageBytesForIdentity() error = nil")
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/images?scope=team&team_id="+url.QueryEscape(teamID), nil)
+	req.Header.Set("Authorization", "Bearer "+outsiderKey)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusNotFound {
+		t.Fatalf("outsider team images status = %d body = %s", res.Code, res.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodDelete, "/api/images", strings.NewReader(jsonString(map[string]any{
+		"paths":   []string{rel},
+		"scope":   "team",
+		"team_id": teamID,
+	})))
+	req.Header.Set("Authorization", "Bearer "+memberKey)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusForbidden {
+		t.Fatalf("member delete team image status = %d body = %s", res.Code, res.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodPatch, "/api/images/tags", strings.NewReader(jsonString(map[string]any{
+		"path":    rel,
+		"tags":    []string{"shared"},
+		"scope":   "team",
+		"team_id": teamID,
+	})))
+	req.Header.Set("Authorization", "Bearer "+managerKey)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("manager update team image tags status = %d body = %s", res.Code, res.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodPatch, "/api/images/visibility", strings.NewReader(jsonString(map[string]any{
+		"path":       rel,
+		"visibility": service.ImageVisibilityPublic,
+		"scope":      "team",
+		"team_id":    teamID,
+	})))
+	req.Header.Set("Authorization", "Bearer "+managerKey)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("manager publish team image status = %d body = %s", res.Code, res.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodDelete, "/api/images", strings.NewReader(jsonString(map[string]any{
+		"paths":   []string{rel},
+		"scope":   "team",
+		"team_id": teamID,
+	})))
+	req.Header.Set("Authorization", "Bearer "+managerKey)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("manager delete team image status = %d body = %s", res.Code, res.Body.String())
+	}
+	var deleted map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &deleted); err != nil {
+		t.Fatalf("manager delete team image json: %v", err)
+	}
+	if deleted["deleted"] != float64(1) || deleted["team_storage"] == nil {
+		t.Fatalf("manager delete team image body = %#v", deleted)
+	}
+}
+
 func TestManagedImageFilesRequireOwnerOrPublicAccess(t *testing.T) {
 	app := newTestApp(t)
 	defer app.Close()
@@ -3979,7 +4152,7 @@ func TestImageThumbnailsAreGeneratedOnDemand(t *testing.T) {
 	app := newTestApp(t)
 	defer app.Close()
 
-	rel := "2026/04/29/sample.png"
+	rel := time.Now().Format("2006/01/02") + "/sample.png"
 	imagePath := filepath.Join(app.config.ImagesDir(), filepath.FromSlash(rel))
 	if err := os.MkdirAll(filepath.Dir(imagePath), 0o755); err != nil {
 		t.Fatalf("mkdir image dir: %v", err)
@@ -6042,11 +6215,49 @@ func TestLuoyeIndependentModeRedirectsAnonymousWebPages(t *testing.T) {
 	}
 }
 
+func TestLuoyeIndependentModeDisablesProtocolAPIForSub2APIUsers(t *testing.T) {
+	app := newIndependentTestApp(t, "http://sub2.test/internal/redeem", "secret", "http://gateway.test")
+	defer app.Close()
+
+	owner := service.AuthOwner{ID: "sub2api:100", Name: "Alice", Provider: service.AuthProviderSub2API}
+	_, sessionKey, err := app.auth.UpsertSub2APISession(owner)
+	if err != nil {
+		t.Fatalf("sub2api session: %v", err)
+	}
+
+	tests := []struct {
+		name   string
+		method string
+		path   string
+		body   string
+	}{
+		{name: "models", method: http.MethodGet, path: "/v1/models"},
+		{name: "image generation", method: http.MethodPost, path: "/v1/images/generations", body: `{"model":"gpt-image-2","prompt":"draw"}`},
+		{name: "image edit", method: http.MethodPost, path: "/v1/images/edits", body: `{"model":"gpt-image-2","prompt":"edit","images":[{"file_id":"file-abc"}]}`},
+		{name: "chat completions", method: http.MethodPost, path: "/v1/chat/completions", body: `{"model":"gpt-5","messages":[{"role":"user","content":"hello"}]}`},
+		{name: "responses", method: http.MethodPost, path: "/v1/responses", body: `{"model":"gpt-5","input":"hello"}`},
+		{name: "messages", method: http.MethodPost, path: "/v1/messages", body: `{"model":"claude","messages":[{"role":"user","content":"hello"}]}`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(tt.method, tt.path, strings.NewReader(tt.body))
+			req.Header.Set("Authorization", "Bearer "+sessionKey)
+			res := httptest.NewRecorder()
+			app.Handler().ServeHTTP(res, req)
+			if res.Code != http.StatusForbidden {
+				t.Fatalf("%s status = %d body = %s", tt.path, res.Code, res.Body.String())
+			}
+		})
+	}
+}
+
 func TestLuoyeIndependentSub2APIDefaultGroupAndBilling(t *testing.T) {
 	var calls []string
 	var generationPayload map[string]any
 	var generationGroupHeader string
 	var generationUserHeader string
+	var reserveAmount any
 	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("X-Sub2API-Studio-Secret") != "secret" {
 			t.Fatalf("gateway secret header = %q", r.Header.Get("X-Sub2API-Studio-Secret"))
@@ -6076,7 +6287,7 @@ func TestLuoyeIndependentSub2APIDefaultGroupAndBilling(t *testing.T) {
 			if payload["app_id"] != "luoye-ai" || payload["launch_token"] != "launch-token" {
 				t.Fatalf("bridge redeem payload = %#v", payload)
 			}
-			util.WriteJSON(w, http.StatusOK, map[string]any{"code": 0, "data": map[string]any{"user_id": 42, "username": "Luoye User", "default_image_group": "image-group", "gateway_base_url": gateway.URL}})
+			util.WriteJSON(w, http.StatusOK, map[string]any{"code": 0, "data": map[string]any{"user_id": 42, "email": "luoye@example.com", "username": "Luoye User", "default_image_group": "image-group", "gateway_base_url": gateway.URL}})
 		case "/internal/charges/reserve", "/internal/charges/commit", "/internal/charges/refund":
 			var payload map[string]any
 			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
@@ -6085,7 +6296,11 @@ func TestLuoyeIndependentSub2APIDefaultGroupAndBilling(t *testing.T) {
 			if payload["app_id"] != "luoye-ai" || payload["user_id"] != float64(42) || payload["charge_key"] == "" {
 				t.Fatalf("bridge charge payload = %#v", payload)
 			}
-			calls = append(calls, strings.TrimPrefix(r.URL.Path, "/internal/charges/"))
+			call := strings.TrimPrefix(r.URL.Path, "/internal/charges/")
+			if call == "reserve" {
+				reserveAmount = payload["amount"]
+			}
+			calls = append(calls, call)
 			util.WriteJSON(w, http.StatusOK, map[string]any{"code": 0, "data": map[string]any{"ok": true}})
 		case "/internal/user-summary":
 			util.WriteJSON(w, http.StatusOK, map[string]any{"code": 0, "data": map[string]any{"user_id": 42, "balance": 99, "recharge_url": "https://sub2.test/recharge"}})
@@ -6136,12 +6351,370 @@ func TestLuoyeIndependentSub2APIDefaultGroupAndBilling(t *testing.T) {
 	if generationUserHeader != "42" {
 		t.Fatalf("gateway user header = %q", generationUserHeader)
 	}
+	if reserveAmount != 0.051 {
+		t.Fatalf("reserve amount = %#v, want 0.051", reserveAmount)
+	}
 	if !reflect.DeepEqual(calls, []string{"reserve", "commit"}) {
 		t.Fatalf("billing calls = %#v", calls)
 	}
 }
 
-func TestTeamV1CreateJoinSwitchAndTaskContext(t *testing.T) {
+func TestLuoyeIndependentCanvasModelsUseDefaultGroups(t *testing.T) {
+	groupHeaders := []string{}
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Sub2API-Studio-Secret") != "secret" {
+			t.Fatalf("gateway secret header = %q", r.Header.Get("X-Sub2API-Studio-Secret"))
+		}
+		if r.Header.Get("X-Sub2API-Studio-User-ID") != "42" {
+			t.Fatalf("gateway user header = %q", r.Header.Get("X-Sub2API-Studio-User-ID"))
+		}
+		if r.URL.Path != "/model-catalog" {
+			t.Fatalf("gateway request = %s %s", r.Method, r.URL.Path)
+		}
+		groupID := r.Header.Get("X-Sub2API-Group-ID")
+		groupHeaders = append(groupHeaders, groupID)
+		switch groupID {
+		case "chat-group":
+			util.WriteJSON(w, http.StatusOK, map[string]any{"items": []map[string]any{{"id": "chat-group-model", "name": "Chat Group Model", "capabilities": []string{"chat"}, "enabled": true}}})
+		case "image-group":
+			util.WriteJSON(w, http.StatusOK, map[string]any{"items": []map[string]any{{"id": util.ImageModelGPT, "name": util.ImageModelGPT, "capabilities": []string{"image"}, "enabled": true}}})
+		case "video-group":
+			util.WriteJSON(w, http.StatusOK, map[string]any{"items": []map[string]any{{"id": "video-group-model", "name": "Video Group Model", "capabilities": []string{"video"}, "enabled": true}}})
+		default:
+			t.Fatalf("unexpected group header %q", groupID)
+		}
+	}))
+	defer gateway.Close()
+
+	bridge := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/internal/redeem":
+			util.WriteJSON(w, http.StatusOK, map[string]any{"code": 0, "data": map[string]any{"user_id": 42, "email": "luoye@example.com", "username": "Luoye User", "default_chat_group": "chat-group", "default_image_group": "image-group", "default_video_group": "video-group", "gateway_base_url": gateway.URL}})
+		case "/internal/user-summary":
+			util.WriteJSON(w, http.StatusOK, map[string]any{"code": 0, "data": map[string]any{"user_id": 42, "balance": 99}})
+		default:
+			t.Fatalf("bridge request = %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer bridge.Close()
+
+	app := newIndependentTestApp(t, bridge.URL+"/internal/redeem", "secret", gateway.URL)
+	defer app.Close()
+	sessionKey := launchIndependentSub2APITestSession(t, app, "launch-token")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/canvas/models", nil)
+	req.Header.Set("Authorization", "Bearer "+sessionKey)
+	res := httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("canvas models status = %d body = %s", res.Code, res.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &body); err != nil {
+		t.Fatalf("canvas models json: %v", err)
+	}
+	ids := map[string]bool{}
+	for _, item := range util.AsMapSlice(body["items"]) {
+		ids[util.Clean(item["id"])] = true
+	}
+	for _, id := range []string{"chat-group-model", util.ImageModelGPT, util.ImageModelGPTOfficial, "video-group-model"} {
+		if !ids[id] {
+			t.Fatalf("model %q missing from %#v", id, body["items"])
+		}
+	}
+	if ids[util.ImageModelGPT55] || ids[util.ImageModelAuto] {
+		t.Fatalf("independent model catalog leaked local chat defaults: %#v", body["items"])
+	}
+	if !reflect.DeepEqual(groupHeaders, []string{"chat-group", "image-group", "video-group"}) {
+		t.Fatalf("group headers = %#v", groupHeaders)
+	}
+}
+
+func TestLuoyeIndependentChatAutoUsesDefaultGroupCatalogModel(t *testing.T) {
+	var chatPayload map[string]any
+	var chatGroupHeader string
+	calls := []string{}
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Sub2API-Studio-Secret") != "secret" {
+			t.Fatalf("gateway secret header = %q", r.Header.Get("X-Sub2API-Studio-Secret"))
+		}
+		switch r.URL.Path {
+		case "/model-catalog":
+			if r.Header.Get("X-Sub2API-Group-ID") != "chat-group" {
+				t.Fatalf("model catalog group header = %q", r.Header.Get("X-Sub2API-Group-ID"))
+			}
+			util.WriteJSON(w, http.StatusOK, map[string]any{"items": []map[string]any{{"id": "chat-group-model", "name": "Chat Group Model", "capabilities": []string{"chat"}, "enabled": true}}})
+		case "/chat/completions":
+			chatGroupHeader = r.Header.Get("X-Sub2API-Group-ID")
+			if err := json.NewDecoder(r.Body).Decode(&chatPayload); err != nil {
+				t.Fatalf("chat json: %v", err)
+			}
+			util.WriteJSON(w, http.StatusOK, map[string]any{"created": 123, "choices": []map[string]any{{"message": map[string]any{"content": "ok"}}}})
+		default:
+			t.Fatalf("gateway request = %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer gateway.Close()
+
+	bridge := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/internal/redeem":
+			util.WriteJSON(w, http.StatusOK, map[string]any{"code": 0, "data": map[string]any{"user_id": 42, "email": "luoye@example.com", "username": "Luoye User", "default_chat_group": "chat-group", "default_image_group": "image-group", "gateway_base_url": gateway.URL}})
+		case "/internal/charges/reserve", "/internal/charges/commit", "/internal/charges/refund":
+			var payload map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatalf("bridge charge json: %v", err)
+			}
+			if payload["app_id"] != "luoye-ai" || payload["user_id"] != float64(42) || payload["charge_key"] == "" || !strings.Contains(util.Clean(payload["reason"]), "mode=chat") {
+				t.Fatalf("bridge charge payload = %#v", payload)
+			}
+			calls = append(calls, strings.TrimPrefix(r.URL.Path, "/internal/charges/"))
+			util.WriteJSON(w, http.StatusOK, map[string]any{"code": 0, "data": map[string]any{"ok": true}})
+		case "/internal/user-summary":
+			util.WriteJSON(w, http.StatusOK, map[string]any{"code": 0, "data": map[string]any{"user_id": 42, "balance": 99}})
+		default:
+			t.Fatalf("bridge request = %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer bridge.Close()
+
+	app := newIndependentTestApp(t, bridge.URL+"/internal/redeem", "secret", gateway.URL)
+	defer app.Close()
+	sessionKey := launchIndependentSub2APITestSession(t, app, "launch-token")
+
+	req := httptest.NewRequest(http.MethodPost, "/api/creation-tasks/chat-completions", strings.NewReader(`{"client_task_id":"luoye-chat","prompt":"hello","model":"auto","messages":[{"role":"user","content":"hello"}]}`))
+	req.Header.Set("Authorization", "Bearer "+sessionKey)
+	res := httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("submit status = %d body = %s", res.Code, res.Body.String())
+	}
+	waitForHTTPTestCondition(t, func() bool {
+		req = httptest.NewRequest(http.MethodGet, "/api/creation-tasks?ids=luoye-chat", nil)
+		req.Header.Set("Authorization", "Bearer "+sessionKey)
+		res = httptest.NewRecorder()
+		app.Handler().ServeHTTP(res, req)
+		var listed map[string]any
+		_ = json.Unmarshal(res.Body.Bytes(), &listed)
+		items := util.AsMapSlice(listed["items"])
+		return len(items) == 1 && items[0]["status"] == service.TaskStatusSuccess
+	})
+	if chatGroupHeader != "chat-group" {
+		t.Fatalf("chat group header = %q", chatGroupHeader)
+	}
+	if chatPayload["model"] != "chat-group-model" {
+		t.Fatalf("chat model = %#v payload=%#v", chatPayload["model"], chatPayload)
+	}
+	if chatPayload["group_id"] != "chat-group" {
+		t.Fatalf("chat group_id = %#v payload=%#v", chatPayload["group_id"], chatPayload)
+	}
+	if !reflect.DeepEqual(calls, []string{"reserve", "commit"}) {
+		t.Fatalf("billing calls = %#v", calls)
+	}
+}
+
+func TestLuoyeIndependentSocialCopyIsBillable(t *testing.T) {
+	calls := []string{}
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Sub2API-Studio-Secret") != "secret" {
+			t.Fatalf("gateway secret header = %q", r.Header.Get("X-Sub2API-Studio-Secret"))
+		}
+		switch r.URL.Path {
+		case "/model-catalog":
+			util.WriteJSON(w, http.StatusOK, map[string]any{"items": []map[string]any{{"id": "chat-group-model", "name": "Chat Group Model", "capabilities": []string{"chat"}, "enabled": true}}})
+		case "/chat/completions":
+			util.WriteJSON(w, http.StatusOK, map[string]any{"created": 123, "choices": []map[string]any{{"message": map[string]any{"content": "copy ok"}}}})
+		default:
+			t.Fatalf("gateway request = %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer gateway.Close()
+
+	bridge := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/internal/redeem":
+			util.WriteJSON(w, http.StatusOK, map[string]any{"code": 0, "data": map[string]any{"user_id": 42, "email": "luoye@example.com", "username": "Luoye User", "default_chat_group": "chat-group", "gateway_base_url": gateway.URL}})
+		case "/internal/charges/reserve", "/internal/charges/commit", "/internal/charges/refund":
+			var payload map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatalf("bridge charge json: %v", err)
+			}
+			if payload["app_id"] != "luoye-ai" || payload["user_id"] != float64(42) || !strings.Contains(util.Clean(payload["reason"]), "mode=chat") {
+				t.Fatalf("bridge charge payload = %#v", payload)
+			}
+			calls = append(calls, strings.TrimPrefix(r.URL.Path, "/internal/charges/"))
+			util.WriteJSON(w, http.StatusOK, map[string]any{"code": 0, "data": map[string]any{"ok": true}})
+		case "/internal/user-summary":
+			util.WriteJSON(w, http.StatusOK, map[string]any{"code": 0, "data": map[string]any{"user_id": 42, "balance": 99}})
+		default:
+			t.Fatalf("bridge request = %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer bridge.Close()
+
+	app := newIndependentTestApp(t, bridge.URL+"/internal/redeem", "secret", gateway.URL)
+	defer app.Close()
+	sessionKey := launchIndependentSub2APITestSession(t, app, "launch-token")
+
+	req := httptest.NewRequest(http.MethodPost, "/api/social-projects", strings.NewReader(`{"platform":"xhs","topic":"新品发布","cards":[{"title":"A","body":"B"}]}`))
+	req.Header.Set("Authorization", "Bearer "+sessionKey)
+	res := httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("create social project status = %d body = %s", res.Code, res.Body.String())
+	}
+	var created map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &created); err != nil {
+		t.Fatalf("create social project json: %v", err)
+	}
+	projectID := util.Clean(util.StringMap(created["item"])["id"])
+	if projectID == "" {
+		t.Fatalf("created social project missing id: %#v", created)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/social-projects/"+projectID+"/generate-copy", strings.NewReader(`{"model":"auto","client_task_id":"social-copy-billable"}`))
+	req.Header.Set("Authorization", "Bearer "+sessionKey)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("generate copy status = %d body = %s", res.Code, res.Body.String())
+	}
+	waitForHTTPTestCondition(t, func() bool {
+		req = httptest.NewRequest(http.MethodGet, "/api/creation-tasks?ids=social-copy-billable", nil)
+		req.Header.Set("Authorization", "Bearer "+sessionKey)
+		res = httptest.NewRecorder()
+		app.Handler().ServeHTTP(res, req)
+		var listed map[string]any
+		_ = json.Unmarshal(res.Body.Bytes(), &listed)
+		items := util.AsMapSlice(listed["items"])
+		return len(items) == 1 && items[0]["status"] == service.TaskStatusSuccess
+	})
+	if !reflect.DeepEqual(calls, []string{"reserve", "commit"}) {
+		t.Fatalf("billing calls = %#v", calls)
+	}
+}
+
+func TestLuoyeIndependentSocialCopyInsufficientBalanceReturns429(t *testing.T) {
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/model-catalog":
+			util.WriteJSON(w, http.StatusOK, map[string]any{"items": []map[string]any{{"id": "chat-group-model", "name": "Chat Group Model", "capabilities": []string{"chat"}, "enabled": true}}})
+		default:
+			t.Fatalf("gateway request = %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer gateway.Close()
+
+	bridge := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/internal/redeem":
+			util.WriteJSON(w, http.StatusOK, map[string]any{"code": 0, "data": map[string]any{"user_id": 42, "email": "luoye@example.com", "username": "Luoye User", "default_chat_group": "chat-group", "gateway_base_url": gateway.URL}})
+		case "/internal/charges/reserve":
+			util.WriteJSON(w, http.StatusOK, map[string]any{"code": 1001, "message": "user balance insufficient"})
+		case "/internal/user-summary":
+			util.WriteJSON(w, http.StatusOK, map[string]any{"code": 0, "data": map[string]any{"user_id": 42, "balance": 0}})
+		default:
+			t.Fatalf("bridge request = %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer bridge.Close()
+
+	app := newIndependentTestApp(t, bridge.URL+"/internal/redeem", "secret", gateway.URL)
+	defer app.Close()
+	sessionKey := launchIndependentSub2APITestSession(t, app, "launch-token")
+
+	req := httptest.NewRequest(http.MethodPost, "/api/social-projects", strings.NewReader(`{"platform":"xhs","topic":"余额不足","cards":[{"title":"A","body":"B"}]}`))
+	req.Header.Set("Authorization", "Bearer "+sessionKey)
+	res := httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("create social project status = %d body = %s", res.Code, res.Body.String())
+	}
+	var created map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &created); err != nil {
+		t.Fatalf("create social project json: %v", err)
+	}
+	projectID := util.Clean(util.StringMap(created["item"])["id"])
+
+	req = httptest.NewRequest(http.MethodPost, "/api/social-projects/"+projectID+"/generate-copy", strings.NewReader(`{"model":"auto","client_task_id":"social-copy-insufficient"}`))
+	req.Header.Set("Authorization", "Bearer "+sessionKey)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusTooManyRequests {
+		t.Fatalf("generate copy insufficient status = %d body = %s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), "user_balance_insufficient") {
+		t.Fatalf("generate copy insufficient body = %s", res.Body.String())
+	}
+}
+
+func TestLuoyeIndependentCanvasPromptNodeIsBillable(t *testing.T) {
+	calls := []string{}
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Sub2API-Studio-Secret") != "secret" {
+			t.Fatalf("gateway secret header = %q", r.Header.Get("X-Sub2API-Studio-Secret"))
+		}
+		switch r.URL.Path {
+		case "/model-catalog":
+			util.WriteJSON(w, http.StatusOK, map[string]any{"items": []map[string]any{{"id": "chat-group-model", "name": "Chat Group Model", "capabilities": []string{"chat"}, "enabled": true}}})
+		case "/chat/completions":
+			util.WriteJSON(w, http.StatusOK, map[string]any{"created": 123, "choices": []map[string]any{{"message": map[string]any{"content": "optimized prompt"}}}})
+		default:
+			t.Fatalf("gateway request = %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer gateway.Close()
+
+	bridge := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/internal/redeem":
+			util.WriteJSON(w, http.StatusOK, map[string]any{"code": 0, "data": map[string]any{"user_id": 42, "email": "luoye@example.com", "username": "Luoye User", "default_chat_group": "chat-group", "gateway_base_url": gateway.URL}})
+		case "/internal/charges/reserve", "/internal/charges/commit", "/internal/charges/refund":
+			var payload map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatalf("bridge charge json: %v", err)
+			}
+			if payload["app_id"] != "luoye-ai" || payload["user_id"] != float64(42) || !strings.Contains(util.Clean(payload["reason"]), "mode=chat") {
+				t.Fatalf("bridge charge payload = %#v", payload)
+			}
+			calls = append(calls, strings.TrimPrefix(r.URL.Path, "/internal/charges/"))
+			util.WriteJSON(w, http.StatusOK, map[string]any{"code": 0, "data": map[string]any{"ok": true}})
+		case "/internal/user-summary":
+			util.WriteJSON(w, http.StatusOK, map[string]any{"code": 0, "data": map[string]any{"user_id": 42, "balance": 99}})
+		default:
+			t.Fatalf("bridge request = %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer bridge.Close()
+
+	app := newIndependentTestApp(t, bridge.URL+"/internal/redeem", "secret", gateway.URL)
+	defer app.Close()
+	sessionKey := launchIndependentSub2APITestSession(t, app, "launch-token")
+	identity := app.auth.Authenticate(sessionKey)
+	if identity == nil {
+		t.Fatal("independent session not found")
+	}
+	out, err := app.ExecuteCanvasNode(context.Background(), *identity, service.CanvasNodeExecution{
+		RunID:    "run-billing",
+		CanvasID: "canvas-billing",
+		Node: service.CanvasNode{
+			ID:   "prompt-node",
+			Type: service.CanvasNodeTypePrompt,
+			Data: map[string]any{"prompt": "make it concise", "model": "auto"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("ExecuteCanvasNode() error = %v", err)
+	}
+	if out.Text != "optimized prompt" {
+		t.Fatalf("canvas prompt output = %#v", out)
+	}
+	if !reflect.DeepEqual(calls, []string{"reserve", "commit"}) {
+		t.Fatalf("billing calls = %#v", calls)
+	}
+}
+
+func TestTeamInvitesRequireTargetEmailAndTaskContext(t *testing.T) {
 	app := newTestApp(t)
 	defer app.Close()
 	owner := service.AuthOwner{ID: "sub2api:100", Name: "Owner", Provider: service.AuthProviderSub2API}
@@ -6154,6 +6727,14 @@ func TestTeamV1CreateJoinSwitchAndTaskContext(t *testing.T) {
 	if err != nil {
 		t.Fatalf("member session: %v", err)
 	}
+	other := service.AuthOwner{ID: "sub2api:300", Name: "Other", Provider: service.AuthProviderSub2API}
+	_, otherSession, err := app.auth.UpsertSub2APISession(other)
+	if err != nil {
+		t.Fatalf("other session: %v", err)
+	}
+	saveTestSub2APIBinding(t, app, owner.ID, "owner@example.com")
+	saveTestSub2APIBinding(t, app, member.ID, "member@example.com")
+	saveTestSub2APIBinding(t, app, other.ID, "other@example.com")
 
 	req := httptest.NewRequest(http.MethodPost, "/api/teams", strings.NewReader(`{"name":"Design Team"}`))
 	req.Header.Set("Authorization", "Bearer "+ownerSession)
@@ -6168,17 +6749,146 @@ func TestTeamV1CreateJoinSwitchAndTaskContext(t *testing.T) {
 	}
 	team := util.StringMap(created["team"])
 	teamID := util.Clean(team["id"])
-	inviteCode := util.Clean(team["invite_code"])
-	if teamID == "" || inviteCode == "" {
+	if teamID == "" || util.Clean(team["invite_code"]) != "" {
 		t.Fatalf("created team = %#v", team)
 	}
 
-	req = httptest.NewRequest(http.MethodPost, "/api/teams/join", strings.NewReader(jsonString(map[string]any{"invite_code": inviteCode})))
+	req = httptest.NewRequest(http.MethodPost, "/api/teams", strings.NewReader(`{"name":"Second Team"}`))
+	req.Header.Set("Authorization", "Bearer "+ownerSession)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), "当前账号已加入团队") {
+		t.Fatalf("create second team status = %d body = %s", res.Code, res.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/teams/join", strings.NewReader(`{"invite_code":"legacy"}`))
+	req.Header.Set("Authorization", "Bearer "+otherSession)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusGone {
+		t.Fatalf("open join status = %d body = %s", res.Code, res.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/teams/"+teamID+"/invites", strings.NewReader(`{"email":"member@example.com","role":"member"}`))
+	req.Header.Set("Authorization", "Bearer "+memberSession)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("non-owner invite status = %d body = %s", res.Code, res.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/teams/"+teamID+"/invites", strings.NewReader(`{"email":"member@example.com","role":"member"}`))
+	req.Header.Set("Authorization", "Bearer "+ownerSession)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("create invite status = %d body = %s", res.Code, res.Body.String())
+	}
+	var invited map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &invited); err != nil {
+		t.Fatalf("invite json: %v", err)
+	}
+	invite := util.StringMap(invited["invite"])
+	inviteID := util.Clean(invite["id"])
+	if inviteID == "" || invite["target_email"] != "member@example.com" {
+		t.Fatalf("invite = %#v", invite)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/team-invites/"+inviteID+"/accept", nil)
+	req.Header.Set("Authorization", "Bearer "+otherSession)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("wrong email accept status = %d body = %s", res.Code, res.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/team-invites/"+inviteID+"/accept", nil)
 	req.Header.Set("Authorization", "Bearer "+memberSession)
 	res = httptest.NewRecorder()
 	app.Handler().ServeHTTP(res, req)
 	if res.Code != http.StatusOK {
-		t.Fatalf("join team status = %d body = %s", res.Code, res.Body.String())
+		t.Fatalf("accept invite status = %d body = %s", res.Code, res.Body.String())
+	}
+	req = httptest.NewRequest(http.MethodPost, "/api/teams/current", strings.NewReader(jsonString(map[string]any{"team_id": ""})))
+	req.Header.Set("Authorization", "Bearer "+memberSession)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("clear current team status = %d body = %s", res.Code, res.Body.String())
+	}
+	var currentWorkspace map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &currentWorkspace); err != nil {
+		t.Fatalf("current workspace json: %v", err)
+	}
+	if currentWorkspace["current_space"] != "personal" || util.Clean(currentWorkspace["current_team_id"]) != "" {
+		t.Fatalf("current workspace = %#v", currentWorkspace)
+	}
+	if teams := util.AsMapSlice(currentWorkspace["teams"]); len(teams) != 1 || util.Clean(teams[0]["id"]) != teamID {
+		t.Fatalf("current workspace teams = %#v", teams)
+	}
+	req = httptest.NewRequest(http.MethodGet, "/api/teams", nil)
+	req.Header.Set("Authorization", "Bearer "+memberSession)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("member list teams status = %d body = %s", res.Code, res.Body.String())
+	}
+	var memberWorkspace map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &memberWorkspace); err != nil {
+		t.Fatalf("member list teams json: %v", err)
+	}
+	memberTeams := util.AsMapSlice(memberWorkspace["teams"])
+	if len(memberTeams) != 1 {
+		t.Fatalf("member teams = %#v", memberTeams)
+	}
+	if len(util.AsMapSlice(memberTeams[0]["members"])) != 2 || util.ToInt(memberTeams[0]["member_count"], 0) != 2 {
+		t.Fatalf("member teams missing members: %#v", memberTeams)
+	}
+	req = httptest.NewRequest(http.MethodGet, "/api/teams", nil)
+	req.Header.Set("Authorization", "Bearer "+ownerSession)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("owner list teams status = %d body = %s", res.Code, res.Body.String())
+	}
+	var ownerWorkspace map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &ownerWorkspace); err != nil {
+		t.Fatalf("owner list teams json: %v", err)
+	}
+	ownerTeams := util.AsMapSlice(ownerWorkspace["teams"])
+	if len(ownerTeams) != 1 || len(util.AsMapSlice(ownerTeams[0]["members"])) != 2 || util.ToInt(ownerTeams[0]["member_count"], 0) != 2 {
+		t.Fatalf("owner teams missing members: %#v", ownerTeams)
+	}
+	req = httptest.NewRequest(http.MethodPost, "/api/team-invites/"+inviteID+"/accept", nil)
+	req.Header.Set("Authorization", "Bearer "+memberSession)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("accept used invite status = %d body = %s", res.Code, res.Body.String())
+	}
+	revokedInviteID := createHTTPTestInvite(t, app, ownerSession, teamID, "other@example.com", "member")
+	req = httptest.NewRequest(http.MethodDelete, "/api/team-invites/"+revokedInviteID, nil)
+	req.Header.Set("Authorization", "Bearer "+ownerSession)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("revoke invite status = %d body = %s", res.Code, res.Body.String())
+	}
+	req = httptest.NewRequest(http.MethodPost, "/api/team-invites/"+revokedInviteID+"/accept", nil)
+	req.Header.Set("Authorization", "Bearer "+otherSession)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("accept revoked invite status = %d body = %s", res.Code, res.Body.String())
+	}
+	expiredInviteID := createHTTPTestInvite(t, app, ownerSession, teamID, "other@example.com", "member")
+	expireHTTPTestInvite(t, app, expiredInviteID)
+	req = httptest.NewRequest(http.MethodPost, "/api/team-invites/"+expiredInviteID+"/accept", nil)
+	req.Header.Set("Authorization", "Bearer "+otherSession)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("accept expired invite status = %d body = %s", res.Code, res.Body.String())
 	}
 	req = httptest.NewRequest(http.MethodPost, "/api/teams/current", strings.NewReader(jsonString(map[string]any{"team_id": teamID})))
 	req.Header.Set("Authorization", "Bearer "+memberSession)
@@ -6194,6 +6904,465 @@ func TestTeamV1CreateJoinSwitchAndTaskContext(t *testing.T) {
 	if ctx.TeamID != teamID || ctx.PayerUserID != owner.ID || ctx.ActorUserID != member.ID {
 		t.Fatalf("task context = %#v", ctx)
 	}
+	app.tasks = service.NewStoredImageTaskService(testJSONStoreFromApp(t, app),
+		failingHTTPImageTaskHandler,
+		failingHTTPImageTaskHandler,
+		func(ctx context.Context, identity service.Identity, payload map[string]any) (map[string]any, error) {
+			return map[string]any{"output_type": "text", "data": []map[string]any{{"text_response": "ok"}}}, nil
+		},
+		func() int { return 30 },
+	)
+	req = httptest.NewRequest(http.MethodPost, "/api/creation-tasks/chat-completions", strings.NewReader(`{"client_task_id":"team-chat-task","prompt":"hello","model":"gpt-5","messages":[{"role":"user","content":"hello"}]}`))
+	req.Header.Set("Authorization", "Bearer "+memberSession)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("submit team chat task status = %d body = %s", res.Code, res.Body.String())
+	}
+	waitForHTTPTestCondition(t, func() bool {
+		req = httptest.NewRequest(http.MethodGet, "/api/teams/"+teamID+"/usage", nil)
+		req.Header.Set("Authorization", "Bearer "+memberSession)
+		res = httptest.NewRecorder()
+		app.Handler().ServeHTTP(res, req)
+		var usageBody map[string]any
+		_ = json.Unmarshal(res.Body.Bytes(), &usageBody)
+		items := util.AsMapSlice(usageBody["items"])
+		return res.Code == http.StatusOK &&
+			len(items) == 1 &&
+			util.Clean(items[0]["id"]) == "team-chat-task" &&
+			util.Clean(items[0]["team_id"]) == teamID &&
+			util.Clean(items[0]["payer_user_id"]) == owner.ID &&
+			util.Clean(items[0]["actor_user_id"]) == member.ID &&
+			util.Clean(items[0]["actor_name"]) == member.Name &&
+			util.ToInt(items[0]["billing_consumed_amount"], 0) > 0
+	})
+
+	secondOwner := service.AuthOwner{ID: "sub2api:400", Name: "Second Owner", Provider: service.AuthProviderSub2API}
+	_, secondOwnerSession, err := app.auth.UpsertSub2APISession(secondOwner)
+	if err != nil {
+		t.Fatalf("second owner session: %v", err)
+	}
+	saveTestSub2APIBinding(t, app, secondOwner.ID, "second-owner@example.com")
+	secondTeamID := createHTTPTestTeam(t, app, secondOwnerSession)
+	secondInviteID := createHTTPTestInvite(t, app, secondOwnerSession, secondTeamID, "member@example.com", "member")
+	req = httptest.NewRequest(http.MethodPost, "/api/team-invites/"+secondInviteID+"/accept", nil)
+	req.Header.Set("Authorization", "Bearer "+memberSession)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), "当前账号已加入团队") {
+		t.Fatalf("accept second team invite status = %d body = %s", res.Code, res.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/teams/"+teamID+"/audit-logs", nil)
+	req.Header.Set("Authorization", "Bearer "+ownerSession)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("owner audit status = %d body = %s", res.Code, res.Body.String())
+	}
+	var auditBody map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &auditBody); err != nil {
+		t.Fatalf("owner audit json: %v", err)
+	}
+	for _, item := range util.AsMapSlice(auditBody["items"]) {
+		if util.Clean(item["action"]) == "space.switched" {
+			t.Fatalf("audit log contains space.switched: %#v", auditBody)
+		}
+	}
+	if items := util.AsMapSlice(auditBody["items"]); len(items) == 0 || util.Clean(items[0]["actor_name"]) == "" {
+		t.Fatalf("audit log missing actor_name: %#v", auditBody)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/teams/"+teamID+"/audit-logs", nil)
+	req.Header.Set("Authorization", "Bearer "+memberSession)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("member audit status = %d body = %s", res.Code, res.Body.String())
+	}
+}
+
+func TestTeamOwnerAndManagerRoleBoundaries(t *testing.T) {
+	app := newTestApp(t)
+	defer app.Close()
+	owner := service.AuthOwner{ID: "sub2api:owner", Name: "Owner", Provider: service.AuthProviderSub2API}
+	manager := service.AuthOwner{ID: "sub2api:manager", Name: "Manager", Provider: service.AuthProviderSub2API}
+	member := service.AuthOwner{ID: "sub2api:member", Name: "Member", Provider: service.AuthProviderSub2API}
+	_, ownerSession, err := app.auth.UpsertSub2APISession(owner)
+	if err != nil {
+		t.Fatalf("owner session: %v", err)
+	}
+	_, managerSession, err := app.auth.UpsertSub2APISession(manager)
+	if err != nil {
+		t.Fatalf("manager session: %v", err)
+	}
+	_, memberSession, err := app.auth.UpsertSub2APISession(member)
+	if err != nil {
+		t.Fatalf("member session: %v", err)
+	}
+	saveTestSub2APIBinding(t, app, owner.ID, "owner@example.com")
+	saveTestSub2APIBinding(t, app, manager.ID, "manager@example.com")
+	saveTestSub2APIBinding(t, app, member.ID, "member@example.com")
+
+	teamID := createHTTPTestTeam(t, app, ownerSession)
+	managerInvite := createHTTPTestInvite(t, app, ownerSession, teamID, "manager@example.com", "manager")
+	acceptHTTPTestInvite(t, app, managerSession, managerInvite)
+	memberInvite := createHTTPTestInvite(t, app, ownerSession, teamID, "member@example.com", "member")
+	acceptHTTPTestInvite(t, app, memberSession, memberInvite)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/teams/"+teamID+"/invites", strings.NewReader(`{"email":"new@example.com","role":"member"}`))
+	req.Header.Set("Authorization", "Bearer "+managerSession)
+	res := httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("manager create invite status = %d body = %s", res.Code, res.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodPatch, "/api/teams/"+teamID+"/members/"+member.ID, strings.NewReader(`{"role":"manager"}`))
+	req.Header.Set("Authorization", "Bearer "+managerSession)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("manager promote member status = %d body = %s", res.Code, res.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodPatch, "/api/teams/"+teamID+"/members/"+member.ID, strings.NewReader(`{"daily_limit_amount":51}`))
+	req.Header.Set("Authorization", "Bearer "+managerSession)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("manager change manager daily limit status = %d body = %s", res.Code, res.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodPatch, "/api/teams/"+teamID+"/members/"+manager.ID, strings.NewReader(`{"role":"member"}`))
+	req.Header.Set("Authorization", "Bearer "+managerSession)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("manager change self status = %d body = %s", res.Code, res.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodDelete, "/api/teams/"+teamID+"/members/"+manager.ID, nil)
+	req.Header.Set("Authorization", "Bearer "+managerSession)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("manager remove self status = %d body = %s", res.Code, res.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodPatch, "/api/teams/"+teamID+"/members/"+manager.ID, strings.NewReader(`{"daily_limit_amount":51}`))
+	req.Header.Set("Authorization", "Bearer "+managerSession)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("manager change self daily limit status = %d body = %s", res.Code, res.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodPatch, "/api/teams/"+teamID+"/members/"+member.ID, strings.NewReader(`{"role":"member"}`))
+	req.Header.Set("Authorization", "Bearer "+managerSession)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("manager change manager status = %d body = %s", res.Code, res.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/teams/"+teamID+"/members/"+member.ID, strings.NewReader(`{"role":"member"}`))
+	req.Header.Set("Authorization", "Bearer "+managerSession)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("post member role status = %d body = %s", res.Code, res.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodPatch, "/api/teams/"+teamID+"/members/"+owner.ID, strings.NewReader(`{"role":"member"}`))
+	req.Header.Set("Authorization", "Bearer "+managerSession)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("manager change owner status = %d body = %s", res.Code, res.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodPatch, "/api/teams/"+teamID+"/members/"+owner.ID, strings.NewReader(`{"daily_limit_amount":51}`))
+	req.Header.Set("Authorization", "Bearer "+managerSession)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("manager change owner daily limit status = %d body = %s", res.Code, res.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodDelete, "/api/teams/"+teamID+"/members/"+owner.ID, nil)
+	req.Header.Set("Authorization", "Bearer "+managerSession)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("manager remove owner status = %d body = %s", res.Code, res.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodPatch, "/api/teams/"+teamID+"/members/"+member.ID, strings.NewReader(`{"role":"member"}`))
+	req.Header.Set("Authorization", "Bearer "+ownerSession)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("owner change manager status = %d body = %s", res.Code, res.Body.String())
+	}
+}
+
+func TestTeamMemberDailyLimitHTTP(t *testing.T) {
+	app := newTestApp(t)
+	defer app.Close()
+	owner := service.AuthOwner{ID: "sub2api:daily-owner", Name: "Daily Owner", Provider: service.AuthProviderSub2API}
+	manager := service.AuthOwner{ID: "sub2api:daily-manager", Name: "Daily Manager", Provider: service.AuthProviderSub2API}
+	member := service.AuthOwner{ID: "sub2api:daily-member", Name: "Daily Member", Provider: service.AuthProviderSub2API}
+	_, ownerSession, err := app.auth.UpsertSub2APISession(owner)
+	if err != nil {
+		t.Fatalf("owner session: %v", err)
+	}
+	_, managerSession, err := app.auth.UpsertSub2APISession(manager)
+	if err != nil {
+		t.Fatalf("manager session: %v", err)
+	}
+	_, memberSession, err := app.auth.UpsertSub2APISession(member)
+	if err != nil {
+		t.Fatalf("member session: %v", err)
+	}
+	saveTestSub2APIBinding(t, app, owner.ID, "daily-owner@example.com")
+	saveTestSub2APIBinding(t, app, manager.ID, "daily-manager@example.com")
+	saveTestSub2APIBinding(t, app, member.ID, "daily-member@example.com")
+
+	teamID := createHTTPTestTeam(t, app, ownerSession)
+	managerInvite := createHTTPTestInvite(t, app, ownerSession, teamID, "daily-manager@example.com", "manager")
+	acceptHTTPTestInvite(t, app, managerSession, managerInvite)
+	memberInvite := createHTTPTestInvite(t, app, ownerSession, teamID, "daily-member@example.com", "member")
+	acceptHTTPTestInvite(t, app, memberSession, memberInvite)
+
+	app.tasks = service.NewStoredImageTaskService(testJSONStoreFromApp(t, app),
+		failingHTTPImageTaskHandler,
+		failingHTTPImageTaskHandler,
+		func(ctx context.Context, identity service.Identity, payload map[string]any) (map[string]any, error) {
+			return map[string]any{"output_type": "text", "data": []map[string]any{{"text_response": "ok"}}}, nil
+		},
+		func() int { return 30 },
+	)
+	app.tasks.SetTeamDailyLimitGetter(app.teams.MemberDailyLimitAmount)
+
+	req := httptest.NewRequest(http.MethodPatch, "/api/teams/"+teamID+"/members/"+member.ID, strings.NewReader(`{"daily_limit_amount":2}`))
+	req.Header.Set("Authorization", "Bearer "+managerSession)
+	res := httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("manager set member daily limit status = %d body = %s", res.Code, res.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/teams", nil)
+	req.Header.Set("Authorization", "Bearer "+memberSession)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("member workspace status = %d body = %s", res.Code, res.Body.String())
+	}
+	var workspace map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &workspace); err != nil {
+		t.Fatalf("member workspace json: %v", err)
+	}
+	teams := util.AsMapSlice(workspace["teams"])
+	if len(teams) != 1 {
+		t.Fatalf("member teams = %#v", teams)
+	}
+	limitState := util.StringMap(teams[0]["my_daily_limit"])
+	if util.ToInt(limitState["limit_amount"], 0) != 2 || util.ToBool(limitState["unlimited"]) {
+		t.Fatalf("member daily limit state = %#v", limitState)
+	}
+	foundMemberLimit := false
+	for _, item := range util.AsMapSlice(teams[0]["members"]) {
+		if util.Clean(item["user_id"]) == member.ID {
+			foundMemberLimit = util.ToInt(item["daily_limit_amount"], 0) == 2
+		}
+	}
+	if !foundMemberLimit {
+		t.Fatalf("member list missing daily limit: %#v", teams[0])
+	}
+
+	req = httptest.NewRequest(http.MethodPatch, "/api/teams/"+teamID+"/members/"+member.ID, strings.NewReader(`{"daily_limit_amount":51}`))
+	req.Header.Set("Authorization", "Bearer "+memberSession)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("member set own daily limit status = %d body = %s", res.Code, res.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/creation-tasks/chat-completions", strings.NewReader(`{"client_task_id":"daily-chat-1","prompt":"hello","model":"gpt-5","messages":[{"role":"user","content":"hello"}]}`))
+	req.Header.Set("Authorization", "Bearer "+memberSession)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("submit first limited team chat status = %d body = %s", res.Code, res.Body.String())
+	}
+	if !waitForHTTPTestConditionResult(func() bool {
+		task, ok := app.tasks.GetTask(service.Identity{ID: member.ID, Role: service.AuthRoleUser, Provider: service.AuthProviderSub2API, OwnerID: member.ID}, "daily-chat-1")
+		return ok && task["status"] == service.TaskStatusSuccess && util.Clean(task["team_id"]) == teamID && util.ToInt(task["billing_consumed_amount"], 0) == 1
+	}) {
+		task, ok := app.tasks.GetTask(service.Identity{ID: member.ID, Role: service.AuthRoleUser, Provider: service.AuthProviderSub2API, OwnerID: member.ID}, "daily-chat-1")
+		t.Fatalf("daily-chat-1 did not settle as expected ok=%v task=%#v", ok, task)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/teams", nil)
+	req.Header.Set("Authorization", "Bearer "+memberSession)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("member workspace after usage status = %d body = %s", res.Code, res.Body.String())
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &workspace); err != nil {
+		t.Fatalf("member workspace after usage json: %v", err)
+	}
+	limitState = util.StringMap(util.AsMapSlice(workspace["teams"])[0]["my_daily_limit"])
+	if util.ToInt(limitState["used_amount"], 0) != 1 || util.ToInt(limitState["remaining_amount"], 0) != 1 {
+		t.Fatalf("member daily limit after usage = %#v", limitState)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/creation-tasks/chat-completions", strings.NewReader(`{"client_task_id":"daily-chat-2","prompt":"hello again","model":"gpt-5","messages":[{"role":"user","content":"hello again"}]}`))
+	req.Header.Set("Authorization", "Bearer "+memberSession)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("submit second limited team chat status = %d body = %s", res.Code, res.Body.String())
+	}
+	waitForHTTPTestCondition(t, func() bool {
+		req = httptest.NewRequest(http.MethodGet, "/api/teams/"+teamID+"/usage", nil)
+		req.Header.Set("Authorization", "Bearer "+memberSession)
+		res = httptest.NewRecorder()
+		app.Handler().ServeHTTP(res, req)
+		var body map[string]any
+		_ = json.Unmarshal(res.Body.Bytes(), &body)
+		return res.Code == http.StatusOK && len(util.AsMapSlice(body["items"])) == 2
+	})
+
+	req = httptest.NewRequest(http.MethodPost, "/api/creation-tasks/chat-completions", strings.NewReader(`{"client_task_id":"daily-chat-3","prompt":"over","model":"gpt-5","messages":[{"role":"user","content":"over"}]}`))
+	req.Header.Set("Authorization", "Bearer "+memberSession)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusTooManyRequests || !strings.Contains(res.Body.String(), "团队成员今日额度不足") {
+		t.Fatalf("submit over daily limit status = %d body = %s", res.Code, res.Body.String())
+	}
+}
+
+func saveTestSub2APIBinding(t *testing.T, app *App, ownerID, email string) {
+	t.Helper()
+	if err := app.sub2Bindings.Save(service.Sub2APIBinding{
+		OwnerID:        ownerID,
+		Sub2APIUserID:  strings.TrimPrefix(ownerID, "sub2api:"),
+		UserEmail:      email,
+		UserName:       email,
+		SessionToken:   "session-" + strings.TrimPrefix(ownerID, "sub2api:"),
+		GatewayBaseURL: "http://gateway.test",
+	}); err != nil {
+		t.Fatalf("save sub2api binding: %v", err)
+	}
+}
+
+func launchIndependentSub2APITestSession(t *testing.T, app *App, launchToken string) string {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/auth/sub2api/launch", strings.NewReader(jsonString(map[string]any{"token": launchToken})))
+	res := httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("launch status = %d body = %s", res.Code, res.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &body); err != nil {
+		t.Fatalf("launch json: %v", err)
+	}
+	sessionKey := util.Clean(body["token"])
+	if sessionKey == "" {
+		t.Fatalf("launch session token missing: %#v", body)
+	}
+	return sessionKey
+}
+
+func createHTTPTestTeam(t *testing.T, app *App, session string) string {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/api/teams", strings.NewReader(`{"name":"Design Team"}`))
+	req.Header.Set("Authorization", "Bearer "+session)
+	res := httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("create team status = %d body = %s", res.Code, res.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &body); err != nil {
+		t.Fatalf("create team json: %v", err)
+	}
+	teamID := util.Clean(util.StringMap(body["team"])["id"])
+	if teamID == "" {
+		t.Fatalf("created team missing id: %#v", body)
+	}
+	return teamID
+}
+
+func createHTTPTestInvite(t *testing.T, app *App, session, teamID, email, role string) string {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/api/teams/"+teamID+"/invites", strings.NewReader(jsonString(map[string]any{"email": email, "role": role})))
+	req.Header.Set("Authorization", "Bearer "+session)
+	res := httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("create invite status = %d body = %s", res.Code, res.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &body); err != nil {
+		t.Fatalf("create invite json: %v", err)
+	}
+	inviteID := util.Clean(util.StringMap(body["invite"])["id"])
+	if inviteID == "" {
+		t.Fatalf("created invite missing id: %#v", body)
+	}
+	return inviteID
+}
+
+func acceptHTTPTestInvite(t *testing.T, app *App, session, inviteID string) {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/api/team-invites/"+inviteID+"/accept", nil)
+	req.Header.Set("Authorization", "Bearer "+session)
+	res := httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("accept invite status = %d body = %s", res.Code, res.Body.String())
+	}
+}
+
+func expireHTTPTestInvite(t *testing.T, app *App, inviteID string) {
+	t.Helper()
+	backend := testJSONStoreFromApp(t, app)
+	store := backend.(storage.JSONDocumentBackend)
+	raw, err := store.LoadJSONDocument("teams.json")
+	if err != nil {
+		t.Fatalf("load teams document: %v", err)
+	}
+	doc := util.StringMap(raw)
+	invites := util.AsMapSlice(doc["invites"])
+	found := false
+	for _, invite := range invites {
+		if util.Clean(invite["id"]) != inviteID {
+			continue
+		}
+		invite["expires_at"] = time.Now().UTC().Add(-time.Hour).Format(time.RFC3339Nano)
+		invite["updated_at"] = time.Now().UTC().Format(time.RFC3339Nano)
+		found = true
+	}
+	if !found {
+		t.Fatalf("invite %q not found in teams document", inviteID)
+	}
+	if err := store.SaveJSONDocument("teams.json", doc); err != nil {
+		t.Fatalf("save teams document: %v", err)
+	}
+	app.teams = service.NewTeamService(backend)
+	app.teams.SetUserEmailLookup(func(ownerID string) string {
+		binding, ok := app.sub2Bindings.Get(ownerID)
+		if !ok {
+			return ""
+		}
+		return binding.UserEmail
+	})
 }
 
 func newTestApp(t *testing.T) *App {

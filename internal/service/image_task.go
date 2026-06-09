@@ -35,6 +35,7 @@ const (
 	imageTaskBillingProviderKey        = "billing_provider"
 	imageTaskPayerUserIDPayloadKey     = "payer_user_id"
 	imageTaskActorUserIDPayloadKey     = "actor_user_id"
+	imageTaskActorNamePayloadKey       = "actor_name"
 	imageTaskTeamIDPayloadKey          = "team_id"
 )
 
@@ -69,24 +70,25 @@ type ImageToolOptions struct {
 }
 
 type ImageTaskService struct {
-	mu                  sync.RWMutex
-	store               storage.JSONDocumentBackend
-	docName             string
-	generation          ImageTaskHandler
-	edit                ImageTaskHandler
-	chat                ImageTaskHandler
-	video               ImageTaskHandler
-	billing             *BillingService
-	externalBilling     ExternalTaskBilling
-	retentionGetter     func() int
-	taskTimeoutGetter   func() time.Duration
-	userConcurrentLimit func() int
-	userRPMLimit        func() int
-	tasks               map[string]map[string]any
-	cancels             map[string]context.CancelFunc
-	ownerSubmitTimes    map[string][]time.Time
-	ownerRunningUnits   map[string]int
-	creationUnitCond    *sync.Cond
+	mu                   sync.RWMutex
+	store                storage.JSONDocumentBackend
+	docName              string
+	generation           ImageTaskHandler
+	edit                 ImageTaskHandler
+	chat                 ImageTaskHandler
+	video                ImageTaskHandler
+	billing              *BillingService
+	externalBilling      ExternalTaskBilling
+	teamDailyLimitGetter func(teamID, actorUserID string) int
+	retentionGetter      func() int
+	taskTimeoutGetter    func() time.Duration
+	userConcurrentLimit  func() int
+	userRPMLimit         func() int
+	tasks                map[string]map[string]any
+	cancels              map[string]context.CancelFunc
+	ownerSubmitTimes     map[string][]time.Time
+	ownerRunningUnits    map[string]int
+	creationUnitCond     *sync.Cond
 }
 
 type ImageTaskDiagnosticsItem struct {
@@ -179,6 +181,24 @@ func (s *ImageTaskService) SetBillingService(billing *BillingService) {
 	if billing == nil {
 		return
 	}
+	s.settlePendingTaskBilling()
+}
+
+func (s *ImageTaskService) SetExternalBilling(billing ExternalTaskBilling) {
+	s.externalBilling = billing
+	if billing == nil {
+		return
+	}
+	s.settlePendingTaskBilling()
+}
+
+func (s *ImageTaskService) SetTeamDailyLimitGetter(getter func(teamID, actorUserID string) int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.teamDailyLimitGetter = getter
+}
+
+func (s *ImageTaskService) settlePendingTaskBilling() {
 	var settleKeys []string
 	s.mu.Lock()
 	changed := false
@@ -209,10 +229,6 @@ func (s *ImageTaskService) SetBillingService(billing *BillingService) {
 	for _, key := range settleKeys {
 		s.settleTaskBilling(key)
 	}
-}
-
-func (s *ImageTaskService) SetExternalBilling(billing ExternalTaskBilling) {
-	s.externalBilling = billing
 }
 
 func (s *ImageTaskService) SubmitGeneration(ctx context.Context, identity Identity, clientTaskID, prompt, model, size, quality, baseURL string, n int, messages any, visibilityValues ...string) (map[string]any, error) {
@@ -272,6 +288,10 @@ func (s *ImageTaskService) SubmitEditWithOptions(ctx context.Context, identity I
 }
 
 func (s *ImageTaskService) SubmitChat(ctx context.Context, identity Identity, clientTaskID, prompt, model string, messages any, billable bool, nValues ...int) (map[string]any, error) {
+	return s.SubmitChatWithMetadata(ctx, identity, clientTaskID, prompt, model, messages, billable, nil, nValues...)
+}
+
+func (s *ImageTaskService) SubmitChatWithMetadata(ctx context.Context, identity Identity, clientTaskID, prompt, model string, messages any, billable bool, metadata map[string]any, nValues ...int) (map[string]any, error) {
 	prompt = strings.TrimSpace(prompt)
 	if prompt == "" {
 		return nil, fmt.Errorf("prompt is required")
@@ -292,10 +312,15 @@ func (s *ImageTaskService) SubmitChat(ctx context.Context, identity Identity, cl
 	if billable {
 		payload[imageTaskBillingBillablePayloadKey] = true
 	}
+	mergeImageTaskMetadata(payload, metadata)
 	return s.submit(ctx, identity, clientTaskID, "chat", payload)
 }
 
 func (s *ImageTaskService) SubmitVideo(ctx context.Context, identity Identity, clientTaskID, prompt, model string, images any, options VideoGenerationOptions, visibilityValues ...string) (map[string]any, error) {
+	return s.SubmitVideoWithMetadata(ctx, identity, clientTaskID, prompt, model, images, options, nil, visibilityValues...)
+}
+
+func (s *ImageTaskService) SubmitVideoWithMetadata(ctx context.Context, identity Identity, clientTaskID, prompt, model string, images any, options VideoGenerationOptions, metadata map[string]any, visibilityValues ...string) (map[string]any, error) {
 	prompt = strings.TrimSpace(prompt)
 	if prompt == "" {
 		return nil, fmt.Errorf("prompt is required")
@@ -326,6 +351,7 @@ func (s *ImageTaskService) SubmitVideo(ctx context.Context, identity Identity, c
 		"enhance_prompt": options.EnhancePrompt,
 		"generate_audio": options.GenerateAudio,
 	}
+	mergeImageTaskMetadata(payload, metadata)
 	return s.submit(ctx, identity, clientTaskID, "video", payload)
 }
 
@@ -392,6 +418,51 @@ func (s *ImageTaskService) ListTasks(identity Identity, taskIDs []string) map[st
 	}
 	s.mu.Unlock()
 	return map[string]any{"items": items, "missing_ids": missing}
+}
+
+func (s *ImageTaskService) ListTeamTasks(identity Identity, teamID, actorFilter string, limit int) map[string]any {
+	teamID = strings.TrimSpace(teamID)
+	if teamID == "" {
+		return map[string]any{"items": []map[string]any{}}
+	}
+	if limit <= 0 || limit > 200 {
+		limit = 100
+	}
+	actorFilter = strings.TrimSpace(actorFilter)
+	s.mu.Lock()
+	if s.cleanupLocked() {
+		_ = s.saveLocked()
+	}
+	items := make([]map[string]any, 0)
+	for _, task := range s.tasks {
+		if util.Clean(task[imageTaskTeamIDPayloadKey]) != teamID {
+			continue
+		}
+		if actorFilter != "" && util.Clean(task[imageTaskActorUserIDPayloadKey]) != actorFilter {
+			continue
+		}
+		items = append(items, publicTask(task))
+	}
+	sort.Slice(items, func(i, j int) bool { return util.Clean(items[i]["updated_at"]) > util.Clean(items[j]["updated_at"]) })
+	if len(items) > limit {
+		items = items[:limit]
+	}
+	s.mu.Unlock()
+	return map[string]any{"items": items}
+}
+
+func (s *ImageTaskService) TeamActorDailyUsageAmount(teamID, actorUserID string, now time.Time) int {
+	teamID = strings.TrimSpace(teamID)
+	actorUserID = strings.TrimSpace(actorUserID)
+	if teamID == "" || actorUserID == "" {
+		return 0
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.cleanupLocked() {
+		_ = s.saveLocked()
+	}
+	return s.teamActorDailyUsageAmountLocked(teamID, actorUserID, now)
 }
 
 func (s *ImageTaskService) GetTask(identity Identity, clientTaskID string) (map[string]any, bool) {
@@ -582,6 +653,13 @@ func (s *ImageTaskService) submit(ctx context.Context, identity Identity, client
 			return nil, err
 		}
 	}
+	if err := s.checkTeamDailyLimitLocked(payload, billingChargeAmount, time.Now()); err != nil {
+		if cleaned {
+			_ = s.saveLocked()
+		}
+		s.mu.Unlock()
+		return nil, err
+	}
 	if err := s.checkUserTaskLimitsLocked(identity, owner, count, time.Now()); err != nil {
 		if cleaned {
 			_ = s.saveLocked()
@@ -631,6 +709,9 @@ func (s *ImageTaskService) submit(ctx context.Context, identity Identity, client
 	if util.ToBool(payload[imageTaskBillingBillablePayloadKey]) {
 		task[imageTaskBillingBillablePayloadKey] = true
 	}
+	if isBillableImageTaskMode(mode, payload) && billingUnitAmount > 0 {
+		task[imageTaskBillingUnitAmountKey] = billingUnitAmount
+	}
 	if isMediaTaskMode(mode) {
 		task["output_statuses"] = initialImageOutputStatuses(count)
 	}
@@ -642,7 +723,22 @@ func (s *ImageTaskService) submit(ctx context.Context, identity Identity, client
 	mergePublicImageToolTaskFields(task, payload)
 	s.tasks[key] = task
 	s.cancels[key] = cancel
-	_ = s.saveLocked()
+	if err := s.saveLocked(); err != nil {
+		delete(s.tasks, key)
+		delete(s.cancels, key)
+		s.mu.Unlock()
+		cancel()
+		if useExternalBilling {
+			ref := imageTaskBillingReference(mode, taskID, task["model"].(string), imageTaskBillingChargeKeyFor(owner, taskID, "rollback"))
+			ref.RefundForKey = billingChargeKey
+			_ = s.externalBilling.RefundTask(context.Background(), identity, publicTask(task), billingChargeAmount, ref)
+		} else if billingChargedAmount > 0 && s.billing != nil {
+			ref := imageTaskBillingReference(mode, taskID, task["model"].(string), imageTaskBillingChargeKeyFor(owner, taskID, "rollback"))
+			ref.RefundForKey = billingChargeKey
+			_, _ = s.billing.RefundUserID(billingUser, billingChargedAmount, ref)
+		}
+		return nil, err
+	}
 	result := publicTask(task)
 	s.mu.Unlock()
 	go s.runTask(taskCtx, key, mode, identity, payload)
@@ -826,6 +922,49 @@ func (s *ImageTaskService) checkUserTaskLimitsLocked(identity Identity, owner st
 		s.ownerSubmitTimes[owner] = append(kept, now)
 	}
 	return nil
+}
+
+func (s *ImageTaskService) checkTeamDailyLimitLocked(payload map[string]any, pendingAmount int, now time.Time) error {
+	if s.teamDailyLimitGetter == nil || pendingAmount <= 0 {
+		return nil
+	}
+	teamID := util.Clean(payload[imageTaskTeamIDPayloadKey])
+	actorUserID := util.Clean(payload[imageTaskActorUserIDPayloadKey])
+	if teamID == "" || actorUserID == "" {
+		return nil
+	}
+	limit := s.teamDailyLimitGetter(teamID, actorUserID)
+	if limit <= 0 {
+		return nil
+	}
+	used := s.teamActorDailyUsageAmountLocked(teamID, actorUserID, now)
+	if used+pendingAmount > limit {
+		return ImageTaskLimitError{Message: fmt.Sprintf("团队成员今日额度不足（今日限额 %s，已用 %s，本次预计 %s）", formatMilliCNY(limit), formatMilliCNY(used), formatMilliCNY(pendingAmount))}
+	}
+	return nil
+}
+
+func (s *ImageTaskService) teamActorDailyUsageAmountLocked(teamID, actorUserID string, now time.Time) int {
+	start := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	end := start.Add(24 * time.Hour)
+	total := 0
+	for _, task := range s.tasks {
+		if util.Clean(task[imageTaskTeamIDPayloadKey]) != teamID || util.Clean(task[imageTaskActorUserIDPayloadKey]) != actorUserID {
+			continue
+		}
+		createdAt := parseTaskTime(task["created_at"])
+		if createdAt.IsZero() || createdAt.Before(start) || !createdAt.Before(end) {
+			continue
+		}
+		amount := util.ToInt(task["billing_consumed_amount"], -1)
+		if amount < 0 {
+			amount = util.ToInt(task[imageTaskBillingChargedAmountKey], 0)
+		}
+		if amount > 0 {
+			total += amount
+		}
+	}
+	return total
 }
 
 func (s *ImageTaskService) userConcurrentLimitValue() int {
@@ -1366,6 +1505,9 @@ func (s *ImageTaskService) cleanupLocked() bool {
 
 func publicTask(task map[string]any) map[string]any {
 	item := map[string]any{"id": task["id"], "status": task["status"], "mode": task["mode"], "model": task["model"], "size": task["size"], "created_at": task["created_at"], "updated_at": task["updated_at"]}
+	if seconds := taskDurationSeconds(task); seconds >= 0 {
+		item["duration_seconds"] = seconds
+	}
 	if quality := util.Clean(task["quality"]); quality != "" {
 		item["quality"] = quality
 	}
@@ -1403,6 +1545,24 @@ func publicTask(task map[string]any) map[string]any {
 	return item
 }
 
+func taskDurationSeconds(task map[string]any) int64 {
+	if util.Clean(task["created_at"]) == "" {
+		return -1
+	}
+	createdAt := parseTaskTime(task["created_at"])
+	if createdAt.IsZero() || createdAt.Equal(time.Unix(0, 0)) {
+		return -1
+	}
+	endAt := parseTaskTime(task["updated_at"])
+	if isActiveTaskStatus(util.Clean(task["status"])) {
+		endAt = time.Now()
+	}
+	if util.Clean(task["updated_at"]) == "" || endAt.IsZero() || endAt.Equal(time.Unix(0, 0)) || endAt.Before(createdAt) {
+		return 0
+	}
+	return int64(endAt.Sub(createdAt) / time.Second)
+}
+
 func mergeTaskContextFields(task map[string]any, payload map[string]any, identity Identity) {
 	if task == nil {
 		return
@@ -1418,10 +1578,13 @@ func mergeTaskContextFields(task map[string]any, payload map[string]any, identit
 	if actor != "" {
 		task[imageTaskActorUserIDPayloadKey] = actor
 	}
+	if actorName := util.Clean(payload[imageTaskActorNamePayloadKey]); actorName != "" {
+		task[imageTaskActorNamePayloadKey] = actorName
+	}
 }
 
 func copyStoredTaskContextFields(target map[string]any, source map[string]any) {
-	for _, key := range []string{imageTaskTeamIDPayloadKey, imageTaskPayerUserIDPayloadKey, imageTaskActorUserIDPayloadKey} {
+	for _, key := range []string{imageTaskTeamIDPayloadKey, imageTaskPayerUserIDPayloadKey, imageTaskActorUserIDPayloadKey, imageTaskActorNamePayloadKey} {
 		if value := util.Clean(source[key]); value != "" {
 			target[key] = value
 		}
@@ -1617,7 +1780,21 @@ func hasBillableImageTaskOutputData(item map[string]any) bool {
 }
 
 func billableTaskOutputCount(task map[string]any) int {
-	if task == nil || util.Clean(task["output_type"]) == "text" {
+	if task == nil {
+		return 0
+	}
+	if util.Clean(task["mode"]) == "chat" && util.Clean(task["output_type"]) == "text" && util.ToBool(task[imageTaskBillingBillablePayloadKey]) {
+		count := 0
+		for _, item := range util.AsMapSlice(task["data"]) {
+			if util.Clean(item["text_response"]) != "" {
+				count++
+			}
+		}
+		if count > 0 {
+			return count
+		}
+	}
+	if util.Clean(task["output_type"]) == "text" {
 		return 0
 	}
 	count := 0
@@ -1683,6 +1860,11 @@ func mergeImageTaskMetadata(payload map[string]any, metadata map[string]any) {
 	}
 	if fallback := normalizedFallbackReferenceImage(metadata["fallback_reference_image"]); len(fallback) > 0 {
 		payload["fallback_reference_image"] = fallback
+	}
+	for _, key := range []string{imageTaskTeamIDPayloadKey, imageTaskPayerUserIDPayloadKey, imageTaskActorUserIDPayloadKey, imageTaskActorNamePayloadKey} {
+		if value := util.Clean(metadata[key]); value != "" {
+			payload[key] = value
+		}
 	}
 }
 
@@ -1795,4 +1977,11 @@ func parseTaskTime(value any) time.Time {
 		}
 	}
 	return time.Unix(0, 0)
+}
+
+func formatMilliCNY(amount int) string {
+	if amount <= 0 {
+		return "¥0.000"
+	}
+	return fmt.Sprintf("¥%.3f", float64(amount)/1000)
 }

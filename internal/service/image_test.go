@@ -1,11 +1,14 @@
 package service
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"image"
 	"image/color"
 	"image/jpeg"
 	"image/png"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -112,6 +115,81 @@ func TestImageServiceListImagesReturnsDimensionsWithoutGeneratingThumbnails(t *t
 	previewPath := filepath.Join(config.ImagePreviewsDir(), "2026", "04", "29", "sample.png"+thumbnailExtension)
 	if _, err := os.Stat(previewPath); !os.IsNotExist(err) {
 		t.Fatalf("ListImages() should not create preview synchronously, stat error = %v", err)
+	}
+}
+
+func TestImageServiceStoreUploadedImageUsesObjectStorageAsPrimary(t *testing.T) {
+	root := t.TempDir()
+	config := testImageConfig{root: root}
+	var uploadedPath string
+	var uploadedBytes []byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPut:
+			uploadedPath = r.URL.Path
+			uploadedBytes, _ = io.ReadAll(r.Body)
+			w.WriteHeader(http.StatusOK)
+		case http.MethodGet:
+			if r.URL.Path != uploadedPath {
+				t.Errorf("GET path = %q, want %q", r.URL.Path, uploadedPath)
+			}
+			w.Header().Set("Content-Type", "image/png")
+			_, _ = w.Write(uploadedBytes)
+		default:
+			t.Errorf("method = %s", r.Method)
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	}))
+	defer server.Close()
+	t.Setenv(imagestore.EnvImageStorageBackend, "cos")
+	t.Setenv(imagestore.EnvImageObjectStorageEndpoint, server.URL)
+	t.Setenv(imagestore.EnvImageObjectStorageRegion, "ap-guangzhou")
+	t.Setenv(imagestore.EnvImageObjectStorageBucket, "bucket")
+	t.Setenv(imagestore.EnvImageObjectStorageAccessKeyID, "ak")
+	t.Setenv(imagestore.EnvImageObjectStorageSecretKey, "sk")
+	t.Setenv(imagestore.EnvImageObjectStorageForcePath, "true")
+	t.Setenv(imagestore.EnvImageObjectStoragePublicBase, "https://cdn.example.com/images")
+
+	var imageBuffer bytes.Buffer
+	img := image.NewRGBA(image.Rect(0, 0, 16, 12))
+	for y := 0; y < 12; y++ {
+		for x := 0; x < 16; x++ {
+			img.Set(x, y, color.RGBA{R: 80, G: uint8(x * 10), B: uint8(y * 12), A: 255})
+		}
+	}
+	if err := png.Encode(&imageBuffer, img); err != nil {
+		t.Fatalf("png.Encode() error = %v", err)
+	}
+
+	service := NewImageService(config)
+	item, err := service.StoreUploadedImage("http://127.0.0.1:8000", UploadedManagedImage{
+		Filename:    "sample.png",
+		ContentType: "image/png",
+		Data:        imageBuffer.Bytes(),
+	}, "linuxdo:123", "alice", ImageVisibilityPrivate)
+	if err != nil {
+		t.Fatalf("StoreUploadedImage() error = %v", err)
+	}
+	rel := toString(item["path"])
+	if rel == "" {
+		t.Fatalf("item path is empty: %#v", item)
+	}
+	if _, err := os.Stat(filepath.Join(config.ImagesDir(), filepath.FromSlash(rel))); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("local original stat error = %v, want os.ErrNotExist", err)
+	}
+	data, mimeType, err := service.ImageBytes(rel, ImageAccessScope{OwnerID: "linuxdo:123"})
+	if err != nil {
+		t.Fatalf("ImageBytes() error = %v", err)
+	}
+	if mimeType != "image/png" || len(data) != len(imageBuffer.Bytes()) {
+		t.Fatalf("ImageBytes() mime=%q len=%d, want image/png len=%d", mimeType, len(data), len(imageBuffer.Bytes()))
+	}
+	detail, err := service.ImageDetail("http://127.0.0.1:8000", rel, ImageAccessScope{OwnerID: "linuxdo:123"})
+	if err != nil {
+		t.Fatalf("ImageDetail() error = %v", err)
+	}
+	if detail["object_key"] == "" || detail["url"] == "" {
+		t.Fatalf("detail missing object metadata: %#v", detail)
 	}
 }
 
@@ -1119,6 +1197,133 @@ func TestImageServiceCleanupStorageUserLimitKeepsNewestPrivateImages(t *testing.
 		if _, err := os.Stat(filepath.Join(config.ImagesDir(), filepath.FromSlash(rel))); err != nil {
 			t.Fatalf("%s should remain, stat error = %v", rel, err)
 		}
+	}
+}
+
+func TestImageServiceMoveImagesToTeamLibraryScopesListsAndDeletes(t *testing.T) {
+	root := t.TempDir()
+	config := testImageConfig{root: root}
+	rels := []string{
+		"2026/04/29/team-a.png",
+		"2026/04/29/team-b.png",
+	}
+	for _, rel := range rels {
+		path := filepath.Join(config.ImagesDir(), filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("MkdirAll() error = %v", err)
+		}
+		if err := writeTestPNG(path); err != nil {
+			t.Fatalf("writeTestPNG(%s) error = %v", rel, err)
+		}
+	}
+
+	service := NewImageService(config)
+	service.RecordGeneratedImages(rels, "linuxdo:123", "alice", ImageVisibilityPrivate)
+	result, err := service.MoveImagesToTeamLibrary([]string{rels[0]}, "linuxdo:123", "team-1", "Design Team", DefaultTeamStorageLimitBytes)
+	if err != nil {
+		t.Fatalf("MoveImagesToTeamLibrary() error = %v", err)
+	}
+	if result["moved"] != 1 || result["team_id"] != "team-1" {
+		t.Fatalf("MoveImagesToTeamLibrary() = %#v", result)
+	}
+
+	personal := service.ListImagesPage("http://127.0.0.1:8000", ImageListOptions{PageSize: 50}, ImageAccessScope{OwnerID: "linuxdo:123"})
+	if items := personal["items"].([]map[string]any); len(items) != 1 || items[0]["path"] != rels[1] {
+		t.Fatalf("personal images after move = %#v", personal)
+	}
+	team := service.ListImagesPage("http://127.0.0.1:8000", ImageListOptions{PageSize: 50}, ImageAccessScope{TeamID: "team-1"})
+	teamItems := team["items"].([]map[string]any)
+	if len(teamItems) != 1 || teamItems[0]["path"] != rels[0] || teamItems[0]["library_scope"] != ImageLibraryScopeTeam || teamItems[0]["team_id"] != "team-1" {
+		t.Fatalf("team images after move = %#v", team)
+	}
+
+	summary := service.TeamStorageSummary("team-1", DefaultTeamStorageLimitBytes)
+	if summary.ImagesCount != 1 || summary.UsedBytes <= 0 || summary.RemainingBytes != DefaultTeamStorageLimitBytes-summary.UsedBytes {
+		t.Fatalf("TeamStorageSummary() = %#v", summary)
+	}
+	deleted, err := service.DeleteImages([]string{rels[0]}, ImageAccessScope{TeamID: "team-1", TeamManager: true})
+	if err != nil {
+		t.Fatalf("DeleteImages(team manager) error = %v", err)
+	}
+	if deleted["deleted"] != 1 || deleted["missing"] != 0 {
+		t.Fatalf("DeleteImages(team manager) = %#v", deleted)
+	}
+	if after := service.TeamStorageSummary("team-1", DefaultTeamStorageLimitBytes); after.ImagesCount != 0 || after.UsedBytes != 0 {
+		t.Fatalf("TeamStorageSummary(after delete) = %#v", after)
+	}
+}
+
+func TestImageServiceMoveImagesToTeamLibraryRequiresOwnerAndQuota(t *testing.T) {
+	root := t.TempDir()
+	config := testImageConfig{root: root}
+	rel := "2026/04/29/quota.png"
+	path := filepath.Join(config.ImagesDir(), filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := writeTestPNG(path); err != nil {
+		t.Fatalf("writeTestPNG() error = %v", err)
+	}
+
+	service := NewImageService(config)
+	service.RecordGeneratedImages([]string{rel}, "linuxdo:123", "alice", ImageVisibilityPrivate)
+	if _, err := service.MoveImagesToTeamLibrary([]string{rel}, "linuxdo:456", "team-1", "Design Team", DefaultTeamStorageLimitBytes); err == nil {
+		t.Fatalf("MoveImagesToTeamLibrary(other owner) error = nil")
+	}
+	if _, err := service.MoveImagesToTeamLibrary([]string{rel}, "linuxdo:123", "team-1", "Design Team", 1); err == nil {
+		t.Fatalf("MoveImagesToTeamLibrary(quota) error = nil")
+	} else {
+		var quotaErr TeamStorageQuotaExceededError
+		if !errors.As(err, &quotaErr) || quotaErr.LimitBytes != 1 || quotaErr.RequiredBytes <= 1 {
+			t.Fatalf("quota error = %#v", err)
+		}
+	}
+	personal := service.ListImagesPage("http://127.0.0.1:8000", ImageListOptions{PageSize: 50}, ImageAccessScope{OwnerID: "linuxdo:123"})
+	if items := personal["items"].([]map[string]any); len(items) != 1 || items[0]["path"] != rel {
+		t.Fatalf("quota failure should keep personal image = %#v", personal)
+	}
+}
+
+func TestImageServiceCleanupStorageUserLimitSkipsTeamImages(t *testing.T) {
+	root := t.TempDir()
+	config := testImageConfig{root: root}
+	rels := []string{
+		"2026/04/29/team-old.png",
+		"2026/04/29/personal-old.png",
+		"2026/04/29/personal-new.png",
+	}
+	baseTime := time.Now().Add(-3 * time.Hour)
+	for index, rel := range rels {
+		path := filepath.Join(config.ImagesDir(), filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("MkdirAll() error = %v", err)
+		}
+		if err := writeTestPNG(path); err != nil {
+			t.Fatalf("writeTestPNG(%s) error = %v", rel, err)
+		}
+		stamp := baseTime.Add(time.Duration(index) * time.Hour)
+		if err := os.Chtimes(path, stamp, stamp); err != nil {
+			t.Fatalf("Chtimes(%s) error = %v", rel, err)
+		}
+	}
+
+	service := NewImageService(config)
+	service.RecordGeneratedImages(rels, "linuxdo:123", "alice", ImageVisibilityPrivate)
+	if _, err := service.MoveImagesToTeamLibrary([]string{rels[0]}, "linuxdo:123", "team-1", "Design Team", DefaultTeamStorageLimitBytes); err != nil {
+		t.Fatalf("MoveImagesToTeamLibrary() error = %v", err)
+	}
+	result, err := service.CleanupStorage(ImageStorageCleanupOptions{MaxImagesPerUser: 1})
+	if err != nil {
+		t.Fatalf("CleanupStorage(user limit) error = %v", err)
+	}
+	if result.DeletedImages != 1 {
+		t.Fatalf("CleanupStorage(user limit) = %#v", result)
+	}
+	if _, err := os.Stat(filepath.Join(config.ImagesDir(), filepath.FromSlash(rels[0]))); err != nil {
+		t.Fatalf("team image should remain, stat error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(config.ImagesDir(), filepath.FromSlash(rels[1]))); !os.IsNotExist(err) {
+		t.Fatalf("old personal image should be deleted, stat error = %v", err)
 	}
 }
 

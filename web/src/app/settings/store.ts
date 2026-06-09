@@ -614,8 +614,8 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       const nextConfig = normalizeConfig(data.config);
       set({ config: nextConfig });
       dispatchAppMetaUpdated({
-        app_title: "落叶AI",
-        project_name: "落叶AI",
+        app_title: "落叶创艺",
+        project_name: "落叶创艺",
         login_page_image_url: String(nextConfig.login_page_image_url || ""),
         login_page_image_mode: normalizeLoginPageImageMode(nextConfig.login_page_image_mode),
         login_page_image_zoom: Number(nextConfig.login_page_image_zoom),

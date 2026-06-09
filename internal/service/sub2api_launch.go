@@ -530,24 +530,38 @@ func (s *Sub2APILaunchService) userSummary(ctx context.Context, binding Sub2APIB
 
 func (s *Sub2APILaunchService) chargePayload(payerUserID, actorUserID, teamID, taskID, mode, model, chargeKey string, amount int) map[string]any {
 	userID, _ := strconv.ParseInt(strings.TrimPrefix(strings.TrimSpace(payerUserID), "sub2api:"), 10, 64)
+	taskID = util.Clean(taskID)
+	mode = util.Clean(mode)
+	model = util.Clean(model)
+	actorUserID = util.Clean(actorUserID)
+	teamID = util.Clean(teamID)
 	reasonParts := []string{
-		"task=" + util.Clean(taskID),
-		"mode=" + util.Clean(mode),
-		"model=" + util.Clean(model),
+		"task=" + taskID,
+		"mode=" + mode,
+		"model=" + model,
 	}
-	if actor := util.Clean(actorUserID); actor != "" {
-		reasonParts = append(reasonParts, "actor="+actor)
+	if actorUserID != "" {
+		reasonParts = append(reasonParts, "actor="+actorUserID)
 	}
-	if team := util.Clean(teamID); team != "" {
-		reasonParts = append(reasonParts, "team="+team)
+	if teamID != "" {
+		reasonParts = append(reasonParts, "team="+teamID)
 	}
 	return map[string]any{
-		"app_id":     sub2APIStudioBridgeAppID,
-		"user_id":    userID,
-		"charge_key": chargeKey,
-		"amount":     float64(amount),
-		"reason":     strings.Join(reasonParts, " "),
+		"app_id":        sub2APIStudioBridgeAppID,
+		"user_id":       userID,
+		"charge_key":    chargeKey,
+		"amount":        sub2APIChargeAmountCNY(amount),
+		"reason":        strings.Join(reasonParts, " "),
+		"task_id":       taskID,
+		"mode":          mode,
+		"model":         model,
+		"actor_user_id": actorUserID,
+		"team_id":       teamID,
 	}
+}
+
+func sub2APIChargeAmountCNY(amountCNYMilli int) float64 {
+	return float64(amountCNYMilli) / 1000
 }
 
 func (s *Sub2APILaunchService) postSub2APIInternal(ctx context.Context, endpoint string, payload map[string]any) (map[string]any, error) {
@@ -577,20 +591,42 @@ func (s *Sub2APILaunchService) postSub2APIInternal(ctx context.Context, endpoint
 	defer resp.Body.Close()
 	data, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("sub2api internal request failed: HTTP %d %s", resp.StatusCode, sub2APIResponseMessage(data))
+		message := sub2APIResponseMessage(data)
+		if isSub2APIInsufficientBalanceError(resp.StatusCode, message) {
+			return nil, NewBillingLimitError(BillingTypeStandard)
+		}
+		return nil, fmt.Errorf("sub2api internal request failed: HTTP %d %s", resp.StatusCode, message)
 	}
 	var envelope map[string]any
 	if err := json.Unmarshal(data, &envelope); err != nil {
 		return nil, fmt.Errorf("sub2api internal payload is invalid")
 	}
 	if code, exists := envelope["code"]; exists && util.ToInt(code, 0) != 0 {
-		return nil, fmt.Errorf("sub2api internal request failed: %s", sub2APIEnvelopeMessage(envelope))
+		message := sub2APIEnvelopeMessage(envelope)
+		if isSub2APIInsufficientBalanceError(resp.StatusCode, message) {
+			return nil, NewBillingLimitError(BillingTypeStandard)
+		}
+		return nil, fmt.Errorf("sub2api internal request failed: %s", message)
 	}
 	body := util.StringMap(unwrapEnvelope(envelope))
 	if len(body) == 0 {
 		body = envelope
 	}
 	return body, nil
+}
+
+func isSub2APIInsufficientBalanceError(status int, message string) bool {
+	text := strings.ToLower(strings.TrimSpace(message))
+	if text == "" {
+		return false
+	}
+	if status == http.StatusPaymentRequired {
+		return true
+	}
+	return strings.Contains(text, "insufficient_quota") ||
+		(strings.Contains(text, "balance") && strings.Contains(text, "insufficient")) ||
+		strings.Contains(text, "quota exceeded") ||
+		strings.Contains(text, "余额不足")
 }
 
 func (s *Sub2APILaunchService) sub2APIInternalURL(endpoint string) (string, error) {
@@ -657,11 +693,15 @@ func (s *Sub2APILaunchService) bindingFromRedeemBody(body map[string]any) (Sub2A
 	if strings.TrimSpace(gatewayBaseURL) == "" {
 		return Sub2APIBinding{}, fmt.Errorf("sub2api launch redeem payload missing gateway_base_url")
 	}
+	userEmail := firstNonEmpty(util.Clean(body["email"]), util.Clean(user["email"]))
+	if userEmail == "" {
+		return Sub2APIBinding{}, fmt.Errorf("sub2api launch redeem payload missing email")
+	}
 	ownerID := "sub2api:" + userID
 	return normalizeSub2APIBinding(Sub2APIBinding{
 		OwnerID:             ownerID,
 		Sub2APIUserID:       userID,
-		UserEmail:           firstNonEmpty(util.Clean(body["email"]), util.Clean(user["email"])),
+		UserEmail:           userEmail,
 		UserName:            firstNonEmpty(util.Clean(body["username"]), util.Clean(user["username"])),
 		SessionToken:        firstNonEmpty(util.Clean(body["session_token"]), "studio-bridge:"+userID),
 		APIKeyID:            util.Clean(apiKey["id"]),

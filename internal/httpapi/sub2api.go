@@ -151,12 +151,12 @@ func (a *App) sub2APIBindingForMode(ctx context.Context, identity service.Identi
 	if identity.Provider != service.AuthProviderSub2API {
 		return service.Sub2APIBinding{}, false
 	}
-	if binding, ok := a.sub2APIBindingForIdentity(identity); ok {
-		return binding, true
-	}
 	if a != nil && a.config != nil && a.config.LuoyeIndependentMode() && a.sub2Launch != nil {
 		binding, err := a.sub2Launch.DefaultBinding(identity, mode)
 		return binding, err == nil
+	}
+	if binding, ok := a.sub2APIBindingForIdentity(identity); ok {
+		return binding, true
 	}
 	return service.Sub2APIBinding{}, false
 }
@@ -200,7 +200,11 @@ func (a *App) runLoggedSub2APIChatTask(ctx context.Context, identity service.Ide
 }
 
 func (a *App) callSub2APIChatCompletions(ctx context.Context, payload map[string]any, binding service.Sub2APIBinding) (map[string]any, error) {
-	return a.postSub2APIJSON(ctx, binding, "chat/completions", sub2APIChatPayload(payload))
+	body := sub2APIChatPayload(payload)
+	if binding.SystemDefault {
+		body["model"] = a.sub2APIChatModelForBinding(ctx, binding, body["model"])
+	}
+	return a.postSub2APIJSON(ctx, binding, "chat/completions", body)
 }
 
 func (a *App) callSub2APIImageGenerations(ctx context.Context, identity service.Identity, payload map[string]any, binding service.Sub2APIBinding) (map[string]any, error) {
@@ -598,6 +602,35 @@ func sub2APIChatModel(value any) string {
 		return util.DefaultChatModel
 	}
 	return model
+}
+
+func (a *App) sub2APIChatModelForBinding(ctx context.Context, binding service.Sub2APIBinding, requested any) string {
+	model := sub2APIChatModel(requested)
+	if !binding.Valid() {
+		return model
+	}
+	items, ok := a.sub2APIModelOptionsForBinding(ctx, binding, "chat")
+	if !ok {
+		return model
+	}
+	chatModels := make([]canvasModelOption, 0, len(items))
+	for _, item := range items {
+		if item.Enabled && canvasModelOptionHasCapability(item, "chat") {
+			chatModels = append(chatModels, item)
+		}
+	}
+	if len(chatModels) == 0 {
+		return model
+	}
+	requestedModel := util.Clean(requested)
+	if requestedModel != "" && requestedModel != util.ImageModelAuto {
+		for _, item := range chatModels {
+			if item.ID == requestedModel {
+				return requestedModel
+			}
+		}
+	}
+	return chatModels[0].ID
 }
 
 func sub2APIChatTaskResult(result map[string]any, text string) map[string]any {

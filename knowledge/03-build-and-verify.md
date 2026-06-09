@@ -2,7 +2,7 @@
 title: Build And Verify
 type: build
 repo: chatgpt2api
-last_verified: 2026-06-04
+last_verified: 2026-06-09
 ---
 
 # 构建与验证
@@ -78,6 +78,22 @@ Sub2API launch/redeem、登录态桥接、图片任务路由或对象存储类�
 4. `git diff --check`
 5. 如本地预览环境可用，至少补 `/image` 的最小页面回读，并确认分辨率/格式/压缩参数未回退
 
+落叶创艺独立用户版、Sub2API bridge、充值/余额、团队空间或生产联调类修改：
+
+1. `go test ./...`
+2. `cd web && npm run lint`
+3. `cd web && npm run build`
+4. `git diff --check`
+5. 如本地预览环境可用，至少补一次浏览器最小闭环：匿名访问 `/image` 或 `/canvas` -> 跳转登录 -> Sub2API launch/redeem -> 回到创作页 -> 余额/充值入口可见
+
+独立用户版、Sub2API bridge、充值/余额、团队空间或落叶创艺生产联调类修改：
+
+1. `cd web && npm run lint`
+2. `cd web && npm run build`
+3. `go test ./...`
+4. `git diff --check`
+5. 如本地预览或容器环境可用，至少补一次真实或 mock 的 `Sub2API 登录/回跳 -> /image 或 /canvas -> 余额展示 -> 创作扣费/失败退款` 最小闭环回读
+
 ## 当前稳定验证心智
 
 - 当前 image workspace 主线至少应覆盖：
@@ -88,6 +104,12 @@ Sub2API launch/redeem、登录态桥接、图片任务路由或对象存储类�
   - image workspace policies hardening 不破坏已有主流程
   - 从 Sub2API launch 进入后，已绑定 API key 不会在 session 初始化或刷新后丢失
   - embedded mode 下 stale token / store 失效后，仍能通过 cookie 恢复认证态
+- 当前独立用户版主线至少应覆盖：
+  - 未登录访问 `/image`、`/canvas`、`/social`、`/image-manager`、`/profile` 会先进入 `/login`，再由登录页跳 Sub2API
+  - 登录回跳后直接进入创作台，而不是要求用户额外理解 API Key、Token 或 OpenAI-compatible 入口
+  - 顶部余额和充值入口优先读取 Sub2API 钱包摘要，余额显示格式不退化
+  - 普通用户 UI 不暴露本地管理员、API 绑定、限制 API、API Key、Token 或 API 选择入口
+  - 团队创建、加入、切换和团队扣费记录至少保持最小可用闭环
 - 当前 `/canvas` 主线至少应覆盖：
   - 页面能正常打开并保留全局顶部导航
   - 默认节点或空白画布加载符合预期
@@ -100,11 +122,18 @@ Sub2API launch/redeem、登录态桥接、图片任务路由或对象存储类�
   - `auto` 不会误作为 `image_resolution` 提交
   - 像素图标尺寸不会叠加分辨率预设
   - `1080p -> 1k`、`output_format`、`output_compression` 的前后端归一规则不退化
+- 当前落叶创艺独立用户版主线至少应覆盖：
+  - 匿名访问 `/image`、`/canvas`、`/social`、`/image-manager`、`/profile` 时，先进入 `/login`，再由登录页跳 Sub2API
+  - 登录回跳后进入创作台，且不会暴露 API Key、Token、OpenAI-compatible、API 选择等普通用户不该看到的入口
+  - 顶部余额和充值入口优先读取 Sub2API 钱包摘要，并正确展示 `cny_milli` 金额
+  - 创作任务的预扣、确认、退款链路不因独立用户版 UI 或 bridge 接口改动而退化
+  - 团队空间最小闭环至少保留 `team_id`、`payer_user_id`、`actor_user_id` 这组真实生产语义
 - 只跑前端 build 不足以证明 Sub2API launch/redeem 或图片任务链路正确；涉及登录态、任务、配置和存储时必须带后端测试。
 - 只跑 `go test ./...` 也不足以证明 `/image` 工作台 UI 没被破坏；涉及编辑器、拖拽和展示流时应至少补前端 build。
 - 只跑命令行构建也不足以证明 `/canvas` 交互没退化；涉及节点拖拽、连线、画布缩放、自动保存和运行状态时，应至少补浏览器侧最小回读。
 - 只验证“能打开登录页”不足以证明嵌入链路正常；涉及 embedded session、Sub2API key 绑定或 launch/redeem 时，至少要确认用户不是被错误打回匿名态，且绑定 key 仍保持。
 - 只验证“视频节点能看到”也不足以证明能力边界正确；还要确认无 Sub2API 绑定时它会 fail-closed 隐藏，而不是留给运行时报错。
+- 只跑仓库内单边测试也不足以证明独立用户版桥接正常；涉及落叶创艺生产联调时，至少要确认 Sub2API 与 chatgpt2api 两边配置、回跳和扣费语义是一致的。
 
 ## 当前验证缺口
 
@@ -113,3 +142,4 @@ Sub2API launch/redeem、登录态桥接、图片任务路由或对象存储类�
 - 当前知识库已能指向命令，但对“哪些改动必须同时验证前后端”之前表达不够稳定，后续应继续按 `/image`、`/canvas`、登录态桥接、对象存储、策略开关这些场景细化。
 - 对 embedded session recovery / bound key preservation 这类修复，知识库目前还缺一份更细的最小人工检查清单，例如“从 launch 进入后刷新页面、模拟前端 token 失效、确认 cookie 恢复后仍保留已绑定 key”。
 - 对视频节点与 composer 分辨率预设这类 6 月初新增主线，仓库还缺更细的最小人工检查清单，例如“无绑定时视频节点隐藏、有绑定时可见；`/image` 里切换预设后 payload 不回退到旧字段”。
+- 对独立用户版 / Studio Bridge / 团队空间这条 2026-06-09 新主线，仓库还缺更细的生产联调 checklist，例如“真实域名、launch URL、recharge URL、internal secret、默认分组、余额显示、预扣/确认/退款、团队 payer/actor 记录”的统一回读入口。

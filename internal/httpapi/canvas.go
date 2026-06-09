@@ -231,7 +231,11 @@ func (a *App) executeCanvasPromptNode(ctx context.Context, identity service.Iden
 		{"role": "user", "content": prompt},
 	}
 	taskID := canvasTaskID(exec.RunID, exec.Node.ID)
-	task, err := a.tasks.SubmitChat(ctx, identity, taskID, prompt, canvasNodeModel(exec.Node, util.ImageModelAuto), messages, false)
+	metadata, err := a.canvasTaskMetadata(identity, exec.Node)
+	if err != nil {
+		return service.CanvasNodeOutput{}, err
+	}
+	task, err := a.tasks.SubmitChatWithMetadata(ctx, identity, taskID, prompt, canvasNodeModel(exec.Node, util.ImageModelAuto), messages, true, metadata)
 	if err != nil {
 		return service.CanvasNodeOutput{}, err
 	}
@@ -244,6 +248,10 @@ func (a *App) executeCanvasImageGenerationNode(ctx context.Context, identity ser
 		return service.CanvasNodeOutput{}, fmt.Errorf("文生图节点缺少 prompt")
 	}
 	taskID := canvasTaskID(exec.RunID, exec.Node.ID)
+	metadata, err := a.canvasTaskMetadata(identity, exec.Node)
+	if err != nil {
+		return service.CanvasNodeOutput{}, err
+	}
 	imageRefs, maskRefs := splitCanvasMaskRefs(canvasImageRefs(exec.Node, exec.Inputs))
 	toolOptions := canvasImageToolOptions(exec.Node)
 	if len(imageRefs) > 0 {
@@ -273,7 +281,7 @@ func (a *App) executeCanvasImageGenerationNode(ctx context.Context, identity ser
 			images,
 			util.ToInt(exec.Node.Data["n"], 1),
 			nil,
-			canvasImageTaskMetadata(exec.Node),
+			metadata,
 			canvasImageOutputOptions(exec.Node),
 			toolOptions,
 			canvasNodeVisibility(exec.Node),
@@ -297,7 +305,7 @@ func (a *App) executeCanvasImageGenerationNode(ctx context.Context, identity ser
 		a.configuredBaseURL(),
 		util.ToInt(exec.Node.Data["n"], 1),
 		nil,
-		canvasImageTaskMetadata(exec.Node),
+		metadata,
 		canvasImageOutputOptions(exec.Node),
 		toolOptions,
 		canvasNodeVisibility(exec.Node),
@@ -319,7 +327,11 @@ func (a *App) executeCanvasVideoGenerationNode(ctx context.Context, identity ser
 		return service.CanvasNodeOutput{}, err
 	}
 	taskID := canvasTaskID(exec.RunID, exec.Node.ID)
-	task, err := a.tasks.SubmitVideo(
+	metadata, err := a.canvasTaskMetadata(identity, exec.Node)
+	if err != nil {
+		return service.CanvasNodeOutput{}, err
+	}
+	task, err := a.tasks.SubmitVideoWithMetadata(
 		ctx,
 		identity,
 		taskID,
@@ -333,6 +345,7 @@ func (a *App) executeCanvasVideoGenerationNode(ctx context.Context, identity ser
 			EnhancePrompt: util.ToBool(exec.Node.Data["enhance_prompt"]),
 			GenerateAudio: util.ToBool(exec.Node.Data["generate_audio"]),
 		},
+		metadata,
 		canvasNodeVisibility(exec.Node),
 	)
 	if err != nil {
@@ -356,6 +369,10 @@ func (a *App) executeCanvasImageEditNode(ctx context.Context, identity service.I
 		return service.CanvasNodeOutput{}, fmt.Errorf("图生图节点缺少上游图片")
 	}
 	taskID := canvasTaskID(exec.RunID, exec.Node.ID)
+	metadata, err := a.canvasTaskMetadata(identity, exec.Node)
+	if err != nil {
+		return service.CanvasNodeOutput{}, err
+	}
 	toolOptions := canvasImageToolOptions(exec.Node)
 	if toolOptions.InputImageMask == "" && len(maskRefs) > 0 {
 		mask, err := a.canvasMaskDataURL(identity, maskRefs[0])
@@ -376,7 +393,7 @@ func (a *App) executeCanvasImageEditNode(ctx context.Context, identity service.I
 		images,
 		util.ToInt(exec.Node.Data["n"], 1),
 		nil,
-		canvasImageTaskMetadata(exec.Node),
+		metadata,
 		canvasImageOutputOptions(exec.Node),
 		toolOptions,
 		canvasNodeVisibility(exec.Node),
@@ -385,6 +402,14 @@ func (a *App) executeCanvasImageEditNode(ctx context.Context, identity service.I
 		return service.CanvasNodeOutput{}, err
 	}
 	return a.waitCanvasTaskOutput(ctx, identity, taskID, task)
+}
+
+func (a *App) canvasTaskMetadata(identity service.Identity, node service.CanvasNode) (map[string]any, error) {
+	metadata := canvasImageTaskMetadata(node)
+	if err := a.attachTaskSpace(identity, metadata, ""); err != nil {
+		return nil, err
+	}
+	return metadata, nil
 }
 
 func (a *App) waitCanvasTaskOutput(ctx context.Context, identity service.Identity, taskID string, initial map[string]any) (service.CanvasNodeOutput, error) {
@@ -429,14 +454,13 @@ func canvasImageRefs(node service.CanvasNode, inputs []service.CanvasNodeInput) 
 }
 
 func (a *App) canvasUploadedImagesFromRefs(identity service.Identity, refs []service.CanvasImageRef) ([]protocol.UploadedImage, error) {
-	scope := imageAccessScope(identity)
 	images := make([]protocol.UploadedImage, 0, len(refs))
 	for index, ref := range refs {
 		value := firstNonEmpty(ref.Path, ref.LocalURL, ref.URL)
 		if value == "" {
 			continue
 		}
-		data, contentType, err := a.images.ImageBytes(value, scope)
+		data, contentType, err := a.imageBytesForIdentity(value, identity)
 		if err != nil {
 			return nil, fmt.Errorf("读取上游图片失败：%w", err)
 		}
@@ -454,7 +478,7 @@ func (a *App) canvasMaskDataURL(identity service.Identity, ref service.CanvasIma
 	if value == "" {
 		return "", nil
 	}
-	data, contentType, err := a.images.ImageBytes(value, imageAccessScope(identity))
+	data, contentType, err := a.imageBytesForIdentity(value, identity)
 	if err != nil {
 		return "", fmt.Errorf("读取蒙版图片失败：%w", err)
 	}
@@ -481,12 +505,30 @@ func isCanvasMaskRef(ref service.CanvasImageRef) bool {
 }
 
 func (a *App) canvasModelCatalog(ctx context.Context, identity service.Identity) []canvasModelOption {
-	if binding, ok := a.sub2APIBindingForIdentity(identity); ok {
-		if result, err := a.getSub2APIModelCatalog(ctx, binding); err == nil {
-			return addBuiltInCanvasImageModels(canvasModelOptionsFromCatalog(result))
+	if a != nil && a.config != nil && a.config.LuoyeIndependentMode() {
+		seen := map[string]canvasModelOption{}
+		for _, mode := range []string{"chat", "generate", "video"} {
+			binding, ok := a.sub2APIBindingForMode(ctx, identity, mode)
+			if !ok || binding.GroupID == "" {
+				continue
+			}
+			items, ok := a.sub2APIModelOptionsForBinding(ctx, binding, mode)
+			if !ok {
+				continue
+			}
+			for _, item := range items {
+				if item.ID != "" && !shouldHideCanvasModel(item.ID) {
+					seen[item.ID] = item
+				}
+			}
 		}
-		if result, err := a.getSub2APIModels(ctx, binding); err == nil {
-			return addBuiltInCanvasImageModels(canvasModelOptionsFromModelList(result, false, true))
+		if len(seen) > 0 {
+			return sortedCanvasModelOptions(seen)
+		}
+	}
+	if binding, ok := a.sub2APIBindingForIdentity(identity); ok {
+		if items, ok := a.sub2APIModelOptionsForBinding(ctx, binding, "generate"); ok {
+			return items
 		}
 	}
 	result, err := a.engine.ListModels(ctx)
@@ -494,6 +536,25 @@ func (a *App) canvasModelCatalog(ctx context.Context, identity service.Identity)
 		result = map[string]any{"data": []map[string]any{}}
 	}
 	return canvasModelOptionsFromModelList(result, true, false)
+}
+
+func (a *App) sub2APIModelOptionsForBinding(ctx context.Context, binding service.Sub2APIBinding, mode string) ([]canvasModelOption, bool) {
+	if result, err := a.getSub2APIModelCatalog(ctx, binding); err == nil {
+		items := canvasModelOptionsFromCatalog(result)
+		if mode == "generate" || mode == "edit" {
+			items = addBuiltInCanvasImageModels(items)
+		}
+		return items, true
+	}
+	if result, err := a.getSub2APIModels(ctx, binding); err == nil {
+		allowVideo := mode == "video"
+		items := canvasModelOptionsFromModelList(result, false, allowVideo)
+		if mode == "generate" || mode == "edit" {
+			items = addBuiltInCanvasImageModels(items)
+		}
+		return items, true
+	}
+	return nil, false
 }
 
 func (a *App) getSub2APIModelCatalog(ctx context.Context, binding service.Sub2APIBinding) (map[string]any, error) {
@@ -777,6 +838,24 @@ func canvasModelCapabilitiesForModelList(id string, allowVideo bool) []string {
 		}
 		return []string{"chat"}
 	}
+}
+
+func canvasModelOptionHasCapability(item canvasModelOption, capability string) bool {
+	for _, itemCapability := range item.Capabilities {
+		if itemCapability == capability {
+			return true
+		}
+	}
+	if capability == "chat" {
+		return item.Kind == "text" || item.Kind == "both"
+	}
+	if capability == "image" {
+		return item.Kind == "image" || item.Kind == "both"
+	}
+	if capability == "video" {
+		return item.Kind == "video"
+	}
+	return false
 }
 
 func canvasModelCapabilities(value any, id string) []string {

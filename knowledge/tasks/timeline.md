@@ -1,5 +1,25 @@
 # Project Timeline
 
+## 2026-06-10 02:38 +08:00 - 落叶创艺本地验收复核
+
+- 当前阶段：落叶创艺独立用户版和 Sub2API Studio Bridge 已完成一轮本地验收复核，未发现阻断上线前提测的问题。
+- 本段重点：复核容器健康、Sub2API launch/redeem、落叶创艺 UI 隐藏 API 概念、团队空间最小闭环、Studio Bridge 幂等扣费和独立模式防绕过扣费。
+- 已完成：本地浏览器通过 launch 进入 `/image`，账号菜单仅保留充值、个人资料、使用记录、团队空间、退出登录等用户入口；团队 API 可创建团队并切换 team scope；Sub2API 扣费接口验证重复 reserve/commit/refund 不重复扣退，commit 后 refund 和同 charge_key 改金额均被拒绝。
+- 关键决策：本轮只做本地验收和知识回写，不触碰生产、不做真钱支付、不消耗真实上游模型；生产真实链路仍单独验收。
+- 验证记录：`chatgpt2api` 容器 healthy，`/health` ok；Sub2API 容器 healthy，根路径 200；`chatgpt2api` 执行 `go test ./...`、`web npm.cmd run lint`、`web npm.cmd run build` 通过；Sub2API 执行 `backend go test ./...`、`frontend npm.cmd run test:run -- public-smoke`、`frontend npm.cmd run build` 通过；两仓库 `git diff --check` 无 whitespace 错误，仅 LF/CRLF 提示；截图见 `output/playwright/luoye-image-after-launch.png`、`luoye-account-menu.png`、`luoye-team-page.png`、`luoye-profile-page.png`。
+- 遗留问题：真实注册/登录回跳、真实支付回调、真实小额充值、真实上游创作成功扣费/失败退款/取消释放预扣、团队成员扣队长/团队额度、生产 DB migration、网络超时和 DB 故障注入仍需 staging 或生产账号验证。
+- 下一步：让用户用真实账号按注册/登录、充值、创作、使用记录、团队空间顺序手测；同时准备生产部署清单，确认正式域名、回跳 URL、充值 URL、internal secret、默认分组和对象存储地域。
+
+## 2026-06-09 11:49 +08:00 - 落叶创艺独立用户版与 Sub2API 桥接提交
+
+- 当前阶段：`chatgpt2api` 已改造成“落叶创艺”独立创作站模式，并和 Sub2API 账号、余额、充值、扣费桥接。
+- 本段重点：普通用户不再看到 API Key、Token、OpenAI-compatible、API 选择等概念；未登录走 Sub2API 注册/登录回跳，`launch_token` 换本地 session；任务使用 Sub2API 默认分组和钱包适配器，支持预扣、确认、退款；团队模式 v1 可创建/加入团队并记录 actor/payer；UI 顶部右侧收敛为用户名下拉，隐藏独立余额 pill，按钮已压窄。
+- 已完成：新增团队后端、Sub2API launch/redeem 适配、独立模式权限与登录限制；前端完成落叶创艺品牌、登录跳转页、右上角菜单、个人中心/团队页、API 文案隐藏；workflow spec、task contract、QA evidence 已写入；本地容器重建后 `/studio-bridge/launch` 不再 404。
+- 关键决策：Sub2API 是用户、余额、充值和管理配置真源；`chatgpt2api` 普通用户部署不暴露本地管理员/API 绑定入口；顶部不显示独立余额 pill，余额/充值放头像下拉；`.codex-runtime/` 是本地重包目录，已加入 ignore。
+- 验证记录：已提交 `47c9f72 feat: add luoye independent studio mode`；Sub2API 对应提交 `fe2f80be1 feat: add studio bridge integration`；`F:/java/chatgpt2api/web` 执行 `npm.cmd run lint`、`npm.cmd run build` 通过；`F:/java/chatgpt2api` 执行 `go test ./...` 通过；Sub2API 前端 `npm.cmd run test:run -- public-smoke`、`npm.cmd run build` 通过；Sub2API 后端 `go test ./...` 通过；两边 `git diff --check` 通过；本地容器 `chatgpt2api:local` 与 `sub2api:local` 健康。
+- 遗留问题：真实生产域名、真实支付和真实用户注册回跳仍需部署阶段验证；Sub2API 日志里旧的 `CHANNEL_MONITOR_KEY_DECRYPT_FAILED` 和本轮无关，需要后台重填监控 key；真实团队扣队长额度和生产对象存储/地域仍需上线前联调。
+- 下一步：上线前配置正式 Sub2API bridge URL、internal secret、recharge URL 和默认分组；用真实账号跑注册、回跳、充值、创作、使用记录、团队空间闭环；如继续开发，优先做生产部署清单和浏览器 E2E。
+
 ## 2026-06-04 08:30 +08:00 - 图片性能、画布稳定化与参数共享收口
 
 - 当前阶段：`/image`、`/image-manager`、`/canvas` 的图片工作流已从局部性能修复推进到参数边界和画布稳定性收口。
@@ -15,6 +35,15 @@
 - 当前阶段：8081 本地 Docker 预览恢复 Sub2API/落叶AI Studio Bridge 启动登录能力。
 - 本段重点：定位到 `chatgpt2api` 容器未加载 `.env`，导致 `/auth/sub2api/launch` 返回启动兑换未配置；已有本地会话仍可直接进 `/canvas`，但新普通用户从 Sub2API 跳转会失败。
 - 已完成：用同一镜像 `chatgpt2api:local`、同一数据卷 `chatgpt2api-data`、同一端口 `127.0.0.1:8081->80` 重建容器，补上 `--env-file F:/java/chatgpt2api/.env` 和 `/app/.env:ro` 挂载。
+# 2026-06-09 22:15 +08:00 - 落叶创艺扣费安全复核收口
+
+- 当前阶段：落叶创艺独立用户版进入扣费安全修复与验证收尾。
+- 本段重点：复核多智能体指出的高风险扣费问题，补齐文本创作侧路计费，并确认 Sub2API Studio Bridge 账本化扣费验证通过。
+- 已完成：独立模式下 Sub2API 普通用户 `/v1/messages` 禁用；社媒文案生成与 Canvas 提示词节点改为 `billable` chat task；Sub2API 桥端余额不足映射为统一 `BillingLimitError` / HTTP 429；确认 Canvas/Social 团队上下文注入、保存失败退款、重启后 pending external billing settlement 等旧发现已修。
+- 关键决策：落叶创艺用户侧凡属于创作台能力的聊天/文案/提示词优化都按 chat 创作任务进入预扣、成功确认、失败/取消退款链路，不再保留免费消耗上游文本模型的侧路。
+- 验证记录：`go test ./internal/httpapi -run "TestLuoyeIndependent(SocialCopy|CanvasPrompt|ChatAuto)|TestLuoyeIndependentSub2APIDefaultGroupAndBilling|TestLuoyeIndependentModeDisablesMessagesForSub2APIUsers" -count=1` 通过；`go test ./internal/httpapi ./internal/service` 通过；`go test ./...` 通过；`cd web && npm.cmd run lint` 通过；`cd web && npm.cmd run build` 通过；`git diff --check` 通过。
+- 遗留问题：仍未做真实生产账号的网络故障注入、数据库迁移演练、真实支付回调链路和浏览器 E2E；上线前必须在 staging 验证 reserve / commit / refund、余额不足、任务失败退款和团队 payer/actor。
+
 - 验证记录：`docker inspect chatgpt2api` 可见 `CHATGPT2API_SUB2API_REDEEM_URL/SECRET/LAUNCH_URL/GATEWAY_BASE_URL`；`http://127.0.0.1:8081/health` 返回 200；容器内访问 `http://host.docker.internal:8080/health` 返回 `{"status":"ok"}`；假 token 调 `/auth/sub2api/launch` 已变为上游 `401 launch token is invalid or expired`，不再是未配置错误。
 - 下一步：如后续用 Compose 或脚本重建 8081，必须保留 `.env` 注入和 `/app/.env` 挂载，否则 Sub2API launch 会再次失效。
 

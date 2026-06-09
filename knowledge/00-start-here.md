@@ -1,5 +1,7 @@
 # ChatGPT2API Knowledge Entry
 
+Last updated: 2026-06-09
+
 ## Purpose
 
 This directory stores project-local context that is useful across Codex sessions. It should stay short, factual, and actionable.
@@ -19,17 +21,17 @@ This directory stores project-local context that is useful across Codex sessions
 - Backend packages live under `internal/`; frontend source lives under `web/src/`.
 - ChatGPT web reverse-engineering notes and validation scripts belong under `jshook/`.
 - Admin async creation-task routes use `/api/creation-tasks` with explicit child resources: `image-generations`, `image-edits`, `chat-completions`, and `video-generations`.
-- The project currently targets ChatGPT web account capabilities and OpenAI-compatible image/text endpoints.
-- The current product-facing default is no longer a generic ChatGPT web wrapper only; it now includes a Sub2API-launched standalone image workspace, a white-label profile experience, and a `/canvas` workflow that has recently become more stateful and video-aware.
+- The project currently targets ChatGPT web account capabilities, an independent end-user creative studio, and OpenAI-compatible image/text endpoints behind a Sub2API-funded wallet flow.
+- The current product-facing default is no longer a generic ChatGPT web wrapper or only a Sub2API-launched image workspace; it has moved to a `luoye` independent-user mode where registration, login, recharge, balance, and billing truth all come from Sub2API while users directly enter creation flows.
 
 ## Current Known Capability Notes
 
 - A repository scan on 2026-05-16 found no `SuperGrok`, `Grok`, or `xAI` implementation or configuration entries.
 - Current documented model options are focused on `gpt-5*`, `gpt-image-2`, `codex-gpt-image-2`, and `auto`.
 - Adding Grok support would be a new integration decision, not a currently supported capability.
-- Recent image-workspace changes added a stronger default policy surface: continued edit flow, drag-result-into-editor flow, draft preservation, per-user image retention cap, and image workspace policy hardening.
-- Stable image behavior now needs to be understood together across backend routes, image task/service logic, config limits, and the React image workspace page, not only from git history.
-- Recent `/canvas` and `/image` changes have shifted the default continuation cost again: gallery retention notice, shared output controls, pixel-icon output normalization, dragged-node image reuse, image resize editing, and safer creation-task / polling behavior are now part of the active mental model, not just isolated patches.
+- Recent image-workspace and `/canvas` changes still matter, but they are now background capability layers under the new `luoye` independent-user product entry.
+- Stable behavior now needs to be understood together across Sub2API bridge launch/redeem, local session exchange, recharge/balance display, team-space billing, backend image task/service logic, and the React `/image` + `/canvas` pages.
+- Recent `/canvas` and `/image` improvements remain active constraints, but the default continuation cost has shifted again: production bridge configuration, real-account end-to-end verification, wallet-backed charge flows, and non-admin user-facing UI boundaries are now part of the active mental model.
 
 ## Knowledge Hygiene
 

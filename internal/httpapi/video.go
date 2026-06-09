@@ -395,14 +395,13 @@ func (a *App) videoInputImages(body map[string]any, identity service.Identity) (
 	if len(refs) == 0 {
 		return nil, nil
 	}
-	scope := imageAccessScope(identity)
 	out := make([]protocol.UploadedImage, 0, len(refs))
 	for index, ref := range refs {
 		value := firstNonEmpty(ref.Path, ref.LocalURL, ref.URL)
 		if value == "" {
 			continue
 		}
-		data, contentType, err := a.images.ImageBytes(value, scope)
+		data, contentType, err := a.imageBytesForIdentity(value, identity)
 		if err != nil {
 			return nil, fmt.Errorf("读取视频输入图片失败：%w", err)
 		}

@@ -1,13 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useLocation } from "react-router-dom";
 import { Globe2, History, ImagePlus, LoaderCircle, Plus, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { ImageComposer } from "@/app/image/components/image-composer";
-import { ImagePromptMarket } from "@/app/image/components/image-prompt-market";
-import { ImageResults, type ImageLightboxItem } from "@/app/image/components/image-results";
+import type { ImageLightboxItem } from "@/app/image/components/image-results";
 import {
   CUSTOM_IMAGE_ASPECT_RATIO,
   DEFAULT_IMAGE_CUSTOM_HEIGHT,
@@ -37,10 +36,8 @@ import {
 import { IMAGE_PROMPT_PRESETS, type ImagePromptPreset } from "@/app/image/image-presets";
 import type { BananaPrompt } from "@/app/image/banana-prompts";
 import { consumeSimilarImageIntent } from "@/app/image/similar-image-intent";
-import { ImageSidebar } from "@/app/image/components/image-sidebar";
-import { ImageLightbox } from "@/components/image-lightbox";
 import { ImageOutputControls } from "@/components/image-output-controls";
-import { ManagedImageAssetSidebar } from "@/components/managed-image-asset-sidebar";
+import { ManagedImageAssetDock } from "@/components/managed-image-asset-dock";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -78,6 +75,7 @@ import {
   fetchCreationTasks,
   fetchManagedImages,
   fetchProfile,
+  fetchTeamWorkspace,
   formatImageDisplayPriceCNY,
   IMAGE_CREATION_MODEL_OPTIONS,
   IMAGE_MODEL_ROUTE_DETAILS,
@@ -106,6 +104,7 @@ import { fetchAuthenticatedImageBlob } from "@/lib/authenticated-image";
 import { clearImageManagerCache } from "@/lib/image-manager-cache";
 import { getManagedImagePathFromUrl, getManagedImageUrlFromPath } from "@/lib/image-path";
 import { authSessionFromLoginResponse, setVerifiedAuthSession } from "@/lib/session";
+import { useAppMeta } from "@/lib/use-app-meta";
 import { cn } from "@/lib/utils";
 import { useAuthGuard } from "@/lib/use-auth-guard";
 import {
@@ -138,6 +137,18 @@ import {
   type ImageTurnProgress,
 } from "@/store/image-turn-progress";
 
+const ImagePromptMarket = lazy(() =>
+  import("@/app/image/components/image-prompt-market").then((module) => ({ default: module.ImagePromptMarket })),
+);
+const ImageResults = lazy(() =>
+  import("@/app/image/components/image-results").then((module) => ({ default: module.ImageResults })),
+);
+const ImageSidebar = lazy(() =>
+  import("@/app/image/components/image-sidebar").then((module) => ({ default: module.ImageSidebar })),
+);
+const ImageLightbox = lazy(() =>
+  import("@/components/image-lightbox").then((module) => ({ default: module.ImageLightbox })),
+);
 const COMPOSER_MODE_STORAGE_KEY = "chatgpt2api:image_composer_mode";
 const IMAGE_MODEL_STORAGE_KEY = "chatgpt2api:image_last_model";
 const CHAT_MODEL_STORAGE_KEY = "chatgpt2api:image_last_chat_model";
@@ -156,6 +167,7 @@ const AI_BACKGROUND_REMOVAL_PROMPT = "AI 抠图：自动识别图片中的主要
 const REFERENCE_IMAGE_MAX_SIDE = 2048;
 const REFERENCE_IMAGE_JPEG_QUALITY = 0.86;
 const IMAGE_ASSET_PAGE_SIZE = 50;
+const IMAGE_ASSET_SIDEBAR_STORAGE_PREFIX = "image-composer-asset-sidebar";
 const PROMPT_MARKET_REFERENCE_IMAGE_LIMIT = 4;
 const activeConversationQueueIds = new Set<string>();
 const EMPTY_IMAGE_ASPECT_RATIO_SELECT_VALUE = "__empty_aspect_ratio__";
@@ -203,6 +215,33 @@ type PublishRecipeOptions = {
 type ImageModelMenuOption = { value: ImageModel; label: string };
 
 type CreationTaskDataItem = NonNullable<CreationTask["data"]>[number];
+
+function getInitialAssetSidebarActivated() {
+  if (typeof window === "undefined") {
+    return false;
+  }
+  return window.localStorage.getItem(`${IMAGE_ASSET_SIDEBAR_STORAGE_PREFIX}-pinned`) === "1";
+}
+
+function ImageLazyLoading({ label, className }: { label: string; className?: string }) {
+  return (
+    <div className={cn("flex min-h-14 items-center justify-center gap-2 text-xs text-stone-500", className)}>
+      <LoaderCircle className="size-4 animate-spin" />
+      <span>{label}</span>
+    </div>
+  );
+}
+
+function ImageOverlayLoading({ label }: { label: string }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-white/50 backdrop-blur-[1px]">
+      <div className="inline-flex items-center gap-2 rounded-full border border-stone-200 bg-white/95 px-3 py-2 text-xs text-stone-500 shadow-sm">
+        <LoaderCircle className="size-4 animate-spin" />
+        <span>{label}</span>
+      </div>
+    </div>
+  );
+}
 
 function isKnownChatOnlyModel(value: unknown) {
   return typeof value === "string" && CHAT_MODEL_OPTIONS.some((option) => option.value === value) && !modelIDLooksImageCapable(value);
@@ -1140,17 +1179,21 @@ function mergeImageModelOptions(
   localOptions: readonly ImageModelMenuOption[],
   selectedModel: ImageModel,
   mode: ComposerMode,
+  preferRemoteOnly = false,
 ) {
   const seen = new Set<string>();
   const merged: ImageModelMenuOption[] = [];
-  for (const option of [...remoteOptions, ...localOptions]) {
+  const options = preferRemoteOnly && remoteOptions.length > 0 ? remoteOptions : [...remoteOptions, ...localOptions];
+  for (const option of options) {
     if (!option.value || seen.has(option.value) || HIDDEN_IMAGE_MODEL_VALUES.has(option.value)) {
       continue;
     }
     seen.add(option.value);
     merged.push(option);
   }
+  const canKeepSelectedModel = !(preferRemoteOnly && remoteOptions.length > 0);
   if (
+    canKeepSelectedModel &&
     selectedModel &&
     !seen.has(selectedModel) &&
     !HIDDEN_IMAGE_MODEL_VALUES.has(selectedModel) &&
@@ -1413,6 +1456,7 @@ async function recoverConversationHistory(items: ImageConversation[]) {
 
 function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof useAuthGuard>["session"]> }) {
   const location = useLocation();
+  const appMeta = useAppMeta();
   const isEmbeddedMode = useMemo(() => new URLSearchParams(location.search).get("ui_mode") === "embedded", [location.search]);
   const isSubmitDispatchingRef = useRef(false);
   const retryingImageIdsRef = useRef(new Set<string>());
@@ -1425,6 +1469,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
   const editFileInputRef = useRef<HTMLInputElement>(null);
   const promptApplyRequestIdRef = useRef(0);
   const similarIntentAppliedRef = useRef(false);
+  const assetsLoadingRequestRef = useRef(false);
 
   const [imagePrompt, setImagePrompt] = useState("");
   const [composerMode, setComposerMode] = useState<ComposerMode>(getStoredComposerMode);
@@ -1470,13 +1515,15 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
   const [hasMoreAssets, setHasMoreAssets] = useState(false);
   const [loadingAssets, setLoadingAssets] = useState(false);
   const [loadingMoreAssets, setLoadingMoreAssets] = useState(false);
+  const [assetsLoaded, setAssetsLoaded] = useState(false);
+  const [assetSidebarActivated, setAssetSidebarActivated] = useState(getInitialAssetSidebarActivated);
   const canInspectAccounts = session.role === "admin" || session.apiPermissions.includes("get/api/accounts");
   const canUseImageAssets = hasAPIPermission(session, "GET", "/api/images");
 
   const parsedCount = useMemo(() => normalizeRequestedImageCount(imageCount), [imageCount]);
   const chatModelOptions = useMemo(
-    () => mergeImageModelOptions(canvasModelsByCapability(remoteCanvasModels, "chat"), CHAT_MODEL_OPTIONS, chatModel, "chat"),
-    [chatModel, remoteCanvasModels],
+    () => mergeImageModelOptions(canvasModelsByCapability(remoteCanvasModels, "chat"), CHAT_MODEL_OPTIONS, chatModel, "chat", appMeta.luoye_independent_mode),
+    [appMeta.luoye_independent_mode, chatModel, remoteCanvasModels],
   );
   const imageCreationModelOptions = useMemo(
     () => mergeImageModelOptions(canvasModelsByCapability(remoteCanvasModels, "image"), IMAGE_CREATION_MODEL_OPTIONS, imageModel, "image"),
@@ -2310,21 +2357,40 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
   }, [switchComposerToImageMode]);
 
   const loadAssets = useCallback(async () => {
+    if (assetsLoadingRequestRef.current) {
+      return;
+    }
     if (!canUseImageAssets) {
       setAssets([]);
       setAssetNextCursor("");
       setHasMoreAssets(false);
+      setAssetsLoaded(true);
       return;
     }
+    assetsLoadingRequestRef.current = true;
     setLoadingAssets(true);
     try {
-      const result = await fetchManagedImages({ scope: "mine", page_size: IMAGE_ASSET_PAGE_SIZE });
-      setAssets(result.items);
-      setAssetNextCursor(result.next_cursor);
-      setHasMoreAssets(result.has_more);
+      const mineResult = await fetchManagedImages({ scope: "mine", page_size: IMAGE_ASSET_PAGE_SIZE });
+      let nextAssets = mineResult.items;
+      try {
+        const workspace = await fetchTeamWorkspace();
+        const team = Array.isArray(workspace.teams) ? workspace.teams[0] : undefined;
+        if (team?.id) {
+          const teamResult = await fetchManagedImages({ scope: "team", team_id: team.id, page_size: IMAGE_ASSET_PAGE_SIZE });
+          const seen = new Set(nextAssets.map((asset) => asset.path));
+          nextAssets = [...nextAssets, ...teamResult.items.filter((asset) => !seen.has(asset.path))];
+        }
+      } catch {
+        // Team library is optional for the asset picker.
+      }
+      setAssets(nextAssets);
+      setAssetNextCursor(mineResult.next_cursor);
+      setHasMoreAssets(mineResult.has_more);
+      setAssetsLoaded(true);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "加载图片库失败");
     } finally {
+      assetsLoadingRequestRef.current = false;
       setLoadingAssets(false);
     }
   }, [canUseImageAssets]);
@@ -2353,9 +2419,26 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     }
   }, [assetNextCursor, canUseImageAssets, hasMoreAssets, loadingAssets, loadingMoreAssets]);
 
-  useEffect(() => {
+  const ensureAssetsLoaded = useCallback(() => {
+    if (assetsLoaded || loadingAssets || assetsLoadingRequestRef.current) {
+      return;
+    }
     void loadAssets();
-  }, [loadAssets]);
+  }, [assetsLoaded, loadAssets, loadingAssets]);
+
+  const activateAssetSidebar = useCallback(() => {
+    setAssetSidebarActivated(true);
+    ensureAssetsLoaded();
+  }, [ensureAssetsLoaded]);
+
+  const handleAssetSidebarExpandedChange = useCallback(
+    (expanded: boolean) => {
+      if (expanded) {
+        ensureAssetsLoaded();
+      }
+    },
+    [ensureAssetsLoaded],
+  );
 
   const handleDeleteConversation = async (id: string) => {
     const nextConversations = conversations.filter((item) => item.id !== id);
@@ -3798,16 +3881,18 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         }
       >
         <div className={cn("hidden h-full min-h-0 border-r border-[#f2f3f5] pr-3 lg:block", isEmbeddedMode && "pr-2")}>
-          <ImageSidebar
-            conversations={conversations}
-            isLoadingHistory={isLoadingHistory}
-            selectedConversationId={selectedConversationId}
-            onCreateDraft={handleCreateDraft}
-            onClearHistory={openClearHistoryConfirm}
-            onSelectConversation={setSelectedConversationId}
-            onDeleteConversation={openDeleteConversationConfirm}
-            formatConversationTime={formatConversationTime}
-          />
+          <Suspense fallback={<ImageLazyLoading label="加载历史..." />}>
+            <ImageSidebar
+              conversations={conversations}
+              isLoadingHistory={isLoadingHistory}
+              selectedConversationId={selectedConversationId}
+              onCreateDraft={handleCreateDraft}
+              onClearHistory={openClearHistoryConfirm}
+              onSelectConversation={setSelectedConversationId}
+              onDeleteConversation={openDeleteConversationConfirm}
+              formatConversationTime={formatConversationTime}
+            />
+          </Suspense>
         </div>
 
         <Dialog open={isHistoryOpen} onOpenChange={setIsHistoryOpen}>
@@ -3819,23 +3904,25 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
               </DialogTitle>
             </DialogHeader>
             <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-8 sm:px-8">
-              <ImageSidebar
-                conversations={conversations}
-                isLoadingHistory={isLoadingHistory}
-                selectedConversationId={selectedConversationId}
-                onCreateDraft={() => {
-                  handleCreateDraft();
-                  setIsHistoryOpen(false);
-                }}
-                onClearHistory={openClearHistoryConfirm}
-                onSelectConversation={(id) => {
-                  setSelectedConversationId(id);
-                  setIsHistoryOpen(false);
-                }}
-                onDeleteConversation={openDeleteConversationConfirm}
-                formatConversationTime={formatConversationTime}
-                hideActionButtons
-              />
+              <Suspense fallback={<ImageLazyLoading label="加载历史..." />}>
+                <ImageSidebar
+                  conversations={conversations}
+                  isLoadingHistory={isLoadingHistory}
+                  selectedConversationId={selectedConversationId}
+                  onCreateDraft={() => {
+                    handleCreateDraft();
+                    setIsHistoryOpen(false);
+                  }}
+                  onClearHistory={openClearHistoryConfirm}
+                  onSelectConversation={(id) => {
+                    setSelectedConversationId(id);
+                    setIsHistoryOpen(false);
+                  }}
+                  onDeleteConversation={openDeleteConversationConfirm}
+                  formatConversationTime={formatConversationTime}
+                  hideActionButtons
+                />
+              </Suspense>
             </div>
           </DialogContent>
         </Dialog>
@@ -4249,24 +4336,26 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
             )}
             style={composerDockHeight > 0 ? { paddingBottom: composerDockHeight + (isEmbeddedMode ? 12 : 24) } : undefined}
           >
-            <ImageResults
-              selectedConversation={selectedConversation}
-              progressByTurnKey={progressByTurnKey}
-              progressNow={progressNow}
-              promptPresets={IMAGE_PROMPT_PRESETS}
-              onOpenLightbox={openLightbox}
-              onApplyPromptPreset={handleApplyPromptPreset}
-              onContinueEdit={handleContinueEdit}
-              onContinueEditBatch={handleContinueEditBatch}
-              onEditTurn={openEditTurnDialog}
-              onCancelTurn={handleCancelTurn}
-              onRegenerateTurn={handleRegenerateTurn}
-              onRetryImage={handleRetryImage}
-              onRetryImages={handleRetryImages}
-              onImageVisibilityChange={handleImageVisibilityChange}
-              visibilityMutatingImageKey={visibilityMutatingImageKey}
-              formatConversationTime={formatConversationTime}
-            />
+            <Suspense fallback={<ImageLazyLoading label="加载结果区..." className="min-h-[160px]" />}>
+              <ImageResults
+                selectedConversation={selectedConversation}
+                progressByTurnKey={progressByTurnKey}
+                progressNow={progressNow}
+                promptPresets={IMAGE_PROMPT_PRESETS}
+                onOpenLightbox={openLightbox}
+                onApplyPromptPreset={handleApplyPromptPreset}
+                onContinueEdit={handleContinueEdit}
+                onContinueEditBatch={handleContinueEditBatch}
+                onEditTurn={openEditTurnDialog}
+                onCancelTurn={handleCancelTurn}
+                onRegenerateTurn={handleRegenerateTurn}
+                onRetryImage={handleRetryImage}
+                onRetryImages={handleRetryImages}
+                onImageVisibilityChange={handleImageVisibilityChange}
+                visibilityMutatingImageKey={visibilityMutatingImageKey}
+                formatConversationTime={formatConversationTime}
+              />
+            </Suspense>
           </div>
 
           <div
@@ -4327,19 +4416,26 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         </div>
 
         {canUseImageAssets ? (
-          <ManagedImageAssetSidebar
+          <ManagedImageAssetDock
+            activated={assetSidebarActivated}
+            assetCount={assets.length}
             assets={assets}
             loadingAssets={loadingAssets}
             loadingMoreAssets={loadingMoreAssets}
             hasMoreAssets={hasMoreAssets}
+            onActivate={activateAssetSidebar}
             onRefreshAssets={() => void loadAssets()}
             onLoadMoreAssets={() => void loadMoreAssets()}
             onAddAssetToComposer={(asset) => void handleManagedImageReference(asset)}
-            storagePrefix="image-composer-asset-sidebar"
+            storagePrefix={IMAGE_ASSET_SIDEBAR_STORAGE_PREFIX}
+            triggerClassName="top-5 bottom-[calc(var(--image-composer-dock-height,0px)+1.25rem)] w-[52px]"
+            loadingClassName="top-5 right-0 bottom-[calc(var(--image-composer-dock-height,0px)+1.25rem)] w-[360px] rounded-l-2xl border-y border-l p-3"
             sideOffsetClassName="bottom-[calc(var(--image-composer-dock-height,0px)+1.25rem)] right-0 top-5 rounded-l-2xl border-y border-l"
             collapsedClassName="w-[52px] translate-x-0 p-2"
             expandedClassName="w-[360px] translate-x-0 p-3"
             wideClassName="w-[560px] translate-x-0 p-3"
+            defaultExpanded
+            onExpandedChange={handleAssetSidebarExpandedChange}
             title="图片库"
             subtitle={`${assets.length} 张素材 · 拖到输入框`}
             emptyLabel="图片库暂无图片"
@@ -4348,19 +4444,27 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         ) : null}
       </section>
 
-      <ImageLightbox
-        images={lightboxImages}
-        currentIndex={lightboxIndex}
-        open={lightboxOpen}
-        onOpenChange={setLightboxOpen}
-        onIndexChange={setLightboxIndex}
-      />
+      {lightboxOpen ? (
+        <Suspense fallback={<ImageOverlayLoading label="加载预览..." />}>
+          <ImageLightbox
+            images={lightboxImages}
+            currentIndex={lightboxIndex}
+            open={lightboxOpen}
+            onOpenChange={setLightboxOpen}
+            onIndexChange={setLightboxIndex}
+          />
+        </Suspense>
+      ) : null}
 
-      <ImagePromptMarket
-        open={isPromptMarketOpen}
-        onOpenChange={setIsPromptMarketOpen}
-        onApplyPrompt={handleApplyMarketPrompt}
-      />
+      {isPromptMarketOpen ? (
+        <Suspense fallback={<ImageOverlayLoading label="加载提示词..." />}>
+          <ImagePromptMarket
+            open={isPromptMarketOpen}
+            onOpenChange={setIsPromptMarketOpen}
+            onApplyPrompt={handleApplyMarketPrompt}
+          />
+        </Suspense>
+      ) : null}
 
       {backgroundRemovalDraft ? (
         <Dialog

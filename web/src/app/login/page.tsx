@@ -26,12 +26,13 @@ import { useRedirectIfAuthenticated } from "@/lib/use-auth-guard";
 const loginBackgroundClass =
   "bg-[#fff9fb] bg-[radial-gradient(rgba(20,86,240,0.12)_1px,transparent_1px),linear-gradient(145deg,#fff8fa_0%,#ffffff_48%,#f4f8ff_100%)] [background-position:0_0,center] [background-size:12px_12px,cover] dark:bg-[#090d16] dark:bg-[radial-gradient(rgba(96,165,250,0.16)_1px,transparent_1px),linear-gradient(145deg,#080b13_0%,#101827_52%,#070b12_100%)]";
 
-const defaultLeafNetworkBrandName = "落叶AI";
+const defaultLeafNetworkBrandName = "落叶创艺";
 const defaultLeafNetworkLoginURL = "https://ai.3zapi.top/login";
 
 export default function LoginPage() {
   const appMeta = useAppMeta();
   const themeToggleRef = useRef<HTMLButtonElement | null>(null);
+  const authProviderRequestRef = useRef<Promise<AuthProviders> | null>(null);
   const [theme, setTheme] = useState<ColorTheme>(() => getPreferredColorTheme());
   const [leafNetworkBrandName, setLeafNetworkBrandName] = useState(defaultLeafNetworkBrandName);
   const [leafNetworkLoginURL, setLeafNetworkLoginURL] = useState(defaultLeafNetworkLoginURL);
@@ -39,9 +40,18 @@ export default function LoginPage() {
   const [isRedirecting, setIsRedirecting] = useState(false);
   const { isCheckingAuth } = useRedirectIfAuthenticated();
 
+  const loadAuthProviders = useCallback(() => {
+    if (!authProviderRequestRef.current) {
+      authProviderRequestRef.current = fetchAuthProviders().finally(() => {
+        authProviderRequestRef.current = null;
+      });
+    }
+    return authProviderRequestRef.current;
+  }, []);
+
   useEffect(() => {
     let active = true;
-    void fetchAuthProviders()
+    void loadAuthProviders()
       .then((providers) => {
         if (!active) {
           return;
@@ -63,17 +73,26 @@ export default function LoginPage() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [loadAuthProviders]);
 
   const handleLeafNetworkLogin = useCallback(async () => {
     setIsRedirecting(true);
-    const launchURL = String(authProviders?.sub2api?.launch_url || "").trim();
-    if (authProviders?.sub2api?.enabled && launchURL) {
+    let providers = authProviders;
+    if (!providers) {
+      try {
+        providers = await loadAuthProviders();
+        setAuthProviders(providers);
+      } catch {
+        // Fall through to the configured fallback URL.
+      }
+    }
+    const launchURL = String(providers?.sub2api?.launch_url || "").trim();
+    if (providers?.sub2api?.enabled && launchURL) {
       window.location.href = launchURL;
       return;
     }
     window.location.href = leafNetworkLoginURL;
-  }, [authProviders, leafNetworkLoginURL]);
+  }, [authProviders, leafNetworkLoginURL, loadAuthProviders]);
 
   useEffect(() => {
     if (isCheckingAuth || isRedirecting) {
@@ -109,7 +128,7 @@ export default function LoginPage() {
           <LoaderCircle className="size-5 animate-spin text-[#45515e] dark:text-white/60" />
           <div className="space-y-1">
             <div className="text-sm font-semibold text-[#222222] dark:text-white">正在跳转至{leafNetworkBrandName}</div>
-            <div className="text-xs text-[#6b7280] dark:text-white/50">登录或注册后会自动回到落叶AI。</div>
+            <div className="text-xs text-[#6b7280] dark:text-white/50">登录或注册后会自动回到落叶创艺。</div>
           </div>
         </div>
       </div>
@@ -150,7 +169,7 @@ export default function LoginPage() {
               />
               <div className="grid min-w-0 leading-none">
                 <div className="truncate text-sm font-semibold tracking-[-0.02em] text-[#222222] dark:text-white">
-                  落叶AI
+                  落叶创艺
                 </div>
                 <div className="truncate text-[10px] font-medium tracking-[0.28em] text-[#8e8e93] uppercase dark:text-white/50">
                   Creative Studio

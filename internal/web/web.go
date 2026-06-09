@@ -7,6 +7,7 @@ import (
 	"mime"
 	"net/http"
 	"path"
+	"strconv"
 	"strings"
 )
 
@@ -53,8 +54,10 @@ func serveAsset(w http.ResponseWriter, r *http.Request, fsys fs.FS, name string)
 
 func serveAssetFile(w http.ResponseWriter, r *http.Request, fsys fs.FS, name string) {
 	setAssetCacheControl(w, name)
-	if encodedName, encoding, ok := encodedAssetCandidate(fsys, r, name); ok {
+	if hasEncodedAssetVariant(fsys, name) {
 		w.Header().Add("Vary", "Accept-Encoding")
+	}
+	if encodedName, encoding, ok := encodedAssetCandidate(fsys, r, name); ok {
 		w.Header().Set("Content-Encoding", encoding)
 		if contentType := mime.TypeByExtension(path.Ext(name)); contentType != "" {
 			w.Header().Set("Content-Type", contentType)
@@ -63,6 +66,15 @@ func serveAssetFile(w http.ResponseWriter, r *http.Request, fsys fs.FS, name str
 		return
 	}
 	serveFSContent(w, r, fsys, name)
+}
+
+func hasEncodedAssetVariant(fsys fs.FS, name string) bool {
+	for _, suffix := range []string{".br", ".gz"} {
+		if info, err := fs.Stat(fsys, name+suffix); err == nil && !info.IsDir() {
+			return true
+		}
+	}
+	return false
 }
 
 func encodedAssetCandidate(fsys fs.FS, r *http.Request, name string) (string, string, bool) {
@@ -90,12 +102,31 @@ func encodedAssetCandidate(fsys fs.FS, r *http.Request, name string) (string, st
 
 func acceptsEncoding(header, encoding string) bool {
 	for _, item := range strings.Split(header, ",") {
-		token := strings.TrimSpace(strings.SplitN(item, ";", 2)[0])
+		parts := strings.Split(item, ";")
+		token := strings.TrimSpace(parts[0])
+		if token == "" {
+			continue
+		}
 		if strings.EqualFold(token, encoding) || token == "*" {
-			return true
+			return encodingQuality(parts[1:]) > 0
 		}
 	}
 	return false
+}
+
+func encodingQuality(params []string) float64 {
+	for _, param := range params {
+		key, value, ok := strings.Cut(strings.TrimSpace(param), "=")
+		if !ok || !strings.EqualFold(strings.TrimSpace(key), "q") {
+			continue
+		}
+		quality, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+		if err != nil {
+			return 1
+		}
+		return quality
+	}
+	return 1
 }
 
 func serveFSContent(w http.ResponseWriter, r *http.Request, fsys fs.FS, name string) {

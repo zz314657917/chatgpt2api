@@ -1,69 +1,61 @@
 # Current Task
 
-更新时间：2026-06-08 13:45 +08:00
+最后更新：2026-06-10 02:38 +08:00
 
 ## 背景
 
-`chatgpt2api` 当前默认续做入口已经再次前移。6 月初的视频节点、composer 分辨率预设、group 节点、图片轻摘要与任务治理，已经从“当前主线”退成稳定背景层；最近 2 天的高频改动集中在：
+`chatgpt2api` 最近主线已从 `/canvas` 与图片任务稳定性，前移到“落叶创艺独立用户版”。本仓库已完成提交 `47c9f72 feat: add luoye independent studio mode`，定位改为面向普通用户的独立创作站：用户注册/登录、充值和余额真源统一走 Sub2API，站内直接进入创作，不再要求用户理解 API Key、Token、OpenAI-compatible 或 API 选择。
 
-- `/canvas` workflow 继续收口
-- dragged node image reuse
-- LLM output / model route 调整
-- image/composer shared output controls
-- gallery retention notice
-- creation task / APIMart task status 稳定性
-- AI background removal workflow
-- composer models per mode 保持
-- node/task state 改变后的名称同步
+Sub2API 对应桥接提交为 `fe2f80be1 feat: add studio bridge integration`。两边本地容器已重建并健康运行，当前默认续做入口是生产配置与真实闭环验证。
 
 ## 当前主线
 
-当前默认续做入口，不再是“视频节点刚接入”或“Sprint 4 还没关”，而是以下几条已经进入真实产品面的 follow-up：
-
-- `/canvas` 继续向更稳定的 Infinite-Canvas 风格工作流收口，而不是只验证节点能不能创建。
-- 图片与画布的输出参数控制已经进入共享层，后续改 `/image` 与 `/canvas` 时要一起看，不再把两边当成独立表单。
-- gallery retention notice、拖拽图片复用、每种模式保留 composer model、AI 抠图工作流，说明图片工作台和画布正在从“能跑”推进到“更稳的持续创作体验”。
-- creation task / APIMart task status 修复仍然属于当前主线，因为它直接影响运行态、轮询、回填和前端状态可信度。
-
-## 当前结论
-
-- `docs/workflow/status.md` 已经切到 `canvas-image-followups-and-task-stability`，但旧 `knowledge/tasks/current-task.md` 仍停在 2026-06-03 的“视频节点 + composer 分辨率预设”语境，已明显落后于最近一轮主线。
-- 当前更值得优先记住的，不是 Sprint 4 历史，而是：
-  - `/canvas` workflow 优化
-  - dragged node image reuse
-  - shared output controls
-  - gallery retention notice
-  - creation task / APIMart task status 稳定性
-  - AI background removal workflow
-  - composer 按模式保留模型
-  - 节点名称随任务状态同步
+- 生产部署前配置正式 Sub2API bridge URL、internal secret、recharge URL、默认聊天/生图/视频分组和落叶创艺回跳域名。
+- 用真实账号跑完整链路：Sub2API 注册/登录 -> 回跳落叶创艺 -> 充值 -> 创作扣费 -> 使用记录 -> 团队空间。
+- 团队模式 v1 的后续验证重点是团队空间任务记录 `team_id`、`payer_user_id`、`actor_user_id`，以及扣队长/团队额度的真实生产链路。
+- UI 继续维持独立用户版语义：顶部为用户名下拉，充值入口在下拉或余额 hover 逻辑里，普通用户不暴露本地管理员、API 绑定、限制 API、API Key、Token、OpenAI-compatible 等入口。
 
 ## 已稳定事实
 
-- `/canvas` 当前不是独立后端系统，而是复用既有图片库、creation tasks、权限和模型路由的前端工作台。
-- `/image` 与 `/canvas` 的输出控制现在要按共享参数层理解；只改一边而不看另一边，回归风险会明显上升。
-- 没有 Sub2API 绑定时视频模型 fail-closed 隐藏，这条约束仍然有效，但它已经不再代表 6 月 8 日最靠前的主线。
-- gallery retention、拖入图片复用、APIMart 任务状态安全轮询、official Sub2API image batch 拆分，已经共同构成这轮运行态稳定性的默认背景。
+- Sub2API 是用户、余额、充值、管理配置和扣费的唯一真源；落叶创艺只保存必要用户映射和创作站会话。
+- 未登录访问落叶创艺用户页时走 Sub2API launch/redeem 链路，`launch_token` 只用于一次性换取本地 session。
+- 创作任务通过 Sub2API 默认分组和钱包适配器执行，任务前预扣，成功确认，失败或取消退款。
+- 扣费安全复核已补齐：独立模式下 Sub2API 普通用户不能调用 `/v1/messages` 绕过创作任务；社媒文案生成和 Canvas 提示词节点已纳入 chat 创作扣费；Sub2API 桥端余额不足会映射为统一的 `BillingLimitError` / HTTP 429。
+- Sub2API 外部扣费金额单位为 `cny_milli`，落叶侧发送到 Sub2API 时换算为元，例如 `51 -> 0.051`。
+- 团队模式 v1 只做“团队共享额度”可用闭环，产品文案不说“调用队长 API”。
+- `.codex-runtime/` 是本地重包目录，已加入 ignore，不应进入提交。
+- 2026-06-10 本地验收确认：Sub2API launch/redeem 能进入落叶创艺 `/image`，页面和账号菜单不暴露 API Key、Token、OpenAI-compatible、API 选择、限制 API 或 `sub2api:` 内部标识；团队页可创建团队并切换到 team scope。
+- 2026-06-10 本地扣费验收确认：Sub2API Studio Bridge `reserve / commit / refund` 使用 `(app_id, charge_key)` 幂等；重复 reserve/commit/refund 不重复扣退；commit 后 refund 被拒绝；同 charge_key 改金额被拒绝；余额不足返回明确错误；普通用户直打协议 API 被独立模式 403 拦截。
 
 ## 下一步
 
-- 如果继续做 `/canvas` 或 `/image`，先按 `docs/workflow/status.md` 的当前 Sprint 理解任务，不要再从 6 月 3 日的视频节点阶段开始恢复。
-- 如果继续补稳定知识，优先把“background removal + shared output controls + task stability + canvas followups”作为当前默认主线，而不是继续扩写旧 Sprint 4 记录。
-- 如需阶段历史，追加到 `knowledge/tasks/timeline.md`；本文件只保留当前默认续做快照。
+- 上线前先整理生产部署清单，确认两个站点域名、回跳 URL、充值 URL、内部密钥、默认分组和对象存储地域。
+- 使用真实账号做浏览器 E2E：注册、登录回跳、充值、创作成功/失败扣费、使用记录、团队创建/加入/团队扣费。
+- 如继续开发，优先补生产联调脚本和 Playwright 最小闭环，而不是继续扩展新功能。
+- 生产环境仍需人工确认真实支付回调、真实上游创作扣费、网络超时/DB 故障注入和迁移演练；本地验收不触碰真钱支付，也不消耗真实上游模型。
 
 ## 证据入口
 
-- 最近主线提交：
-  - `959275b` `chore: sync workflow docs and task coverage`
-  - `7ce957e` `feat: use AI background removal workflow`
-  - `09fedd5` `fix(canvas): sync node names after task state changes`
-  - `69a1fe0` `fix(image): keep composer models per mode`
-  - `d86e514` `fix: stabilize creation tasks and frontend build`
-  - `31971d4` `fix(httpapi): split official sub2api image batches`
-  - `99b27dd` `fix(canvas): avoid duplicate run insight status`
-  - `d90976f` `fix(canvas): reuse dragged node images`
-  - `1f9d2b8` `feat(canvas): improve model routes and llm output`
-  - `fee72e3` `fix(httpapi): poll apimart task status safely`
-  - `6530ff9` `feat(canvas): optimize infinite canvas workflow`
-- 当前 workflow 入口：`docs/workflow/status.md`
-- 手工验收入口：`knowledge/07-canvas-manual-checklist.md`
+- `chatgpt2api` 提交：`47c9f72 feat: add luoye independent studio mode`
+- Sub2API 提交：`fe2f80be1 feat: add studio bridge integration`
+- `chatgpt2api` 验证：
+  - `cd F:/java/chatgpt2api/web && npm.cmd run lint`
+  - `cd F:/java/chatgpt2api/web && npm.cmd run build`
+  - `cd F:/java/chatgpt2api && go test ./...`
+  - `cd F:/java/chatgpt2api && go test ./internal/httpapi -run "TestLuoyeIndependent(SocialCopy|CanvasPrompt|ChatAuto)|TestLuoyeIndependentSub2APIDefaultGroupAndBilling|TestLuoyeIndependentModeDisablesMessagesForSub2APIUsers" -count=1`
+- Sub2API 验证：
+  - `cd F:/mcplugins/sub2api/frontend && npm.cmd run test:run -- public-smoke`
+  - `cd F:/mcplugins/sub2api/frontend && npm.cmd run build`
+  - `cd F:/mcplugins/sub2api/backend && go test ./...`
+  - `cd F:/mcplugins/sub2api/backend && go test -tags=integration ./internal/repository -run "TestStudioBridgeRepository" -count=1`
+- 其他验证：两边 `git diff --check` 通过；本地 `chatgpt2api:local` 和 `sub2api:local` 容器健康，`/studio-bridge/launch` 不再 404。
+- 2026-06-10 02:38 本地复核：
+  - `docker ps` 显示 `chatgpt2api`、`sub2api` healthy；`http://127.0.0.1:8081/health` 返回 ok；`http://127.0.0.1:62080/` 返回 200。
+  - `cd F:/java/chatgpt2api && go test ./...` 通过。
+  - `cd F:/java/chatgpt2api/web && npm.cmd run lint` 通过。
+  - `cd F:/java/chatgpt2api/web && npm.cmd run build` 通过。
+  - `cd F:/mcplugins/sub2api/backend && go test ./...` 通过。
+  - `cd F:/mcplugins/sub2api/frontend && npm.cmd run test:run -- public-smoke` 通过。
+  - `cd F:/mcplugins/sub2api/frontend && npm.cmd run build` 通过，仅有既有 Vite chunk、Browserslist 和 Node deprecation 警告。
+  - `git diff --check` 两仓库均无 whitespace 错误，仅 LF/CRLF 工作区提示。
+  - 浏览器截图证据：`output/playwright/luoye-image-after-launch.png`、`output/playwright/luoye-account-menu.png`、`output/playwright/luoye-team-page.png`、`output/playwright/luoye-profile-page.png`。

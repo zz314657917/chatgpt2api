@@ -544,6 +544,12 @@ export type ManagedImageSummary = {
   name: string;
   path: string;
   owner_name?: string;
+  owner_id?: string;
+  library_scope?: "personal" | "team" | string;
+  team_id?: string;
+  team_name?: string;
+  moved_by_user_id?: string;
+  moved_at?: string;
   visibility: ImageVisibility;
   date: string;
   size: number;
@@ -561,7 +567,6 @@ export type ManagedImageSummary = {
 };
 
 export type ManagedImageDetail = ManagedImageSummary & {
-  owner_id?: string;
   prompt?: string;
   model?: ImageModel;
   quality?: ImageQuality;
@@ -592,12 +597,13 @@ export type ManagedImageDetail = ManagedImageSummary & {
 
 export type ManagedImage = ManagedImageDetail;
 
-export type ManagedImageListScope = "mine" | "public" | "all";
+export type ManagedImageListScope = "mine" | "team" | "public" | "all";
 
 export type ManagedImageListFilters = {
   start_date?: string;
   end_date?: string;
   scope?: ManagedImageListScope;
+  team_id?: string;
   page_size?: number;
   cursor?: string;
   search?: string;
@@ -616,6 +622,13 @@ export type ManagedImageListResult = {
   has_more: boolean;
   page_size: number;
   retention_days: number;
+  team?: {
+    id: string;
+    name?: string;
+    member_role?: "owner" | "manager" | "member" | string;
+    storage_limit_bytes?: number;
+  };
+  team_storage?: TeamImageStorageSummary;
 };
 
 export type SystemLog = {
@@ -1141,24 +1154,93 @@ export type WorkspaceScope = {
 export type TeamMember = {
   user_id: string;
   name: string;
-  role?: "owner" | "member" | string;
+  email?: string;
+  role?: "owner" | "manager" | "member" | string;
+  daily_limit_amount?: number;
   joined_at?: string | null;
+};
+
+export type TeamDailyLimitState = {
+  limit_amount: number;
+  used_amount: number;
+  remaining_amount: number;
+  unlimited: boolean;
+};
+
+export type TeamImageStorageSummary = {
+  team_id: string;
+  used_bytes: number;
+  limit_bytes: number;
+  remaining_bytes: number;
+  images_count: number;
+};
+
+export type TeamInvite = {
+  id: string;
+  team_id: string;
+  team_name?: string;
+  target_email: string;
+  role: "manager" | "member" | string;
+  status: "pending" | "accepted" | "revoked" | string;
+  invited_by_user_id?: string;
+  invited_by_name?: string;
+  can_revoke?: boolean;
+  created_at?: string | null;
+  updated_at?: string | null;
+  expires_at?: string | null;
 };
 
 export type TeamSummary = {
   id: string;
   name: string;
-  invite_code?: string;
   owner_user_id?: string;
   owner_name?: string;
   member_count?: number;
+  member_role?: "owner" | "manager" | "member" | string;
   members?: TeamMember[];
+  invites?: TeamInvite[];
+  my_daily_limit?: TeamDailyLimitState;
+  storage_limit_bytes?: number;
+  storage?: TeamImageStorageSummary;
   created_at?: string | null;
+  updated_at?: string | null;
 };
 
 export type TeamWorkspaceState = {
   scope: WorkspaceScope;
   teams: TeamSummary[];
+  pending_invites?: TeamInvite[];
+};
+
+export type TeamAuditLog = {
+  id: string;
+  team_id: string;
+  actor_user_id?: string;
+  actor_name?: string;
+  action?: string;
+  summary?: string;
+  target_email?: string;
+  target_user_id?: string;
+  target_role?: string;
+  created_at?: string | null;
+};
+
+export type TeamUsageTask = {
+  id: string;
+  status: string;
+  mode: string;
+  model?: string;
+  size?: string;
+  count?: number;
+  team_id?: string;
+  payer_user_id?: string;
+  actor_user_id?: string;
+  actor_name?: string;
+  billing_consumed_amount?: number;
+  billing_unit_amount?: number;
+  duration_seconds?: number;
+  created_at?: string | null;
+  updated_at?: string | null;
 };
 
 export type Announcement = {
@@ -1445,21 +1527,64 @@ export async function fetchTeamWorkspace() {
       ? { type: "team" as const, team_id: String(data.scope.team_id || "") }
       : { type: "personal" as const },
     teams: Array.isArray(data.teams) ? data.teams : [],
+    pending_invites: Array.isArray(data.pending_invites) ? data.pending_invites : [],
   };
 }
 
 export async function createTeam(name: string) {
-  return httpRequest<{ team: TeamSummary; workspace?: TeamWorkspaceState }>("/api/teams", {
+  return httpRequest<{ team: TeamSummary; teams?: TeamSummary[]; workspace?: TeamWorkspaceState }>("/api/teams", {
     method: "POST",
     body: { name },
   });
 }
 
-export async function joinTeam(inviteCode: string) {
-  return httpRequest<{ team: TeamSummary; workspace?: TeamWorkspaceState }>("/api/teams/join", {
+export async function createTeamInvite(teamId: string, email: string, role: "manager" | "member") {
+  return httpRequest<{ invite: TeamInvite; teams?: TeamSummary[]; workspace?: TeamWorkspaceState }>(`/api/teams/${encodeURIComponent(teamId)}/invites`, {
     method: "POST",
-    body: { invite_code: inviteCode },
+    body: { email, role },
   });
+}
+
+export async function acceptTeamInvite(inviteId: string) {
+  return httpRequest<{ team: TeamSummary; teams?: TeamSummary[]; workspace?: TeamWorkspaceState }>(`/api/team-invites/${encodeURIComponent(inviteId)}/accept`, {
+    method: "POST",
+  });
+}
+
+export async function revokeTeamInvite(inviteId: string) {
+  return httpRequest<{ invite: TeamInvite; teams?: TeamSummary[]; workspace?: TeamWorkspaceState }>(`/api/team-invites/${encodeURIComponent(inviteId)}`, {
+    method: "DELETE",
+  });
+}
+
+export async function updateTeamMemberRole(teamId: string, userId: string, role: "manager" | "member") {
+  return httpRequest<{ team: TeamSummary; teams?: TeamSummary[]; workspace?: TeamWorkspaceState }>(`/api/teams/${encodeURIComponent(teamId)}/members/${encodeURIComponent(userId)}`, {
+    method: "PATCH",
+    body: { role },
+  });
+}
+
+export async function updateTeamMemberDailyLimit(teamId: string, userId: string, dailyLimitAmount: number) {
+  return httpRequest<{ team: TeamSummary; teams?: TeamSummary[]; workspace?: TeamWorkspaceState }>(`/api/teams/${encodeURIComponent(teamId)}/members/${encodeURIComponent(userId)}`, {
+    method: "PATCH",
+    body: { daily_limit_amount: dailyLimitAmount },
+  });
+}
+
+export async function removeTeamMember(teamId: string, userId: string) {
+  return httpRequest<{ team: TeamSummary; teams?: TeamSummary[]; workspace?: TeamWorkspaceState }>(`/api/teams/${encodeURIComponent(teamId)}/members/${encodeURIComponent(userId)}`, {
+    method: "DELETE",
+  });
+}
+
+export async function fetchTeamAuditLogs(teamId: string, limit = 100) {
+  const params = new URLSearchParams({ limit: String(limit) });
+  return httpRequest<{ items: TeamAuditLog[] }>(`/api/teams/${encodeURIComponent(teamId)}/audit-logs?${params.toString()}`);
+}
+
+export async function fetchTeamUsage(teamId: string, limit = 100) {
+  const params = new URLSearchParams({ limit: String(limit) });
+  return httpRequest<{ items: TeamUsageTask[] }>(`/api/teams/${encodeURIComponent(teamId)}/usage?${params.toString()}`);
 }
 
 export async function switchWorkspace(scope: WorkspaceScope) {
@@ -2153,6 +2278,8 @@ export async function fetchManagedImages(
     has_more?: boolean | null;
     page_size?: number | null;
     retention_days?: number | string | null;
+    team?: ManagedImageListResult["team"] | null;
+    team_storage?: TeamImageStorageSummary | null;
   }>(
     `/api/images${params.toString() ? `?${params.toString()}` : ""}`,
     { signal: options.signal },
@@ -2164,16 +2291,19 @@ export async function fetchManagedImages(
     has_more: data.has_more === true,
     page_size: Number(data.page_size ?? filters.page_size ?? 50) || 50,
     retention_days: Math.max(1, Number(data.retention_days) || 7),
+    team: data.team || undefined,
+    team_storage: data.team_storage || undefined,
   };
 }
 
 export async function fetchManagedImageDetail(
   path: string,
-  filters: { scope?: ManagedImageListScope } = {},
+  filters: { scope?: ManagedImageListScope; team_id?: string } = {},
   options: { signal?: AbortSignal } = {},
 ) {
   const params = new URLSearchParams({ path });
   if (filters.scope) params.set("scope", filters.scope);
+  if (filters.team_id) params.set("team_id", filters.team_id);
   const data = await httpRequest<{ item: ManagedImageDetail }>(
     `/api/images/detail?${params.toString()}`,
     { signal: options.signal },
@@ -2202,7 +2332,7 @@ export async function uploadManagedImages(
 export async function updateManagedImageVisibility(
   path: string,
   visibility: ImageVisibility,
-  options: { sharePromptParameters?: boolean; shareReferenceImages?: boolean } = {},
+  options: { sharePromptParameters?: boolean; shareReferenceImages?: boolean; scope?: ManagedImageListScope; team_id?: string } = {},
 ) {
   return httpRequest<{ item: Partial<ManagedImageDetail> & { path: string; visibility: ImageVisibility } }>(
     "/api/images/visibility",
@@ -2211,6 +2341,8 @@ export async function updateManagedImageVisibility(
       body: {
         path,
         visibility,
+        ...(options.scope ? { scope: options.scope } : {}),
+        ...(options.team_id ? { team_id: options.team_id } : {}),
         ...(visibility === "public" && options.sharePromptParameters ? { share_prompt_parameters: true } : {}),
         ...(visibility === "public" && options.sharePromptParameters && options.shareReferenceImages ? { share_reference_images: true } : {}),
       },
@@ -2218,36 +2350,50 @@ export async function updateManagedImageVisibility(
   );
 }
 
-export async function fetchManagedImageTags(filters: { scope?: ManagedImageListScope } = {}) {
+export async function fetchManagedImageTags(filters: { scope?: ManagedImageListScope; team_id?: string } = {}) {
   const params = new URLSearchParams();
   if (filters.scope) params.set("scope", filters.scope);
+  if (filters.team_id) params.set("team_id", filters.team_id);
   const data = await httpRequest<{ tags?: string[] | null }>(
     `/api/images/tags${params.toString() ? `?${params.toString()}` : ""}`,
   );
   return Array.isArray(data.tags) ? data.tags : [];
 }
 
-export async function updateManagedImageTags(path: string, tags: string[]) {
+export async function updateManagedImageTags(path: string, tags: string[], options: { scope?: ManagedImageListScope; team_id?: string } = {}) {
   return httpRequest<{ item: Partial<ManagedImageDetail> & { path: string; tags?: string[] }; tags?: string[] | null }>(
     "/api/images/tags",
     {
       method: "PATCH",
-      body: { path, tags },
+      body: { path, tags, ...(options.scope ? { scope: options.scope } : {}), ...(options.team_id ? { team_id: options.team_id } : {}) },
     },
   );
 }
 
-export async function deleteManagedImageTag(tag: string) {
+export async function deleteManagedImageTag(tag: string, options: { scope?: ManagedImageListScope; team_id?: string } = {}) {
   return httpRequest<{ deleted: number; tag: string; paths: string[] }>("/api/images/tags", {
     method: "DELETE",
-    body: { tag },
+    body: { tag, ...(options.scope ? { scope: options.scope } : {}), ...(options.team_id ? { team_id: options.team_id } : {}) },
   });
 }
 
-export async function deleteManagedImages(paths: string[]) {
-  return httpRequest<{ deleted: number; missing: number; paths: string[] }>("/api/images", {
+export async function deleteManagedImages(paths: string[], options: { scope?: ManagedImageListScope; team_id?: string } = {}) {
+  return httpRequest<{ deleted: number; missing: number; paths: string[]; team_storage?: TeamImageStorageSummary }>("/api/images", {
     method: "DELETE",
-    body: { paths },
+    body: { paths, ...(options.scope ? { scope: options.scope } : {}), ...(options.team_id ? { team_id: options.team_id } : {}) },
+  });
+}
+
+export async function moveManagedImagesToTeamLibrary(paths: string[], teamId: string) {
+  return httpRequest<{
+    moved: number;
+    paths: string[];
+    team_id: string;
+    required_bytes: number;
+    storage?: TeamImageStorageSummary;
+  }>("/api/images/library-scope", {
+    method: "PATCH",
+    body: { paths, target_scope: "team", team_id: teamId },
   });
 }
 

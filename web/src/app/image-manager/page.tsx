@@ -1,7 +1,7 @@
 "use client";
 
 import { forwardRef, useCallback, useEffect, useMemo, useRef, useState, type HTMLAttributes } from "react";
-import { Check, Copy, Download, Eye, Globe2, ImageIcon, Info, LoaderCircle, Lock, MoreHorizontal, RefreshCw, Search, SlidersHorizontal, Sparkles, Tag, Trash2, X } from "lucide-react";
+import { Check, Copy, Download, Eye, Globe2, ImageIcon, Info, LoaderCircle, Lock, MoreHorizontal, RefreshCw, Search, Send, SlidersHorizontal, Sparkles, Tag, Trash2, Users, X } from "lucide-react";
 import { VirtuosoGrid, type VirtuosoGridHandle } from "react-virtuoso";
 import { useLocation, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
@@ -10,7 +10,6 @@ import { writeSimilarImageIntent } from "@/app/image/similar-image-intent";
 import { AuthenticatedImage } from "@/components/authenticated-image";
 import { DateRangeFilter } from "@/components/date-range-filter";
 import { ImageLightbox } from "@/components/image-lightbox";
-import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -27,20 +26,25 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   deleteManagedImages,
+  fetchTeamWorkspace,
   fetchManagedImageTags,
   fetchManagedImageDetail,
   fetchManagedImages,
+  moveManagedImagesToTeamLibrary,
   updateManagedImageTags,
   updateManagedImageVisibility,
   type ImageVisibility,
   type ManagedImageDetail,
   type ManagedImageSummary,
+  type TeamImageStorageSummary,
+  type TeamSummary,
 } from "@/lib/api";
 import {
   fetchAuthenticatedImageBlob,
   invalidateAuthenticatedImageCacheForPaths,
   shouldUseAuthenticatedImageFallback,
 } from "@/lib/authenticated-image";
+import { getManagedImageUrlFromPath } from "@/lib/image-path";
 import {
   clearImageManagerCache,
   getImageManagerCache,
@@ -78,7 +82,7 @@ function managedImageDetailCacheKey(item: ManagedImageSummary, scope?: ImageGall
 }
 
 function managedImageDetailCacheKeys(item: ManagedImageSummary) {
-  return ["mine", "public", "all"].map((scope) => managedImageDetailCacheKey(item, scope as ImageGalleryView));
+  return ["mine", "team", "public", "all"].map((scope) => managedImageDetailCacheKey(item, scope as ImageGalleryView));
 }
 
 function buildManagedImageDownloadName(item: ManagedImageSummary, index: number) {
@@ -98,16 +102,24 @@ function imageDownloadErrorMessage(error: unknown) {
 
 async function downloadManagedImage(item: ManagedImageDetail, index: number) {
   let objectUrl = "";
+  const downloadUrl = item.url || (item.path ? getManagedImageUrlFromPath(item.path) : "");
+  const fallbackUrl = item.path ? getManagedImageUrlFromPath(item.path) : "";
 
   try {
-    const blob = shouldUseAuthenticatedImageFallback(item.url)
-      ? await fetchAuthenticatedImageBlob(item.url)
-      : await fetch(item.url).then((response) => {
+    const fetchBlob = (url: string) => shouldUseAuthenticatedImageFallback(url)
+      ? fetchAuthenticatedImageBlob(url)
+      : fetch(url).then((response) => {
         if (!response.ok) {
           throw new Error(`下载图片失败 (${response.status})`);
         }
         return response.blob();
       });
+    const blob = await fetchBlob(downloadUrl).catch((error) => {
+      if (fallbackUrl && fallbackUrl !== downloadUrl) {
+        return fetchBlob(fallbackUrl);
+      }
+      throw error;
+    });
     objectUrl = URL.createObjectURL(blob);
   } catch (error) {
     throw new Error(imageDownloadErrorMessage(error));
@@ -142,6 +154,10 @@ type TagEditTarget = {
 };
 
 type PublishImageTarget = {
+  items: ManagedImageSummary[];
+};
+
+type MoveTeamTarget = {
   items: ManagedImageSummary[];
 };
 
@@ -184,6 +200,24 @@ function imageOwnerLabel(item: ManagedImageSummary) {
   return item.owner_name?.trim() || "未知用户";
 }
 
+function canManageTeamImages(team?: TeamSummary | null) {
+  return team?.member_role === "owner" || team?.member_role === "manager";
+}
+
+function formatStorageBytes(bytes?: number) {
+  const value = Math.max(0, Number(bytes) || 0);
+  if (value >= 1024 * 1024 * 1024) {
+    return `${(value / 1024 / 1024 / 1024).toFixed(value >= 10 * 1024 * 1024 * 1024 ? 0 : 1)} GiB`;
+  }
+  if (value >= 1024 * 1024) {
+    return `${(value / 1024 / 1024).toFixed(value >= 10 * 1024 * 1024 ? 0 : 1)} MiB`;
+  }
+  if (value >= 1024) {
+    return `${(value / 1024).toFixed(1)} KiB`;
+  }
+  return `${value} B`;
+}
+
 function normalizeImageTags(value: string | string[] | undefined) {
   const raw = Array.isArray(value) ? value : (value || "").split(/[,，\n\t]/);
   const seen = new Set<string>();
@@ -206,13 +240,14 @@ function reusableImagePrompt(item: ManagedImageDetail) {
 }
 
 function reusableImageReferenceUrls(item: ManagedImageDetail) {
+  const originalUrl = item.url || (item.path ? getManagedImageUrlFromPath(item.path) : "");
   if (!item.share_reference_images) {
-    return [item.url];
+    return [originalUrl];
   }
   const urls = item.reference_image_urls?.length
     ? item.reference_image_urls
     : item.reference_images?.map((reference) => reference.url || "").filter(Boolean);
-  return urls && urls.length > 0 ? Array.from(new Set(urls.map((url) => url.trim()).filter(Boolean))) : [item.url];
+  return urls && urls.length > 0 ? Array.from(new Set(urls.map((url) => url.trim()).filter(Boolean))) : [originalUrl];
 }
 
 function managedImageDimensions(item: ManagedImageSummary) {
@@ -379,6 +414,10 @@ function ImageManagerContent({
     sharePromptParameters: false,
     shareReferenceImages: false,
   });
+  const [teamImagesTarget, setTeamImagesTarget] = useState<MoveTeamTarget | null>(null);
+  const [activeTeam, setActiveTeam] = useState<TeamSummary | null>(null);
+  const [teamStorage, setTeamStorage] = useState<TeamImageStorageSummary | null>(null);
+  const [isMovingToTeam, setIsMovingToTeam] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [visibilityMutatingPath, setVisibilityMutatingPath] = useState<string | null>(null);
   const [focusedImagePath, setFocusedImagePath] = useState<string | null>(null);
@@ -445,10 +484,13 @@ function ImageManagerContent({
     if (cached) {
       return cached;
     }
-    const detail = await fetchManagedImageDetail(item.path, { scope: galleryView });
+    const detail = await fetchManagedImageDetail(item.path, {
+      scope: galleryView,
+      team_id: galleryView === "team" ? activeTeam?.id || "" : "",
+    });
     setDetailItemsByPath((current) => ({ ...current, [cacheKey]: detail }));
     return detail;
-  }, [detailItemsByPath, galleryView]);
+  }, [activeTeam?.id, detailItemsByPath, galleryView]);
   const lightboxImages = useMemo(
     () =>
       items.map((item) => {
@@ -488,9 +530,18 @@ function ImageManagerContent({
     () => selectedItems.filter((item) => item.visibility === "public"),
     [selectedItems],
   );
+  const hasTeamLibrary = Boolean(activeTeam?.id);
+  const teamManager = canManageTeamImages(activeTeam);
   const selectedCount = selectedItems.length;
   const allSelected = items.length > 0 && selectedCount === items.length;
-  const isMutatingImages = downloadingKey !== null || isDeleting || visibilityMutatingPath !== null || tagMutatingPath !== null;
+  const libraryViewLabel = galleryView === "team" ? "团队" : galleryView === "all" ? "全部" : galleryView === "public" ? "公共" : "个人";
+  const imageCountLabel = hasMoreItems ? `已加载 ${items.length} 张` : `当前 ${items.length} 张`;
+  const libraryHintText = galleryView === "team" && teamStorage
+    ? `容量 ${formatStorageBytes(teamStorage.used_bytes)} / ${formatStorageBytes(teamStorage.limit_bytes)}，剩余 ${formatStorageBytes(teamStorage.remaining_bytes)}。`
+    : galleryView === "public"
+      ? "公共图库展示已公开的图片，可直接引用。"
+      : `仅保留最近 ${imageRetentionDays} 天，过期图片会自动清理。`;
+  const isMutatingImages = downloadingKey !== null || isDeleting || isMovingToTeam || visibilityMutatingPath !== null || tagMutatingPath !== null;
   const showImageLoadingState = isLoading && items.length === 0;
   const showImageErrorState = !isLoading && loadError !== "" && items.length === 0;
   const showImageEmptyState = !isLoading && loadError === "" && items.length === 0;
@@ -501,6 +552,7 @@ function ImageManagerContent({
   }, []);
   const buildImageListFilters = useCallback((cursor = "") => ({
     scope: galleryView,
+    team_id: galleryView === "team" ? activeTeam?.id || "" : "",
     start_date: startDate,
     end_date: endDate,
     page_size: IMAGE_MANAGER_PAGE_SIZE,
@@ -512,7 +564,7 @@ function ImageManagerContent({
     resolution: resolutionFilter,
     aspect_ratio: aspectRatioFilter,
     tags: selectedTags,
-  }), [aspectRatioFilter, endDate, formatFilter, galleryView, orientationFilter, resolutionFilter, searchKeyword, selectedTags, startDate, visibilityFilter]);
+  }), [activeTeam?.id, aspectRatioFilter, endDate, formatFilter, galleryView, orientationFilter, resolutionFilter, searchKeyword, selectedTags, startDate, visibilityFilter]);
 
   const keepImageGridScrollInBounds = useCallback(() => {
     window.requestAnimationFrame(() => {
@@ -527,6 +579,41 @@ function ImageManagerContent({
   useEffect(() => {
     keepImageGridScrollInBounds();
   }, [items.length, keepImageGridScrollInBounds]);
+
+  useEffect(() => {
+    let canceled = false;
+    fetchTeamWorkspace()
+      .then((workspace) => {
+        if (canceled) return;
+        const team = Array.isArray(workspace.teams) ? workspace.teams[0] : undefined;
+        setActiveTeam(team || null);
+        setTeamStorage(team?.storage || null);
+      })
+      .catch(() => {
+        if (!canceled) {
+          setActiveTeam(null);
+          setTeamStorage(null);
+        }
+      });
+    return () => {
+      canceled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (galleryView === "all") {
+      setGalleryView("mine");
+      setSelectedImageIds({});
+      clearLoadedItemsForQueryChange();
+      setLoadError("");
+    }
+  }, [clearLoadedItemsForQueryChange, galleryView]);
+
+  useEffect(() => {
+    if (galleryView === "team" && !activeTeam?.id) {
+      setGalleryView("mine");
+    }
+  }, [activeTeam?.id, galleryView]);
 
   const openImagePreview = useCallback((_item: ManagedImageSummary, index: number) => {
     setLightboxIndex(index);
@@ -571,6 +658,9 @@ function ImageManagerContent({
       updateImageManagerCache(currentCacheKey, data.items, data.next_cursor, data.has_more, data.retention_days);
       setItems(data.items);
       setImageRetentionDays(data.retention_days);
+      if (data.team_storage) {
+        setTeamStorage(data.team_storage);
+      }
       setNextCursor(data.next_cursor);
       setHasMoreItems(data.has_more);
       setSelectedImageIds({});
@@ -611,9 +701,15 @@ function ImageManagerContent({
       });
       if (hasSameItems) {
         setImageRetentionDays(data.retention_days);
+        if (data.team_storage) {
+          setTeamStorage(data.team_storage);
+        }
         return;
       }
       setImageRetentionDays(data.retention_days);
+      if (data.team_storage) {
+        setTeamStorage(data.team_storage);
+      }
       setItems((current) => {
         const next = data.items.map((item) => ({ ...current.find((currentItem) => currentItem.path === item.path), ...item }));
         if (next.length === current.length && next.every((item, index) => item.path === current[index]?.path && JSON.stringify(item) === JSON.stringify(current[index]))) {
@@ -858,7 +954,7 @@ function ImageManagerContent({
   };
 
   const openDeleteConfirm = (targetItems: ManagedImageSummary[]) => {
-    if (!canDeleteImages) {
+    if (!canDeleteImages || (galleryView === "team" && !teamManager)) {
       return;
     }
     const paths = Array.from(new Set(targetItems.map((item) => item.path)));
@@ -869,8 +965,56 @@ function ImageManagerContent({
     setDeleteTarget({ paths });
   };
 
+  const openMoveToTeamConfirm = (targetItems: ManagedImageSummary[]) => {
+    if (!activeTeam?.id) {
+      toast.error("当前没有可用团队");
+      return;
+    }
+    const pendingItems = targetItems.filter((item) => item.library_scope !== "team");
+    if (pendingItems.length === 0) {
+      toast.info("所选图片已在团队图片库");
+      return;
+    }
+    setTeamImagesTarget({ items: pendingItems });
+  };
+
+  const handleConfirmMoveToTeam = async () => {
+    if (!activeTeam?.id || !teamImagesTarget || isMovingToTeam) {
+      return;
+    }
+    const paths = Array.from(new Set(teamImagesTarget.items.map((item) => item.path)));
+    if (paths.length === 0) {
+      setTeamImagesTarget(null);
+      return;
+    }
+    const pathSet = new Set(paths);
+    setIsMovingToTeam(true);
+    try {
+      const data = await moveManagedImagesToTeamLibrary(paths, activeTeam.id);
+      clearImageManagerCache();
+      if (data.storage) {
+        setTeamStorage(data.storage);
+      }
+      setItems((current) => current.filter((item) => !pathSet.has(item.path)));
+      setSelectedImageIds((current) => {
+        const next = { ...current };
+        paths.forEach((path) => {
+          delete next[path];
+        });
+        return next;
+      });
+      setTeamImagesTarget(null);
+      keepImageGridScrollInBounds();
+      toast.success(`已移动 ${data.moved} 张图片到团队图片库`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "移动到团队图片库失败");
+    } finally {
+      setIsMovingToTeam(false);
+    }
+  };
+
   const handleConfirmDelete = async () => {
-    if (!canDeleteImages || !deleteTarget || isDeleting) {
+    if (!canDeleteImages || (galleryView === "team" && !teamManager) || !deleteTarget || isDeleting) {
       return;
     }
 
@@ -878,7 +1022,11 @@ function ImageManagerContent({
     const pathSet = new Set(paths);
     setIsDeleting(true);
     try {
-      const data = await deleteManagedImages(paths);
+      const deleteOptions = galleryView === "team" && activeTeam?.id ? { scope: "team" as const, team_id: activeTeam.id } : {};
+      const data = await deleteManagedImages(paths, deleteOptions);
+      if ("team_storage" in data && data.team_storage) {
+        setTeamStorage(data.team_storage);
+      }
       removeCachedManagedImages(paths);
       invalidateAuthenticatedImageCacheForPaths(paths);
       setItems((current) => current.filter((item) => !pathSet.has(item.path)));
@@ -919,7 +1067,8 @@ function ImageManagerContent({
     visibility: ImageVisibility,
     options: PublishRecipeOptions = { sharePromptParameters: false, shareReferenceImages: false },
   ) => {
-    if (!canUpdateImageVisibility || galleryView !== "mine" || visibilityMutatingPath) {
+    const canMutateScope = galleryView === "mine" || Boolean(galleryView === "team" && teamManager && activeTeam?.id);
+    if (!canUpdateImageVisibility || !canMutateScope || visibilityMutatingPath) {
       return;
     }
     const previousVisibility = item.visibility;
@@ -932,7 +1081,8 @@ function ImageManagerContent({
     }
     setVisibilityMutatingPath(item.path);
     try {
-      const data = await updateManagedImageVisibility(item.path, visibility, options);
+      const scopeOptions = galleryView === "team" && activeTeam?.id ? { scope: "team" as const, team_id: activeTeam.id } : {};
+      const data = await updateManagedImageVisibility(item.path, visibility, { ...options, ...scopeOptions });
       const updated = {
         ...data.item,
         path: item.path,
@@ -971,7 +1121,8 @@ function ImageManagerContent({
     visibility: ImageVisibility,
     options: PublishRecipeOptions = { sharePromptParameters: false, shareReferenceImages: false },
   ) => {
-    if (!canUpdateImageVisibility || galleryView !== "mine" || visibilityMutatingPath) {
+    const canMutateScope = galleryView === "mine" || Boolean(galleryView === "team" && teamManager && activeTeam?.id);
+    if (!canUpdateImageVisibility || !canMutateScope || visibilityMutatingPath) {
       return;
     }
     const pendingItems = targetItems.filter((item) => item.visibility !== visibility);
@@ -987,7 +1138,8 @@ function ImageManagerContent({
     try {
       const results = await Promise.allSettled(
         pendingItems.map(async (item) => {
-          const data = await updateManagedImageVisibility(item.path, visibility, options);
+          const scopeOptions = galleryView === "team" && activeTeam?.id ? { scope: "team" as const, team_id: activeTeam.id } : {};
+          const data = await updateManagedImageVisibility(item.path, visibility, { ...options, ...scopeOptions });
           return {
             ...data.item,
             path: item.path,
@@ -1053,7 +1205,7 @@ function ImageManagerContent({
   };
 
   const openTagEditor = (item: ManagedImageSummary) => {
-    if (!canEditImageTags) {
+    if (!canEditImageTags || (galleryView === "team" && !teamManager)) {
       return;
     }
     setTagEditTarget({ item });
@@ -1061,14 +1213,15 @@ function ImageManagerContent({
   };
 
   const handleSaveImageTags = async () => {
-    if (!canEditImageTags || !tagEditTarget || tagMutatingPath) {
+    if (!canEditImageTags || (galleryView === "team" && !teamManager) || !tagEditTarget || tagMutatingPath) {
       return;
     }
     const tags = normalizeImageTags(tagInput);
     const path = tagEditTarget.item.path;
     setTagMutatingPath(path);
     try {
-      const data = await updateManagedImageTags(path, tags);
+      const tagOptions = galleryView === "team" && activeTeam?.id ? { scope: "team" as const, team_id: activeTeam.id } : {};
+      const data = await updateManagedImageTags(path, tags, tagOptions);
       const updatedTags = normalizeImageTags(data.item.tags || tags);
       clearImageManagerCache();
       setAllImageTags((current) => normalizeImageTags([...current, ...updatedTags]));
@@ -1102,7 +1255,7 @@ function ImageManagerContent({
 
   useEffect(() => {
     let canceled = false;
-    fetchManagedImageTags({ scope: galleryView })
+    fetchManagedImageTags({ scope: galleryView, team_id: galleryView === "team" ? activeTeam?.id || "" : "" })
       .then((tags) => {
         if (!canceled) {
           setAllImageTags(tags);
@@ -1116,7 +1269,7 @@ function ImageManagerContent({
     return () => {
       canceled = true;
     };
-  }, [galleryView, items]);
+  }, [activeTeam?.id, galleryView, items]);
 
   useEffect(() => {
     if (!isAutoRefreshEnabled) {
@@ -1393,25 +1546,15 @@ function ImageManagerContent({
   );
 
   return (
-    <section className="flex h-full min-h-0 flex-col gap-5 pb-20 sm:pb-24">
-      <div className="flex min-w-0 flex-col gap-2">
-        <PageHeader eyebrow="Images" title="图片库" />
-        {galleryView === "mine" ? (
-          <div className="inline-flex w-fit max-w-full items-center gap-2 rounded-full border border-border bg-background/70 px-3 py-1.5 text-xs leading-5 text-muted-foreground shadow-sm">
-            <Info className="size-3.5 shrink-0" />
-            <span className="min-w-0">个人图库仅保留最近 {imageRetentionDays} 天，过期图片会自动清理。</span>
-          </div>
-        ) : null}
-      </div>
-
+    <section className="flex h-full min-h-0 flex-col gap-4 pt-3 pb-20 sm:pb-24">
       <div className="grid min-w-0 gap-4 lg:grid-cols-[300px_minmax(0,1fr)] xl:grid-cols-[320px_minmax(0,1fr)]">
-        <aside className="min-w-0 rounded-[18px] border border-border bg-background/80 p-3 shadow-[0_6px_20px_rgba(15,23,42,0.04)] sm:p-4 lg:sticky lg:top-24 lg:self-start">
-          <div className="flex min-w-0 flex-col gap-2">
+        <aside className="flex min-w-0 flex-col gap-3 rounded-[18px] border border-border bg-background/80 p-3 shadow-[0_6px_20px_rgba(15,23,42,0.04)] sm:p-4 lg:sticky lg:top-4 lg:self-start">
+          <div className="flex min-h-[58px] min-w-0 flex-col justify-start gap-2">
             <div className="inline-flex w-full rounded-lg border border-border bg-muted/50 p-1">
               {[
-                { value: "mine" as const, label: "个人图库", icon: ImageIcon },
-                { value: "public" as const, label: "公开图库", icon: Globe2 },
-                ...(isAdmin ? [{ value: "all" as const, label: "全部", icon: SlidersHorizontal }] : []),
+                { value: "mine" as const, label: "个人", icon: ImageIcon },
+                ...(hasTeamLibrary ? [{ value: "team" as const, label: "团队", icon: Users }] : []),
+                { value: "public" as const, label: "公共", icon: Globe2 },
               ].map((option) => {
                 const Icon = option.icon;
                 const active = galleryView === option.value;
@@ -1419,7 +1562,7 @@ function ImageManagerContent({
                   <button
                     key={option.value}
                     type="button"
-                    className={`inline-flex h-8 flex-1 items-center justify-center gap-1.5 whitespace-nowrap rounded-md px-3 text-sm font-medium transition ${
+                    className={`inline-flex h-8 min-w-0 flex-1 basis-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-md px-3 text-sm font-medium transition ${
                       active
                         ? "bg-background text-foreground shadow-sm"
                         : "text-muted-foreground hover:text-foreground"
@@ -1433,10 +1576,10 @@ function ImageManagerContent({
                 );
               })}
             </div>
-            <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
+            <div className="flex h-5 min-w-0 items-center gap-x-2 text-sm text-muted-foreground">
               <ImageIcon className="size-4 shrink-0" />
-              <span>{galleryView === "mine" ? "个人图库" : galleryView === "all" ? "全部图片" : "公开图库"}</span>
-              <span>{hasMoreItems ? `已加载 ${items.length} 张` : `共 ${items.length} 张`}</span>
+              <span className="shrink-0">{libraryViewLabel}</span>
+              <span className="min-w-0 truncate">{imageCountLabel}</span>
             </div>
           </div>
 
@@ -1514,6 +1657,10 @@ function ImageManagerContent({
                 </div>
               ) : null}
               {renderAutoRefreshControls("mobile", "mt-2 flex min-w-0 items-center gap-2")}
+              <div className="mt-2 flex min-w-0 items-start gap-1.5 rounded-xl border border-border bg-background/60 px-3 py-2 text-xs leading-5 text-muted-foreground">
+                <Info className="mt-0.5 size-3.5 shrink-0" />
+                <span className="min-w-0">{libraryHintText}</span>
+              </div>
             </div>
 
             <div className="hidden flex-col gap-2 md:flex">
@@ -1526,13 +1673,16 @@ function ImageManagerContent({
                 {renderAutoRefreshControls("desktop", "col-span-2 flex min-w-0 items-center gap-2")}
               </div>
               {renderTagFilters()}
+              <div className="flex min-w-0 items-start gap-1.5 rounded-xl border border-border bg-background/60 px-3 py-2 text-xs leading-5 text-muted-foreground">
+                <Info className="mt-0.5 size-3.5 shrink-0" />
+                <span className="min-w-0">{libraryHintText}</span>
+              </div>
             </div>
           </div>
 
         </aside>
 
         <div className="min-w-0">
-
         <Popover open={isImageActionsOpen} onOpenChange={setIsImageActionsOpen}>
           <div className="fixed right-4 bottom-[calc(env(safe-area-inset-bottom)+1rem)] z-40 sm:right-6 sm:bottom-6">
             <PopoverTrigger asChild>
@@ -1570,7 +1720,7 @@ function ImageManagerContent({
                   <Check className="size-4" />
                   {allSelected ? "取消全选" : "全选"}
                 </Button>
-                {galleryView === "mine" && canUpdateImageVisibility ? (
+                {(galleryView === "mine" || (galleryView === "team" && teamManager)) && canUpdateImageVisibility ? (
                   <>
                     <Button
                       type="button"
@@ -1602,6 +1752,21 @@ function ImageManagerContent({
                     </Button>
                   </>
                 ) : null}
+                {galleryView === "mine" && hasTeamLibrary ? (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    className="h-10 justify-start rounded-lg px-3 text-sm"
+                    disabled={selectedCount === 0 || isMutatingImages}
+                    onClick={() => {
+                      setIsImageActionsOpen(false);
+                      openMoveToTeamConfirm(selectedItems);
+                    }}
+                  >
+                    {isMovingToTeam ? <LoaderCircle className="size-4 animate-spin" /> : <Send className="size-4" />}
+                    移动到团队图片库 ({selectedCount})
+                  </Button>
+                ) : null}
                 <Button
                   type="button"
                   variant="ghost"
@@ -1616,7 +1781,7 @@ function ImageManagerContent({
                   )}
                   下载已选 ({selectedCount})
                 </Button>
-                {canDeleteImages ? (
+                {canDeleteImages && (galleryView !== "team" || teamManager) ? (
                   <Button
                     type="button"
                     variant="ghost"
@@ -1716,8 +1881,8 @@ function ImageManagerContent({
                 const sizeLabel = formatImageFileSize(item.size);
                 const imageMeta = [dimensions, ratioLabel, megapixelsLabel, sizeLabel].filter(Boolean).join(" | ");
                 const ownerLabel = imageOwnerLabel(item);
-                const canToggleVisibility = galleryView === "mine" && canUpdateImageVisibility;
-                const showVisibilityStatus = galleryView === "mine" || (isAdmin && (galleryView === "public" || galleryView === "all"));
+                const canToggleVisibility = (galleryView === "mine" || (galleryView === "team" && teamManager)) && canUpdateImageVisibility;
+                const showVisibilityStatus = galleryView === "mine" || galleryView === "team" || (isAdmin && (galleryView === "public" || galleryView === "all"));
                 return (
                   <figure
                     className={cn(
@@ -1810,7 +1975,7 @@ function ImageManagerContent({
                           <Sparkles className="size-3.5" />
                         </button>
                       ) : null}
-                      {galleryView !== "public" && canEditImageTags ? (
+                      {galleryView !== "public" && canEditImageTags && (galleryView !== "team" || teamManager) ? (
                         <button
                           type="button"
                           onClick={(event) => {
@@ -1823,6 +1988,21 @@ function ImageManagerContent({
                           title="编辑标签"
                         >
                           {tagMutatingPath === item.path ? <LoaderCircle className="size-3.5 animate-spin" /> : <Tag className="size-3.5" />}
+                        </button>
+                      ) : null}
+                      {galleryView === "mine" && hasTeamLibrary ? (
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.currentTarget.blur();
+                            openMoveToTeamConfirm([item]);
+                          }}
+                          disabled={isMovingToTeam}
+                          className="inline-flex size-7 items-center justify-center rounded-full bg-white/95 text-[#1456f0] shadow-sm transition hover:bg-[#e8f2ff] disabled:cursor-not-allowed disabled:opacity-60"
+                          aria-label="移动到团队图片库"
+                          title="移动到团队图片库"
+                        >
+                          {isMovingToTeam && teamImagesTarget?.items.some((target) => target.path === item.path) ? <LoaderCircle className="size-3.5 animate-spin" /> : <Send className="size-3.5" />}
                         </button>
                       ) : null}
                       {galleryView !== "mine" ? (
@@ -1839,7 +2019,7 @@ function ImageManagerContent({
                           <Copy className="size-3.5" />
                         </button>
                       ) : null}
-                      {canDeleteImages ? (
+                      {canDeleteImages && (galleryView !== "team" || teamManager) ? (
                         <button
                           type="button"
                           onClick={(event) => {
@@ -1938,6 +2118,8 @@ function ImageManagerContent({
                     ? "调整关键词、状态、格式或方向筛选后再试。"
                     : galleryView === "mine"
                       ? "图片生成成功后会自动进入个人图库。"
+                      : galleryView === "team"
+                        ? "团队图片库暂无图片，可从个人图库移动图片到团队空间。"
                       : galleryView === "all"
                         ? "暂无可管理图片。"
                         : "公开图库暂无公开图片。"}
@@ -1956,6 +2138,58 @@ function ImageManagerContent({
         onIndexChange={setLightboxIndex}
         resolveDownloadSource={resolveLightboxDownloadSource}
       />
+      {teamImagesTarget ? (
+        <Dialog open onOpenChange={(open) => (!open && !isMovingToTeam ? setTeamImagesTarget(null) : null)}>
+          <DialogContent showCloseButton={false} className="rounded-2xl p-6">
+            <DialogHeader className="gap-2">
+              <DialogTitle>移动到团队图片库</DialogTitle>
+              <DialogDescription className="text-sm leading-6">
+                将 {teamImagesTarget.items.length} 张图片移动到 {activeTeam?.name || "团队图片库"}。移动后不再计入个人图库保留数量。
+              </DialogDescription>
+            </DialogHeader>
+            <div className="rounded-xl border border-border bg-muted/40 p-3 text-sm">
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-muted-foreground">本次占用</span>
+                <span className="font-medium text-foreground">{formatStorageBytes(teamImagesTarget.items.reduce((sum, item) => sum + (Number(item.size) || 0), 0))}</span>
+              </div>
+              {teamStorage ? (
+                <>
+                  <div className="mt-2 flex items-center justify-between gap-3">
+                    <span className="text-muted-foreground">当前团队空间</span>
+                    <span className="font-medium text-foreground">{formatStorageBytes(teamStorage.used_bytes)} / {formatStorageBytes(teamStorage.limit_bytes)}</span>
+                  </div>
+                  <div className="mt-2 h-2 overflow-hidden rounded-full bg-background">
+                    <div
+                      className="h-full rounded-full bg-[#21b8a6]"
+                      style={{ width: `${Math.min(100, Math.max(0, (teamStorage.used_bytes / Math.max(1, teamStorage.limit_bytes)) * 100))}%` }}
+                    />
+                  </div>
+                </>
+              ) : null}
+            </div>
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                className="h-10 rounded-xl border-stone-200 bg-white px-5 text-stone-700 hover:bg-stone-50"
+                onClick={() => setTeamImagesTarget(null)}
+                disabled={isMovingToTeam}
+              >
+                取消
+              </Button>
+              <Button
+                type="button"
+                className="h-10 rounded-xl px-5"
+                onClick={() => void handleConfirmMoveToTeam()}
+                disabled={isMovingToTeam}
+              >
+                {isMovingToTeam ? <LoaderCircle className="size-4 animate-spin" /> : <Send className="size-4" />}
+                移动
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      ) : null}
       {publishTarget ? (
         <Dialog open onOpenChange={(open) => (!open && !visibilityMutatingPath ? setPublishTarget(null) : null)}>
           <DialogContent showCloseButton={false} className="rounded-2xl p-6">

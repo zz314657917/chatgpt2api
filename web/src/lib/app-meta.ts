@@ -19,16 +19,18 @@ export type AppMeta = {
   login_page_image_zoom: number;
   login_page_image_position_x: number;
   login_page_image_position_y: number;
+  luoye_independent_mode: boolean;
 };
 
 export const defaultAppMeta: AppMeta = {
-  app_title: "落叶AI",
-  project_name: "落叶AI",
+  app_title: "落叶创艺",
+  project_name: "落叶创艺",
   login_page_image_url: "",
   login_page_image_mode: "contain",
   login_page_image_zoom: LOGIN_PAGE_IMAGE_DEFAULT_TRANSFORM.zoom,
   login_page_image_position_x: LOGIN_PAGE_IMAGE_DEFAULT_TRANSFORM.positionX,
   login_page_image_position_y: LOGIN_PAGE_IMAGE_DEFAULT_TRANSFORM.positionY,
+  luoye_independent_mode: false,
 };
 
 export async function fetchAppMeta() {
@@ -55,6 +57,7 @@ export function normalizeAppMeta(data: Partial<AppMeta> = {}): AppMeta {
     login_page_image_zoom: transform.zoom,
     login_page_image_position_x: transform.positionX,
     login_page_image_position_y: transform.positionY,
+    luoye_independent_mode: Boolean(data.luoye_independent_mode),
   };
 }
 

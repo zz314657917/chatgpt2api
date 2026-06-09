@@ -2,46 +2,45 @@
 title: Current Focus
 type: status
 repo: chatgpt2api
-last_verified: 2026-06-04
+last_verified: 2026-06-09
 ---
 
 # 当前稳定心智模型
 
-chatgpt2api 当前不应再被理解为单纯“ChatGPT 官网能力封装服务”。最近稳定主线已经从 5 月 22 日前后的 image workspace / white-label / leaf login，进一步推进为“现有图片服务能力 + 自研 `/canvas` 节点画布工作台”的双层产品面。
+chatgpt2api 当前不应再被理解为单纯“ChatGPT 官网能力封装服务”，也不应只理解成“Sub2API 跳转过来的图片工作台”。最近稳定主线已经从 6 月初的 image workspace + `/canvas` 工作台，进一步推进到“落叶创艺独立用户版 + Sub2API 作为用户/余额/充值/扣费真源 + 现有 `/image` 和 `/canvas` 能力作为创作底座”的三层产品面。
 
-- 面向 Sub2API 的独立生图工作台。
-- 面向被跳转用户的 white-label profile experience。
-- 面向 `leaf network` / `linux.do` 入口的本地登录态承接。
-- 面向图像创作链路的 `/canvas` 自研节点画布。
+- 面向普通用户的独立创作站。
+- 面向 Sub2API bridge 的注册、登录、充值和余额真源接入。
+- 面向图像创作链路的 `/image` 工作台与 `/canvas` 自研节点画布。
+- 面向团队共享额度 v1 的 actor / payer 扣费语义。
 
 ## 当前主线
 
-- `Sub2API launch/redeem -> 本地登录态 -> /image 工作台 -> creation tasks / image tasks -> 本地或对象存储图片访问` 已经成为默认产品链路。
+- `Sub2API launch/redeem -> 本地登录态 -> /image 或 /canvas 创作 -> 钱包预扣/确认/退款 -> 使用记录/团队空间` 已经成为默认产品链路。
+- Sub2API 是用户、余额、充值、管理配置和扣费的唯一真源；chatgpt2api 只保留必要用户映射、创作站会话和前端产品面。
+- 未登录访问用户页时，会先进入 `/login`，再由登录页跳 Sub2API；普通用户默认不再暴露 API Key、Token、OpenAI-compatible 或本地管理员相关入口。
+- 顶部余额、充值入口和团队共享额度语义已经进入默认产品面；后续问题不要再只按 image workspace 或 white-label 细节理解。
+- `/image` 与 `/canvas` 仍是创作底座：连续编辑、继续创作、结果回填、自研画布、视频节点 fail-closed 和参数归一规则继续成立，但它们现在服务于独立用户版而不再是唯一主线。
 - `embedded session recovery + bound Sub2API key preservation` 仍是这条链路的稳定默认约束，而不只是 launch 页或登录页的小修。
-- 图片工作台最近继续推进了“连续编辑”和“继续创作”体验，而不是停在第一版单次生成。
-- `/canvas` 已从 React Flow 试验版切到自研画布，当前默认理解是复用既有图片库、`creation-tasks`、权限体系和 Sub2API 模型路由，而不是引入 ComfyUI 或新 GPU 工作流。
-- 当前 `/canvas` 交互已经收口为 Infinite-Canvas 风格的节点式图片创作工作台：保留全局顶部导航，左侧功能导航，顶部节点工具条，以及 `image`、`prompt`、`image_generation`、`result` 节点组合。
-- 6 月初的新主线已经把 `/canvas` 从静态图片编排推进到包含视频生成节点的工作流，并明确“没有 Sub2API 绑定时，视频模型要 fail-closed 隐藏”。
-- `/image` 创作台的分辨率预设、图片参数规范化和 composer 资产库，也已经进入稳定默认范围；当前不能再把 `/canvas` 单独理解成唯一主线。
-- 白标化重点是收敛用户感知入口和个人页，不让从 Sub2API 跳转来的用户误以为还要在 chatgpt2api 内重复维护本地账号体系。
-- 最近新增的 leaf network launch login 说明登录页本身也已进入产品主线，不再只是被动承接 Sub2API 跳转；默认心智里应包含“特定上游入口换取本地登录态”的链路。
 
 ## 已稳定结论
 
 - 当前项目仍不支持 `SuperGrok` / `Grok` / `xAI`；如果要支持，属于新增集成决策。
+- 落叶创艺独立用户版当前的稳定边界是：用户通过 Sub2API 注册/登录/充值，chatgpt2api 不再要求普通用户理解 API 概念或手动绑定本地能力入口。
 - `image` 相关默认心智已经包含：
   - 创建聊天时保留 draft。
   - 生成结果可拖回编辑器继续编辑。
   - continued edits 使用本地结果 URL，而不是依赖外部临时地址。
   - 每用户图片保留上限已经收口为稳定配置约束。
   - image workspace policies 已进一步 harden，不应再把早期宽松行为当默认。
-- 当前产品线里，`white label profile experience` 是收口项，不再是唯一主线；真正需要优先理解的是 image workspace 与 Sub2API 集成链路。
+- 当前产品线里，`white label profile experience` 与旧 leaf login 更像背景层；真正需要优先理解的是独立用户版 bridge、钱包扣费语义和生产联调闭环。
 - 登录入口当前至少要区分普通本地登录与 leaf network / linux.do launch login，不应再把登录页当成纯静态表单。
 - 当前 embedded mode 默认还要满足以下会话约束：
   - stale token 或前端 store 失效后，允许从 cookie 恢复嵌入会话，而不是直接把用户打回匿名态。
   - 从 Sub2API launch 进入时，已绑定的 Sub2API API key 不应在 session 初始化过程中被覆盖、清空或误判成未绑定。
   - 嵌入模式下的认证保持优先级高于主题 reveal、provider 名称提示等纯展示体验；后者可以降级，认证连续性不能退化。
 - 管理端异步创作任务资源仍以 `/api/creation-tasks` 为根，并通过 `image-generations`、`image-edits`、`chat-completions`、`video-generations` 等子资源表达场景。
+- 团队模式 v1 当前只承诺“团队共享额度”最小可用闭环，知识入口应优先记录 `team_id`、`payer_user_id`、`actor_user_id` 语义，而不是把它误写成“调用队长 API”。
 - `/canvas` 当前仍是“复用现有能力的前端工作台”，不是独立后端系统：
   - 节点数据不保存 API key、`base_url`、`group_id`。
   - 图片本体继续由现有图片库和对象存储管理，画布只保存引用。
@@ -76,14 +75,16 @@ chatgpt2api 当前不应再被理解为单纯“ChatGPT 官网能力封装服务
 ## 当前剩余重点
 
 1. 把 6 月初“视频节点 + composer 分辨率预设 + 图片参数共享配置”继续下沉到稳定知识，不要只留在 `current-task`。
-2. 如果继续推进 Sub2API 集成，继续把 launch/redeem、embedded session 恢复、bound key 保持、图片任务、对象存储、`/image` 与 `/canvas` 之间的关系固化到专题知识，而不是只留在提交历史。
-3. 如果准备公开说明能力边界，要显式区分“当前已支持的 Sub2API / leaf network 登录、image workspace、canvas workspace、受绑定约束的视频节点”与“尚未支持的 Grok/xAI、ComfyUI、独立 GPU 工作流”。
+2. 把 2026-06-09 的独立用户版主线继续下沉到稳定知识，包括生产域名/回跳 URL/bridge secret/默认分组、余额展示、充值入口、预扣确认退款和团队空间最小闭环。
+3. 如果继续推进 Sub2API 集成，继续把 launch/redeem、embedded session 恢复、bound key 保持、钱包扣费、图片任务、对象存储、`/image` 与 `/canvas` 之间的关系固化到专题知识，而不是只留在提交历史。
+4. 如果准备公开说明能力边界，要显式区分“当前已支持的独立用户版、Sub2API 登录充值、image workspace、canvas workspace、受绑定约束的视频节点、团队共享额度 v1”与“尚未支持的 Grok/xAI、ComfyUI、独立 GPU 工作流”。
 
 ## 不要误判的点
 
 - 当前不是继续围绕“品牌改名/去掉外链/隐藏本地账号能力”做主线开发；那些更像已完成的白标收口事实。
-- 当前也不是通用多模型扩展仓库；最近主线集中在图片工作台、节点画布与 Sub2API 集成。
+- 当前也不是通用多模型扩展仓库；最近主线集中在独立用户版入口、钱包/扣费桥接，以及图片工作台与节点画布的实际创作闭环。
 - 不要把 `/canvas` 误判成引入了 ComfyUI、Infinite-Canvas 代码或新的图像调度后端；当前只是站内已有图片链路上的新工作台。
 - 不要把 embedded session / bound key 修复误判成单纯 auth store 小修；它直接影响从 Sub2API 进入 `/image`、`/canvas` 后是否还能保持正确账号身份和路由。
 - 不要把“视频模型隐藏”误判成纯前端展示条件；它反映的是当前能力边界依赖 Sub2API 绑定这一真实产品约束。
-- 仅看 README 和旧任务快照，容易漏掉 per-user retention、continued edit、leaf network login、embedded session recovery、bound Sub2API key preservation、image workspace policy hardening、视频节点 fail-closed，以及 `/canvas` 自研节点画布这些新默认约束。
+- 不要把当前仓库默认理解成“继续做 `/canvas` 功能”或“继续打磨 image workspace UI”；最近更高优先级的是 bridge 配置、真实账号回跳、充值扣费、余额展示和团队空间闭环。
+- 仅看 README 和旧任务快照，容易漏掉独立用户版入口、Sub2API 钱包真源、团队共享额度 v1、per-user retention、continued edit、embedded session recovery、bound Sub2API key preservation、视频节点 fail-closed，以及 `/canvas` 自研节点画布这些新默认约束。
