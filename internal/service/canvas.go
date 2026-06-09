@@ -135,6 +135,7 @@ type CanvasImageRef struct {
 	Path         string `json:"path,omitempty"`
 	Name         string `json:"name,omitempty"`
 	ThumbnailURL string `json:"thumbnail_url,omitempty"`
+	Role         string `json:"role,omitempty"`
 }
 
 type CanvasVideoRef struct {
@@ -1028,14 +1029,33 @@ func staticCanvasNodeOutput(node CanvasNode) CanvasNodeOutput {
 	case CanvasNodeTypeText:
 		return CanvasNodeOutput{Text: firstNonEmpty(util.Clean(node.Data["text"]), util.Clean(node.Data["prompt"]))}
 	case CanvasNodeTypeImage:
-		ref := CanvasImageRef{
+		var refs []CanvasImageRef
+		appendRef := func(ref CanvasImageRef) {
+			if ref.URL != "" || ref.LocalURL != "" || ref.Path != "" {
+				refs = append(refs, ref)
+			}
+		}
+		appendRef(CanvasImageRef{
 			URL:      firstNonEmpty(util.Clean(node.Data["url"]), util.Clean(node.Data["image_url"])),
 			LocalURL: util.Clean(node.Data["local_url"]),
 			Path:     firstNonEmpty(util.Clean(node.Data["path"]), util.Clean(node.Data["image_path"])),
 			Name:     util.Clean(node.Data["name"]),
+			Role:     util.Clean(node.Data["role"]),
+		})
+		for _, key := range []string{"source_images", "images"} {
+			for _, item := range util.AsMapSlice(node.Data[key]) {
+				appendRef(CanvasImageRef{
+					URL:          util.Clean(item["url"]),
+					LocalURL:     util.Clean(item["local_url"]),
+					Path:         util.Clean(item["path"]),
+					Name:         util.Clean(item["name"]),
+					ThumbnailURL: util.Clean(item["thumbnail_url"]),
+					Role:         util.Clean(item["role"]),
+				})
+			}
 		}
-		if ref.URL != "" || ref.LocalURL != "" || ref.Path != "" {
-			return CanvasNodeOutput{Images: []CanvasImageRef{ref}}
+		if len(refs) > 0 {
+			return CanvasNodeOutput{Images: refs}
 		}
 	}
 	return CanvasNodeOutput{}
@@ -1049,10 +1069,12 @@ func canvasNodeOutputFromMap(raw map[string]any) CanvasNodeOutput {
 	}
 	for _, item := range util.AsMapSlice(raw["images"]) {
 		ref := CanvasImageRef{
-			URL:      util.Clean(item["url"]),
-			LocalURL: util.Clean(item["local_url"]),
-			Path:     util.Clean(item["path"]),
-			Name:     util.Clean(item["name"]),
+			URL:          util.Clean(item["url"]),
+			LocalURL:     util.Clean(item["local_url"]),
+			Path:         util.Clean(item["path"]),
+			Name:         util.Clean(item["name"]),
+			ThumbnailURL: util.Clean(item["thumbnail_url"]),
+			Role:         util.Clean(item["role"]),
 		}
 		if ref.URL != "" || ref.LocalURL != "" || ref.Path != "" {
 			output.Images = append(output.Images, ref)

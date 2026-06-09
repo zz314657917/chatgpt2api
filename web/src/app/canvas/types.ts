@@ -60,6 +60,7 @@ export type SmartCanvasItemData = {
   source_images?: CanvasImageRef[];
   input_images?: CanvasImageRef[];
   mention_images?: CanvasImageRef[];
+  input_image_mask?: string;
   group_item_ids?: string[];
   loop_mode?: "repeat" | "images";
   loop_count?: number;

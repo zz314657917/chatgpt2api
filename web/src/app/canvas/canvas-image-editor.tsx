@@ -62,7 +62,7 @@ type SmartCanvasImageEditorProps = {
   image: CanvasImageRef | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onApplyEdit: (image: CanvasImageRef, files: File[]) => Promise<void>;
+  onApplyEdit: (image: CanvasImageRef, files: File[], mode: ImageEditMode) => Promise<void>;
   angleValues: SmartCanvasAngleControlValues;
   anglePrompt: string;
   angleResultItem: SmartCanvasItem | null;
@@ -1022,7 +1022,7 @@ export function SmartCanvasImageEditor({
               : mode === "brush"
                 ? [await makeBrushFile()]
                 : await makeGridFiles();
-      await onApplyEdit(image, files);
+      await onApplyEdit(image, files, mode);
       onOpenChange(false);
     } finally {
       setApplying(false);
