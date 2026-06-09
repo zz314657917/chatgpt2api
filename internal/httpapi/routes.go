@@ -1609,7 +1609,7 @@ func (a *App) handleCreationTasks(w http.ResponseWriter, r *http.Request) {
 		if !a.attachCreationTaskSpace(w, identity, body) {
 			return
 		}
-		task, err := a.tasks.SubmitChat(r.Context(), identity, util.Clean(body["client_task_id"]), util.Clean(body["prompt"]), firstNonEmpty(util.Clean(body["model"]), util.DefaultChatModel), body["messages"], protocol.IsImageChatRequest(body), util.ToInt(body["n"], 1))
+		task, err := a.tasks.SubmitChatWithMetadata(r.Context(), identity, util.Clean(body["client_task_id"]), util.Clean(body["prompt"]), firstNonEmpty(util.Clean(body["model"]), util.DefaultChatModel), body["messages"], true, imageTaskRequestMetadata(body), util.ToInt(body["n"], 1))
 		if err != nil {
 			writeCreationTaskSubmitError(w, err)
 			return
@@ -1627,13 +1627,13 @@ func (a *App) handleCreationTasks(w http.ResponseWriter, r *http.Request) {
 			util.WriteError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		task, err := a.tasks.SubmitVideo(r.Context(), identity, util.Clean(body["client_task_id"]), util.Clean(body["prompt"]), firstNonEmpty(util.Clean(body["model"]), util.ImageModelAuto), images, service.VideoGenerationOptions{
+		task, err := a.tasks.SubmitVideoWithMetadata(r.Context(), identity, util.Clean(body["client_task_id"]), util.Clean(body["prompt"]), firstNonEmpty(util.Clean(body["model"]), util.ImageModelAuto), images, service.VideoGenerationOptions{
 			Duration:      util.ToInt(body["duration"], 5),
 			AspectRatio:   util.Clean(body["aspect_ratio"]),
 			Resolution:    util.Clean(body["resolution"]),
 			EnhancePrompt: util.ToBool(body["enhance_prompt"]),
 			GenerateAudio: util.ToBool(body["generate_audio"]),
-		}, util.Clean(body["visibility"]))
+		}, imageTaskRequestMetadata(body), util.Clean(body["visibility"]))
 		if err != nil {
 			writeCreationTaskSubmitError(w, err)
 			return
@@ -1713,6 +1713,11 @@ func imageTaskRequestMetadata(body map[string]any) map[string]any {
 	if fallback := util.StringMap(body["fallback_reference_image"]); len(fallback) > 0 {
 		metadata["fallback_reference_image"] = fallback
 	}
+	for _, key := range []string{"team_id", "payer_user_id", "actor_user_id", "actor_name"} {
+		if value := util.Clean(body[key]); value != "" {
+			metadata[key] = value
+		}
+	}
 	return metadata
 }
 
@@ -1767,13 +1772,23 @@ func (a *App) attachCreationTaskSpace(w http.ResponseWriter, identity service.Id
 	if body == nil {
 		return true
 	}
-	if a == nil || a.teams == nil || identity.Role != service.AuthRoleUser {
-		return true
-	}
-	ctx, err := a.teams.TaskContext(identity, util.Clean(body["team_id"]))
-	if err != nil {
+	if err := a.attachTaskSpace(identity, body, util.Clean(body["team_id"])); err != nil {
 		util.WriteError(w, http.StatusBadRequest, err.Error())
 		return false
+	}
+	return true
+}
+
+func (a *App) attachTaskSpace(identity service.Identity, body map[string]any, teamID string) error {
+	if body == nil {
+		return nil
+	}
+	if a == nil || a.teams == nil || identity.Role != service.AuthRoleUser {
+		return nil
+	}
+	ctx, err := a.teams.TaskContext(identity, teamID)
+	if err != nil {
+		return err
 	}
 	if ctx.TeamID != "" {
 		body["team_id"] = ctx.TeamID
@@ -1782,7 +1797,10 @@ func (a *App) attachCreationTaskSpace(w http.ResponseWriter, identity service.Id
 	}
 	body["payer_user_id"] = ctx.PayerUserID
 	body["actor_user_id"] = ctx.ActorUserID
-	return true
+	if ctx.ActorName != "" {
+		body["actor_name"] = ctx.ActorName
+	}
+	return nil
 }
 
 func (a *App) handleRegister(w http.ResponseWriter, r *http.Request) {

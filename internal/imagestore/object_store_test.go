@@ -34,8 +34,8 @@ func TestConfigObjectKeyAndPublicURLForCOS(t *testing.T) {
 	}
 }
 
-func TestStoreUploadAndDeleteUsesS3CompatibleRequests(t *testing.T) {
-	var seenPut, seenDelete bool
+func TestStoreUploadGetAndDeleteUsesS3CompatibleRequests(t *testing.T) {
+	var seenPut, seenGet, seenDelete bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") == "" {
 			t.Errorf("missing Authorization header")
@@ -54,6 +54,13 @@ func TestStoreUploadAndDeleteUsesS3CompatibleRequests(t *testing.T) {
 				t.Errorf("body = %q", body)
 			}
 			w.WriteHeader(http.StatusOK)
+		case http.MethodGet:
+			seenGet = true
+			if r.URL.Path != "/bucket/prefix/sample.png" {
+				t.Errorf("GET path = %q", r.URL.Path)
+			}
+			w.Header().Set("Content-Type", "image/png")
+			_, _ = w.Write([]byte("png-bytes"))
 		case http.MethodDelete:
 			seenDelete = true
 			if r.URL.Path != "/bucket/prefix/sample.png" {
@@ -87,10 +94,17 @@ func TestStoreUploadAndDeleteUsesS3CompatibleRequests(t *testing.T) {
 	if stored.Backend != "cos" || stored.Key != "prefix/sample.png" || !strings.HasPrefix(stored.URL, "https://cdn.example.com/images/prefix/sample.png") {
 		t.Fatalf("stored = %#v", stored)
 	}
+	data, err := store.GetBytes(context.Background(), "prefix/sample.png")
+	if err != nil {
+		t.Fatalf("GetBytes() error = %v", err)
+	}
+	if string(data.Data) != "png-bytes" || data.ContentType != "image/png" {
+		t.Fatalf("GetBytes() = %#v", data)
+	}
 	if err := store.Delete(context.Background(), "prefix/sample.png"); err != nil {
 		t.Fatalf("Delete() error = %v", err)
 	}
-	if !seenPut || !seenDelete {
-		t.Fatalf("seenPut=%v seenDelete=%v", seenPut, seenDelete)
+	if !seenPut || !seenGet || !seenDelete {
+		t.Fatalf("seenPut=%v seenGet=%v seenDelete=%v", seenPut, seenGet, seenDelete)
 	}
 }

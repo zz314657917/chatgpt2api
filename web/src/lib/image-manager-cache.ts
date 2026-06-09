@@ -1,6 +1,6 @@
 import type { ManagedImageSummary } from "@/lib/api";
 
-export type ImageGalleryView = "mine" | "public" | "all";
+export type ImageGalleryView = "mine" | "team" | "public" | "all";
 
 type ImageManagerCacheEntry = {
   items: ManagedImageSummary[];

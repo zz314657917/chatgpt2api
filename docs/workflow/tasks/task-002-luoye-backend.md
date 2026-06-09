@@ -14,13 +14,13 @@ task-002-luoye-backend
 你是 P/G/E 流程里的 chatgpt2api Backend Developer Worker。只执行本 contract，不做架构裁决，不扩大范围。
 
 ## Goal
-实现落叶AI独立模式后端：Sub2API launch token 登录、本地会话映射、Sub2API 余额/扣费适配、系统默认分组调用、团队模式 v1 后端。
+实现落叶创艺独立模式后端：Sub2API launch token 登录、本地会话映射、Sub2API 余额/扣费适配、系统默认分组调用、团队模式 v1 后端。
 
 ## Success Criteria
 - 普通用户只通过 Sub2API launch token 建立会话；本地普通用户注册/登录/API 绑定路径在独立模式下不可见或不可用。
 - 任务执行统一使用系统配置的 Sub2API 默认聊天/生图/视频分组，不要求用户绑定 API Key。
 - 创作任务前调用 Sub2API `reserve`，成功后 `commit`，失败/取消时 `refund`；扣费 key 幂等。
-- 团队 v1 后端支持创建团队、邀请码加入、关闭邀请码、移除成员、切换/查询当前空间。
+- 团队 v1 后端支持创建团队、创建者定向邀请、撤销邀请、移除成员、调整角色、切换/查询当前空间。
 - 团队空间任务记录 `team_id`、`payer_user_id`、`actor_user_id`，扣费 payer 为队长/团队共享额度。
 
 ## Context

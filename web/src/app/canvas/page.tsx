@@ -1,23 +1,48 @@
 "use client";
 
+import { lazy, Suspense } from "react";
 import { LoaderCircle } from "lucide-react";
 
+import { ManagedImageAssetDock } from "@/components/managed-image-asset-dock";
 import {
-  SmartCanvasAssetSidebar,
   SmartCanvasBoard,
-  SmartCanvasHelpPanel,
   SmartCanvasLeftRail,
-  SmartCanvasOnboardingDialog,
-  SmartCanvasOperationHistoryPanel,
-  SmartCanvasPickerDialog,
-  SmartCanvasPresetDialog,
-  SmartCanvasRunHistoryPanel,
   SmartCanvasShell,
   SmartCanvasTopBar,
 } from "./canvas-node";
-import { SmartCanvasImageEditor } from "./canvas-image-editor";
 import { smartCanvasRuns } from "./canvas-utils";
 import { useSmartCanvasController } from "./use-smart-canvas-controller";
+
+const SmartCanvasImageEditor = lazy(() =>
+  import("./canvas-image-editor").then((module) => ({ default: module.SmartCanvasImageEditor })),
+);
+const SmartCanvasHelpPanel = lazy(() =>
+  import("./canvas-node").then((module) => ({ default: module.SmartCanvasHelpPanel })),
+);
+const SmartCanvasRunHistoryPanel = lazy(() =>
+  import("./canvas-node").then((module) => ({ default: module.SmartCanvasRunHistoryPanel })),
+);
+const SmartCanvasOperationHistoryPanel = lazy(() =>
+  import("./canvas-node").then((module) => ({ default: module.SmartCanvasOperationHistoryPanel })),
+);
+const SmartCanvasOnboardingDialog = lazy(() =>
+  import("./canvas-node").then((module) => ({ default: module.SmartCanvasOnboardingDialog })),
+);
+const SmartCanvasPickerDialog = lazy(() =>
+  import("./canvas-node").then((module) => ({ default: module.SmartCanvasPickerDialog })),
+);
+const SmartCanvasPresetDialog = lazy(() =>
+  import("./canvas-node").then((module) => ({ default: module.SmartCanvasPresetDialog })),
+);
+
+function CanvasLazyLoading({ label, className = "" }: { label: string; className?: string }) {
+  return (
+    <div className={`pointer-events-none flex items-center justify-center gap-2 text-xs font-medium text-muted-foreground ${className}`}>
+      <LoaderCircle className="size-3.5 animate-spin" />
+      <span>{label}</span>
+    </div>
+  );
+}
 
 export default function CanvasPage() {
   const canvas = useSmartCanvasController();
@@ -128,54 +153,73 @@ export default function CanvasPage() {
             onUploadAt={canvas.openUploadDialogAt}
           />
 
-          <SmartCanvasAssetSidebar
+          <ManagedImageAssetDock
+            activated={canvas.assetSidebarActivated}
+            assetCount={canvas.assets.length}
             assets={canvas.assets}
             loadingAssets={canvas.loadingAssets}
             loadingMoreAssets={canvas.loadingMoreAssets}
             hasMoreAssets={canvas.hasMoreAssets}
-            onRefreshAssets={() => void canvas.loadAssets()}
+            onActivate={canvas.activateAssetSidebar}
+            onRefreshAssets={() => void canvas.refreshAssets()}
             onLoadMoreAssets={() => void canvas.loadMoreAssets()}
             onAddAssetToCanvas={canvas.addAssetToCanvas}
             onAddAssetToComposer={canvas.addAssetToComposer}
+            storagePrefix="smart-canvas-asset-sidebar"
+            showOpenButton={false}
             title={canvas.assetLibraryScope === "public" ? "公共图片库" : "图片库"}
             subtitle={canvas.assetLibraryScope === "public" ? `${canvas.assets.length} 张公开素材 · 点击加入输入` : undefined}
             emptyLabel={canvas.assetLibraryScope === "public" ? "公共图片库暂无图片" : undefined}
             tabs={canvas.assetLibraryTabs}
             activeTabId={canvas.assetLibraryScope}
             onActiveTabChange={canvas.setAssetLibraryScope}
+            defaultExpanded
+            onExpandedChange={canvas.handleAssetSidebarExpandedChange}
           />
 
-          <SmartCanvasHelpPanel
-            open={canvas.helpOpen}
-            topic={canvas.helpTopic}
-            onOpenChange={canvas.setHelpOpen}
-            onTopicChange={canvas.setHelpTopic}
-            onInsertTemplate={(templateId) => {
-              canvas.insertFlowTemplate(templateId);
-              canvas.setHelpOpen(false);
-            }}
-          />
+          {canvas.helpOpen ? (
+            <Suspense fallback={<CanvasLazyLoading label="加载帮助..." className="absolute right-4 top-24 z-40 rounded-full border border-border bg-card/90 px-3 py-1.5 shadow-sm backdrop-blur" />}>
+              <SmartCanvasHelpPanel
+                open={canvas.helpOpen}
+                topic={canvas.helpTopic}
+                onOpenChange={canvas.setHelpOpen}
+                onTopicChange={canvas.setHelpTopic}
+                onInsertTemplate={(templateId) => {
+                  canvas.insertFlowTemplate(templateId);
+                  canvas.setHelpOpen(false);
+                }}
+              />
+            </Suspense>
+          ) : null}
 
-          <SmartCanvasRunHistoryPanel
-            canvas={canvas.canvas}
-            open={canvas.runHistoryOpen}
-            onOpenChange={canvas.setRunHistoryOpen}
-            onBackToRun={canvas.focusItem}
-          />
+          {canvas.runHistoryOpen ? (
+            <Suspense fallback={<CanvasLazyLoading label="加载运行记录..." className="absolute right-4 top-24 z-40 rounded-full border border-border bg-card/90 px-3 py-1.5 shadow-sm backdrop-blur" />}>
+              <SmartCanvasRunHistoryPanel
+                canvas={canvas.canvas}
+                open={canvas.runHistoryOpen}
+                onOpenChange={canvas.setRunHistoryOpen}
+                onBackToRun={canvas.focusItem}
+              />
+            </Suspense>
+          ) : null}
 
-          <SmartCanvasOperationHistoryPanel
-            entries={canvas.historyEntries}
-            open={canvas.operationHistoryOpen}
-            canUndo={canvas.canUndo}
-            canRedo={canvas.canRedo}
-            onOpenChange={canvas.setOperationHistoryOpen}
-            onUndo={canvas.undoCanvas}
-            onRedo={canvas.redoCanvas}
-            onRestore={(entry) => {
-              canvas.restoreHistoryEntry(entry);
-              canvas.setOperationHistoryOpen(false);
-            }}
-          />
+          {canvas.operationHistoryOpen ? (
+            <Suspense fallback={<CanvasLazyLoading label="加载操作记录..." className="absolute right-4 top-24 z-40 rounded-full border border-border bg-card/90 px-3 py-1.5 shadow-sm backdrop-blur" />}>
+              <SmartCanvasOperationHistoryPanel
+                entries={canvas.historyEntries}
+                open={canvas.operationHistoryOpen}
+                canUndo={canvas.canUndo}
+                canRedo={canvas.canRedo}
+                onOpenChange={canvas.setOperationHistoryOpen}
+                onUndo={canvas.undoCanvas}
+                onRedo={canvas.redoCanvas}
+                onRestore={(entry) => {
+                  canvas.restoreHistoryEntry(entry);
+                  canvas.setOperationHistoryOpen(false);
+                }}
+              />
+            </Suspense>
+          ) : null}
         </div>
       </SmartCanvasShell>
 
@@ -188,63 +232,79 @@ export default function CanvasPage() {
         onChange={canvas.handleUploadInputChange}
       />
 
-      <SmartCanvasImageEditor
-        image={canvas.imageEditorImage}
-        open={Boolean(canvas.imageEditorImage)}
-        onApplyEdit={canvas.applyEditedImageFiles}
-        angleValues={canvas.angleControlValues}
-        anglePrompt={canvas.angleControlPrompt}
-        angleResultItem={canvas.angleControlResultItem}
-        runningAngle={canvas.running}
-        runningBackgroundRemoval={canvas.running}
-        initialMode={canvas.imageEditorInitialMode}
-        onAngleValuesChange={canvas.setAngleControlValues}
-        onSubmitAngle={canvas.runAngleControlForImageEditor}
-        onSubmitBackgroundRemoval={canvas.imageEditorSourceItemId ? canvas.runBackgroundRemovalForImageEditor : undefined}
-        onOpenChange={(open) => {
-          if (!open) {
-            canvas.setImageEditorImage(null);
-            canvas.setImageEditorSourceItemId("");
-          }
-        }}
-      />
+      {canvas.imageEditorImage ? (
+        <Suspense fallback={<CanvasLazyLoading label="加载编辑器..." className="fixed inset-x-0 top-20 z-50" />}>
+          <SmartCanvasImageEditor
+            image={canvas.imageEditorImage}
+            open={Boolean(canvas.imageEditorImage)}
+            onApplyEdit={canvas.applyEditedImageFiles}
+            angleValues={canvas.angleControlValues}
+            anglePrompt={canvas.angleControlPrompt}
+            angleResultItem={canvas.angleControlResultItem}
+            runningAngle={canvas.running}
+            runningBackgroundRemoval={canvas.running}
+            initialMode={canvas.imageEditorInitialMode}
+            onAngleValuesChange={canvas.setAngleControlValues}
+            onSubmitAngle={canvas.runAngleControlForImageEditor}
+            onSubmitBackgroundRemoval={canvas.imageEditorSourceItemId ? canvas.runBackgroundRemovalForImageEditor : undefined}
+            onOpenChange={(open) => {
+              if (!open) {
+                canvas.setImageEditorImage(null);
+                canvas.setImageEditorSourceItemId("");
+              }
+            }}
+          />
+        </Suspense>
+      ) : null}
 
-      <SmartCanvasOnboardingDialog
-        open={canvas.onboardingOpen}
-        onDismiss={canvas.dismissOnboarding}
-        onOpenHelp={() => {
-          canvas.dismissOnboarding();
-          canvas.openCanvasHelp();
-        }}
-        onInsertBasicTemplate={() => {
-          canvas.dismissOnboarding();
-          canvas.insertFlowTemplate("basic-text");
-        }}
-      />
+      {canvas.onboardingOpen ? (
+        <Suspense fallback={<CanvasLazyLoading label="加载引导..." className="fixed inset-x-0 top-20 z-50" />}>
+          <SmartCanvasOnboardingDialog
+            open={canvas.onboardingOpen}
+            onDismiss={canvas.dismissOnboarding}
+            onOpenHelp={() => {
+              canvas.dismissOnboarding();
+              canvas.openCanvasHelp();
+            }}
+            onInsertBasicTemplate={() => {
+              canvas.dismissOnboarding();
+              canvas.insertFlowTemplate("basic-text");
+            }}
+          />
+        </Suspense>
+      ) : null}
 
-      <SmartCanvasPickerDialog
-        open={canvas.canvasPickerOpen}
-        canvases={canvas.canvases}
-        currentCanvasId={canvas.canvas?.id || ""}
-        loading={canvas.loading}
-        onOpenChange={canvas.setCanvasPickerOpen}
-        onSelectCanvas={(id) => void canvas.selectCanvas(id)}
-        onCreateCanvas={() => canvas.setCanvasPresetPickerOpen(true)}
-        onRefresh={() => void canvas.reloadCanvases()}
-        onDeleteCanvas={(id) => void canvas.deleteCanvasById(id)}
-        onRenameCanvas={(id, name) => void canvas.renameCanvasById(id, name)}
-      />
+      {canvas.canvasPickerOpen ? (
+        <Suspense fallback={<CanvasLazyLoading label="加载画布列表..." className="fixed inset-x-0 top-20 z-50" />}>
+          <SmartCanvasPickerDialog
+            open={canvas.canvasPickerOpen}
+            canvases={canvas.canvases}
+            currentCanvasId={canvas.canvas?.id || ""}
+            loading={canvas.loading}
+            onOpenChange={canvas.setCanvasPickerOpen}
+            onSelectCanvas={(id) => void canvas.selectCanvas(id)}
+            onCreateCanvas={() => canvas.setCanvasPresetPickerOpen(true)}
+            onRefresh={() => void canvas.reloadCanvases()}
+            onDeleteCanvas={(id) => void canvas.deleteCanvasById(id)}
+            onRenameCanvas={(id, name) => void canvas.renameCanvasById(id, name)}
+          />
+        </Suspense>
+      ) : null}
 
-      <SmartCanvasPresetDialog
-        open={canvas.canvasPresetPickerOpen}
-        currentCanvasName={canvas.canvas?.name || ""}
-        userPresets={canvas.userPresets}
-        onOpenChange={canvas.setCanvasPresetPickerOpen}
-        onCreateCanvas={(presetId) => void canvas.createNewCanvas(presetId)}
-        onCreateFromUserPreset={(presetId) => void canvas.createCanvasFromUserPreset(presetId)}
-        onSaveCurrentAsPreset={canvas.saveCurrentCanvasAsPreset}
-        onDeleteUserPreset={canvas.deleteUserPreset}
-      />
+      {canvas.canvasPresetPickerOpen ? (
+        <Suspense fallback={<CanvasLazyLoading label="加载预设..." className="fixed inset-x-0 top-20 z-50" />}>
+          <SmartCanvasPresetDialog
+            open={canvas.canvasPresetPickerOpen}
+            currentCanvasName={canvas.canvas?.name || ""}
+            userPresets={canvas.userPresets}
+            onOpenChange={canvas.setCanvasPresetPickerOpen}
+            onCreateCanvas={(presetId) => void canvas.createNewCanvas(presetId)}
+            onCreateFromUserPreset={(presetId) => void canvas.createCanvasFromUserPreset(presetId)}
+            onSaveCurrentAsPreset={canvas.saveCurrentCanvasAsPreset}
+            onDeleteUserPreset={canvas.deleteUserPreset}
+          />
+        </Suspense>
+      ) : null}
     </div>
   );
 }

@@ -13,6 +13,7 @@ import {
   Save,
   Sparkles,
   Trash2,
+  Users,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -49,6 +50,7 @@ import {
   fetchCanvasModels,
   fetchManagedImages,
   fetchSocialProjects,
+  fetchTeamWorkspace,
   generateSocialProjectCards,
   generateSocialProjectCopy,
   saveSocialProject,
@@ -58,11 +60,13 @@ import {
   type ImageModel,
   type ManagedImageListScope,
   type ManagedImageSummary,
+  type TeamSummary,
   type SocialCard,
   type SocialImageRef,
   type SocialProject,
 } from "@/lib/api";
 import { getManagedImagePreviewUrlFromPath, getManagedImageUrlFromPath } from "@/lib/image-path";
+import { useAppMeta } from "@/lib/use-app-meta";
 import { useAuthGuard } from "@/lib/use-auth-guard";
 import { cn } from "@/lib/utils";
 
@@ -163,17 +167,24 @@ function socialModelsByCapability(models: CanvasModelOption[], capability: "chat
     .map(socialModelOption);
 }
 
-function mergeSocialModelOptions(remoteOptions: SocialModelMenuOption[], localOptions: readonly SocialModelMenuOption[], selectedModel: ImageModel) {
+function mergeSocialModelOptions(
+  remoteOptions: SocialModelMenuOption[],
+  localOptions: readonly SocialModelMenuOption[],
+  selectedModel: ImageModel,
+  preferRemoteOnly = false,
+) {
   const seen = new Set<string>();
   const merged: SocialModelMenuOption[] = [];
-  for (const option of [...remoteOptions, ...localOptions]) {
+  const options = preferRemoteOnly && remoteOptions.length > 0 ? remoteOptions : [...remoteOptions, ...localOptions];
+  for (const option of options) {
     if (!option.value || seen.has(option.value)) {
       continue;
     }
     seen.add(option.value);
     merged.push(option);
   }
-  if (selectedModel && !seen.has(selectedModel)) {
+  const canKeepSelectedModel = !(preferRemoteOnly && remoteOptions.length > 0);
+  if (canKeepSelectedModel && selectedModel && !seen.has(selectedModel)) {
     merged.unshift({ value: selectedModel, label: selectedModel });
   }
   return merged;
@@ -409,6 +420,7 @@ function projectTitle(project: SocialProject) {
 
 export default function SocialPage() {
   const { isCheckingAuth } = useAuthGuard(undefined, "/social");
+  const appMeta = useAppMeta();
   const [projects, setProjects] = useState<SocialProject[]>([]);
   const [selectedId, setSelectedId] = useState("");
   const [draft, setDraft] = useState<ProjectDraft>(() => emptyDraft());
@@ -426,6 +438,7 @@ export default function SocialPage() {
   const [libraryNextCursor, setLibraryNextCursor] = useState("");
   const [libraryHasMore, setLibraryHasMore] = useState(false);
   const [selectedLibraryPaths, setSelectedLibraryPaths] = useState<string[]>([]);
+  const [activeTeam, setActiveTeam] = useState<TeamSummary | null>(null);
   const [chatModel, setChatModel] = useState<ImageModel>(DEFAULT_CHAT_MODEL);
   const [imageModel, setImageModel] = useState<ImageModel>(DEFAULT_IMAGE_MODEL);
   const [remoteCanvasModels, setRemoteCanvasModels] = useState<CanvasModelOption[]>([]);
@@ -441,8 +454,8 @@ export default function SocialPage() {
   );
   const activeCard = draft.cards[selectedCardIndex] || null;
   const chatModelOptions = useMemo(
-    () => mergeSocialModelOptions(socialModelsByCapability(remoteCanvasModels, "chat"), CHAT_MODEL_OPTIONS, chatModel),
-    [chatModel, remoteCanvasModels],
+    () => mergeSocialModelOptions(socialModelsByCapability(remoteCanvasModels, "chat"), CHAT_MODEL_OPTIONS, chatModel, appMeta.luoye_independent_mode),
+    [appMeta.luoye_independent_mode, chatModel, remoteCanvasModels],
   );
   const imageModelOptions = useMemo(
     () => mergeSocialModelOptions(socialModelsByCapability(remoteCanvasModels, "image"), IMAGE_CREATION_MODEL_OPTIONS, imageModel),
@@ -523,6 +536,33 @@ export default function SocialPage() {
       setImageModel(imageModelOptions[0]?.value || DEFAULT_IMAGE_MODEL);
     }
   }, [imageModel, imageModelOptions]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadTeamWorkspace = async () => {
+      try {
+        const workspace = await fetchTeamWorkspace();
+        if (cancelled) return;
+        const team = Array.isArray(workspace.teams) ? workspace.teams[0] : undefined;
+        setActiveTeam(team || null);
+      } catch {
+        if (!cancelled) {
+          setActiveTeam(null);
+        }
+      }
+    };
+    void loadTeamWorkspace();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (libraryScope === "team" && !activeTeam?.id) {
+      setLibraryScope("mine");
+      setSelectedLibraryPaths([]);
+    }
+  }, [activeTeam?.id, libraryScope]);
 
   useEffect(() => {
     if (!pendingTaskIds.length || !selectedProject) return;
@@ -673,6 +713,12 @@ export default function SocialPage() {
   };
 
   const loadLibraryImages = useCallback(async (scope = libraryScope, cursor = "", append = false) => {
+    if (scope === "team" && !activeTeam?.id) {
+      setLibraryImages([]);
+      setLibraryNextCursor("");
+      setLibraryHasMore(false);
+      return;
+    }
     if (append) {
       setLibraryLoadingMore(true);
     } else {
@@ -681,6 +727,7 @@ export default function SocialPage() {
     try {
       const result = await fetchManagedImages({
         scope,
+        team_id: scope === "team" ? activeTeam?.id || "" : "",
         page_size: SOCIAL_LIBRARY_PAGE_SIZE,
         cursor,
       });
@@ -693,7 +740,7 @@ export default function SocialPage() {
       setLibraryLoading(false);
       setLibraryLoadingMore(false);
     }
-  }, [libraryScope]);
+  }, [activeTeam?.id, libraryScope]);
 
   const openImageLibrary = () => {
     setLibraryOpen(true);
@@ -1295,6 +1342,7 @@ export default function SocialPage() {
           <div className="flex gap-2">
             {[
               ["mine", "我的图片"],
+              ...(activeTeam?.id ? [["team", "团队图片库"]] : []),
               ["public", "公开图库"],
               ["all", "全部"],
             ].map(([scope, label]) => (
@@ -1305,6 +1353,7 @@ export default function SocialPage() {
                 className="h-8 rounded-xl"
                 onClick={() => changeLibraryScope(scope as ManagedImageListScope)}
               >
+                {scope === "team" ? <Users className="size-3.5" /> : null}
                 {label}
               </Button>
             ))}

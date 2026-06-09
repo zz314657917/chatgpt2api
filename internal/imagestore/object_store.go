@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"path"
@@ -62,6 +63,11 @@ type StoredObject struct {
 	URL     string
 }
 
+type ObjectData struct {
+	Data        []byte
+	ContentType string
+}
+
 func LoadConfigFromEnv() Config {
 	return Config{
 		Backend:         strings.TrimSpace(os.Getenv(EnvImageStorageBackend)),
@@ -99,6 +105,22 @@ func DeleteFromEnv(ctx context.Context, key string) error {
 		return err
 	}
 	return store.Delete(ctx, key)
+}
+
+func GetBytesFromEnv(ctx context.Context, key string) (ObjectData, bool, error) {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return ObjectData{}, false, nil
+	}
+	store, enabled, err := NewFromEnv(ctx)
+	if !enabled {
+		return ObjectData{}, false, nil
+	}
+	if err != nil {
+		return ObjectData{}, true, err
+	}
+	data, err := store.GetBytes(ctx, key)
+	return data, true, err
 }
 
 func New(ctx context.Context, cfg Config) (*Store, error) {
@@ -240,6 +262,33 @@ func (s *Store) Delete(ctx context.Context, key string) error {
 		return fmt.Errorf("delete image object: %w", err)
 	}
 	return nil
+}
+
+func (s *Store) GetBytes(ctx context.Context, key string) (ObjectData, error) {
+	if s == nil || s.client == nil {
+		return ObjectData{}, errors.New("image object storage is not initialized")
+	}
+	key = strings.TrimLeft(filepath.ToSlash(strings.TrimSpace(key)), "/")
+	if key == "" {
+		return ObjectData{}, errors.New("image object key is empty")
+	}
+	output, err := s.client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(s.cfg.Bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		return ObjectData{}, fmt.Errorf("get image object: %w", err)
+	}
+	defer output.Body.Close()
+	data, err := io.ReadAll(output.Body)
+	if err != nil {
+		return ObjectData{}, fmt.Errorf("read image object: %w", err)
+	}
+	contentType := ""
+	if output.ContentType != nil {
+		contentType = strings.TrimSpace(*output.ContentType)
+	}
+	return ObjectData{Data: data, ContentType: contentType}, nil
 }
 
 func (c Config) normalized() Config {

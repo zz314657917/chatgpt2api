@@ -75,7 +75,7 @@ function getStoredImageSrc(image: StoredImage) {
     return `data:image/${image.outputFormat || "png"};base64,${image.b64_json}`;
   }
   if (image.localUrl || image.url) {
-    return image.localUrl || image.url || "";
+    return image.url || image.localUrl || "";
   }
   return image.path ? getManagedImageUrlFromPath(image.path) : "";
 }

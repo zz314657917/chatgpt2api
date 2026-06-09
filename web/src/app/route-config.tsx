@@ -15,6 +15,7 @@ const routePageComponents = {
   register: lazy(() => import("@/app/register/page")),
   settings: lazy(() => import("@/app/settings/page")),
   social: lazy(() => import("@/app/social/page")),
+  team: lazy(() => import("@/app/team/page")),
   users: lazy(() => import("@/app/users/page")),
 };
 
@@ -35,6 +36,7 @@ export const appRoutes: AppRouteConfig[] = [
   { path: "/image-manager", Component: routePageComponents.imageManager, requiredPath: "/image-manager" },
   { path: "/users", Component: routePageComponents.users, requiredPath: "/users" },
   { path: "/profile", Component: routePageComponents.profile, requiredPath: "/profile" },
+  { path: "/team", Component: routePageComponents.team, requiredPath: "/team" },
   { path: "/rbac", Component: routePageComponents.rbac, requiredPath: "/rbac" },
   { path: "/logs", Component: routePageComponents.logs, requiredPath: "/logs" },
   { path: "/settings", Component: routePageComponents.settings, requiredPath: "/settings" },

@@ -15,6 +15,7 @@ import (
 	_ "image/gif"
 	"image/jpeg"
 	_ "image/png"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -52,6 +53,9 @@ const (
 	defaultImagePageSize           = 50
 	maxImagePageSize               = 100
 	tempImageReferenceRetention    = 48 * time.Hour
+	ImageLibraryScopePersonal      = "personal"
+	ImageLibraryScopeTeam          = "team"
+	DefaultTeamStorageLimitBytes   = int64(2 * 1024 * 1024 * 1024)
 )
 
 type ImageConfig interface {
@@ -65,14 +69,39 @@ type ImageConfig interface {
 }
 
 type ImageAccessScope struct {
-	OwnerID string
-	All     bool
-	Public  bool
+	OwnerID     string
+	TeamID      string
+	TeamManager bool
+	All         bool
+	Public      bool
+}
+
+type TeamImageStorageSummary struct {
+	TeamID         string `json:"team_id"`
+	UsedBytes      int64  `json:"used_bytes"`
+	LimitBytes     int64  `json:"limit_bytes"`
+	RemainingBytes int64  `json:"remaining_bytes"`
+	ImagesCount    int    `json:"images_count"`
+}
+
+type TeamStorageQuotaExceededError struct {
+	UsedBytes     int64
+	LimitBytes    int64
+	RequiredBytes int64
+}
+
+func (e TeamStorageQuotaExceededError) Error() string {
+	return "team storage quota exceeded"
 }
 
 type imageMetadata struct {
 	OwnerID           string
 	OwnerName         string
+	LibraryScope      string
+	TeamID            string
+	TeamName          string
+	MovedByUserID     string
+	MovedAt           string
 	Visibility        string
 	PublishedAt       string
 	StorageBackend    string
@@ -204,21 +233,27 @@ type imageReferenceMetadata struct {
 }
 
 type ImageFileAccess struct {
-	Rel        string
-	Path       string
-	Info       os.FileInfo
-	Visibility string
-	OwnerID    string
+	Rel          string
+	Path         string
+	Info         os.FileInfo
+	Data         []byte
+	ContentType  string
+	Visibility   string
+	OwnerID      string
+	LibraryScope string
+	TeamID       string
 }
 
 type ImageReferenceFileAccess struct {
-	Rel         string
-	SourceRel   string
-	Path        string
-	ContentType string
-	Visibility  string
-	OwnerID     string
-	Shared      bool
+	Rel          string
+	SourceRel    string
+	Path         string
+	ContentType  string
+	Visibility   string
+	OwnerID      string
+	LibraryScope string
+	TeamID       string
+	Shared       bool
 }
 
 type ImageVisibilityUpdateOptions struct {
@@ -252,10 +287,27 @@ type ImageService struct {
 }
 
 type imageFileRef struct {
-	rel  string
-	path string
-	info os.FileInfo
+	rel         string
+	path        string
+	info        os.FileInfo
+	meta        imageMetadata
+	data        []byte
+	contentType string
+	fromStore   bool
 }
+
+type memoryFileInfo struct {
+	name    string
+	size    int64
+	modTime time.Time
+}
+
+func (i memoryFileInfo) Name() string       { return i.name }
+func (i memoryFileInfo) Size() int64        { return i.size }
+func (i memoryFileInfo) Mode() os.FileMode  { return 0 }
+func (i memoryFileInfo) ModTime() time.Time { return i.modTime }
+func (i memoryFileInfo) IsDir() bool        { return false }
+func (i memoryFileInfo) Sys() any           { return nil }
 
 type thumbnailJob struct {
 	done   chan struct{}
@@ -296,6 +348,11 @@ type imageIndexEntry struct {
 	ModifiedUnixNano  int64    `json:"modified_unix_nano"`
 	OwnerID           string   `json:"owner_id,omitempty"`
 	OwnerName         string   `json:"owner_name,omitempty"`
+	LibraryScope      string   `json:"library_scope,omitempty"`
+	TeamID            string   `json:"team_id,omitempty"`
+	TeamName          string   `json:"team_name,omitempty"`
+	MovedByUserID     string   `json:"moved_by_user_id,omitempty"`
+	MovedAt           string   `json:"moved_at,omitempty"`
 	Visibility        string   `json:"visibility"`
 	PublishedAt       string   `json:"published_at,omitempty"`
 	PublishedUnixNano int64    `json:"published_unix_nano,omitempty"`
@@ -349,6 +406,28 @@ func (s *ImageService) StorageGovernance() ImageStorageGovernanceSummary {
 	summary.TotalBytes = summary.ImagesBytes + summary.ThumbnailsBytes + summary.PreviewsBytes + summary.MetadataBytes + summary.ReferenceBytes
 	if summary.LimitBytes > 0 && summary.TotalBytes > summary.LimitBytes {
 		summary.OverLimitBytes = summary.TotalBytes - summary.LimitBytes
+	}
+	return summary
+}
+
+func (s *ImageService) TeamStorageSummary(teamID string, limitBytes int64) TeamImageStorageSummary {
+	teamID = strings.TrimSpace(teamID)
+	if limitBytes <= 0 {
+		limitBytes = DefaultTeamStorageLimitBytes
+	}
+	summary := TeamImageStorageSummary{TeamID: teamID, LimitBytes: limitBytes, RemainingBytes: limitBytes}
+	if teamID == "" {
+		return summary
+	}
+	for _, candidate := range s.imageCleanupCandidates() {
+		if candidate.meta.LibraryScope != ImageLibraryScopeTeam || candidate.meta.TeamID != teamID {
+			continue
+		}
+		summary.ImagesCount++
+		summary.UsedBytes += candidate.groupSize
+	}
+	if limitBytes > 0 {
+		summary.RemainingBytes = maxInt64(0, limitBytes-summary.UsedBytes)
 	}
 	return summary
 }
@@ -434,8 +513,8 @@ func (s *ImageService) ListImages(baseURL, startDate, endDate string, scope Imag
 func (s *ImageService) ListImagesPage(baseURL string, options ImageListOptions, scope ImageAccessScope) map[string]any {
 	pageSize := normalizedImagePageSize(options.PageSize)
 	cursor, hasCursor := decodeImageListCursor(options.Cursor)
+	s.ensureLocalImageIndexEntries()
 	entries := s.imageIndexEntries()
-	imageRoot, imageRootErr := filepath.Abs(s.config.ImagesDir())
 	sort.Slice(entries, func(i, j int) bool {
 		left := imageIndexSortUnixNano(entries[i], scope)
 		right := imageIndexSortUnixNano(entries[j], scope)
@@ -462,11 +541,9 @@ func (s *ImageService) ListImagesPage(baseURL string, options ImageListOptions, 
 				continue
 			}
 		}
-		if imageRootErr == nil {
-			if _, err := s.imageFileRef(imageRoot, entry.Path); err != nil {
-				missingIndexPaths = append(missingIndexPaths, entry.Path)
-				continue
-			}
+		if !s.imageIndexEntryExists(entry) {
+			missingIndexPaths = append(missingIndexPaths, entry.Path)
+			continue
 		}
 		if len(items) >= pageSize {
 			hasMore = true
@@ -497,6 +574,76 @@ func (s *ImageService) ListImagesPage(baseURL string, options ImageListOptions, 
 		"has_more":    hasMore,
 		"page_size":   pageSize,
 	}
+}
+
+func (s *ImageService) ensureLocalImageIndexEntries() {
+	if s == nil || s.config == nil {
+		return
+	}
+	_ = s.ensureImageIndexLoaded()
+	root, err := filepath.Abs(s.config.ImagesDir())
+	if err != nil {
+		return
+	}
+	s.indexMu.RLock()
+	known := make(map[string]struct{}, len(s.imageIndex))
+	for rel := range s.imageIndex {
+		known[rel] = struct{}{}
+	}
+	s.indexMu.RUnlock()
+	var refs []imageFileRef
+	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		rel, relErr := filepath.Rel(root, path)
+		if relErr != nil {
+			return nil
+		}
+		rel = filepath.ToSlash(rel)
+		if _, ok := known[rel]; ok {
+			return nil
+		}
+		ref, refErr := s.localImageFileRef(root, rel)
+		if refErr != nil {
+			return nil
+		}
+		refs = append(refs, ref)
+		return nil
+	})
+	if len(refs) == 0 {
+		return
+	}
+	s.indexMu.Lock()
+	if s.imageIndex == nil {
+		s.imageIndex = map[string]imageIndexEntry{}
+	}
+	for _, ref := range refs {
+		s.imageIndex[ref.rel] = s.imageIndexEntryFromRef(ref)
+	}
+	s.indexLoaded = true
+	entries := make([]imageIndexEntry, 0, len(s.imageIndex))
+	for _, item := range s.imageIndex {
+		entries = append(entries, item)
+	}
+	err = s.saveImageIndexEntriesLocked(entries)
+	s.indexMu.Unlock()
+	_ = err
+}
+
+func (s *ImageService) imageIndexEntryExists(entry imageIndexEntry) bool {
+	if strings.TrimSpace(entry.Path) == "" {
+		return false
+	}
+	if strings.TrimSpace(entry.ObjectKey) != "" {
+		return true
+	}
+	imageRoot, err := filepath.Abs(s.config.ImagesDir())
+	if err != nil {
+		return false
+	}
+	_, err = s.localImageFileRef(imageRoot, entry.Path)
+	return err == nil
 }
 
 func (s *ImageService) ImageDetail(baseURL, value string, scope ImageAccessScope) (map[string]any, error) {
@@ -547,8 +694,21 @@ func (s *ImageService) managedImageSummaryItem(baseURL string, entry imageIndexE
 		"visibility":  entry.Visibility,
 		"tags":        append([]string(nil), entry.Tags...),
 	}
+	item["library_scope"] = normalizeImageLibraryScope(entry.LibraryScope)
 	if entry.OwnerName != "" {
 		item["owner_name"] = entry.OwnerName
+	}
+	if entry.TeamID != "" {
+		item["team_id"] = entry.TeamID
+	}
+	if entry.TeamName != "" {
+		item["team_name"] = entry.TeamName
+	}
+	if entry.MovedByUserID != "" {
+		item["moved_by_user_id"] = entry.MovedByUserID
+	}
+	if entry.MovedAt != "" {
+		item["moved_at"] = entry.MovedAt
 	}
 	if entry.PublishedAt != "" {
 		item["published_at"] = entry.PublishedAt
@@ -574,6 +734,20 @@ func (s *ImageService) imageIndexEntries() []imageIndexEntry {
 		entries = append(entries, entry)
 	}
 	return entries
+}
+
+func (s *ImageService) imageIndexEntry(rel string) (imageIndexEntry, bool) {
+	rel = filepath.ToSlash(strings.TrimSpace(rel))
+	if rel == "" || s == nil || s.config == nil {
+		return imageIndexEntry{}, false
+	}
+	if err := s.ensureImageIndexLoaded(); err != nil {
+		return imageIndexEntry{}, false
+	}
+	s.indexMu.RLock()
+	defer s.indexMu.RUnlock()
+	entry, ok := s.imageIndex[rel]
+	return entry, ok
 }
 
 func (s *ImageService) resetImageIndex() {
@@ -769,7 +943,10 @@ func (s *ImageService) removeImageIndexEntries(paths []string) {
 
 func (s *ImageService) imageIndexEntryFromRef(ref imageFileRef) imageIndexEntry {
 	meta := s.imageMetadata(ref.rel)
-	width, height, _ := imageFileDimensions(ref.path)
+	if ref.meta.ObjectKey != "" && meta.ObjectKey == "" {
+		meta = ref.meta
+	}
+	width, height, _ := imageRefDimensions(ref)
 	created := ref.info.ModTime()
 	publishedUnixNano := int64(0)
 	if meta.PublishedAt != "" {
@@ -798,6 +975,11 @@ func (s *ImageService) imageIndexEntryFromRef(ref imageFileRef) imageIndexEntry 
 		ModifiedUnixNano:  created.UnixNano(),
 		OwnerID:           meta.OwnerID,
 		OwnerName:         meta.OwnerName,
+		LibraryScope:      meta.LibraryScope,
+		TeamID:            meta.TeamID,
+		TeamName:          meta.TeamName,
+		MovedByUserID:     meta.MovedByUserID,
+		MovedAt:           meta.MovedAt,
 		Visibility:        visibility,
 		PublishedAt:       meta.PublishedAt,
 		PublishedUnixNano: publishedUnixNano,
@@ -814,6 +996,9 @@ func (s *ImageService) imageIndexEntryFromRef(ref imageFileRef) imageIndexEntry 
 func (s *ImageService) managedImageItem(baseURL string, ref imageFileRef, info os.FileInfo, scope ImageAccessScope) map[string]any {
 	day := imageDay(ref.rel, info.ModTime())
 	meta := s.imageMetadata(ref.rel)
+	if ref.meta.ObjectKey != "" && meta.ObjectKey == "" {
+		meta = ref.meta
+	}
 	thumb := s.thumbnailInfo(ref.rel, info)
 	preview := s.previewInfo(ref.rel, info)
 	item := map[string]any{
@@ -826,6 +1011,7 @@ func (s *ImageService) managedImageItem(baseURL string, ref imageFileRef, info o
 		"visibility": meta.Visibility,
 		"tags":       append([]string(nil), meta.Tags...),
 	}
+	item["library_scope"] = meta.LibraryScope
 	addImageMetadataFields(item, meta, imageMetadataFieldOptions{
 		BaseURL:                baseURL,
 		IncludeReusableFields:  !scope.Public || meta.SharePromptParams,
@@ -842,7 +1028,7 @@ func (s *ImageService) managedImageItem(baseURL string, ref imageFileRef, info o
 		item["preview_url"] = ""
 	}
 	if !setImageItemDimensions(item, thumb["width"], thumb["height"]) {
-		if width, height, ok := imageFileDimensions(ref.path); ok {
+		if width, height, ok := imageRefDimensions(ref); ok {
 			setImageItemDimensions(item, width, height)
 		}
 	}
@@ -876,7 +1062,17 @@ func imageIndexEntryMatchesScope(entry imageIndexEntry, scope ImageAccessScope) 
 	if scope.All {
 		return true
 	}
-	return scope.OwnerID != "" && entry.OwnerID == scope.OwnerID
+	if scope.TeamID != "" {
+		return normalizeImageLibraryScope(entry.LibraryScope) == ImageLibraryScopeTeam && entry.TeamID == scope.TeamID
+	}
+	return scope.OwnerID != "" && normalizeImageLibraryScope(entry.LibraryScope) == ImageLibraryScopePersonal && entry.OwnerID == scope.OwnerID
+}
+
+func normalizeImageLibraryScope(scope string) string {
+	if strings.TrimSpace(scope) == ImageLibraryScopeTeam {
+		return ImageLibraryScopeTeam
+	}
+	return ImageLibraryScopePersonal
 }
 
 func imageIndexEntryMatchesOptions(entry imageIndexEntry, options ImageListOptions) bool {
@@ -1071,7 +1267,9 @@ func (s *ImageService) StoreUploadedImage(baseURL string, upload UploadedManaged
 	}
 	ref.info = info
 	s.upsertImageIndexEntry(ref)
-	return s.managedImageItem(baseURL, ref, info, ImageAccessScope{OwnerID: strings.TrimSpace(ownerID)}), nil
+	item := s.managedImageItem(baseURL, ref, info, ImageAccessScope{OwnerID: strings.TrimSpace(ownerID)})
+	s.removeLocalOriginalIfObjectStored(ref.rel)
+	return item, nil
 }
 
 func (s *ImageService) StoreTempReferenceImage(upload UploadedTempReferenceImage, ownerID string) (TempReferenceImage, error) {
@@ -1263,7 +1461,7 @@ func (s *ImageService) UpdateImageVisibility(value, visibility string, scope Ima
 		return nil, err
 	}
 	meta := s.imageMetadata(ref.rel)
-	if !scope.All && (scope.OwnerID == "" || meta.OwnerID != scope.OwnerID) {
+	if !imageMetadataAllowsMutation(meta, scope) {
 		return nil, errors.New("image not found")
 	}
 	if err := s.writeImageMetadataForRef(ref, "", "", visibility, GeneratedImageMetadata{
@@ -1283,7 +1481,7 @@ func (s *ImageService) UpdateImageVisibility(value, visibility string, scope Ima
 		"created_at": ref.info.ModTime().Format("2006-01-02 15:04:05"),
 	}
 	addImageMetadataFields(item, nextMeta)
-	if width, height, ok := imageFileDimensions(ref.path); ok {
+	if width, height, ok := imageRefDimensions(ref); ok {
 		setImageItemDimensions(item, width, height)
 	}
 	return item, nil
@@ -1310,11 +1508,15 @@ func (s *ImageService) ImageFileAccess(value string, scope ImageAccessScope) (Im
 		return ImageFileAccess{}, errors.New("image not found")
 	}
 	return ImageFileAccess{
-		Rel:        ref.rel,
-		Path:       ref.path,
-		Info:       ref.info,
-		Visibility: meta.Visibility,
-		OwnerID:    meta.OwnerID,
+		Rel:          ref.rel,
+		Path:         ref.path,
+		Info:         ref.info,
+		Data:         append([]byte(nil), ref.data...),
+		ContentType:  ref.contentType,
+		Visibility:   meta.Visibility,
+		OwnerID:      meta.OwnerID,
+		LibraryScope: meta.LibraryScope,
+		TeamID:       meta.TeamID,
 	}, nil
 }
 
@@ -1357,13 +1559,15 @@ func (s *ImageService) ImageReferenceFileAccess(value string) (ImageReferenceFil
 		return ImageReferenceFileAccess{}, errors.New("image not found")
 	}
 	return ImageReferenceFileAccess{
-		Rel:         rel,
-		SourceRel:   sourceRel,
-		Path:        refPath,
-		ContentType: metadata.ContentType,
-		Visibility:  meta.Visibility,
-		OwnerID:     meta.OwnerID,
-		Shared:      meta.ShareReferences,
+		Rel:          rel,
+		SourceRel:    sourceRel,
+		Path:         refPath,
+		ContentType:  metadata.ContentType,
+		Visibility:   meta.Visibility,
+		OwnerID:      meta.OwnerID,
+		LibraryScope: meta.LibraryScope,
+		TeamID:       meta.TeamID,
+		Shared:       meta.ShareReferences,
 	}, nil
 }
 
@@ -1372,11 +1576,18 @@ func (s *ImageService) ImageBytes(value string, scope ImageAccessScope) ([]byte,
 	if err != nil {
 		return nil, "", err
 	}
-	data, err := os.ReadFile(access.Path)
-	if err != nil {
-		return nil, "", err
+	data := access.Data
+	if len(data) == 0 {
+		var err error
+		data, err = os.ReadFile(access.Path)
+		if err != nil {
+			return nil, "", err
+		}
 	}
-	mimeType := http.DetectContentType(data)
+	mimeType := strings.TrimSpace(access.ContentType)
+	if mimeType == "" {
+		mimeType = http.DetectContentType(data)
+	}
 	if !strings.HasPrefix(mimeType, "image/") {
 		return nil, "", errors.New("unsupported image file")
 	}
@@ -1406,7 +1617,8 @@ func (s *ImageService) DeleteImages(paths []string, scope ImageAccessScope) (map
 		}
 		seen[rel] = struct{}{}
 
-		if _, err := s.imageFileRef(imageRoot, rel); err != nil {
+		ref, err := s.imageFileRef(imageRoot, rel)
+		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
 				missing++
 				continue
@@ -1416,7 +1628,8 @@ func (s *ImageService) DeleteImages(paths []string, scope ImageAccessScope) (map
 		if !pathInsideRoot(imageRoot, filepath.Join(imageRoot, filepath.FromSlash(rel))) {
 			return nil, errors.New("invalid image path")
 		}
-		if !scope.All && (scope.OwnerID == "" || s.imageOwner(rel) != scope.OwnerID) {
+		meta := s.imageMetadata(ref.rel)
+		if !imageMetadataAllowsMutation(meta, scope) {
 			missing++
 			continue
 		}
@@ -1424,7 +1637,7 @@ func (s *ImageService) DeleteImages(paths []string, scope ImageAccessScope) (map
 		if err != nil {
 			return nil, err
 		}
-		if stats.images == 0 {
+		if stats.images == 0 && meta.ObjectKey == "" {
 			missing++
 		} else {
 			deleted++
@@ -1433,6 +1646,121 @@ func (s *ImageService) DeleteImages(paths []string, scope ImageAccessScope) (map
 	}
 	s.removeImageIndexEntries(removedPaths)
 	return map[string]any{"deleted": deleted, "missing": missing, "paths": removedPaths}, nil
+}
+
+func (s *ImageService) removeLocalOriginalIfObjectStored(rel string) {
+	rel, err := cleanImageRelativePath(rel)
+	if err != nil {
+		return
+	}
+	meta := s.imageMetadata(rel)
+	if meta.ObjectKey == "" {
+		return
+	}
+	imageRoot, err := filepath.Abs(s.config.ImagesDir())
+	if err != nil {
+		return
+	}
+	imagePath := filepath.Join(imageRoot, filepath.FromSlash(rel))
+	if !pathInsideRoot(imageRoot, imagePath) {
+		return
+	}
+	removed, _, err := removeFileWithStats(imagePath)
+	if err != nil || !removed {
+		return
+	}
+	removeEmptyParentDirs(imageRoot, filepath.Dir(imagePath))
+}
+
+func (s *ImageService) MoveImagesToTeamLibrary(paths []string, actorID, teamID, teamName string, limitBytes int64) (map[string]any, error) {
+	actorID = strings.TrimSpace(actorID)
+	teamID = strings.TrimSpace(teamID)
+	teamName = strings.TrimSpace(teamName)
+	if actorID == "" {
+		return nil, errors.New("user session is required")
+	}
+	if teamID == "" {
+		return nil, errors.New("team id is required")
+	}
+	if len(paths) == 0 {
+		return nil, errors.New("paths is required")
+	}
+	if limitBytes <= 0 {
+		limitBytes = DefaultTeamStorageLimitBytes
+	}
+	imageRoot, err := filepath.Abs(s.config.ImagesDir())
+	if err != nil {
+		return nil, err
+	}
+	type moveCandidate struct {
+		ref       imageFileRef
+		meta      imageMetadata
+		groupSize int64
+	}
+	seen := make(map[string]struct{}, len(paths))
+	candidates := make([]moveCandidate, 0, len(paths))
+	requiredBytes := int64(0)
+	for _, value := range paths {
+		rel, err := cleanImageRelativePath(value)
+		if err != nil {
+			return nil, err
+		}
+		if _, ok := seen[rel]; ok {
+			continue
+		}
+		seen[rel] = struct{}{}
+		ref, err := s.imageFileRef(imageRoot, rel)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return nil, errors.New("image not found")
+			}
+			return nil, err
+		}
+		meta := s.imageMetadata(ref.rel)
+		if meta.LibraryScope == ImageLibraryScopeTeam {
+			return nil, errors.New("image already in team library")
+		}
+		if meta.OwnerID == "" || meta.OwnerID != actorID {
+			return nil, errors.New("image not found")
+		}
+		groupSize := s.imageGroupSize(ref.rel, ref.info.Size())
+		candidates = append(candidates, moveCandidate{ref: ref, meta: meta, groupSize: groupSize})
+		requiredBytes += groupSize
+	}
+	if len(candidates) == 0 {
+		return nil, errors.New("paths is required")
+	}
+	storageBefore := s.TeamStorageSummary(teamID, limitBytes)
+	if limitBytes > 0 && storageBefore.UsedBytes+requiredBytes > limitBytes {
+		return nil, TeamStorageQuotaExceededError{
+			UsedBytes:     storageBefore.UsedBytes,
+			LimitBytes:    limitBytes,
+			RequiredBytes: requiredBytes,
+		}
+	}
+	movedPaths := make([]string, 0, len(candidates))
+	movedAt := time.Now().UTC().Format(time.RFC3339Nano)
+	for _, candidate := range candidates {
+		meta := candidate.meta
+		meta.LibraryScope = ImageLibraryScopeTeam
+		meta.TeamID = teamID
+		meta.TeamName = teamName
+		meta.MovedByUserID = actorID
+		meta.MovedAt = movedAt
+		if err := s.writeImageMetadata(candidate.ref.rel, meta); err != nil {
+			return nil, err
+		}
+		s.upsertImageIndexEntry(candidate.ref)
+		movedPaths = append(movedPaths, candidate.ref.rel)
+	}
+	storageAfter := s.TeamStorageSummary(teamID, limitBytes)
+	return map[string]any{
+		"moved":          len(movedPaths),
+		"paths":          movedPaths,
+		"team_id":        teamID,
+		"required_bytes": requiredBytes,
+		"storage":        storageAfter,
+	}, nil
 }
 
 func (s *ImageService) RecordImageOwners(values []string, ownerID string) {
@@ -1463,6 +1791,7 @@ func (s *ImageService) RecordGeneratedImages(values []string, ownerID, ownerName
 		if ownerID != "" && ownerID != "anonymous" {
 			if s.writeImageMetadataForRef(ref, ownerID, ownerName, visibility, metadata) == nil {
 				s.upsertImageIndexEntry(ref)
+				s.removeLocalOriginalIfObjectStored(ref.rel)
 			}
 		}
 	}
@@ -1618,11 +1947,11 @@ func (s *ImageService) previewCacheInfo(rel string, sourceModTime time.Time) (st
 
 func (s *ImageService) generateThumbnail(ref imageFileRef) map[string]any {
 	thumbPath, result, _ := s.thumbnailCacheInfo(ref.rel, ref.info.ModTime())
-	file, err := os.Open(ref.path)
+	file, closeReader, err := openImageRefReader(ref)
 	if err != nil {
 		return map[string]any{}
 	}
-	defer file.Close()
+	defer closeReader()
 	img, _, err := image.Decode(file)
 	if err != nil {
 		return map[string]any{}
@@ -1648,11 +1977,11 @@ func (s *ImageService) generateThumbnail(ref imageFileRef) map[string]any {
 
 func (s *ImageService) generatePreview(ref imageFileRef) map[string]any {
 	previewPath, result, _ := s.previewCacheInfo(ref.rel, ref.info.ModTime())
-	file, err := os.Open(ref.path)
+	file, closeReader, err := openImageRefReader(ref)
 	if err != nil {
 		return map[string]any{}
 	}
-	defer file.Close()
+	defer closeReader()
 	img, _, err := image.Decode(file)
 	if err != nil {
 		return map[string]any{}
@@ -1705,6 +2034,21 @@ func (s *ImageService) imageFileRefs(values []string) []imageFileRef {
 }
 
 func (s *ImageService) imageFileRef(imageRoot, rel string) (imageFileRef, error) {
+	ref, err := s.localImageFileRef(imageRoot, rel)
+	if err == nil {
+		return ref, nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return imageFileRef{}, err
+	}
+	storedRef, storedErr := s.storedImageFileRef(rel)
+	if storedErr == nil {
+		return storedRef, nil
+	}
+	return imageFileRef{}, err
+}
+
+func (s *ImageService) localImageFileRef(imageRoot, rel string) (imageFileRef, error) {
 	rel, err := cleanImageRelativePath(rel)
 	if err != nil {
 		return imageFileRef{}, err
@@ -1721,6 +2065,64 @@ func (s *ImageService) imageFileRef(imageRoot, rel string) (imageFileRef, error)
 		return imageFileRef{}, errors.New("image path is not a file")
 	}
 	return imageFileRef{rel: rel, path: imagePath, info: info}, nil
+}
+
+func (s *ImageService) storedImageFileRef(rel string) (imageFileRef, error) {
+	rel, err := cleanImageRelativePath(rel)
+	if err != nil {
+		return imageFileRef{}, err
+	}
+	meta := s.imageMetadata(rel)
+	if meta.ObjectKey == "" {
+		entry, ok := s.imageIndexEntry(rel)
+		if !ok || entry.ObjectKey == "" {
+			return imageFileRef{}, errors.New("image not found")
+		}
+		meta.StorageBackend = entry.StorageBackend
+		meta.ObjectKey = entry.ObjectKey
+		meta.ObjectURL = entry.ObjectURL
+		if meta.OutputFormat == "" {
+			meta.OutputFormat = entry.OutputFormat
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	object, enabled, err := imagestore.GetBytesFromEnv(ctx, meta.ObjectKey)
+	cancel()
+	if err != nil {
+		return imageFileRef{}, err
+	}
+	if !enabled || len(object.Data) == 0 {
+		return imageFileRef{}, errors.New("image not found")
+	}
+	mtime := time.Now()
+	entry, hasEntry := s.imageIndexEntry(rel)
+	if hasEntry && entry.ModifiedUnixNano > 0 {
+		mtime = time.Unix(0, entry.ModifiedUnixNano)
+	}
+	name := filepath.Base(filepath.FromSlash(rel))
+	if hasEntry && entry.Name != "" {
+		name = entry.Name
+	}
+	return imageFileRef{
+		rel:         rel,
+		path:        filepath.Join(s.config.ImagesDir(), filepath.FromSlash(rel)),
+		info:        memoryFileInfo{name: name, size: int64(len(object.Data)), modTime: mtime},
+		meta:        meta,
+		data:        object.Data,
+		contentType: strings.TrimSpace(object.ContentType),
+		fromStore:   true,
+	}, nil
+}
+
+func openImageRefReader(ref imageFileRef) (io.Reader, func(), error) {
+	if len(ref.data) > 0 {
+		return bytes.NewReader(ref.data), func() {}, nil
+	}
+	file, err := os.Open(ref.path)
+	if err != nil {
+		return nil, func() {}, err
+	}
+	return file, func() { _ = file.Close() }, nil
 }
 
 func (s *ImageService) thumbnailPath(rel string) string {
@@ -1742,7 +2144,20 @@ func imageMetadataAllowsAccess(meta imageMetadata, scope ImageAccessScope) bool 
 	if scope.All {
 		return true
 	}
-	return scope.OwnerID != "" && meta.OwnerID == scope.OwnerID
+	if scope.TeamID != "" {
+		return meta.LibraryScope == ImageLibraryScopeTeam && meta.TeamID == scope.TeamID
+	}
+	return scope.OwnerID != "" && meta.LibraryScope == ImageLibraryScopePersonal && meta.OwnerID == scope.OwnerID
+}
+
+func imageMetadataAllowsMutation(meta imageMetadata, scope ImageAccessScope) bool {
+	if scope.All {
+		return true
+	}
+	if scope.TeamID != "" {
+		return scope.TeamManager && meta.LibraryScope == ImageLibraryScopeTeam && meta.TeamID == scope.TeamID
+	}
+	return scope.OwnerID != "" && meta.LibraryScope == ImageLibraryScopePersonal && meta.OwnerID == scope.OwnerID
 }
 
 func (s *ImageService) imageMetadata(rel string) imageMetadata {
@@ -1776,9 +2191,20 @@ func normalizeImageMetadata(raw map[string]any) imageMetadata {
 	if visibility != ImageVisibilityPublic {
 		visibility = ImageVisibilityPrivate
 	}
+	libraryScope := normalizeImageLibraryScope(toString(raw["library_scope"]))
+	teamID := strings.TrimSpace(toString(raw["team_id"]))
+	if libraryScope != ImageLibraryScopeTeam || teamID == "" {
+		libraryScope = ImageLibraryScopePersonal
+		teamID = ""
+	}
 	return imageMetadata{
 		OwnerID:           strings.TrimSpace(toString(raw["owner_id"])),
 		OwnerName:         strings.TrimSpace(toString(raw["owner_name"])),
+		LibraryScope:      libraryScope,
+		TeamID:            teamID,
+		TeamName:          strings.TrimSpace(toString(raw["team_name"])),
+		MovedByUserID:     strings.TrimSpace(toString(raw["moved_by_user_id"])),
+		MovedAt:           strings.TrimSpace(toString(raw["moved_at"])),
 		Visibility:        visibility,
 		PublishedAt:       strings.TrimSpace(toString(raw["published_at"])),
 		StorageBackend:    strings.TrimSpace(toString(raw["storage_backend"])),
@@ -1879,6 +2305,9 @@ func (s *ImageService) writeImageMetadataForRef(ref imageFileRef, ownerID, owner
 	if meta.Visibility == "" {
 		meta.Visibility = ImageVisibilityPrivate
 	}
+	if meta.LibraryScope == "" {
+		meta.LibraryScope = ImageLibraryScopePersonal
+	}
 	return s.writeImageMetadata(ref.rel, meta)
 }
 
@@ -1886,6 +2315,11 @@ func (s *ImageService) writeUploadedImageMetadataForRef(ref imageFileRef, ownerI
 	meta := s.imageMetadata(ref.rel)
 	meta.OwnerID = strings.TrimSpace(ownerID)
 	meta.OwnerName = strings.TrimSpace(ownerName)
+	meta.LibraryScope = ImageLibraryScopePersonal
+	meta.TeamID = ""
+	meta.TeamName = ""
+	meta.MovedByUserID = ""
+	meta.MovedAt = ""
 	normalized, err := NormalizeImageVisibility(visibility)
 	if err != nil {
 		return err
@@ -1945,7 +2379,7 @@ func (s *ImageService) UpdateImageTags(value any, tags []string, scope ImageAcce
 		return nil, err
 	}
 	meta := s.imageMetadata(ref.rel)
-	if !scope.All && (scope.OwnerID == "" || meta.OwnerID != scope.OwnerID) {
+	if !imageMetadataAllowsMutation(meta, scope) {
 		return nil, errors.New("image not found")
 	}
 	meta.Tags = NormalizeImageTags(tags)
@@ -1976,6 +2410,9 @@ func (s *ImageService) DeleteImageTag(tag string, scope ImageAccessScope) (map[s
 			continue
 		}
 		meta := s.imageMetadata(ref.rel)
+		if !imageMetadataAllowsMutation(meta, scope) {
+			continue
+		}
 		nextTags := removeImageTag(meta.Tags, tag)
 		if len(nextTags) == len(meta.Tags) {
 			continue
@@ -2023,6 +2460,19 @@ func (s *ImageService) writeImageMetadata(rel string, meta imageMetadata) error 
 	}
 	if meta.OwnerName != "" {
 		value["owner_name"] = meta.OwnerName
+	}
+	value["library_scope"] = normalizeImageLibraryScope(meta.LibraryScope)
+	if meta.TeamID != "" {
+		value["team_id"] = meta.TeamID
+	}
+	if meta.TeamName != "" {
+		value["team_name"] = meta.TeamName
+	}
+	if meta.MovedByUserID != "" {
+		value["moved_by_user_id"] = meta.MovedByUserID
+	}
+	if meta.MovedAt != "" {
+		value["moved_at"] = meta.MovedAt
 	}
 	if meta.PublishedAt != "" {
 		value["published_at"] = meta.PublishedAt
@@ -2321,6 +2771,7 @@ func (s *ImageService) imageCleanupCandidates() []imageCleanupCandidate {
 		return nil
 	}
 	candidates := make([]imageCleanupCandidate, 0)
+	seen := map[string]struct{}{}
 	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return nil
@@ -2334,6 +2785,7 @@ func (s *ImageService) imageCleanupCandidates() []imageCleanupCandidate {
 		if statErr != nil {
 			return nil
 		}
+		seen[rel] = struct{}{}
 		meta := s.imageMetadata(rel)
 		candidates = append(candidates, imageCleanupCandidate{
 			rel:       rel,
@@ -2344,6 +2796,32 @@ func (s *ImageService) imageCleanupCandidates() []imageCleanupCandidate {
 		})
 		return nil
 	})
+	for _, entry := range s.imageIndexEntries() {
+		if entry.Path == "" || entry.ObjectKey == "" {
+			continue
+		}
+		if _, ok := seen[entry.Path]; ok {
+			continue
+		}
+		modTime := time.Now()
+		if entry.ModifiedUnixNano > 0 {
+			modTime = time.Unix(0, entry.ModifiedUnixNano)
+		}
+		meta := s.imageMetadata(entry.Path)
+		if meta.ObjectKey == "" {
+			meta.StorageBackend = entry.StorageBackend
+			meta.ObjectKey = entry.ObjectKey
+			meta.ObjectURL = entry.ObjectURL
+		}
+		info := memoryFileInfo{name: firstNonEmptyString(entry.Name, filepath.Base(filepath.FromSlash(entry.Path))), size: entry.Size, modTime: modTime}
+		candidates = append(candidates, imageCleanupCandidate{
+			rel:       entry.Path,
+			path:      filepath.Join(root, filepath.FromSlash(entry.Path)),
+			info:      info,
+			meta:      meta,
+			groupSize: s.imageGroupSize(entry.Path, entry.Size),
+		})
+	}
 	return candidates
 }
 
@@ -2377,6 +2855,9 @@ func (s *ImageService) cleanupByUserImageLimit(maxImagesPerUser int, includePubl
 	}
 	owned := map[string][]imageCleanupCandidate{}
 	for _, candidate := range s.imageCleanupCandidates() {
+		if candidate.meta.LibraryScope == ImageLibraryScopeTeam {
+			continue
+		}
 		ownerID := strings.TrimSpace(candidate.meta.OwnerID)
 		if ownerID == "" {
 			continue
@@ -2451,6 +2932,12 @@ func (s *ImageService) removeImageGroup(rel string) (imageStorageRemovalStats, e
 		return imageStorageRemovalStats{}, err
 	}
 	meta := s.imageMetadata(rel)
+	entry, hasEntry := s.imageIndexEntry(rel)
+	objectSize := int64(0)
+	if hasEntry && entry.Size > 0 {
+		objectSize = entry.Size
+	}
+	objectRemoved := false
 	var stats imageStorageRemovalStats
 	if meta.ObjectKey != "" {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -2459,6 +2946,7 @@ func (s *ImageService) removeImageGroup(rel string) (imageStorageRemovalStats, e
 		if err != nil {
 			return stats, err
 		}
+		objectRemoved = true
 	}
 	thumbnailRoot, err := filepath.Abs(s.config.ImageThumbnailsDir())
 	if err != nil {
@@ -2512,6 +3000,12 @@ func (s *ImageService) removeImageGroup(rel string) (imageStorageRemovalStats, e
 		stats.images++
 		stats.imagePaths = append(stats.imagePaths, rel)
 		stats.bytes += bytes
+		objectRemoved = false
+	}
+	if objectRemoved {
+		stats.images++
+		stats.imagePaths = append(stats.imagePaths, rel)
+		stats.bytes += objectSize
 	}
 	removeEmptyParentDirs(imageRoot, filepath.Dir(imagePath))
 	return stats, nil
@@ -2746,6 +3240,19 @@ func addImageMetadataFields(item map[string]any, meta imageMetadata, optionsValu
 	}
 	if meta.OwnerName != "" {
 		item["owner_name"] = meta.OwnerName
+	}
+	item["library_scope"] = meta.LibraryScope
+	if meta.TeamID != "" {
+		item["team_id"] = meta.TeamID
+	}
+	if meta.TeamName != "" {
+		item["team_name"] = meta.TeamName
+	}
+	if meta.MovedByUserID != "" {
+		item["moved_by_user_id"] = meta.MovedByUserID
+	}
+	if meta.MovedAt != "" {
+		item["moved_at"] = meta.MovedAt
 	}
 	if meta.PublishedAt != "" {
 		item["published_at"] = meta.PublishedAt
@@ -3039,6 +3546,17 @@ func imageFileDimensions(path string) (int, int, bool) {
 		return 0, 0, false
 	}
 	return config.Width, config.Height, true
+}
+
+func imageRefDimensions(ref imageFileRef) (int, int, bool) {
+	if len(ref.data) > 0 {
+		config, _, err := image.DecodeConfig(bytes.NewReader(ref.data))
+		if err != nil || config.Width <= 0 || config.Height <= 0 {
+			return 0, 0, false
+		}
+		return config.Width, config.Height, true
+	}
+	return imageFileDimensions(ref.path)
 }
 
 func simplifiedAspectRatio(width, height int) string {
@@ -3658,4 +4176,11 @@ func firstNonEmptyString(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func maxInt64(left, right int64) int64 {
+	if left > right {
+		return left
+	}
+	return right
 }

@@ -25,6 +25,7 @@ import {
   fetchCanvases,
   fetchCreationTasks,
   fetchManagedImages,
+  fetchTeamWorkspace,
   saveCanvas,
   supportsImageOutputControls,
   uploadManagedImages,
@@ -34,6 +35,7 @@ import {
   type ImageModel,
   type ImageVisibility,
   type ManagedImageSummary,
+  type TeamSummary,
 } from "@/lib/api";
 import { fetchAuthenticatedImageBlob } from "@/lib/authenticated-image";
 import {
@@ -134,7 +136,7 @@ const DEFAULT_ANGLE_CONTROL_VALUES: SmartCanvasAngleControlValues = { horizontal
 const DETAIL_ENHANCE_PROMPT = "请对这张图片进行细节增强和高清修复，提升清晰度、纹理细节、边缘锐度和整体质感，同时严格保留原始构图、主体、颜色关系和风格，不新增无关元素。";
 const AI_BACKGROUND_REMOVAL_PROMPT = "AI 抠图：自动识别图片中的主要主体，移除背景并输出透明背景 PNG。保持主体形状、纹理、颜色和像素细节，避免新增或重绘无关内容。注意：这是 AI 编辑，可能会重绘图片内容。";
 
-type SmartCanvasAssetLibraryScope = "mine" | "public";
+type SmartCanvasAssetLibraryScope = "mine" | "team" | "public";
 
 type SmartCanvasNodeClipboard = {
   nodes: SmartCanvasItem[];
@@ -921,11 +923,18 @@ export function useSmartCanvasController() {
   const [assets, setAssets] = useState<ManagedImageSummary[]>([]);
   const [assetNextCursor, setAssetNextCursor] = useState("");
   const [hasMoreAssets, setHasMoreAssets] = useState(false);
+  const [assetsLoaded, setAssetsLoaded] = useState(false);
   const [publicAssets, setPublicAssets] = useState<ManagedImageSummary[]>([]);
   const [publicAssetNextCursor, setPublicAssetNextCursor] = useState("");
   const [hasMorePublicAssets, setHasMorePublicAssets] = useState(false);
   const [publicAssetsLoaded, setPublicAssetsLoaded] = useState(false);
+  const [activeTeam, setActiveTeam] = useState<TeamSummary | null>(null);
+  const [teamAssets, setTeamAssets] = useState<ManagedImageSummary[]>([]);
+  const [teamAssetNextCursor, setTeamAssetNextCursor] = useState("");
+  const [hasMoreTeamAssets, setHasMoreTeamAssets] = useState(false);
+  const [teamAssetsLoaded, setTeamAssetsLoaded] = useState(false);
   const [assetLibraryScope, setAssetLibraryScope] = useState<SmartCanvasAssetLibraryScope>("mine");
+  const [assetSidebarActivated, setAssetSidebarActivated] = useState(false);
   const [selectedItemId, setSelectedItemId] = useState("");
   const [selectedItemIds, setSelectedItemIds] = useState<string[]>([]);
   const [viewport, setViewport] = useState<SmartCanvasViewport>(DEFAULT_SMART_VIEWPORT);
@@ -987,6 +996,9 @@ export function useSmartCanvasController() {
   const historyCommitBaseRef = useRef<SmartCanvasDocument | null>(null);
   const nodeClipboardRef = useRef<SmartCanvasNodeClipboard | null>(null);
   const nodePasteOffsetRef = useRef(0);
+  const assetsLoadingRequestRef = useRef(false);
+  const publicAssetsLoadingRequestRef = useRef(false);
+  const teamAssetsLoadingRequestRef = useRef(false);
 
   const selectedItem = useMemo(
     () => canvas?.nodes.find((item) => item.id === selectedItemId) || null,
@@ -994,11 +1006,12 @@ export function useSmartCanvasController() {
   );
   const blankNodeCount = useMemo(() => blankSmartCanvasItemIds(canvas).length, [canvas]);
   const selectedImageToolDisabledReason = useMemo(() => imageToolUnavailableReason(selectedItem), [selectedItem]);
-  const mentionItems = useMemo(() => mentionCandidateImages(canvas, [...assets, ...publicAssets]), [assets, canvas, publicAssets]);
+  const mentionItems = useMemo(() => mentionCandidateImages(canvas, [...assets, ...teamAssets, ...publicAssets]), [assets, canvas, publicAssets, teamAssets]);
   const assetLibraryTabs = useMemo(() => [
     { id: "mine", label: "我的图库", count: assets.length },
+    ...(activeTeam?.id ? [{ id: "team", label: "团队图库", count: teamAssets.length }] : []),
     { id: "public", label: "公共图库", count: publicAssets.length },
-  ], [assets.length, publicAssets.length]);
+  ], [activeTeam?.id, assets.length, publicAssets.length, teamAssets.length]);
   const angleControlPrompt = useMemo(() => buildAngleControlPrompt(angleControlValues), [angleControlValues]);
   const angleControlResultItem = useMemo(() => {
     if (!angleControlResultItemId) {
@@ -1037,6 +1050,34 @@ export function useSmartCanvasController() {
   useEffect(() => {
     setUserPresets(loadSmartCanvasUserPresets(userPresetScope()));
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadTeamWorkspace = async () => {
+      try {
+        const workspace = await fetchTeamWorkspace();
+        if (cancelled) {
+          return;
+        }
+        const team = Array.isArray(workspace.teams) ? workspace.teams[0] : undefined;
+        setActiveTeam(team || null);
+      } catch {
+        if (!cancelled) {
+          setActiveTeam(null);
+        }
+      }
+    };
+    void loadTeamWorkspace();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (assetLibraryScope === "team" && !activeTeam?.id) {
+      setAssetLibraryScope("mine");
+    }
+  }, [activeTeam?.id, assetLibraryScope]);
 
   useEffect(() => {
     if (typeof window === "undefined" || isCheckingAuth || loading) {
@@ -1137,15 +1178,21 @@ export function useSmartCanvasController() {
   }, [selectSingleItem]);
 
   const loadAssets = useCallback(async () => {
+    if (assetsLoadingRequestRef.current) {
+      return;
+    }
+    assetsLoadingRequestRef.current = true;
     setLoadingAssets(true);
     try {
       const result = await fetchManagedImages({ scope: "mine", page_size: CANVAS_ASSET_PAGE_SIZE });
       setAssets(result.items);
       setAssetNextCursor(result.next_cursor);
       setHasMoreAssets(result.has_more);
+      setAssetsLoaded(true);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "加载图片库失败");
     } finally {
+      assetsLoadingRequestRef.current = false;
       setLoadingAssets(false);
     }
   }, []);
@@ -1175,6 +1222,10 @@ export function useSmartCanvasController() {
   }, [assetNextCursor, hasMoreAssets, loadingAssets, loadingMoreAssets]);
 
   const loadPublicAssets = useCallback(async () => {
+    if (publicAssetsLoadingRequestRef.current) {
+      return;
+    }
+    publicAssetsLoadingRequestRef.current = true;
     setLoadingPublicAssets(true);
     try {
       const result = await fetchManagedImages({ scope: "public", page_size: CANVAS_ASSET_PAGE_SIZE });
@@ -1185,9 +1236,62 @@ export function useSmartCanvasController() {
       toast.error(error instanceof Error ? error.message : "加载公共图片库失败");
     } finally {
       setPublicAssetsLoaded(true);
+      publicAssetsLoadingRequestRef.current = false;
       setLoadingPublicAssets(false);
     }
   }, []);
+
+  const loadTeamAssets = useCallback(async () => {
+    if (teamAssetsLoadingRequestRef.current) {
+      return;
+    }
+    if (!activeTeam?.id) {
+      setTeamAssets([]);
+      setTeamAssetNextCursor("");
+      setHasMoreTeamAssets(false);
+      setTeamAssetsLoaded(true);
+      return;
+    }
+    teamAssetsLoadingRequestRef.current = true;
+    setLoadingPublicAssets(true);
+    try {
+      const result = await fetchManagedImages({ scope: "team", team_id: activeTeam.id, page_size: CANVAS_ASSET_PAGE_SIZE });
+      setTeamAssets(result.items);
+      setTeamAssetNextCursor(result.next_cursor);
+      setHasMoreTeamAssets(result.has_more);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "加载团队图片库失败");
+    } finally {
+      setTeamAssetsLoaded(true);
+      teamAssetsLoadingRequestRef.current = false;
+      setLoadingPublicAssets(false);
+    }
+  }, [activeTeam?.id]);
+
+  const loadMoreTeamAssets = useCallback(async () => {
+    if (!activeTeam?.id || loadingPublicAssets || loadingMorePublicAssets || !hasMoreTeamAssets || !teamAssetNextCursor) {
+      return;
+    }
+    setLoadingMorePublicAssets(true);
+    try {
+      const result = await fetchManagedImages({
+        scope: "team",
+        team_id: activeTeam.id,
+        page_size: CANVAS_ASSET_PAGE_SIZE,
+        cursor: teamAssetNextCursor,
+      });
+      setTeamAssets((current) => {
+        const seen = new Set(current.map((asset) => asset.path));
+        return [...current, ...result.items.filter((asset) => !seen.has(asset.path))];
+      });
+      setTeamAssetNextCursor(result.next_cursor);
+      setHasMoreTeamAssets(result.has_more);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "加载更多团队图片失败");
+    } finally {
+      setLoadingMorePublicAssets(false);
+    }
+  }, [activeTeam?.id, hasMoreTeamAssets, loadingMorePublicAssets, loadingPublicAssets, teamAssetNextCursor]);
 
   const loadMorePublicAssets = useCallback(async () => {
     if (loadingPublicAssets || loadingMorePublicAssets || !hasMorePublicAssets || !publicAssetNextCursor) {
@@ -1214,24 +1318,72 @@ export function useSmartCanvasController() {
   }, [hasMorePublicAssets, loadingMorePublicAssets, loadingPublicAssets, publicAssetNextCursor]);
 
   useEffect(() => {
-    if (assetLibraryScope === "public" && !publicAssetsLoaded && !loadingPublicAssets) {
+    if (assetSidebarActivated && assetLibraryScope === "public" && !publicAssetsLoaded && !loadingPublicAssets) {
       void loadPublicAssets();
     }
-  }, [assetLibraryScope, loadPublicAssets, loadingPublicAssets, publicAssetsLoaded]);
+  }, [assetLibraryScope, assetSidebarActivated, loadPublicAssets, loadingPublicAssets, publicAssetsLoaded]);
+
+  useEffect(() => {
+    if (assetSidebarActivated && assetLibraryScope === "team" && activeTeam?.id && !teamAssetsLoaded && !loadingPublicAssets) {
+      void loadTeamAssets();
+    }
+  }, [activeTeam?.id, assetLibraryScope, assetSidebarActivated, loadTeamAssets, loadingPublicAssets, teamAssetsLoaded]);
 
   const selectAssetLibraryScope = useCallback((scope: string) => {
-    if (scope === "mine" || scope === "public") {
+    if (scope === "mine" || scope === "public" || (scope === "team" && activeTeam?.id)) {
       setAssetLibraryScope(scope);
     }
-  }, []);
+  }, [activeTeam?.id]);
 
   const refreshAssetLibrary = useCallback(() => {
-    return assetLibraryScope === "public" ? loadPublicAssets() : loadAssets();
-  }, [assetLibraryScope, loadAssets, loadPublicAssets]);
+    if (assetLibraryScope === "public") {
+      return loadPublicAssets();
+    }
+    if (assetLibraryScope === "team") {
+      return loadTeamAssets();
+    }
+    return loadAssets();
+  }, [assetLibraryScope, loadAssets, loadPublicAssets, loadTeamAssets]);
+
+  const ensureAssetLibraryLoaded = useCallback(() => {
+    if (assetLibraryScope === "public") {
+      if (!publicAssetsLoaded && !loadingPublicAssets && !publicAssetsLoadingRequestRef.current) {
+        void loadPublicAssets();
+      }
+      return;
+    }
+    if (assetLibraryScope === "team") {
+      if (!teamAssetsLoaded && !loadingPublicAssets && !teamAssetsLoadingRequestRef.current) {
+        void loadTeamAssets();
+      }
+      return;
+    }
+    if (!assetsLoaded && !loadingAssets && !assetsLoadingRequestRef.current) {
+      void loadAssets();
+    }
+  }, [assetLibraryScope, assetsLoaded, loadAssets, loadPublicAssets, loadTeamAssets, loadingAssets, loadingPublicAssets, publicAssetsLoaded, teamAssetsLoaded]);
+
+  const activateAssetSidebar = useCallback(() => {
+    setAssetSidebarActivated(true);
+    ensureAssetLibraryLoaded();
+  }, [ensureAssetLibraryLoaded]);
+
+  const handleAssetSidebarExpandedChange = useCallback((expanded: boolean) => {
+    if (expanded) {
+      setAssetSidebarActivated(true);
+      ensureAssetLibraryLoaded();
+    }
+  }, [ensureAssetLibraryLoaded]);
 
   const loadMoreAssetLibrary = useCallback(() => {
-    return assetLibraryScope === "public" ? loadMorePublicAssets() : loadMoreAssets();
-  }, [assetLibraryScope, loadMoreAssets, loadMorePublicAssets]);
+    if (assetLibraryScope === "public") {
+      return loadMorePublicAssets();
+    }
+    if (assetLibraryScope === "team") {
+      return loadMoreTeamAssets();
+    }
+    return loadMoreAssets();
+  }, [assetLibraryScope, loadMoreAssets, loadMorePublicAssets, loadMoreTeamAssets]);
 
   const reloadCanvases = useCallback(async () => {
     try {
@@ -1256,14 +1408,13 @@ export function useSmartCanvasController() {
       setCanvases(smartCanvases);
       applyCanvas(smartCanvases[0] || createEmptySmartCanvas());
       setModels(normalizeModelCatalog(modelItems));
-      void loadAssets();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "加载画布失败");
       applyCanvas(createEmptySmartCanvas());
     } finally {
       setLoading(false);
     }
-  }, [applyCanvas, loadAssets]);
+  }, [applyCanvas]);
 
   useEffect(() => {
     void loadInitial();
@@ -4083,7 +4234,8 @@ export function useSmartCanvasController() {
     canvases,
     canvas,
     models,
-    assets: assetLibraryScope === "public" ? publicAssets : assets,
+    assets: assetLibraryScope === "public" ? publicAssets : assetLibraryScope === "team" ? teamAssets : assets,
+    assetSidebarActivated,
     assetLibraryScope,
     assetLibraryTabs,
     selectedItemId,
@@ -4099,9 +4251,9 @@ export function useSmartCanvasController() {
     saving,
     running,
     uploading,
-    loadingAssets: assetLibraryScope === "public" ? loadingPublicAssets : loadingAssets,
-    loadingMoreAssets: assetLibraryScope === "public" ? loadingMorePublicAssets : loadingMoreAssets,
-    hasMoreAssets: assetLibraryScope === "public" ? hasMorePublicAssets : hasMoreAssets,
+    loadingAssets: assetLibraryScope === "public" || assetLibraryScope === "team" ? loadingPublicAssets : loadingAssets,
+    loadingMoreAssets: assetLibraryScope === "public" || assetLibraryScope === "team" ? loadingMorePublicAssets : loadingMoreAssets,
+    hasMoreAssets: assetLibraryScope === "public" ? hasMorePublicAssets : assetLibraryScope === "team" ? hasMoreTeamAssets : hasMoreAssets,
     draggingImages,
     mentionOpen,
     mentionItems,
@@ -4144,6 +4296,7 @@ export function useSmartCanvasController() {
     restoreHistoryEntry,
     saveNow,
     loadAssets: refreshAssetLibrary,
+    refreshAssets: refreshAssetLibrary,
     loadMoreAssets: loadMoreAssetLibrary,
     reloadCanvases,
     updateItemData,
@@ -4205,6 +4358,8 @@ export function useSmartCanvasController() {
     deleteImageFromItem,
     addAssetToCanvas,
     addAssetToComposer,
+    activateAssetSidebar,
+    handleAssetSidebarExpandedChange,
     addMentionImageToPrompt,
     handleUploadInputChange,
     toggleMention,

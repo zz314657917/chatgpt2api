@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -113,6 +115,20 @@ func TestImageTaskServiceListTasksReturnsEmptyArrays(t *testing.T) {
 		if strings.Contains(text, `"items":null`) || strings.Contains(text, `"missing_ids":null`) {
 			t.Fatalf("%s encoded nil arrays: %s", name, text)
 		}
+	}
+}
+
+func TestImageTaskServicePublicTaskIncludesDurationSeconds(t *testing.T) {
+	item := publicTask(map[string]any{
+		"id":         "task-1",
+		"status":     TaskStatusSuccess,
+		"mode":       "chat",
+		"model":      "gpt-5.1",
+		"created_at": "2026-06-09 12:00:00",
+		"updated_at": "2026-06-09 12:01:05",
+	})
+	if got := util.ToInt(item["duration_seconds"], -1); got != 65 {
+		t.Fatalf("duration_seconds = %d, want 65 in %#v", got, item)
 	}
 }
 
@@ -1618,9 +1634,77 @@ func TestImageTaskServiceDiagnosticsAndRepair(t *testing.T) {
 	}
 }
 
+func TestImageTaskServiceRefundsExternalReserveWhenTaskSaveFails(t *testing.T) {
+	backend := newTestStorageBackend(t)
+	store := &failingJSONDocumentStore{base: backend.(storage.JSONDocumentBackend), failName: "image_tasks.json"}
+	svc := newImageTaskService(store, failingImageTaskHandler, failingImageTaskHandler, failingImageTaskHandler, failingImageTaskHandler, func() int { return 30 })
+	billing := &recordingExternalTaskBilling{}
+	svc.SetExternalBilling(billing)
+
+	identity := Identity{Role: AuthRoleUser, Provider: AuthProviderSub2API, OwnerID: "sub2api:42", Name: "Alice"}
+	_, err := svc.SubmitGeneration(context.Background(), identity, "save-fails", "draw", "gpt-image-2", "1024x1024", "high", "https://base.test", 1, nil)
+	if err == nil || !strings.Contains(err.Error(), "forced save failure") {
+		t.Fatalf("SubmitGeneration() error = %v, want forced save failure", err)
+	}
+	if !reflect.DeepEqual(billing.calls, []string{"reserve", "refund"}) {
+		t.Fatalf("external billing calls = %#v", billing.calls)
+	}
+	if billing.refundAmount != billing.reserveAmount {
+		t.Fatalf("refund amount = %d, reserve amount = %d", billing.refundAmount, billing.reserveAmount)
+	}
+	if got := svc.ListTasks(identity, []string{"save-fails"}); len(got["items"].([]map[string]any)) != 0 {
+		t.Fatalf("failed save task should not remain visible: %#v", got)
+	}
+}
+
 func newTestImageTaskService(t *testing.T, generation ImageTaskHandler, edit ImageTaskHandler, chat ImageTaskHandler, retentionGetter func() int, limitGetters ...func() int) *ImageTaskService {
 	t.Helper()
 	return NewStoredImageTaskService(newTestStorageBackend(t), generation, edit, chat, retentionGetter, limitGetters...)
+}
+
+type failingJSONDocumentStore struct {
+	base     storage.JSONDocumentBackend
+	failName string
+}
+
+func (s *failingJSONDocumentStore) LoadJSONDocument(name string) (any, error) {
+	return s.base.LoadJSONDocument(name)
+}
+
+func (s *failingJSONDocumentStore) SaveJSONDocument(name string, value any) error {
+	if name == s.failName {
+		return fmt.Errorf("forced save failure")
+	}
+	return s.base.SaveJSONDocument(name, value)
+}
+
+func (s *failingJSONDocumentStore) DeleteJSONDocument(name string) error {
+	return s.base.DeleteJSONDocument(name)
+}
+
+type recordingExternalTaskBilling struct {
+	calls         []string
+	reserveAmount int
+	refundAmount  int
+	commitAmount  int
+}
+
+func (b *recordingExternalTaskBilling) ReserveTask(_ context.Context, _ Identity, _ map[string]any, amount int, _ BillingReference) error {
+	b.calls = append(b.calls, "reserve")
+	b.reserveAmount = amount
+	return nil
+}
+
+func (b *recordingExternalTaskBilling) CommitTask(_ context.Context, _ Identity, _ map[string]any, amount int, _ BillingReference) error {
+	b.calls = append(b.calls, "commit")
+	b.commitAmount = amount
+	return nil
+}
+
+func (b *recordingExternalTaskBilling) RefundTask(_ context.Context, _ Identity, _ map[string]any, amount int, _ BillingReference) error {
+	b.calls = append(b.calls, "refund")
+	b.refundAmount = amount
+	return nil
 }
 
 func waitForStartedTask(t *testing.T, started <-chan string) string {

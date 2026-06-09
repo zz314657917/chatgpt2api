@@ -7,7 +7,7 @@
 - Evidence dir: `F:/java/chatgpt2api/docs/workflow/evidence/task-004-qa-browser/`
 
 ## Findings
-- PASS: 未登录访问 `/image` 会进入落叶AI登录跳转链路；最终浏览器证据记录到 `/login -> /auth/sub2api/launch?token=qa-token -> /image`。
+- PASS: 未登录访问 `/image` 会进入落叶创艺登录跳转链路；最终浏览器证据记录到 `/login -> /auth/sub2api/launch?token=qa-token -> /image`。
 - PASS: mock Sub2API launch token 回跳后进入 `/image`。
 - PASS: 登录后右上角余额 `¥123.45` 和 `充值` 入口可见。
 - PASS: 普通用户 `/image` 和 `/profile` 页面未出现 `API Key`、`Token`、`OpenAI-compatible`、`API 选择` 禁用文案。

@@ -1,6 +1,6 @@
 "use client";
 
-import { forwardRef, useCallback, useMemo, useState, type DragEvent, type HTMLAttributes } from "react";
+import { forwardRef, useCallback, useEffect, useMemo, useState, type DragEvent, type HTMLAttributes } from "react";
 import { VirtuosoGrid } from "react-virtuoso";
 import { Images, LoaderCircle, Maximize2, Minimize2, PanelRightOpen, Pin, RefreshCw } from "lucide-react";
 
@@ -32,6 +32,7 @@ export type ManagedImageAssetSidebarProps = {
   expandedClassName?: string;
   wideClassName?: string;
   defaultPinned?: boolean;
+  defaultExpanded?: boolean;
   title?: string;
   subtitle?: string;
   emptyLabel?: string;
@@ -40,6 +41,7 @@ export type ManagedImageAssetSidebarProps = {
   tabs?: ManagedImageAssetSidebarTab[];
   activeTabId?: string;
   onActiveTabChange?: (tabId: string) => void;
+  onExpandedChange?: (expanded: boolean) => void;
 };
 
 const panelClass =
@@ -65,6 +67,7 @@ export function ManagedImageAssetSidebar({
   expandedClassName = "w-[420px] translate-x-0 p-3",
   wideClassName = "w-[680px] translate-x-0 p-3",
   defaultPinned = false,
+  defaultExpanded = false,
   title = "图片库",
   subtitle,
   emptyLabel = "图片库暂无图片",
@@ -73,10 +76,11 @@ export function ManagedImageAssetSidebar({
   tabs,
   activeTabId,
   onActiveTabChange,
+  onExpandedChange,
 }: ManagedImageAssetSidebarProps) {
   const pinnedStorageKey = `${storagePrefix}-pinned`;
   const wideStorageKey = `${storagePrefix}-wide`;
-  const [hoverExpanded, setHoverExpanded] = useState(defaultPinned);
+  const [hoverExpanded, setHoverExpanded] = useState(defaultPinned || defaultExpanded);
   const [pinned, setPinned] = useState(() => {
     if (typeof window === "undefined") {
       return defaultPinned;
@@ -101,6 +105,10 @@ export function ManagedImageAssetSidebar({
       ? "bg-sky-500/15 text-sky-600 dark:bg-sky-400/15 dark:text-sky-300"
       : "bg-slate-900/8 text-slate-700 dark:bg-slate-100/10 dark:text-slate-200";
   const resolvedSubtitle = subtitle || `${assets.length} 张素材 · 点击加入输入`;
+  useEffect(() => {
+    onExpandedChange?.(expanded);
+  }, [expanded, onExpandedChange]);
+
   const assetGridComponents = useMemo(
     () => ({
       List: forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivElement>>(function ManagedImageAssetGridList(props, ref) {
@@ -230,7 +238,7 @@ export function ManagedImageAssetSidebar({
           </div>
         </div>
         {tabs?.length ? (
-          <div className="mt-3 grid grid-cols-2 gap-1 rounded-xl border border-border bg-muted/40 p-1 dark:border-slate-800 dark:bg-slate-950/40">
+          <div className={cn("mt-3 grid gap-1 rounded-xl border border-border bg-muted/40 p-1 dark:border-slate-800 dark:bg-slate-950/40", tabs.length > 2 ? "grid-cols-3" : "grid-cols-2")}>
             {tabs.map((tab) => {
               const active = tab.id === activeTabId;
               return (

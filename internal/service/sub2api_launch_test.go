@@ -1,10 +1,22 @@
 package service
 
 import (
+	"strings"
 	"testing"
 
 	"chatgpt2api/internal/storage"
 )
+
+type testSub2APILaunchConfig struct {
+	gatewayBaseURL string
+}
+
+func (c testSub2APILaunchConfig) Sub2APIRedeemURL() string           { return "" }
+func (c testSub2APILaunchConfig) Sub2APIRedeemSecret() string        { return "" }
+func (c testSub2APILaunchConfig) Sub2APIGatewayBaseURL() string      { return c.gatewayBaseURL }
+func (c testSub2APILaunchConfig) Sub2APIDefaultChatGroupID() string  { return "" }
+func (c testSub2APILaunchConfig) Sub2APIDefaultImageGroupID() string { return "" }
+func (c testSub2APILaunchConfig) Sub2APIDefaultVideoGroupID() string { return "" }
 
 func newTestSub2APIBindingStore(t *testing.T) *Sub2APIBindingStore {
 	t.Helper()
@@ -133,5 +145,35 @@ func TestSub2APIPublicDisplayNameSkipsInternalID(t *testing.T) {
 	}
 	if got := sub2APIPublicDisplayName("", "sub2api:42", "Alice"); got != "Alice" {
 		t.Fatalf("sub2APIPublicDisplayName(fallback) = %q, want Alice", got)
+	}
+}
+
+func TestSub2APIBindingFromRedeemBodyRequiresEmail(t *testing.T) {
+	svc := &Sub2APILaunchService{config: testSub2APILaunchConfig{gatewayBaseURL: "https://gateway.example.com/v1"}}
+
+	_, err := svc.bindingFromRedeemBody(map[string]any{"user_id": "42"})
+	if err == nil || !strings.Contains(err.Error(), "missing email") {
+		t.Fatalf("bindingFromRedeemBody() error = %v, want missing email", err)
+	}
+
+	binding, err := svc.bindingFromRedeemBody(map[string]any{"user_id": "42", "user": map[string]any{"email": "user@example.com"}})
+	if err != nil {
+		t.Fatalf("bindingFromRedeemBody(with email) error = %v", err)
+	}
+	if binding.UserEmail != "user@example.com" {
+		t.Fatalf("binding email = %q, want user@example.com", binding.UserEmail)
+	}
+}
+
+func TestSub2APIChargePayloadConvertsCNYMilliToYuan(t *testing.T) {
+	svc := &Sub2APILaunchService{}
+
+	payload := svc.chargePayload("sub2api:42", "sub2api:99", "team-1", "task-1", "generate", "gpt-image-2", "charge-1", 50)
+
+	if got := payload["amount"]; got != 0.05 {
+		t.Fatalf("payload amount = %#v, want 0.05", got)
+	}
+	if payload["task_id"] != "task-1" || payload["mode"] != "generate" || payload["model"] != "gpt-image-2" || payload["actor_user_id"] != "sub2api:99" || payload["team_id"] != "team-1" {
+		t.Fatalf("payload missing structured metadata: %#v", payload)
 	}
 }

@@ -13,11 +13,11 @@ last_verified: 2026-06-09
 
 - 当前阶段：`done`
 - 当前 Sprint：`luoye-ai-independent-user-edition`
-- 当前目标：把 `chatgpt2api` 改造成“落叶AI”独立用户版，普通用户只走 Sub2API 注册、登录、充值和扣费，站内直接创作；同时实现团队共享额度 v1。
+- 当前目标：把 `chatgpt2api` 改造成“落叶创艺”独立用户版，普通用户只走 Sub2API 注册、登录、充值和扣费，站内直接创作；同时实现团队共享额度 v1。
 - 本轮范围：
   - Sub2API 外部创作站 bridge。
-  - chatgpt2api 落叶AI独立模式后端。
-  - chatgpt2api 落叶AI普通用户前端。
+  - chatgpt2api 落叶创艺独立模式后端。
+  - chatgpt2api 落叶创艺普通用户前端。
   - 跨仓库浏览器验收。
 - Task contracts：
   - `docs/workflow/tasks/task-001-sub2-studio-bridge.md`
@@ -34,7 +34,7 @@ last_verified: 2026-06-09
   - 登录回跳后进入创作台。
   - 右上角余额和充值入口可见。
   - 普通用户 UI 不出现 API Key、Token、OpenAI-compatible、API 选择。
-  - 团队创建、加入、切换和团队任务记录可用。
+  - 团队创建、定向邀请、切换和团队任务记录可用。
 - 已完成开发 worker：
   - `task-001-sub2-studio-bridge`
   - `task-002-luoye-backend`

@@ -7,6 +7,7 @@ import {
   Eraser,
   Image as ImageIcon,
   ImagePlus,
+  LoaderCircle,
   MessageCircle,
   Plus,
   SlidersHorizontal,
@@ -14,10 +15,12 @@ import {
   X,
 } from "lucide-react";
 import {
+  lazy,
   useEffect,
   Fragment,
   useMemo,
   useRef,
+  Suspense,
   useState,
   type ClipboardEvent,
   type DragEvent,
@@ -27,7 +30,6 @@ import {
   type RefObject,
 } from "react";
 
-import { ImageLightbox } from "@/components/image-lightbox";
 import { ImageOutputControls } from "@/components/image-output-controls";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -61,6 +63,10 @@ import {
   type ManagedImageSummary,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
+
+const ImageLightbox = lazy(() =>
+  import("@/components/image-lightbox").then((module) => ({ default: module.ImageLightbox })),
+);
 
 type ImageComposerProps = {
   composerMode: "chat" | "image";
@@ -151,6 +157,17 @@ function hasDraggedImage(dataTransfer: DataTransfer) {
 function ImageComposerDock({ children }: { children: ReactNode }) {
   return (
     <div className="w-full">{children}</div>
+  );
+}
+
+function ComposerLightboxLoading() {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-white/50 backdrop-blur-[1px]">
+      <div className="inline-flex items-center gap-2 rounded-full border border-stone-200 bg-white/95 px-3 py-2 text-xs text-stone-500 shadow-sm">
+        <LoaderCircle className="size-4 animate-spin" />
+        <span>加载预览...</span>
+      </div>
+    </div>
   );
 }
 
@@ -761,13 +778,17 @@ export function ImageComposer({
             textareaRef.current?.focus();
           }}
         >
-          <ImageLightbox
-            images={lightboxImages}
-            currentIndex={lightboxIndex}
-            open={lightboxOpen}
-            onOpenChange={setLightboxOpen}
-            onIndexChange={setLightboxIndex}
-          />
+          {lightboxOpen ? (
+            <Suspense fallback={<ComposerLightboxLoading />}>
+              <ImageLightbox
+                images={lightboxImages}
+                currentIndex={lightboxIndex}
+                open={lightboxOpen}
+                onOpenChange={setLightboxOpen}
+                onIndexChange={setLightboxIndex}
+              />
+            </Suspense>
+          ) : null}
           <Textarea
             ref={textareaRef}
             value={prompt}

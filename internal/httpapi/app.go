@@ -20,6 +20,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -107,9 +108,17 @@ func NewApp() (*App, error) {
 	sub2Bindings := service.NewSub2APIBindingStore(documentStore)
 	imageSessions := service.NewImageConversationSessionService(filepath.Join(cfg.DataDir, "image_conversation_sessions.json"), storageBackend)
 	engine := &protocol.Engine{Accounts: accounts, Config: cfg, Storage: documentStore, Proxy: proxy, Logger: logger, ImageConversationSessions: imageSessions}
+	teams := service.NewTeamService(storageBackend)
+	teams.SetUserEmailLookup(func(ownerID string) string {
+		binding, ok := sub2Bindings.Get(ownerID)
+		if !ok {
+			return ""
+		}
+		return binding.UserEmail
+	})
 	images := service.NewImageService(cfg, storageBackend)
 	images.SetLogger(logger)
-	app := &App{config: cfg, auth: auth, accounts: accounts, billing: billing, logs: logs, logger: logger, proxy: proxy, engine: engine, images: images, canvases: service.NewCanvasService(storageBackend), social: service.NewSocialProjectService(storageBackend), announce: service.NewAnnouncementService(storageBackend), prompts: service.NewPromptFavoriteService(storageBackend), cpa: service.NewCPAConfig(storageBackend), sub2: service.NewSub2APIConfig(storageBackend), sub2Bindings: sub2Bindings, teams: service.NewTeamService(storageBackend), update: newUpdateService(cfg), cancel: cancel}
+	app := &App{config: cfg, auth: auth, accounts: accounts, billing: billing, logs: logs, logger: logger, proxy: proxy, engine: engine, images: images, canvases: service.NewCanvasService(storageBackend), social: service.NewSocialProjectService(storageBackend), announce: service.NewAnnouncementService(storageBackend), prompts: service.NewPromptFavoriteService(storageBackend), cpa: service.NewCPAConfig(storageBackend), sub2: service.NewSub2APIConfig(storageBackend), sub2Bindings: sub2Bindings, teams: teams, update: newUpdateService(cfg), cancel: cancel}
 	app.cpaImport = service.NewCPAImportService(app.cpa, accounts, proxy)
 	app.sub2Import = service.NewSub2APIService(app.sub2, accounts)
 	app.sub2Launch = service.NewSub2APILaunchService(auth, sub2Bindings, cfg)
@@ -163,6 +172,7 @@ func NewApp() (*App, error) {
 	if cfg.LuoyeIndependentMode() {
 		app.tasks.SetExternalBilling(app)
 	}
+	app.tasks.SetTeamDailyLimitGetter(app.teams.MemberDailyLimitAmount)
 	app.tasks.SetTaskTimeoutGetter(func() time.Duration {
 		return time.Duration(app.config.ImageTaskTimeoutSeconds()) * time.Second
 	})
@@ -211,6 +221,9 @@ func (a *App) handleModels(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if a.blockIndependentProtocolForUser(w, identity) {
+		return
+	}
 	result, err := a.engine.ListModels(r.Context())
 	a.writeProtocol(w, r, result, nil, err, "openai", "/v1/models", "models", identity, "模型列表", service.ImageVisibilityPrivate, service.BillingReference{})
 }
@@ -218,6 +231,9 @@ func (a *App) handleModels(w http.ResponseWriter, r *http.Request) {
 func (a *App) handleImageGenerations(w http.ResponseWriter, r *http.Request) {
 	identity, ok := a.requireIdentity(w, r, "")
 	if !ok {
+		return
+	}
+	if a.blockIndependentProtocolForUser(w, identity) {
 		return
 	}
 	body, err := readJSONMap(r)
@@ -250,6 +266,9 @@ func (a *App) handleImageGenerations(w http.ResponseWriter, r *http.Request) {
 func (a *App) handleImageEdits(w http.ResponseWriter, r *http.Request) {
 	identity, ok := a.requireIdentity(w, r, "")
 	if !ok {
+		return
+	}
+	if a.blockIndependentProtocolForUser(w, identity) {
 		return
 	}
 	body, images, err := a.readImageEditBody(r, identity)
@@ -293,6 +312,9 @@ func (a *App) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if a.blockIndependentProtocolForUser(w, identity) {
+		return
+	}
 	body, err := readJSONMap(r)
 	if err != nil {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid json body")
@@ -318,6 +340,9 @@ func (a *App) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 func (a *App) handleResponses(w http.ResponseWriter, r *http.Request) {
 	identity, ok := a.requireIdentity(w, r, "")
 	if !ok {
+		return
+	}
+	if a.blockIndependentProtocolForUser(w, identity) {
 		return
 	}
 	body, err := readJSONMap(r)
@@ -351,6 +376,9 @@ func (a *App) handleMessages(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if a.blockIndependentProtocolForUser(w, identity) {
+		return
+	}
 	body, err := readJSONMap(r)
 	if err != nil {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid json body")
@@ -361,6 +389,17 @@ func (a *App) handleMessages(w http.ResponseWriter, r *http.Request) {
 	r = r.WithContext(ctx)
 	result, stream, err := a.engine.HandleMessages(ctx, body)
 	a.writeProtocol(w, r, result, stream, err, "anthropic", "/v1/messages", model, identity, "Messages", service.ImageVisibilityPrivate, service.BillingReference{})
+}
+
+func (a *App) blockIndependentProtocolForUser(w http.ResponseWriter, identity service.Identity) bool {
+	if a == nil || a.config == nil || !a.config.LuoyeIndependentMode() {
+		return false
+	}
+	if identity.Role != service.AuthRoleUser || identity.Provider != service.AuthProviderSub2API {
+		return false
+	}
+	writeOpenAIError(w, http.StatusForbidden, "protocol api is disabled in independent mode")
+	return true
 }
 
 func (a *App) writeProtocol(w http.ResponseWriter, r *http.Request, result map[string]any, stream *protocol.StreamResult, err error, sseKind, endpoint, model string, identity service.Identity, summary, visibility string, billingRef service.BillingReference, imagePayloads ...map[string]any) {
@@ -711,13 +750,14 @@ func (a *App) handleSettings(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) handleAppMeta(w http.ResponseWriter, r *http.Request) {
 	util.WriteJSON(w, http.StatusOK, map[string]any{
-		"app_title":                   "落叶AI",
-		"project_name":                "落叶AI",
+		"app_title":                   "落叶创艺",
+		"project_name":                "落叶创艺",
 		"login_page_image_url":        a.config.LoginPageImageURL(),
 		"login_page_image_mode":       a.config.LoginPageImageMode(),
 		"login_page_image_zoom":       a.config.LoginPageImageZoom(),
 		"login_page_image_position_x": a.config.LoginPageImagePositionX(),
 		"login_page_image_position_y": a.config.LoginPageImagePositionY(),
+		"luoye_independent_mode":      a.luoyeIndependentMode(),
 	})
 }
 
@@ -904,7 +944,7 @@ func (a *App) handleImages(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodGet:
-		scope, status, message := imageListAccessScope(identity, r.URL.Query().Get("scope"))
+		scope, teamContext, status, message := a.imageListAccessScope(identity, r.URL.Query())
 		if status != 0 {
 			util.WriteError(w, status, message)
 			a.logFrontendCriticalRequest(r, "image_list", started, status)
@@ -924,6 +964,15 @@ func (a *App) handleImages(w http.ResponseWriter, r *http.Request) {
 			Tags:             imageTagsFromQuery(r.URL.Query()),
 		}, scope)
 		a.decorateImageList(payload)
+		if teamContext.TeamID != "" {
+			payload["team_storage"] = a.images.TeamStorageSummary(teamContext.TeamID, teamContext.StorageLimitBytes)
+			payload["team"] = map[string]any{
+				"id":                  teamContext.TeamID,
+				"name":                teamContext.TeamName,
+				"member_role":         teamContext.Role,
+				"storage_limit_bytes": teamContext.StorageLimitBytes,
+			}
+		}
 		payload["retention_days"] = a.config.ImageRetentionDays()
 		util.WriteJSON(w, http.StatusOK, payload)
 		a.logFrontendCriticalRequest(r, "image_list", started, http.StatusOK)
@@ -933,10 +982,21 @@ func (a *App) handleImages(w http.ResponseWriter, r *http.Request) {
 			util.WriteError(w, http.StatusBadRequest, "invalid json body")
 			return
 		}
-		result, err := a.images.DeleteImages(util.AsStringSlice(body["paths"]), imageAccessScope(identity))
+		scope, status, message := a.imageMutationAccessScope(identity, util.Clean(body["scope"]), util.Clean(body["team_id"]))
+		if status != 0 {
+			util.WriteError(w, status, message)
+			return
+		}
+		result, err := a.images.DeleteImages(util.AsStringSlice(body["paths"]), scope)
 		if err != nil {
 			util.WriteError(w, http.StatusBadRequest, err.Error())
 			return
+		}
+		if util.Clean(body["scope"]) == "team" {
+			teamContext, _, _ := a.imageTeamContext(identity, util.Clean(body["team_id"]))
+			if teamContext.TeamID != "" {
+				result["team_storage"] = a.images.TeamStorageSummary(teamContext.TeamID, teamContext.StorageLimitBytes)
+			}
 		}
 		util.WriteJSON(w, http.StatusOK, result)
 	default:
@@ -951,7 +1011,7 @@ func (a *App) handleImageTags(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodGet:
-		scope, status, message := imageListAccessScope(identity, r.URL.Query().Get("scope"))
+		scope, _, status, message := a.imageListAccessScope(identity, r.URL.Query())
 		if status != 0 {
 			util.WriteError(w, status, message)
 			return
@@ -968,7 +1028,11 @@ func (a *App) handleImageTags(w http.ResponseWriter, r *http.Request) {
 			util.WriteError(w, http.StatusBadRequest, "path is required")
 			return
 		}
-		scope := imageAccessScope(identity)
+		scope, status, message := a.imageMutationAccessScope(identity, util.Clean(body["scope"]), util.Clean(body["team_id"]))
+		if status != 0 {
+			util.WriteError(w, status, message)
+			return
+		}
 		item, err := a.images.UpdateImageTags(path, service.NormalizeImageTags(body["tags"]), scope)
 		if err != nil {
 			status := http.StatusBadRequest
@@ -983,7 +1047,12 @@ func (a *App) handleImageTags(w http.ResponseWriter, r *http.Request) {
 	case http.MethodDelete:
 		body, _ := readJSONMap(r)
 		tag := firstNonEmpty(util.Clean(body["tag"]), util.Clean(r.URL.Query().Get("tag")))
-		result, err := a.images.DeleteImageTag(tag, imageAccessScope(identity))
+		scope, status, message := a.imageMutationAccessScope(identity, util.Clean(body["scope"]), util.Clean(body["team_id"]))
+		if status != 0 {
+			util.WriteError(w, status, message)
+			return
+		}
+		result, err := a.images.DeleteImageTag(tag, scope)
 		if err != nil {
 			util.WriteError(w, http.StatusBadRequest, err.Error())
 			return
@@ -1003,7 +1072,7 @@ func (a *App) handleImageDetail(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	scope, status, message := imageListAccessScope(identity, r.URL.Query().Get("scope"))
+	scope, _, status, message := a.imageListAccessScope(identity, r.URL.Query())
 	if status != 0 {
 		util.WriteError(w, status, message)
 		return
@@ -1145,9 +1214,10 @@ func (a *App) handleImageVisibility(w http.ResponseWriter, r *http.Request) {
 	visibility := util.Clean(body["visibility"])
 	sharePromptParams := util.ToBool(body["share_prompt_parameters"])
 	shareReferences := sharePromptParams && util.ToBool(body["share_reference_images"])
-	scope := service.ImageAccessScope{OwnerID: identityScope(identity)}
-	if identity.Role == service.AuthRoleAdmin {
-		scope = service.ImageAccessScope{All: true}
+	scope, status, message := a.imageMutationAccessScope(identity, util.Clean(body["scope"]), util.Clean(body["team_id"]))
+	if status != 0 {
+		util.WriteError(w, status, message)
+		return
 	}
 	item, err := a.images.UpdateImageVisibility(path, visibility, scope, service.ImageVisibilityUpdateOptions{
 		SharePromptParams: sharePromptParams,
@@ -1165,6 +1235,52 @@ func (a *App) handleImageVisibility(w http.ResponseWriter, r *http.Request) {
 	util.WriteJSON(w, http.StatusOK, map[string]any{"item": item})
 }
 
+func (a *App) handleImageLibraryScope(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPatch {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	identity, ok := a.requireIdentity(w, r, "")
+	if !ok {
+		return
+	}
+	body, err := readJSONMap(r)
+	if err != nil {
+		util.WriteError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	targetScope := util.Clean(body["target_scope"])
+	if targetScope != service.ImageLibraryScopeTeam {
+		util.WriteError(w, http.StatusBadRequest, "target_scope must be team")
+		return
+	}
+	teamContext, status, message := a.imageTeamContext(identity, util.Clean(body["team_id"]))
+	if status != 0 {
+		util.WriteError(w, status, message)
+		return
+	}
+	result, err := a.images.MoveImagesToTeamLibrary(util.AsStringSlice(body["paths"]), identityScope(identity), teamContext.TeamID, teamContext.TeamName, teamContext.StorageLimitBytes)
+	if err != nil {
+		var quotaErr service.TeamStorageQuotaExceededError
+		if errors.As(err, &quotaErr) {
+			util.WriteJSON(w, http.StatusBadRequest, map[string]any{
+				"error":          quotaErr.Error(),
+				"used_bytes":     quotaErr.UsedBytes,
+				"limit_bytes":    quotaErr.LimitBytes,
+				"required_bytes": quotaErr.RequiredBytes,
+			})
+			return
+		}
+		status := http.StatusBadRequest
+		if err.Error() == "image not found" || err.Error() == "team not found" {
+			status = http.StatusNotFound
+		}
+		util.WriteError(w, status, err.Error())
+		return
+	}
+	util.WriteJSON(w, http.StatusOK, result)
+}
+
 func (a *App) handleImageFile(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -1177,6 +1293,17 @@ func (a *App) handleImageFile(w http.ResponseWriter, r *http.Request) {
 	}
 	ref, ok := a.authorizeImageFileRequest(w, r, rel)
 	if !ok {
+		return
+	}
+	if len(ref.Data) > 0 {
+		if ref.ContentType != "" {
+			w.Header().Set("Content-Type", ref.ContentType)
+		}
+		if r.Method == http.MethodHead {
+			w.Header().Set("Content-Length", strconv.Itoa(len(ref.Data)))
+			return
+		}
+		http.ServeContent(w, r, filepath.Base(ref.Rel), ref.Info.ModTime(), bytes.NewReader(ref.Data))
 		return
 	}
 	http.ServeFile(w, r, ref.Path)
@@ -1208,7 +1335,7 @@ func (a *App) handleImageReferenceFile(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if identity.Role != service.AuthRoleAdmin && (ref.OwnerID == "" || ref.OwnerID != identityScope(identity)) {
+	if identity.Role != service.AuthRoleAdmin && (ref.OwnerID == "" || ref.OwnerID != identityScope(identity)) && !a.identityCanAccessImageTeam(identity, ref.LibraryScope, ref.TeamID) {
 		http.NotFound(w, r)
 		return
 	}
@@ -1234,8 +1361,19 @@ func (a *App) authorizeImageFileRequest(w http.ResponseWriter, r *http.Request, 
 	if identity.Role == service.AuthRoleAdmin || (ref.OwnerID != "" && ref.OwnerID == identityScope(identity)) {
 		return ref, true
 	}
+	if a.identityCanAccessImageTeam(identity, ref.LibraryScope, ref.TeamID) {
+		return ref, true
+	}
 	http.NotFound(w, r)
 	return service.ImageFileAccess{}, false
+}
+
+func (a *App) identityCanAccessImageTeam(identity service.Identity, libraryScope, teamID string) bool {
+	if libraryScope != service.ImageLibraryScopeTeam || util.Clean(teamID) == "" || a == nil || a.teams == nil {
+		return false
+	}
+	_, err := a.teams.ImageLibraryContext(identity, teamID)
+	return err == nil
 }
 
 func (a *App) handleImageThumbnail(w http.ResponseWriter, r *http.Request) {
@@ -2295,6 +2433,25 @@ func imageAccessScope(identity service.Identity) service.ImageAccessScope {
 	return service.ImageAccessScope{OwnerID: identityScope(identity)}
 }
 
+func (a *App) imageBytesForIdentity(value string, identity service.Identity) ([]byte, string, error) {
+	scope := imageAccessScope(identity)
+	data, mimeType, err := a.images.ImageBytes(value, scope)
+	if err == nil {
+		return data, mimeType, nil
+	}
+	if identity.Role == service.AuthRoleAdmin || a == nil || a.teams == nil {
+		return nil, "", err
+	}
+	access, accessErr := a.images.ImageFileAccess(value, service.ImageAccessScope{All: true})
+	if accessErr != nil || access.LibraryScope != service.ImageLibraryScopeTeam || util.Clean(access.TeamID) == "" {
+		return nil, "", err
+	}
+	if _, teamErr := a.teams.ImageLibraryContext(identity, access.TeamID); teamErr != nil {
+		return nil, "", err
+	}
+	return a.images.ImageBytes(value, service.ImageAccessScope{TeamID: access.TeamID})
+}
+
 func (a *App) attachFallbackReferenceImage(identity service.Identity, payload map[string]any) {
 	if a == nil || a.images == nil || payload == nil || util.Clean(payload["fallback_reference_image_b64"]) != "" {
 		return
@@ -2312,7 +2469,7 @@ func (a *App) attachFallbackReferenceImage(identity service.Identity, payload ma
 		if value == "" {
 			continue
 		}
-		data, mimeType, err := a.images.ImageBytes(value, imageAccessScope(identity))
+		data, mimeType, err := a.imageBytesForIdentity(value, identity)
 		if err != nil || len(data) == 0 {
 			continue
 		}
@@ -2350,22 +2507,65 @@ func fallbackReferenceDataURL(value string) string {
 	return "data:" + contentType + ";base64," + base64.StdEncoding.EncodeToString(data)
 }
 
-func imageListAccessScope(identity service.Identity, value string) (service.ImageAccessScope, int, string) {
-	switch strings.TrimSpace(value) {
+func (a *App) imageListAccessScope(identity service.Identity, query url.Values) (service.ImageAccessScope, service.TeamImageLibraryContext, int, string) {
+	value := strings.TrimSpace(query.Get("scope"))
+	switch value {
 	case "":
-		return imageAccessScope(identity), 0, ""
+		return imageAccessScope(identity), service.TeamImageLibraryContext{}, 0, ""
 	case "mine":
-		return service.ImageAccessScope{OwnerID: identityScope(identity)}, 0, ""
+		return service.ImageAccessScope{OwnerID: identityScope(identity)}, service.TeamImageLibraryContext{}, 0, ""
 	case "public":
-		return service.ImageAccessScope{Public: true}, 0, ""
+		return service.ImageAccessScope{Public: true}, service.TeamImageLibraryContext{}, 0, ""
+	case "team":
+		context, status, message := a.imageTeamContext(identity, query.Get("team_id"))
+		if status != 0 {
+			return service.ImageAccessScope{}, service.TeamImageLibraryContext{}, status, message
+		}
+		return service.ImageAccessScope{TeamID: context.TeamID}, context, 0, ""
 	case "all":
 		if identity.Role != service.AuthRoleAdmin {
-			return service.ImageAccessScope{}, http.StatusForbidden, "admin permission required"
+			return service.ImageAccessScope{}, service.TeamImageLibraryContext{}, http.StatusForbidden, "admin permission required"
 		}
-		return service.ImageAccessScope{All: true}, 0, ""
+		return service.ImageAccessScope{All: true}, service.TeamImageLibraryContext{}, 0, ""
 	default:
-		return service.ImageAccessScope{}, http.StatusBadRequest, "scope must be mine, public, or all"
+		return service.ImageAccessScope{}, service.TeamImageLibraryContext{}, http.StatusBadRequest, "scope must be mine, team, public, or all"
 	}
+}
+
+func (a *App) imageMutationAccessScope(identity service.Identity, scopeValue, teamID string) (service.ImageAccessScope, int, string) {
+	scopeValue = strings.TrimSpace(scopeValue)
+	if scopeValue == "" || scopeValue == "mine" {
+		return imageAccessScope(identity), 0, ""
+	}
+	if scopeValue != "team" {
+		return service.ImageAccessScope{}, http.StatusBadRequest, "scope must be mine or team"
+	}
+	context, status, message := a.imageTeamContext(identity, teamID)
+	if status != 0 {
+		return service.ImageAccessScope{}, status, message
+	}
+	if !service.TeamRoleCanManageImages(context.Role) {
+		return service.ImageAccessScope{}, http.StatusForbidden, "team manager permission required"
+	}
+	return service.ImageAccessScope{TeamID: context.TeamID, TeamManager: true}, 0, ""
+}
+
+func (a *App) imageTeamContext(identity service.Identity, teamID string) (service.TeamImageLibraryContext, int, string) {
+	if a == nil || a.teams == nil {
+		return service.TeamImageLibraryContext{}, http.StatusNotFound, "team not found"
+	}
+	context, err := a.teams.ImageLibraryContext(identity, teamID)
+	if err != nil {
+		status := http.StatusBadRequest
+		if err.Error() == "team not found" {
+			status = http.StatusNotFound
+		}
+		if err.Error() == "user session is required" {
+			status = http.StatusUnauthorized
+		}
+		return service.TeamImageLibraryContext{}, status, err.Error()
+	}
+	return context, 0, ""
 }
 
 func imageTagsFromQuery(query url.Values) []string {

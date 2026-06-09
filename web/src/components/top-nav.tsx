@@ -1,11 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { ChevronDown, ChevronUp, Clock3, LogOut, MoonStar, Sun, UserCircle2, UserPlus, WalletCards } from "lucide-react";
 import { motion, useReducedMotion, type Transition } from "motion/react";
 import { Link, NavLink, useLocation, useNavigate } from "react-router-dom";
 
-import { ImageTaskQueue } from "@/components/image-task-queue";
 import webConfig from "@/constants/common-env";
 import {
   AUTH_SESSION_CHANGE_EVENT,
@@ -36,7 +35,7 @@ const navItems = [
   { href: "/image-manager", label: "图片库" },
 ];
 const profileNavItem = { href: "/profile", label: "个人中心" };
-const teamNavItem = { href: "/profile?tab=team", label: "团队空间" };
+const teamNavItem = { href: "/team", label: "团队空间" };
 const PRIMARY_NAV_ID = "primary-navigation";
 const NAV_ACTIVE_LAYOUT_ID = "top-nav-active-pill";
 const navActiveTransition: Transition = {
@@ -48,6 +47,25 @@ const navActiveTransition: Transition = {
 const reducedNavActiveTransition: Transition = {
   duration: 0.01,
 };
+const ImageTaskQueue = lazy(() =>
+  import("@/components/image-task-queue").then((module) => ({ default: module.ImageTaskQueue })),
+);
+
+function ImageTaskQueueLoading({ className }: { className?: string }) {
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      className={cn("h-9 rounded-full border-border bg-background px-2.5 text-muted-foreground shadow-none", className)}
+      aria-label="加载任务队列"
+      title="任务队列"
+      disabled
+    >
+      <Clock3 className="size-4" />
+      <span className="hidden text-xs font-medium xl:inline">任务队列</span>
+    </Button>
+  );
+}
 
 function formatBillingQuota(billing?: BillingState | null) {
   if (!billing) {
@@ -169,12 +187,13 @@ function AccountMenu({
   const [open, setOpen] = useState(false);
   const [rechargeURL, setRechargeURL] = useState("");
   const [walletQuota, setWalletQuota] = useState("");
-  const displayName = accountDisplayName(session, roleLabel === "管理员" ? roleLabel : "落叶AI用户");
+  const displayName = accountDisplayName(session, roleLabel === "管理员" ? roleLabel : "落叶创艺用户");
   const quotaLabel = walletQuota || availableQuota;
   const initial = (displayName.trim() || "U").slice(0, 1).toUpperCase();
-  const profileActive = isActivePath(pathname, profileNavItem.href);
   const usageActive = pathname === "/profile" && new URLSearchParams(window.location.search).get("tab") === "usage";
-  const teamActive = pathname === "/profile" && new URLSearchParams(window.location.search).get("tab") === "team";
+  const profileActive = isActivePath(pathname, profileNavItem.href) && !usageActive;
+  const teamActive = pathname === "/team";
+  const showTeamEntry = session.role === "user";
 
   useEffect(() => {
     let active = true;
@@ -212,16 +231,18 @@ function AccountMenu({
 
   return (
     <div className="flex min-w-0 items-center gap-1.5">
-      <Link
-        to={teamNavItem.href}
-        className={cn(
-          "inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full border border-border px-2.5 text-sm font-medium shadow-none transition hover:bg-accent hover:text-accent-foreground",
-          teamActive ? "border-emerald-500/30 bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300" : "text-foreground",
-        )}
-      >
-        <UserPlus className="size-4" />
-        <span className="hidden sm:inline">团队</span>
-      </Link>
+      {showTeamEntry ? (
+        <Link
+          to={teamNavItem.href}
+          className={cn(
+            "inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full border border-border px-2.5 text-sm font-medium shadow-none transition hover:bg-accent hover:text-accent-foreground",
+            teamActive ? "border-emerald-500/30 bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300" : "text-foreground",
+          )}
+        >
+          <UserPlus className="size-4" />
+          <span className="hidden sm:inline">团队</span>
+        </Link>
+      ) : null}
       <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger asChild>
         <Button
@@ -309,17 +330,19 @@ function AccountMenu({
               <Clock3 className="size-4" />
               使用记录
             </Link>
-            <Link
-              to={teamNavItem.href}
-              className={cn(
-                "flex items-center justify-center gap-2 rounded-xl px-3 py-2 text-sm font-medium transition hover:bg-accent hover:text-accent-foreground",
-                teamActive ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300" : "text-foreground",
-              )}
-              onClick={() => setOpen(false)}
-            >
-              <UserPlus className="size-4" />
-              团队空间
-            </Link>
+            {showTeamEntry ? (
+              <Link
+                to={teamNavItem.href}
+                className={cn(
+                  "flex items-center justify-center gap-2 rounded-xl px-3 py-2 text-sm font-medium transition hover:bg-accent hover:text-accent-foreground",
+                  teamActive ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300" : "text-foreground",
+                )}
+                onClick={() => setOpen(false)}
+              >
+                <UserPlus className="size-4" />
+                团队空间
+              </Link>
+            ) : null}
           </div>
 
           <button
@@ -443,12 +466,16 @@ export function TopNav() {
               aria-hidden="true"
               className="size-7 rounded-[10px] shadow-[0_4px_10px_rgba(184,90,127,0.16)]"
             />
-            <span className="truncate">落叶AI</span>
+            <span className="truncate">落叶创艺</span>
             {navCollapsed ? <ChevronDown aria-hidden="true" /> : <ChevronUp aria-hidden="true" />}
           </Button>
           <div className="ml-auto flex shrink-0 items-center gap-1 lg:hidden">
             <ThemeToggleButton theme={theme} onToggle={handleThemeToggle} />
-            {canAccessImageTasks ? <ImageTaskQueue className="size-8 px-0" /> : null}
+            {canAccessImageTasks ? (
+              <Suspense fallback={<ImageTaskQueueLoading className="size-8 px-0" />}>
+                <ImageTaskQueue className="size-8 px-0" />
+              </Suspense>
+            ) : null}
             <AccountMenu
               session={session}
               roleLabel={roleLabel}
@@ -472,7 +499,11 @@ export function TopNav() {
         </nav>
         <div className="hidden items-center justify-end gap-1.5 lg:flex">
           <ThemeToggleButton theme={theme} onToggle={handleThemeToggle} />
-          {canAccessImageTasks ? <ImageTaskQueue /> : null}
+          {canAccessImageTasks ? (
+            <Suspense fallback={<ImageTaskQueueLoading />}>
+              <ImageTaskQueue />
+            </Suspense>
+          ) : null}
           <AccountMenu
             session={session}
             roleLabel={roleLabel}

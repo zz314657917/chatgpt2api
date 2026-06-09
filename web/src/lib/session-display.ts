@@ -12,14 +12,14 @@ export function publicDisplayText(value?: string | null) {
   return text;
 }
 
-export function accountDisplayName(session: StoredAuthSession, fallback = "落叶AI用户") {
+export function accountDisplayName(session: StoredAuthSession, fallback = "落叶创艺用户") {
   return publicDisplayText(session.name) ||
     publicDisplayText(session.sub2api?.user_name) ||
     publicDisplayText(session.sub2api?.user_email) ||
     fallback;
 }
 
-export function accountDisplayLabel(session: StoredAuthSession, fallback = "落叶AI账户") {
+export function accountDisplayLabel(session: StoredAuthSession, fallback = "落叶创艺账户") {
   return publicDisplayText(session.sub2api?.user_email) ||
     publicDisplayText(session.sub2api?.user_name) ||
     publicDisplayText(session.name) ||

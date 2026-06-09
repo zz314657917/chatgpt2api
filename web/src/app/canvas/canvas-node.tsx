@@ -43,7 +43,6 @@ import {
 
 import { AuthenticatedImage } from "@/components/authenticated-image";
 import { ImageOutputControls } from "@/components/image-output-controls";
-import { ManagedImageAssetSidebar, type ManagedImageAssetSidebarProps } from "@/components/managed-image-asset-sidebar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
@@ -4501,10 +4500,6 @@ function CanvasImagePlaceholder({ label }: { label: string }) {
       <span className="max-w-full truncate text-[10px] font-semibold">{label}</span>
     </span>
   );
-}
-
-export function SmartCanvasAssetSidebar(props: Omit<ManagedImageAssetSidebarProps, "storagePrefix">) {
-  return <ManagedImageAssetSidebar {...props} storagePrefix="smart-canvas-asset-sidebar" />;
 }
 
 export function SmartCanvasRunHistoryPanel({

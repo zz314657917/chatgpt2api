@@ -14,7 +14,7 @@ task-004-qa-browser
 你是 P/G/E 流程里的 QA Worker。只在开发 worker 完成并经主控允许后执行验收，不修改业务代码。
 
 ## Goal
-对落叶AI独立用户版做跨仓库命令验证和浏览器验收，确认登录回跳、充值、余额、隐藏 API 文案、创作扣费和团队 v1 最小闭环。
+对落叶创艺独立用户版做跨仓库命令验证和浏览器验收，确认登录回跳、充值、余额、隐藏 API 文案、创作扣费和团队 v1 最小闭环。
 
 ## Success Criteria
 - chatgpt2api 通过 lint、frontend build、Go tests。
