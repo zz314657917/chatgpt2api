@@ -592,6 +592,7 @@ export function dedupeCanvasImageRefs(refs: CanvasImageRef[]) {
       name: cleanImageText(ref.name),
       thumbnail_url: cleanImageText(ref.thumbnail_url),
       preview_url: cleanImageText(ref.preview_url),
+      role: ref.role === "mask" ? "mask" : ref.role === "image" ? "image" : undefined,
       visibility: normalizeCanvasImageRefVisibility(ref.visibility),
     };
     const key = canvasImageKey(clean);
@@ -903,6 +904,7 @@ function sanitizeSmartItemData(data?: SmartCanvasItemData): SmartCanvasItemData 
     source_images: dedupeCanvasImageRefs(Array.isArray(data.source_images) ? data.source_images : []),
     input_images: dedupeCanvasImageRefs(Array.isArray(data.input_images) ? data.input_images : []),
     mention_images: dedupeCanvasImageRefs(Array.isArray(data.mention_images) ? data.mention_images : []),
+    input_image_mask: cleanImageText(data.input_image_mask),
     group_item_ids: uniqueStringList(Array.isArray(data.group_item_ids) ? data.group_item_ids : []),
     loop_mode: data.loop_mode === "images" ? "images" : "repeat",
     loop_count: Number.isFinite(Number(data.loop_count)) ? Math.max(1, Math.min(10, Number(data.loop_count))) : undefined,

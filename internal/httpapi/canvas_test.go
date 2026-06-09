@@ -1,8 +1,14 @@
 package httpapi
 
 import (
+	"bytes"
+	"context"
+	"strings"
 	"testing"
 
+	"chatgpt2api/internal/backend"
+	"chatgpt2api/internal/protocol"
+	"chatgpt2api/internal/service"
 	"chatgpt2api/internal/util"
 )
 
@@ -85,6 +91,77 @@ func TestCanvasModelOptionsAllowVideoForSub2APIModelList(t *testing.T) {
 	}
 	if modelListItems[0].Kind != "video" || !hasCanvasTestCapability(modelListItems[0].Capabilities, "video") {
 		t.Fatalf("model option = %#v, want video capability", modelListItems[0])
+	}
+}
+
+func TestCanvasGenerationNodeUsesMaskAsInputImageMask(t *testing.T) {
+	app := newTestApp(t)
+	defer app.Close()
+	requests := make(chan protocol.ConversationRequest, 1)
+	installHTTPTestImageStreamFunc(t, app, func(ctx context.Context, client *backend.Client, request protocol.ConversationRequest, index, total int) (<-chan protocol.ImageOutput, <-chan error) {
+		requests <- request
+		return httpTestImageOutputStream(request, index)
+	})
+
+	identity := service.Identity{ID: "admin", Name: "Admin", Role: service.AuthRoleAdmin, OwnerID: "admin"}
+	var original bytes.Buffer
+	if err := encodeHTTPTestPNG(&original); err != nil {
+		t.Fatalf("encode original: %v", err)
+	}
+	originalItem, err := app.images.StoreUploadedImage("http://127.0.0.1:8000", service.UploadedManagedImage{
+		Filename:    "source.png",
+		ContentType: "image/png",
+		Data:        original.Bytes(),
+	}, identity.OwnerID, identity.Name, service.ImageVisibilityPrivate)
+	if err != nil {
+		t.Fatalf("StoreUploadedImage(original) error = %v", err)
+	}
+	var mask bytes.Buffer
+	if err := encodeHTTPTestPNG(&mask); err != nil {
+		t.Fatalf("encode mask: %v", err)
+	}
+	maskItem, err := app.images.StoreUploadedImage("http://127.0.0.1:8000", service.UploadedManagedImage{
+		Filename:    "source_mask.png",
+		ContentType: "image/png",
+		Data:        mask.Bytes(),
+	}, identity.OwnerID, identity.Name, service.ImageVisibilityPrivate)
+	if err != nil {
+		t.Fatalf("StoreUploadedImage(mask) error = %v", err)
+	}
+
+	out, err := app.ExecuteCanvasNode(context.Background(), identity, service.CanvasNodeExecution{
+		RunID:    "run-mask",
+		CanvasID: "canvas-mask",
+		Node: service.CanvasNode{
+			ID:   "generator",
+			Type: service.CanvasNodeTypeImageCreate,
+			Data: map[string]any{"prompt": "replace the selected area", "model": util.ImageModelGPT},
+		},
+		Inputs: []service.CanvasNodeInput{{
+			NodeID: "mask-node",
+			Output: service.CanvasNodeOutput{Images: []service.CanvasImageRef{
+				{Path: util.Clean(originalItem["path"]), Name: "source.png"},
+				{Path: util.Clean(maskItem["path"]), Name: "source_mask.png", Role: "mask"},
+			}},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("ExecuteCanvasNode() error = %v", err)
+	}
+	if len(out.Images) == 0 {
+		t.Fatalf("ExecuteCanvasNode() output = %#v", out)
+	}
+	var request protocol.ConversationRequest
+	select {
+	case request = <-requests:
+	default:
+		t.Fatal("image request was not captured")
+	}
+	if len(request.Images) != 1 {
+		t.Fatalf("request.Images length = %d, want 1", len(request.Images))
+	}
+	if !strings.HasPrefix(request.InputImageMask, "data:image/png;base64,") {
+		t.Fatalf("InputImageMask = %q, want image data URL", request.InputImageMask)
 	}
 }
 

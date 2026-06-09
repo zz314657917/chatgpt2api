@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -243,6 +244,48 @@ func (a *App) executeCanvasImageGenerationNode(ctx context.Context, identity ser
 		return service.CanvasNodeOutput{}, fmt.Errorf("文生图节点缺少 prompt")
 	}
 	taskID := canvasTaskID(exec.RunID, exec.Node.ID)
+	imageRefs, maskRefs := splitCanvasMaskRefs(canvasImageRefs(exec.Node, exec.Inputs))
+	toolOptions := canvasImageToolOptions(exec.Node)
+	if len(imageRefs) > 0 {
+		images, err := a.canvasUploadedImagesFromRefs(identity, imageRefs)
+		if err != nil {
+			return service.CanvasNodeOutput{}, err
+		}
+		if len(images) == 0 {
+			return service.CanvasNodeOutput{}, fmt.Errorf("图生图节点缺少上游图片")
+		}
+		if toolOptions.InputImageMask == "" && len(maskRefs) > 0 {
+			mask, err := a.canvasMaskDataURL(identity, maskRefs[0])
+			if err != nil {
+				return service.CanvasNodeOutput{}, err
+			}
+			toolOptions.InputImageMask = mask
+		}
+		task, err := a.tasks.SubmitEditWithOptions(
+			ctx,
+			identity,
+			taskID,
+			prompt,
+			canvasNodeModel(exec.Node, util.ImageModelAuto),
+			protocol.NormalizeImageGenerationSize(util.Clean(exec.Node.Data["size"])),
+			util.Clean(exec.Node.Data["quality"]),
+			a.configuredBaseURL(),
+			images,
+			util.ToInt(exec.Node.Data["n"], 1),
+			nil,
+			canvasImageTaskMetadata(exec.Node),
+			canvasImageOutputOptions(exec.Node),
+			toolOptions,
+			canvasNodeVisibility(exec.Node),
+		)
+		if err != nil {
+			return service.CanvasNodeOutput{}, err
+		}
+		return a.waitCanvasTaskOutput(ctx, identity, taskID, task)
+	}
+	if len(maskRefs) > 0 {
+		return service.CanvasNodeOutput{}, fmt.Errorf("蒙版需要和原图一起作为输入")
+	}
 	task, err := a.tasks.SubmitGenerationWithOptions(
 		ctx,
 		identity,
@@ -256,7 +299,7 @@ func (a *App) executeCanvasImageGenerationNode(ctx context.Context, identity ser
 		nil,
 		canvasImageTaskMetadata(exec.Node),
 		canvasImageOutputOptions(exec.Node),
-		canvasImageToolOptions(exec.Node),
+		toolOptions,
 		canvasNodeVisibility(exec.Node),
 	)
 	if err != nil {
@@ -270,7 +313,8 @@ func (a *App) executeCanvasVideoGenerationNode(ctx context.Context, identity ser
 	if prompt == "" {
 		return service.CanvasNodeOutput{}, fmt.Errorf("视频生成节点缺少 prompt")
 	}
-	images, err := a.canvasUploadedImages(identity, exec.Node, exec.Inputs)
+	imageRefs, _ := splitCanvasMaskRefs(canvasImageRefs(exec.Node, exec.Inputs))
+	images, err := a.canvasUploadedImagesFromRefs(identity, imageRefs)
 	if err != nil {
 		return service.CanvasNodeOutput{}, err
 	}
@@ -302,7 +346,9 @@ func (a *App) executeCanvasImageEditNode(ctx context.Context, identity service.I
 	if prompt == "" {
 		return service.CanvasNodeOutput{}, fmt.Errorf("图生图节点缺少 prompt")
 	}
-	images, err := a.canvasUploadedImages(identity, exec.Node, exec.Inputs)
+	refs := canvasImageRefs(exec.Node, exec.Inputs)
+	imageRefs, maskRefs := splitCanvasMaskRefs(refs)
+	images, err := a.canvasUploadedImagesFromRefs(identity, imageRefs)
 	if err != nil {
 		return service.CanvasNodeOutput{}, err
 	}
@@ -310,6 +356,14 @@ func (a *App) executeCanvasImageEditNode(ctx context.Context, identity service.I
 		return service.CanvasNodeOutput{}, fmt.Errorf("图生图节点缺少上游图片")
 	}
 	taskID := canvasTaskID(exec.RunID, exec.Node.ID)
+	toolOptions := canvasImageToolOptions(exec.Node)
+	if toolOptions.InputImageMask == "" && len(maskRefs) > 0 {
+		mask, err := a.canvasMaskDataURL(identity, maskRefs[0])
+		if err != nil {
+			return service.CanvasNodeOutput{}, err
+		}
+		toolOptions.InputImageMask = mask
+	}
 	task, err := a.tasks.SubmitEditWithOptions(
 		ctx,
 		identity,
@@ -324,7 +378,7 @@ func (a *App) executeCanvasImageEditNode(ctx context.Context, identity service.I
 		nil,
 		canvasImageTaskMetadata(exec.Node),
 		canvasImageOutputOptions(exec.Node),
-		canvasImageToolOptions(exec.Node),
+		toolOptions,
 		canvasNodeVisibility(exec.Node),
 	)
 	if err != nil {
@@ -360,6 +414,10 @@ func (a *App) waitCanvasTaskOutput(ctx context.Context, identity service.Identit
 }
 
 func (a *App) canvasUploadedImages(identity service.Identity, node service.CanvasNode, inputs []service.CanvasNodeInput) ([]protocol.UploadedImage, error) {
+	return a.canvasUploadedImagesFromRefs(identity, canvasImageRefs(node, inputs))
+}
+
+func canvasImageRefs(node service.CanvasNode, inputs []service.CanvasNodeInput) []service.CanvasImageRef {
 	var refs []service.CanvasImageRef
 	for _, ref := range canvasImageNodeOutput(node).Images {
 		refs = append(refs, ref)
@@ -367,6 +425,10 @@ func (a *App) canvasUploadedImages(identity service.Identity, node service.Canva
 	for _, input := range inputs {
 		refs = append(refs, input.Output.Images...)
 	}
+	return refs
+}
+
+func (a *App) canvasUploadedImagesFromRefs(identity service.Identity, refs []service.CanvasImageRef) ([]protocol.UploadedImage, error) {
 	scope := imageAccessScope(identity)
 	images := make([]protocol.UploadedImage, 0, len(refs))
 	for index, ref := range refs {
@@ -385,6 +447,37 @@ func (a *App) canvasUploadedImages(identity service.Identity, node service.Canva
 		})
 	}
 	return images, nil
+}
+
+func (a *App) canvasMaskDataURL(identity service.Identity, ref service.CanvasImageRef) (string, error) {
+	value := firstNonEmpty(ref.Path, ref.LocalURL, ref.URL)
+	if value == "" {
+		return "", nil
+	}
+	data, contentType, err := a.images.ImageBytes(value, imageAccessScope(identity))
+	if err != nil {
+		return "", fmt.Errorf("读取蒙版图片失败：%w", err)
+	}
+	return "data:" + firstNonEmpty(contentType, "image/png") + ";base64," + base64.StdEncoding.EncodeToString(data), nil
+}
+
+func splitCanvasMaskRefs(refs []service.CanvasImageRef) ([]service.CanvasImageRef, []service.CanvasImageRef) {
+	var images []service.CanvasImageRef
+	var masks []service.CanvasImageRef
+	for _, ref := range refs {
+		if isCanvasMaskRef(ref) {
+			masks = append(masks, ref)
+			continue
+		}
+		images = append(images, ref)
+	}
+	return images, masks
+}
+
+func isCanvasMaskRef(ref service.CanvasImageRef) bool {
+	role := strings.ToLower(strings.TrimSpace(ref.Role))
+	name := strings.ToLower(strings.TrimSpace(ref.Name))
+	return role == "mask" || strings.HasSuffix(name, "_mask.png") || strings.HasSuffix(name, "-mask.png")
 }
 
 func (a *App) canvasModelCatalog(ctx context.Context, identity service.Identity) []canvasModelOption {
@@ -521,15 +614,19 @@ func canvasImageNodeOutput(node service.CanvasNode) service.CanvasNodeOutput {
 		LocalURL: util.Clean(node.Data["local_url"]),
 		Path:     firstNonEmpty(util.Clean(node.Data["path"]), util.Clean(node.Data["image_path"])),
 		Name:     util.Clean(node.Data["name"]),
+		Role:     util.Clean(node.Data["role"]),
 	})
-	for _, item := range util.AsMapSlice(node.Data["images"]) {
-		appendRef(service.CanvasImageRef{
-			URL:          util.Clean(item["url"]),
-			LocalURL:     util.Clean(item["local_url"]),
-			Path:         util.Clean(item["path"]),
-			Name:         util.Clean(item["name"]),
-			ThumbnailURL: util.Clean(item["thumbnail_url"]),
-		})
+	for _, key := range []string{"source_images", "images"} {
+		for _, item := range util.AsMapSlice(node.Data[key]) {
+			appendRef(service.CanvasImageRef{
+				URL:          util.Clean(item["url"]),
+				LocalURL:     util.Clean(item["local_url"]),
+				Path:         util.Clean(item["path"]),
+				Name:         util.Clean(item["name"]),
+				ThumbnailURL: util.Clean(item["thumbnail_url"]),
+				Role:         util.Clean(item["role"]),
+			})
+		}
 	}
 	return service.CanvasNodeOutput{Images: refs}
 }

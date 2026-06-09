@@ -155,6 +155,23 @@ type PendingImageUploadNode = {
   nodeId: string;
 };
 
+function isMaskImageRef(ref: CanvasImageRef) {
+  return ref.role === "mask" || /(?:^|[-_])mask\.(?:png|jpe?g|webp)$/i.test(ref.name || "");
+}
+
+function splitMaskImageRefs(refs: CanvasImageRef[]) {
+  const masks: CanvasImageRef[] = [];
+  const images: CanvasImageRef[] = [];
+  for (const ref of refs) {
+    if (isMaskImageRef(ref)) {
+      masks.push(ref);
+    } else {
+      images.push(ref);
+    }
+  }
+  return { images: dedupeCanvasImageRefs(images), masks: dedupeCanvasImageRefs(masks) };
+}
+
 function userPresetScope() {
   const session = getCachedAuthSession();
   if (!session) {
@@ -1891,11 +1908,14 @@ export function useSmartCanvasController() {
     }) || null;
   }, []);
 
-  const addCroppedImageToCanvas = useCallback((original: CanvasImageRef, images: CanvasImageRef[]) => {
-    const refs = dedupeCanvasImageRefs(images);
+  const addCroppedImageToCanvas = useCallback((original: CanvasImageRef, images: CanvasImageRef[], mode: ImageEditMode = "crop") => {
+    const refs = dedupeCanvasImageRefs(mode === "mask"
+      ? images.map((image) => ({ ...image, role: "mask" as const }))
+      : images);
     if (refs.length === 0) {
       return;
     }
+    const isMask = mode === "mask";
     let position = { x: 160, y: 160 };
     const sourceItem = findItemContainingImage(original);
     if (sourceItem) {
@@ -1905,14 +1925,14 @@ export function useSmartCanvasController() {
       };
     }
     const item = createImageItem(refs, position);
-    item.name = refs.length > 1 ? "切分图片" : "裁剪图片";
+    item.name = isMask ? "蒙版" : refs.length > 1 ? "切分图片" : "裁剪图片";
     item.data = {
       ...item.data,
       visibility: sourceImageVisibility(sourceItem),
       source_images: [original],
       tool_type: "image_edit",
       tool_parameters: {
-        mode: refs.length > 1 ? "grid_split" : "manual_edit",
+        mode: isMask ? "mask" : refs.length > 1 ? "grid_split" : "manual_edit",
         count: refs.length,
       },
     };
@@ -1920,11 +1940,11 @@ export function useSmartCanvasController() {
       ...doc,
       nodes: [...doc.nodes, item],
       edges: sourceItem ? [...doc.edges, createSmartEdge(sourceItem.id, item.id)] : doc.edges,
-    }), true, refs.length > 1 ? "添加切分图片" : "添加编辑图片");
+    }), true, isMask ? "添加蒙版节点" : refs.length > 1 ? "添加切分图片" : "添加编辑图片");
     selectSingleItem(item.id);
   }, [findItemContainingImage, selectSingleItem, updateCanvas]);
 
-  const applyEditedImageFiles = useCallback(async (original: CanvasImageRef, files: File[]) => {
+  const applyEditedImageFiles = useCallback(async (original: CanvasImageRef, files: File[], mode: ImageEditMode = "crop") => {
     const imageFiles = imageFilesFromList(files);
     if (imageFiles.length === 0) {
       toast.error("没有可上传的编辑结果");
@@ -1937,9 +1957,9 @@ export function useSmartCanvasController() {
       if (refs.length === 0) {
         throw new Error("图片上传失败");
       }
-      addCroppedImageToCanvas(original, refs);
+      addCroppedImageToCanvas(original, refs, mode);
       await loadAssets();
-      toast.success(refs.length > 1 ? `已生成 ${refs.length} 张图片` : "已生成编辑图片");
+      toast.success(mode === "mask" ? "已生成蒙版节点" : refs.length > 1 ? `已生成 ${refs.length} 张图片` : "已生成编辑图片");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "图片编辑失败");
       throw error;
@@ -2549,6 +2569,20 @@ export function useSmartCanvasController() {
       files.push(new File([blob], ref.name || `canvas-input-${index + 1}.${ext}`, { type: blob.type || "image/png" }));
     }
     return files;
+  }, []);
+
+  const imageRefToDataUrl = useCallback(async (ref: CanvasImageRef) => {
+    const src = canvasImageSource(ref);
+    if (!src) {
+      return "";
+    }
+    const blob = await fetchAuthenticatedImageBlob(src);
+    return await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(typeof reader.result === "string" ? reader.result : "");
+      reader.onerror = () => reject(reader.error || new Error("读取蒙版失败"));
+      reader.readAsDataURL(blob);
+    });
   }, []);
 
   const getSelectedSingleImage = useCallback(() => {
@@ -3256,11 +3290,13 @@ export function useSmartCanvasController() {
         try {
           let task: CreationTask;
           const taskCount = loopMode === "repeat" ? loopCount : 1;
-          if (iterationImages.length > 0) {
-            const files = await imageRefsToFiles(iterationImages);
+          const { images: editIterationImages, masks: maskIterationImages } = splitMaskImageRefs(iterationImages);
+          if (editIterationImages.length > 0) {
+            const files = await imageRefsToFiles(editIterationImages);
             if (files.length === 0) {
               throw new Error("没有可读取的输入图片");
             }
+            const inputImageMask = maskIterationImages[0] ? await imageRefToDataUrl(maskIterationImages[0]) : "";
             task = await createImageEditTask(
               uniqueTaskId("smart-canvas-loop"),
               files,
@@ -3274,8 +3310,10 @@ export function useSmartCanvasController() {
               generatorImageResolution(generator, true),
               generatorOutputFormat(generator),
               generatorOutputCompression(generator),
-              undefined,
+              inputImageMask ? { inputImageMask } : undefined,
             );
+          } else if (maskIterationImages.length > 0) {
+            throw new Error("蒙版需要和原图一起作为输入");
           } else {
             task = await createImageGenerationTask(
               uniqueTaskId("smart-canvas-loop"),
@@ -3363,7 +3401,7 @@ export function useSmartCanvasController() {
       loopStopRequestsRef.current.delete(loop.id);
       setRunning(false);
     }
-  }, [imageRefsToFiles, loadAssets, selectSingleItem, updateCanvas]);
+  }, [imageRefToDataUrl, imageRefsToFiles, loadAssets, selectSingleItem, updateCanvas]);
 
   const runGeneratorNode = useCallback(async (generatorId: string) => {
     const current = canvasRef.current;
@@ -3393,6 +3431,7 @@ export function useSmartCanvasController() {
       return;
     }
     const inputRefs = generatorInputImages(current, generator);
+    const { images: editInputRefs, masks: maskInputRefs } = splitMaskImageRefs(inputRefs);
     const migrated = migrateGeneratorDirectInputsToImageNodes(current, generator);
     const startedAt = new Date().toISOString();
     setRunning(true);
@@ -3423,7 +3462,7 @@ export function useSmartCanvasController() {
           uniqueTaskId("smart-canvas-video"),
           submittedPrompt,
           videoModel,
-          inputRefs,
+          editInputRefs,
           Number(generator.data?.duration || 5),
           generator.data?.aspect_ratio || "16:9",
           generator.data?.resolution || "",
@@ -3433,11 +3472,12 @@ export function useSmartCanvasController() {
             generateAudio: generator.data?.generate_audio === true,
           },
         );
-      } else if (inputRefs.length > 0) {
-        const files = await imageRefsToFiles(inputRefs);
+      } else if (editInputRefs.length > 0) {
+        const files = await imageRefsToFiles(editInputRefs);
         if (files.length === 0) {
           throw new Error("没有可读取的输入图片");
         }
+        const inputImageMask = maskInputRefs[0] ? await imageRefToDataUrl(maskInputRefs[0]) : "";
         task = await createImageEditTask(
           clientTaskId,
           files,
@@ -3451,8 +3491,10 @@ export function useSmartCanvasController() {
           generatorImageResolution(generator, true),
           generatorOutputFormat(generator),
           generatorOutputCompression(generator),
-          undefined,
+          inputImageMask ? { inputImageMask } : undefined,
         );
+      } else if (maskInputRefs.length > 0) {
+        throw new Error("蒙版需要和原图一起作为输入");
       } else {
         task = await createImageGenerationTask(
           clientTaskId,
@@ -3533,7 +3575,7 @@ export function useSmartCanvasController() {
     } finally {
       setRunning(false);
     }
-  }, [imageRefsToFiles, migrateGeneratorDirectInputsToImageNodes, models.video, pollTaskIntoGenerator, runLoopNode, selectSingleItem, updateCanvas]);
+  }, [imageRefToDataUrl, imageRefsToFiles, migrateGeneratorDirectInputsToImageNodes, models.video, pollTaskIntoGenerator, runLoopNode, selectSingleItem, updateCanvas]);
 
   const stopLoopNode = useCallback(async (loopId: string) => {
     const current = canvasRef.current;

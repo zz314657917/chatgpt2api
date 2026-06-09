@@ -826,6 +826,7 @@ export type CanvasImageRef = {
   name?: string;
   thumbnail_url?: string;
   preview_url?: string;
+  role?: "image" | "mask";
   visibility?: ImageVisibility;
 };
 

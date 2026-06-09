@@ -175,6 +175,72 @@ func TestCanvasServiceAllowsGroupNode(t *testing.T) {
 	}
 }
 
+func TestCanvasServicePreservesMaskImageRole(t *testing.T) {
+	backend := newTestStorageBackend(t)
+	svc := NewCanvasService(backend)
+	identity := Identity{ID: "user-1", Role: AuthRoleUser, OwnerID: "user-1"}
+
+	created, err := svc.CreateCanvas(identity, CanvasDocument{
+		Name: "Mask Canvas",
+		Nodes: []CanvasNode{{
+			ID:   "mask-node",
+			Type: CanvasNodeTypeImage,
+			Data: map[string]any{
+				"images": []map[string]any{{
+					"path": "images/source_mask.png",
+					"name": "source_mask.png",
+					"role": "mask",
+				}},
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("CreateCanvas() error = %v", err)
+	}
+	images, _ := created.Nodes[0].Data["images"].([]map[string]any)
+	if len(images) == 0 {
+		rawImages, _ := created.Nodes[0].Data["images"].([]any)
+		for _, item := range rawImages {
+			if mapped, ok := item.(map[string]any); ok {
+				images = append(images, mapped)
+			}
+		}
+	}
+	if len(images) != 1 || images[0]["role"] != "mask" {
+		t.Fatalf("CreateCanvas() images = %#v, want mask role", created.Nodes[0].Data["images"])
+	}
+}
+
+func TestCanvasNodeInputsIncludeMaskSourceImages(t *testing.T) {
+	source := CanvasNode{
+		ID:   "mask-node",
+		Type: CanvasNodeTypeImage,
+		Data: map[string]any{
+			"source_images": []map[string]any{{
+				"path": "images/source.png",
+				"name": "source.png",
+			}},
+			"images": []map[string]any{{
+				"path": "images/source_mask.png",
+				"name": "source_mask.png",
+				"role": "mask",
+			}},
+		},
+	}
+	inputs := canvasNodeInputs(
+		"generator",
+		map[string][]CanvasEdge{"generator": []CanvasEdge{{ID: "edge-1", Source: "mask-node", Target: "generator"}}},
+		map[string]CanvasNode{"mask-node": source},
+		map[string]CanvasNodeOutput{},
+	)
+	if len(inputs) != 1 || len(inputs[0].Output.Images) != 2 {
+		t.Fatalf("inputs = %#v, want source and mask images", inputs)
+	}
+	if inputs[0].Output.Images[1].Role != "mask" {
+		t.Fatalf("mask role = %#v", inputs[0].Output.Images)
+	}
+}
+
 func TestCanvasServiceLimitsUserCanvasCount(t *testing.T) {
 	backend := newTestStorageBackend(t)
 	svc := NewCanvasService(backend)

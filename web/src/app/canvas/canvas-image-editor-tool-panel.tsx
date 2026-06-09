@@ -268,7 +268,7 @@ export function SmartCanvasImageEditorToolPanel({
             <DrawHistoryActions drawHistoryLength={drawHistoryLength} onUndoDraw={onUndoDraw} onClearDrawCanvas={onClearDrawCanvas} />
           </ToolSection>
           <p className="rounded-xl bg-muted/70 px-3 py-2 text-xs font-semibold leading-relaxed text-muted-foreground dark:bg-slate-900/80 dark:text-slate-400">
-            白色区域会输出为 mask 图。擦除只影响遮罩，不会修改原图。
+            白色区域会生成蒙版节点。把原图和蒙版一起连接到图片生成节点时，蒙版会作为 input_image_mask 提交，AI 只重点重绘白色区域；擦除只影响遮罩，不会修改原图。
           </p>
         </>
       ) : null}
