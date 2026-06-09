@@ -3232,7 +3232,7 @@ function LlmNodeBody({
         </div>
         <Dialog open={outputDialogOpen} onOpenChange={setOutputDialogOpen}>
           <DialogContent className={cn("w-[min(92vw,760px)] max-w-none rounded-2xl p-0", canvasPanelClass)} data-node-interactive="true" onPointerDown={stopNodeInteraction}>
-            <div className="border-b border-border px-4 py-3 dark:border-slate-800">
+            <div className="border-b border-border px-4 py-3 pr-12 dark:border-slate-800 sm:pr-14">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <DialogTitle className="text-base font-black">提示词输出全文</DialogTitle>
