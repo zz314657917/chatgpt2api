@@ -13,7 +13,7 @@ import {
 import { AnnouncementNotifications } from "@/components/announcement-banner";
 import { LoginPageImageStage } from "@/components/login-page-image-stage";
 import { Button } from "@/components/ui/button";
-import { fetchAuthProviders } from "@/lib/api";
+import { fetchAuthProviders, type AuthProviders } from "@/lib/api";
 import {
   applyColorTheme,
   getPreferredColorTheme,
@@ -35,6 +35,7 @@ export default function LoginPage() {
   const [theme, setTheme] = useState<ColorTheme>(() => getPreferredColorTheme());
   const [leafNetworkBrandName, setLeafNetworkBrandName] = useState(defaultLeafNetworkBrandName);
   const [leafNetworkLoginURL, setLeafNetworkLoginURL] = useState(defaultLeafNetworkLoginURL);
+  const [authProviders, setAuthProviders] = useState<AuthProviders | null>(null);
   const [isRedirecting, setIsRedirecting] = useState(false);
   const { isCheckingAuth } = useRedirectIfAuthenticated();
 
@@ -45,6 +46,7 @@ export default function LoginPage() {
         if (!active) {
           return;
         }
+        setAuthProviders(providers);
         const sub2api = providers.sub2api;
         const launchURL = String(sub2api?.launch_url || "").trim();
         const brandName = String(sub2api?.brand_name || "").trim();
@@ -65,18 +67,13 @@ export default function LoginPage() {
 
   const handleLeafNetworkLogin = useCallback(async () => {
     setIsRedirecting(true);
-    try {
-      const providers = await fetchAuthProviders();
-      const launchURL = String(providers.sub2api?.launch_url || "").trim();
-      if (providers.sub2api?.enabled && launchURL) {
-        window.location.href = launchURL;
-        return;
-      }
-    } catch {
-      // Fall through to the configured fallback URL.
+    const launchURL = String(authProviders?.sub2api?.launch_url || "").trim();
+    if (authProviders?.sub2api?.enabled && launchURL) {
+      window.location.href = launchURL;
+      return;
     }
     window.location.href = leafNetworkLoginURL;
-  }, [leafNetworkLoginURL]);
+  }, [authProviders, leafNetworkLoginURL]);
 
   useEffect(() => {
     if (isCheckingAuth || isRedirecting) {

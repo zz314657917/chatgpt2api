@@ -124,27 +124,34 @@ func userKeyScope(identity service.Identity) (service.AuthKeyFilter, service.Aut
 }
 
 func (a *App) handleProfile(w http.ResponseWriter, r *http.Request) {
+	started := time.Now()
 	identity, ok := a.requireIdentity(w, r, "")
 	if !ok {
+		a.logFrontendCriticalRequest(r, "profile", started, http.StatusUnauthorized)
 		return
 	}
 	switch r.Method {
 	case http.MethodGet:
 		a.writeLoginResponse(w, identity, "")
+		a.logFrontendCriticalRequest(r, "profile", started, http.StatusOK)
 	case http.MethodPost:
 		body, err := readJSONMap(r)
 		if err != nil {
 			util.WriteError(w, http.StatusBadRequest, "invalid json body")
+			a.logFrontendCriticalRequest(r, "profile", started, http.StatusBadRequest)
 			return
 		}
 		updated, err := a.auth.UpdateProfileName(identity, util.Clean(body["name"]))
 		if err != nil {
 			util.WriteError(w, http.StatusBadRequest, err.Error())
+			a.logFrontendCriticalRequest(r, "profile", started, http.StatusBadRequest)
 			return
 		}
 		a.writeLoginResponse(w, *updated, "")
+		a.logFrontendCriticalRequest(r, "profile", started, http.StatusOK)
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
+		a.logFrontendCriticalRequest(r, "profile", started, http.StatusMethodNotAllowed)
 	}
 }
 

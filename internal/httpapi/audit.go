@@ -129,6 +129,19 @@ func (a *App) logHTTPRequest(r *http.Request, status int, duration time.Duration
 	}
 }
 
+func (a *App) logFrontendCriticalRequest(r *http.Request, name string, started time.Time, status int) {
+	if a.logger == nil {
+		return
+	}
+	a.logger.Info("frontend critical request",
+		"name", name,
+		"method", r.Method,
+		"path", r.URL.Path,
+		"status", status,
+		"duration_ms", time.Since(started).Milliseconds(),
+	)
+}
+
 func (a *App) writeAuditLog(r *http.Request, recorder *auditResponseWriter, status int, duration time.Duration, requestCapture auditRequestCapture) {
 	if a.logs == nil {
 		return

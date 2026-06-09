@@ -107,7 +107,9 @@ func NewApp() (*App, error) {
 	sub2Bindings := service.NewSub2APIBindingStore(documentStore)
 	imageSessions := service.NewImageConversationSessionService(filepath.Join(cfg.DataDir, "image_conversation_sessions.json"), storageBackend)
 	engine := &protocol.Engine{Accounts: accounts, Config: cfg, Storage: documentStore, Proxy: proxy, Logger: logger, ImageConversationSessions: imageSessions}
-	app := &App{config: cfg, auth: auth, accounts: accounts, billing: billing, logs: logs, logger: logger, proxy: proxy, engine: engine, images: service.NewImageService(cfg, storageBackend), canvases: service.NewCanvasService(storageBackend), social: service.NewSocialProjectService(storageBackend), announce: service.NewAnnouncementService(storageBackend), prompts: service.NewPromptFavoriteService(storageBackend), cpa: service.NewCPAConfig(storageBackend), sub2: service.NewSub2APIConfig(storageBackend), sub2Bindings: sub2Bindings, teams: service.NewTeamService(storageBackend), update: newUpdateService(cfg), cancel: cancel}
+	images := service.NewImageService(cfg, storageBackend)
+	images.SetLogger(logger)
+	app := &App{config: cfg, auth: auth, accounts: accounts, billing: billing, logs: logs, logger: logger, proxy: proxy, engine: engine, images: images, canvases: service.NewCanvasService(storageBackend), social: service.NewSocialProjectService(storageBackend), announce: service.NewAnnouncementService(storageBackend), prompts: service.NewPromptFavoriteService(storageBackend), cpa: service.NewCPAConfig(storageBackend), sub2: service.NewSub2APIConfig(storageBackend), sub2Bindings: sub2Bindings, teams: service.NewTeamService(storageBackend), update: newUpdateService(cfg), cancel: cancel}
 	app.cpaImport = service.NewCPAImportService(app.cpa, accounts, proxy)
 	app.sub2Import = service.NewSub2APIService(app.sub2, accounts)
 	app.sub2Launch = service.NewSub2APILaunchService(auth, sub2Bindings, cfg)
@@ -551,14 +553,17 @@ func (a *App) handleLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) handleSession(w http.ResponseWriter, r *http.Request) {
+	started := time.Now()
 	identity, ok := a.requireIdentity(w, r, "")
 	if !ok {
+		a.logFrontendCriticalRequest(r, "auth_session", started, http.StatusUnauthorized)
 		return
 	}
 	if token := requestBearerToken(r); token != "" {
 		setAuthSessionCookie(w, r, token)
 	}
 	a.writeLoginResponse(w, identity, "")
+	a.logFrontendCriticalRequest(r, "auth_session", started, http.StatusOK)
 }
 
 func (a *App) handleAccountRegister(w http.ResponseWriter, r *http.Request) {
@@ -891,8 +896,10 @@ func safeUploadStem(filename string) string {
 }
 
 func (a *App) handleImages(w http.ResponseWriter, r *http.Request) {
+	started := time.Now()
 	identity, ok := a.requireIdentity(w, r, "")
 	if !ok {
+		a.logFrontendCriticalRequest(r, "image_list", started, http.StatusUnauthorized)
 		return
 	}
 	switch r.Method {
@@ -900,6 +907,7 @@ func (a *App) handleImages(w http.ResponseWriter, r *http.Request) {
 		scope, status, message := imageListAccessScope(identity, r.URL.Query().Get("scope"))
 		if status != 0 {
 			util.WriteError(w, status, message)
+			a.logFrontendCriticalRequest(r, "image_list", started, status)
 			return
 		}
 		payload := a.images.ListImagesPage(a.resolveImageBaseURL(r), service.ImageListOptions{
@@ -918,6 +926,7 @@ func (a *App) handleImages(w http.ResponseWriter, r *http.Request) {
 		a.decorateImageList(payload)
 		payload["retention_days"] = a.config.ImageRetentionDays()
 		util.WriteJSON(w, http.StatusOK, payload)
+		a.logFrontendCriticalRequest(r, "image_list", started, http.StatusOK)
 	case http.MethodDelete:
 		body, err := readJSONMap(r)
 		if err != nil {
