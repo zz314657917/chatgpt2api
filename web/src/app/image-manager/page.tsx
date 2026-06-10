@@ -11,7 +11,6 @@ import { AuthenticatedImage } from "@/components/authenticated-image";
 import { DateRangeFilter } from "@/components/date-range-filter";
 import { ImageLightbox } from "@/components/image-lightbox";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
@@ -383,6 +382,7 @@ function ImageManagerContent({
   canGenerateSimilar,
   canUpdateImageVisibility,
   canEditImageTags,
+  canMoveImagesToTeam,
   isAdmin,
 }: {
   cacheScope: string;
@@ -390,6 +390,7 @@ function ImageManagerContent({
   canGenerateSimilar: boolean;
   canUpdateImageVisibility: boolean;
   canEditImageTags: boolean;
+  canMoveImagesToTeam: boolean;
   isAdmin: boolean;
 }) {
   const navigate = useNavigate();
@@ -966,6 +967,10 @@ function ImageManagerContent({
   };
 
   const openMoveToTeamConfirm = (targetItems: ManagedImageSummary[]) => {
+    if (!canMoveImagesToTeam) {
+      toast.error("当前账号没有移动到团队图片库权限");
+      return;
+    }
     if (!activeTeam?.id) {
       toast.error("当前没有可用团队");
       return;
@@ -979,7 +984,7 @@ function ImageManagerContent({
   };
 
   const handleConfirmMoveToTeam = async () => {
-    if (!activeTeam?.id || !teamImagesTarget || isMovingToTeam) {
+    if (!canMoveImagesToTeam || !activeTeam?.id || !teamImagesTarget || isMovingToTeam) {
       return;
     }
     const paths = Array.from(new Set(teamImagesTarget.items.map((item) => item.path)));
@@ -1549,8 +1554,8 @@ function ImageManagerContent({
     <section className="flex h-full min-h-0 flex-col gap-4 pt-3 pb-20 sm:pb-24">
       <div className="grid min-w-0 gap-4 lg:grid-cols-[300px_minmax(0,1fr)] xl:grid-cols-[320px_minmax(0,1fr)]">
         <aside className="flex min-w-0 flex-col gap-3 rounded-[18px] border border-border bg-background/80 p-3 shadow-[0_6px_20px_rgba(15,23,42,0.04)] sm:p-4 lg:sticky lg:top-4 lg:self-start">
-          <div className="flex min-h-[58px] min-w-0 flex-col justify-start gap-2">
-            <div className="inline-flex w-full rounded-lg border border-border bg-muted/50 p-1">
+          <div className="flex h-[64px] shrink-0 min-w-0 flex-col justify-start gap-1 overflow-hidden">
+            <div className="inline-flex h-10 w-full shrink-0 items-center rounded-lg border border-border bg-muted/50 p-1">
               {[
                 { value: "mine" as const, label: "个人", icon: ImageIcon },
                 ...(hasTeamLibrary ? [{ value: "team" as const, label: "团队", icon: Users }] : []),
@@ -1562,7 +1567,7 @@ function ImageManagerContent({
                   <button
                     key={option.value}
                     type="button"
-                    className={`inline-flex h-8 min-w-0 flex-1 basis-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-md px-3 text-sm font-medium transition ${
+                    className={`inline-flex h-8 min-w-0 flex-1 basis-0 items-center justify-center gap-1.5 overflow-hidden whitespace-nowrap rounded-md px-3 text-sm font-medium leading-none transition ${
                       active
                         ? "bg-background text-foreground shadow-sm"
                         : "text-muted-foreground hover:text-foreground"
@@ -1570,13 +1575,13 @@ function ImageManagerContent({
                     onClick={() => handleGalleryViewChange(option.value)}
                     aria-pressed={active}
                   >
-                    <Icon className="size-4" />
-                    {option.label}
+                    <Icon className="size-4 shrink-0" />
+                    <span className="truncate">{option.label}</span>
                   </button>
                 );
               })}
             </div>
-            <div className="flex h-5 min-w-0 items-center gap-x-2 text-sm text-muted-foreground">
+            <div className="flex h-5 shrink-0 min-w-0 items-center gap-x-2 overflow-hidden text-sm leading-5 text-muted-foreground">
               <ImageIcon className="size-4 shrink-0" />
               <span className="shrink-0">{libraryViewLabel}</span>
               <span className="min-w-0 truncate">{imageCountLabel}</span>
@@ -1657,9 +1662,9 @@ function ImageManagerContent({
                 </div>
               ) : null}
               {renderAutoRefreshControls("mobile", "mt-2 flex min-w-0 items-center gap-2")}
-              <div className="mt-2 flex min-w-0 items-start gap-1.5 rounded-xl border border-border bg-background/60 px-3 py-2 text-xs leading-5 text-muted-foreground">
-                <Info className="mt-0.5 size-3.5 shrink-0" />
-                <span className="min-w-0">{libraryHintText}</span>
+              <div className="mt-2 flex h-9 min-w-0 items-center gap-1.5 rounded-xl border border-border bg-background/60 px-3 text-xs leading-none text-muted-foreground">
+                <Info className="size-3.5 shrink-0" />
+                <span className="min-w-0 truncate">{libraryHintText}</span>
               </div>
             </div>
 
@@ -1673,9 +1678,9 @@ function ImageManagerContent({
                 {renderAutoRefreshControls("desktop", "col-span-2 flex min-w-0 items-center gap-2")}
               </div>
               {renderTagFilters()}
-              <div className="flex min-w-0 items-start gap-1.5 rounded-xl border border-border bg-background/60 px-3 py-2 text-xs leading-5 text-muted-foreground">
-                <Info className="mt-0.5 size-3.5 shrink-0" />
-                <span className="min-w-0">{libraryHintText}</span>
+              <div className="flex h-9 min-w-0 items-center gap-1.5 rounded-xl border border-border bg-background/60 px-3 text-xs leading-none text-muted-foreground">
+                <Info className="size-3.5 shrink-0" />
+                <span className="min-w-0 truncate">{libraryHintText}</span>
               </div>
             </div>
           </div>
@@ -1752,7 +1757,7 @@ function ImageManagerContent({
                     </Button>
                   </>
                 ) : null}
-                {galleryView === "mine" && hasTeamLibrary ? (
+                {galleryView === "mine" && hasTeamLibrary && canMoveImagesToTeam ? (
                   <Button
                     type="button"
                     variant="ghost"
@@ -1825,22 +1830,20 @@ function ImageManagerContent({
           </div>
         </Popover>
 
-        {showImageLoadingState ? (
-          <Card className="overflow-hidden rounded-[20px]">
-            <CardContent className="flex min-h-[280px] flex-col items-center justify-center gap-3 px-6 py-14 text-center">
+        <div className="h-[calc(100dvh-14rem)] min-h-[360px] overflow-hidden rounded-[20px] sm:min-h-[520px]">
+          {showImageLoadingState ? (
+            <div className="flex h-full flex-col items-center justify-center gap-3 px-6 py-14 text-center">
               <div className="rounded-[16px] bg-[#edf4ff] p-4 text-[#1456f0] ring-1 ring-blue-100">
                 <LoaderCircle className="size-7 animate-spin" />
               </div>
               <div className="space-y-1">
                 <p className="text-sm font-medium text-foreground">正在加载图片</p>
               </div>
-            </CardContent>
-          </Card>
-        ) : null}
+            </div>
+          ) : null}
 
-        {showImageErrorState ? (
-          <Card className="overflow-hidden rounded-[20px]">
-            <CardContent className="flex min-h-[280px] flex-col items-center justify-center gap-3 px-6 py-14 text-center">
+          {showImageErrorState ? (
+            <div className="flex h-full flex-col items-center justify-center gap-3 px-6 py-14 text-center">
               <div className="rounded-[16px] bg-rose-50 p-4 text-rose-600 ring-1 ring-rose-100">
                 <ImageIcon className="size-7" />
               </div>
@@ -1852,12 +1855,10 @@ function ImageManagerContent({
                 <RefreshCw className="size-4" />
                 重试
               </Button>
-            </CardContent>
-          </Card>
-        ) : null}
+            </div>
+          ) : null}
 
-        {items.length > 0 ? (
-          <div className="h-[calc(100dvh-14rem)] min-h-[360px] sm:min-h-[520px]">
+          {items.length > 0 ? (
             <VirtuosoGrid
               ref={imageGridRef}
               data={items}
@@ -1990,21 +1991,6 @@ function ImageManagerContent({
                           {tagMutatingPath === item.path ? <LoaderCircle className="size-3.5 animate-spin" /> : <Tag className="size-3.5" />}
                         </button>
                       ) : null}
-                      {galleryView === "mine" && hasTeamLibrary ? (
-                        <button
-                          type="button"
-                          onClick={(event) => {
-                            event.currentTarget.blur();
-                            openMoveToTeamConfirm([item]);
-                          }}
-                          disabled={isMovingToTeam}
-                          className="inline-flex size-7 items-center justify-center rounded-full bg-white/95 text-[#1456f0] shadow-sm transition hover:bg-[#e8f2ff] disabled:cursor-not-allowed disabled:opacity-60"
-                          aria-label="移动到团队图片库"
-                          title="移动到团队图片库"
-                        >
-                          {isMovingToTeam && teamImagesTarget?.items.some((target) => target.path === item.path) ? <LoaderCircle className="size-3.5 animate-spin" /> : <Send className="size-3.5" />}
-                        </button>
-                      ) : null}
                       {galleryView !== "mine" ? (
                         <button
                           type="button"
@@ -2039,6 +2025,30 @@ function ImageManagerContent({
                         </button>
                       ) : null}
                     </div>
+                    {galleryView === "mine" && hasTeamLibrary && canMoveImagesToTeam ? (
+                      <div
+                        className={`absolute right-2 bottom-11 z-20 transition duration-150 ${
+                          focused
+                            ? "pointer-events-auto opacity-100"
+                            : "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100"
+                        }`}
+                      >
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.currentTarget.blur();
+                            openMoveToTeamConfirm([item]);
+                          }}
+                          disabled={isMovingToTeam}
+                          className="inline-flex h-8 max-w-[10rem] items-center gap-1.5 rounded-full bg-white/95 px-3 text-xs font-medium text-[#1456f0] shadow-sm ring-1 ring-blue-100 transition hover:bg-[#e8f2ff] disabled:cursor-not-allowed disabled:opacity-60"
+                          aria-label="移动到团队图片库"
+                          title="移动到团队图片库"
+                        >
+                          {isMovingToTeam && teamImagesTarget?.items.some((target) => target.path === item.path) ? <LoaderCircle className="size-3.5 shrink-0 animate-spin" /> : <Send className="size-3.5 shrink-0" />}
+                          <span className="truncate">移到团队</span>
+                        </button>
+                      </div>
+                    ) : null}
                     <div className="absolute right-2 bottom-2 left-2 z-20 flex items-center justify-between gap-2">
                       <div
                         className="pointer-events-none inline-flex h-7 min-w-0 max-w-[min(58%,13rem)] items-center rounded-full bg-white/15 px-2.5 text-[11px] font-medium text-white shadow-sm ring-1 ring-white/25 backdrop-blur-md"
@@ -2104,13 +2114,10 @@ function ImageManagerContent({
                 );
               }}
             />
-          </div>
-        ) : null}
+          ) : null}
 
-        {showImageEmptyState ? (
-          <Card className="overflow-hidden rounded-[20px]">
-            <CardContent className="flex min-h-[320px] flex-col items-center justify-center gap-4 px-6 py-14 text-center">
-
+          {showImageEmptyState ? (
+            <div className="flex h-full flex-col items-center justify-center gap-4 px-6 py-14 text-center">
               <div className="space-y-1">
                 <p className="text-sm font-medium text-foreground">暂无图片</p>
                 <p className="max-w-[32rem] text-sm leading-6 text-muted-foreground">
@@ -2125,9 +2132,9 @@ function ImageManagerContent({
                         : "公开图库暂无公开图片。"}
                 </p>
               </div>
-            </CardContent>
-          </Card>
-        ) : null}
+            </div>
+          ) : null}
+        </div>
         </div>
       </div>
       <ImageLightbox
@@ -2370,6 +2377,7 @@ export default function ImageManagerPage() {
   const canGenerateSimilar = canAccessPath(session, "/image") && hasAPIPermission(session, "POST", "/api/creation-tasks");
   const canUpdateImageVisibility = hasAPIPermission(session, "PATCH", "/api/images/visibility");
   const canEditImageTags = hasAPIPermission(session, "PATCH", "/api/images/tags");
+  const canMoveImagesToTeam = hasAPIPermission(session, "PATCH", "/api/images/library-scope");
   return (
     <ImageManagerContent
       cacheScope={imageManagerCacheScope(session)}
@@ -2377,6 +2385,7 @@ export default function ImageManagerPage() {
       canGenerateSimilar={canGenerateSimilar}
       canUpdateImageVisibility={canUpdateImageVisibility}
       canEditImageTags={canEditImageTags}
+      canMoveImagesToTeam={canMoveImagesToTeam}
       isAdmin={session.role === "admin"}
     />
   );

@@ -93,7 +93,9 @@ import {
   type CreationTaskMessage,
   type FallbackReferenceImage,
   type ImageVisibility,
+  type ManagedImageListScope,
   type ManagedImageSummary,
+  type TeamSummary,
 } from "@/lib/api";
 import {
   isImageOutputFormat,
@@ -175,6 +177,7 @@ const MISSING_RECOVERABLE_TASK_ID_ERROR = "页面刷新或任务中断，未找�
 const HIDDEN_IMAGE_MODEL_VALUES = new Set(["codex-gpt-image-2"]);
 
 type ComposerMode = "chat" | "image";
+type ImageAssetLibraryScope = Exclude<ManagedImageListScope, "all">;
 
 type EditingTurnDraft = {
   conversationId: string;
@@ -637,6 +640,11 @@ function managedImageFileName(item: ManagedImageSummary) {
   } catch {
     return rawName || "library-reference.png";
   }
+}
+
+function mergeManagedImageAssets(current: ManagedImageSummary[], incoming: ManagedImageSummary[]) {
+  const seen = new Set(current.map((asset) => asset.path));
+  return [...current, ...incoming.filter((asset) => !seen.has(asset.path))];
 }
 
 async function buildReferenceImageFromManagedImage(item: ManagedImageSummary): Promise<StoredReferenceImage> {
@@ -1513,9 +1521,19 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
   const [assets, setAssets] = useState<ManagedImageSummary[]>([]);
   const [assetNextCursor, setAssetNextCursor] = useState("");
   const [hasMoreAssets, setHasMoreAssets] = useState(false);
+  const [publicAssets, setPublicAssets] = useState<ManagedImageSummary[]>([]);
+  const [publicAssetNextCursor, setPublicAssetNextCursor] = useState("");
+  const [hasMorePublicAssets, setHasMorePublicAssets] = useState(false);
+  const [teamAssets, setTeamAssets] = useState<ManagedImageSummary[]>([]);
+  const [teamAssetNextCursor, setTeamAssetNextCursor] = useState("");
+  const [hasMoreTeamAssets, setHasMoreTeamAssets] = useState(false);
+  const [activeTeam, setActiveTeam] = useState<TeamSummary | null>(null);
+  const [assetLibraryScope, setAssetLibraryScope] = useState<ImageAssetLibraryScope>("mine");
   const [loadingAssets, setLoadingAssets] = useState(false);
   const [loadingMoreAssets, setLoadingMoreAssets] = useState(false);
   const [assetsLoaded, setAssetsLoaded] = useState(false);
+  const [publicAssetsLoaded, setPublicAssetsLoaded] = useState(false);
+  const [teamAssetsLoaded, setTeamAssetsLoaded] = useState(false);
   const [assetSidebarActivated, setAssetSidebarActivated] = useState(getInitialAssetSidebarActivated);
   const canInspectAccounts = session.role === "admin" || session.apiPermissions.includes("get/api/accounts");
   const canUseImageAssets = hasAPIPermission(session, "GET", "/api/images");
@@ -1695,6 +1713,23 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     () => formatHighResolutionHint(canInspectAccounts),
     [canInspectAccounts],
   );
+  const visibleAssets = assetLibraryScope === "public" ? publicAssets : assetLibraryScope === "team" ? teamAssets : assets;
+  const visibleAssetCount = visibleAssets.length;
+  const visibleLoadingAssets = loadingAssets;
+  const visibleLoadingMoreAssets = loadingMoreAssets;
+  const visibleHasMoreAssets = assetLibraryScope === "public" ? hasMorePublicAssets : assetLibraryScope === "team" ? hasMoreTeamAssets : hasMoreAssets;
+  const assetLibraryTabs = useMemo(() => [
+    { id: "mine", label: "个人", count: assets.length },
+    ...(activeTeam?.id ? [{ id: "team", label: "团队", count: teamAssets.length }] : []),
+    { id: "public", label: "公共", count: publicAssets.length },
+  ], [activeTeam?.id, assets.length, publicAssets.length, teamAssets.length]);
+  const assetLibrarySubtitle = `${visibleAssetCount} 张素材 · 拖到输入框`;
+  const assetLibraryTitle = assetLibraryScope === "team" ? "团队图片库" : assetLibraryScope === "public" ? "公共图片库" : "个人图片库";
+  const assetLibraryEmptyLabel = assetLibraryScope === "team"
+    ? "团队图片库暂无图片"
+    : assetLibraryScope === "public"
+      ? "公共图片库暂无图片"
+      : "个人图片库暂无图片";
 
   useEffect(() => {
     conversationsRef.current = conversations;
@@ -2356,6 +2391,40 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     }
   }, [switchComposerToImageMode]);
 
+  useEffect(() => {
+    if (!canUseImageAssets) {
+      setActiveTeam(null);
+      return;
+    }
+    let cancelled = false;
+
+    const loadTeamWorkspace = async () => {
+      try {
+        const workspace = await fetchTeamWorkspace();
+        if (cancelled) {
+          return;
+        }
+        const team = Array.isArray(workspace.teams) ? workspace.teams[0] : undefined;
+        setActiveTeam(team || null);
+      } catch {
+        if (!cancelled) {
+          setActiveTeam(null);
+        }
+      }
+    };
+
+    void loadTeamWorkspace();
+    return () => {
+      cancelled = true;
+    };
+  }, [canUseImageAssets]);
+
+  useEffect(() => {
+    if (assetLibraryScope === "team" && !activeTeam?.id) {
+      setAssetLibraryScope("mine");
+    }
+  }, [activeTeam?.id, assetLibraryScope]);
+
   const loadAssets = useCallback(async () => {
     if (assetsLoadingRequestRef.current) {
       return;
@@ -2370,30 +2439,72 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     assetsLoadingRequestRef.current = true;
     setLoadingAssets(true);
     try {
-      const mineResult = await fetchManagedImages({ scope: "mine", page_size: IMAGE_ASSET_PAGE_SIZE });
-      let nextAssets = mineResult.items;
-      try {
-        const workspace = await fetchTeamWorkspace();
-        const team = Array.isArray(workspace.teams) ? workspace.teams[0] : undefined;
-        if (team?.id) {
-          const teamResult = await fetchManagedImages({ scope: "team", team_id: team.id, page_size: IMAGE_ASSET_PAGE_SIZE });
-          const seen = new Set(nextAssets.map((asset) => asset.path));
-          nextAssets = [...nextAssets, ...teamResult.items.filter((asset) => !seen.has(asset.path))];
-        }
-      } catch {
-        // Team library is optional for the asset picker.
-      }
-      setAssets(nextAssets);
-      setAssetNextCursor(mineResult.next_cursor);
-      setHasMoreAssets(mineResult.has_more);
+      const result = await fetchManagedImages({ scope: "mine", page_size: IMAGE_ASSET_PAGE_SIZE });
+      setAssets(result.items);
+      setAssetNextCursor(result.next_cursor);
+      setHasMoreAssets(result.has_more);
       setAssetsLoaded(true);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "加载图片库失败");
+      toast.error(error instanceof Error ? error.message : "加载个人图片库失败");
     } finally {
       assetsLoadingRequestRef.current = false;
       setLoadingAssets(false);
     }
   }, [canUseImageAssets]);
+
+  const loadPublicAssets = useCallback(async () => {
+    if (assetsLoadingRequestRef.current) {
+      return;
+    }
+    if (!canUseImageAssets) {
+      setPublicAssets([]);
+      setPublicAssetNextCursor("");
+      setHasMorePublicAssets(false);
+      setPublicAssetsLoaded(true);
+      return;
+    }
+    assetsLoadingRequestRef.current = true;
+    setLoadingAssets(true);
+    try {
+      const result = await fetchManagedImages({ scope: "public", page_size: IMAGE_ASSET_PAGE_SIZE });
+      setPublicAssets(result.items);
+      setPublicAssetNextCursor(result.next_cursor);
+      setHasMorePublicAssets(result.has_more);
+      setPublicAssetsLoaded(true);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "加载公共图片库失败");
+    } finally {
+      assetsLoadingRequestRef.current = false;
+      setLoadingAssets(false);
+    }
+  }, [canUseImageAssets]);
+
+  const loadTeamAssets = useCallback(async () => {
+    if (assetsLoadingRequestRef.current) {
+      return;
+    }
+    if (!canUseImageAssets || !activeTeam?.id) {
+      setTeamAssets([]);
+      setTeamAssetNextCursor("");
+      setHasMoreTeamAssets(false);
+      setTeamAssetsLoaded(true);
+      return;
+    }
+    assetsLoadingRequestRef.current = true;
+    setLoadingAssets(true);
+    try {
+      const result = await fetchManagedImages({ scope: "team", team_id: activeTeam.id, page_size: IMAGE_ASSET_PAGE_SIZE });
+      setTeamAssets(result.items);
+      setTeamAssetNextCursor(result.next_cursor);
+      setHasMoreTeamAssets(result.has_more);
+      setTeamAssetsLoaded(true);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "加载团队图片库失败");
+    } finally {
+      assetsLoadingRequestRef.current = false;
+      setLoadingAssets(false);
+    }
+  }, [activeTeam?.id, canUseImageAssets]);
 
   const loadMoreAssets = useCallback(async () => {
     if (!canUseImageAssets || loadingAssets || loadingMoreAssets || !hasMoreAssets || !assetNextCursor) {
@@ -2406,25 +2517,111 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         page_size: IMAGE_ASSET_PAGE_SIZE,
         cursor: assetNextCursor,
       });
-      setAssets((current) => {
-        const seen = new Set(current.map((asset) => asset.path));
-        return [...current, ...result.items.filter((asset) => !seen.has(asset.path))];
-      });
+      setAssets((current) => mergeManagedImageAssets(current, result.items));
       setAssetNextCursor(result.next_cursor);
       setHasMoreAssets(result.has_more);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "加载更多图片失败");
+      toast.error(error instanceof Error ? error.message : "加载更多个人图片失败");
     } finally {
       setLoadingMoreAssets(false);
     }
   }, [assetNextCursor, canUseImageAssets, hasMoreAssets, loadingAssets, loadingMoreAssets]);
 
-  const ensureAssetsLoaded = useCallback(() => {
-    if (assetsLoaded || loadingAssets || assetsLoadingRequestRef.current) {
+  const loadMorePublicAssets = useCallback(async () => {
+    if (!canUseImageAssets || loadingAssets || loadingMoreAssets || !hasMorePublicAssets || !publicAssetNextCursor) {
       return;
     }
-    void loadAssets();
-  }, [assetsLoaded, loadAssets, loadingAssets]);
+    setLoadingMoreAssets(true);
+    try {
+      const result = await fetchManagedImages({
+        scope: "public",
+        page_size: IMAGE_ASSET_PAGE_SIZE,
+        cursor: publicAssetNextCursor,
+      });
+      setPublicAssets((current) => mergeManagedImageAssets(current, result.items));
+      setPublicAssetNextCursor(result.next_cursor);
+      setHasMorePublicAssets(result.has_more);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "加载更多公共图片失败");
+    } finally {
+      setLoadingMoreAssets(false);
+    }
+  }, [canUseImageAssets, hasMorePublicAssets, loadingAssets, loadingMoreAssets, publicAssetNextCursor]);
+
+  const loadMoreTeamAssets = useCallback(async () => {
+    if (!canUseImageAssets || !activeTeam?.id || loadingAssets || loadingMoreAssets || !hasMoreTeamAssets || !teamAssetNextCursor) {
+      return;
+    }
+    setLoadingMoreAssets(true);
+    try {
+      const result = await fetchManagedImages({
+        scope: "team",
+        team_id: activeTeam.id,
+        page_size: IMAGE_ASSET_PAGE_SIZE,
+        cursor: teamAssetNextCursor,
+      });
+      setTeamAssets((current) => mergeManagedImageAssets(current, result.items));
+      setTeamAssetNextCursor(result.next_cursor);
+      setHasMoreTeamAssets(result.has_more);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "加载更多团队图片失败");
+    } finally {
+      setLoadingMoreAssets(false);
+    }
+  }, [activeTeam?.id, canUseImageAssets, hasMoreTeamAssets, loadingAssets, loadingMoreAssets, teamAssetNextCursor]);
+
+  const loadAssetLibrary = useCallback(() => {
+    if (assetLibraryScope === "public") {
+      return loadPublicAssets();
+    }
+    if (assetLibraryScope === "team") {
+      return loadTeamAssets();
+    }
+    return loadAssets();
+  }, [assetLibraryScope, loadAssets, loadPublicAssets, loadTeamAssets]);
+
+  const loadMoreAssetLibrary = useCallback(() => {
+    if (assetLibraryScope === "public") {
+      return loadMorePublicAssets();
+    }
+    if (assetLibraryScope === "team") {
+      return loadMoreTeamAssets();
+    }
+    return loadMoreAssets();
+  }, [assetLibraryScope, loadMoreAssets, loadMorePublicAssets, loadMoreTeamAssets]);
+
+  const ensureAssetsLoaded = useCallback(() => {
+    if (loadingAssets || assetsLoadingRequestRef.current) {
+      return;
+    }
+    if (assetLibraryScope === "public") {
+      if (!publicAssetsLoaded) {
+        void loadPublicAssets();
+      }
+      return;
+    }
+    if (assetLibraryScope === "team") {
+      if (!teamAssetsLoaded) {
+        void loadTeamAssets();
+      }
+      return;
+    }
+    if (!assetsLoaded) {
+      void loadAssets();
+    }
+  }, [assetLibraryScope, assetsLoaded, loadAssets, loadPublicAssets, loadTeamAssets, loadingAssets, publicAssetsLoaded, teamAssetsLoaded]);
+
+  useEffect(() => {
+    if (assetSidebarActivated) {
+      ensureAssetsLoaded();
+    }
+  }, [assetLibraryScope, assetSidebarActivated, ensureAssetsLoaded]);
+
+  const selectAssetLibraryScope = useCallback((scope: string) => {
+    if (scope === "mine" || scope === "public" || (scope === "team" && activeTeam?.id)) {
+      setAssetLibraryScope(scope);
+    }
+  }, [activeTeam?.id]);
 
   const activateAssetSidebar = useCallback(() => {
     setAssetSidebarActivated(true);
@@ -4418,14 +4615,14 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         {canUseImageAssets ? (
           <ManagedImageAssetDock
             activated={assetSidebarActivated}
-            assetCount={assets.length}
-            assets={assets}
-            loadingAssets={loadingAssets}
-            loadingMoreAssets={loadingMoreAssets}
-            hasMoreAssets={hasMoreAssets}
+            assetCount={visibleAssetCount}
+            assets={visibleAssets}
+            loadingAssets={visibleLoadingAssets}
+            loadingMoreAssets={visibleLoadingMoreAssets}
+            hasMoreAssets={visibleHasMoreAssets}
             onActivate={activateAssetSidebar}
-            onRefreshAssets={() => void loadAssets()}
-            onLoadMoreAssets={() => void loadMoreAssets()}
+            onRefreshAssets={() => void loadAssetLibrary()}
+            onLoadMoreAssets={() => void loadMoreAssetLibrary()}
             onAddAssetToComposer={(asset) => void handleManagedImageReference(asset)}
             storagePrefix={IMAGE_ASSET_SIDEBAR_STORAGE_PREFIX}
             triggerClassName="top-5 bottom-[calc(var(--image-composer-dock-height,0px)+1.25rem)] w-[52px]"
@@ -4436,10 +4633,13 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
             wideClassName="w-[560px] translate-x-0 p-3"
             defaultExpanded
             onExpandedChange={handleAssetSidebarExpandedChange}
-            title="图片库"
-            subtitle={`${assets.length} 张素材 · 拖到输入框`}
-            emptyLabel="图片库暂无图片"
+            title={assetLibraryTitle}
+            subtitle={assetLibrarySubtitle}
+            emptyLabel={assetLibraryEmptyLabel}
             collapsedTitle="展开图片库"
+            tabs={assetLibraryTabs}
+            activeTabId={assetLibraryScope}
+            onActiveTabChange={selectAssetLibraryScope}
           />
         ) : null}
       </section>
