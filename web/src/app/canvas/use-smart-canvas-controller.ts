@@ -3583,28 +3583,92 @@ export function useSmartCanvasController() {
     }
     const inputRefs = generatorInputImages(current, generator);
     const { images: editInputRefs, masks: maskInputRefs } = splitMaskImageRefs(inputRefs);
-    const migrated = migrateGeneratorDirectInputsToImageNodes(current, generator);
     const startedAt = new Date().toISOString();
+    const placeholderOutput = generator.type === "video_generation" ? { videos: [] } : { images: [] };
+    const placeholderModel = generator.type === "video_generation"
+      ? generator.data?.model || models.video[0]?.id || ""
+      : generatorImageModel(generator);
+    let outputIds = current.edges.filter((edge) => edge.source === generator.id)
+      .map((edge) => current.nodes.find((item) => item.id === edge.target))
+      .filter((item): item is SmartCanvasItem => item?.type === "result")
+      .map((item) => item.id);
+    const placeholderOutputNode = outputIds.length === 0
+      ? createOutputNode({
+          x: Number(generator.position?.x || 0) + 430,
+          y: Number(generator.position?.y || 0),
+        })
+      : null;
+    if (placeholderOutputNode) {
+      outputIds = [placeholderOutputNode.id];
+    }
     setRunning(true);
     try {
       updateCanvas((doc) => {
         const next = migrateGeneratorDirectInputsToImageNodes(doc, doc.nodes.find((item) => item.id === generator.id) || generator);
-        return {
-          ...next,
-          nodes: next.nodes.map((item) => item.id === generator.id ? {
-            ...item,
+        let edges = next.edges;
+        let nodes = next.nodes.map((item) => {
+          if (item.id === generator.id) {
+            return {
+              ...item,
+              data: {
+                ...item.data,
+                input_images: [],
+                status: "running" as const,
+                error: "",
+                output: placeholderOutput,
+                started_at: startedAt,
+                updated_at: startedAt,
+              },
+            };
+          }
+          if (outputIds.includes(item.id)) {
+            return {
+              ...item,
+              name: generationOutputNodeName("running"),
+              data: {
+                ...item.data,
+                prompt: submittedPrompt,
+                model: placeholderModel,
+                output: placeholderOutput,
+                status: "running" as const,
+                error: "",
+                last_run_error_detail: "",
+                task_id: "",
+                started_at: startedAt,
+                updated_at: startedAt,
+              },
+            };
+          }
+          return item;
+        });
+        if (placeholderOutputNode && !nodes.some((item) => item.id === placeholderOutputNode.id)) {
+          nodes = [...nodes, {
+            ...placeholderOutputNode,
+            name: generationOutputNodeName("running"),
             data: {
-              ...item.data,
-              input_images: [],
+              ...placeholderOutputNode.data,
+              prompt: submittedPrompt,
+              model: placeholderModel,
+              output: placeholderOutput,
               status: "running",
               error: "",
-              output: generator.type === "video_generation" ? { videos: [] } : { images: [] },
+              last_run_error_detail: "",
+              task_id: "",
               started_at: startedAt,
               updated_at: startedAt,
             },
-          } : item),
+          }];
+          edges = edges.some((edge) => edge.source === generator.id && edge.target === placeholderOutputNode.id)
+            ? edges
+            : [...edges, createSmartEdge(generator.id, placeholderOutputNode.id)];
+        }
+        return {
+          ...next,
+          nodes,
+          edges,
         };
       }, true, "开始 图片生成");
+      selectSingleItem(outputIds[0] || generator.id);
       const clientTaskId = uniqueTaskId("smart-canvas-node");
       let task: CreationTask;
       if (generator.type === "video_generation") {
@@ -3664,10 +3728,6 @@ export function useSmartCanvasController() {
       }
       const output = creationTaskToOutput(task);
       const submittedModel = task.model || generator.data?.model || (generator.type === "video_generation" ? models.video[0]?.id || "" : "auto");
-      let outputIds = migrated.edges.filter((edge) => edge.source === generator.id)
-        .map((edge) => migrated.nodes.find((item) => item.id === edge.target))
-        .filter((item): item is SmartCanvasItem => item?.type === "result")
-        .map((item) => item.id);
       updateCanvas((doc) => {
         let nodes = doc.nodes.map((item) => item.id === generator.id ? {
           ...item,
@@ -3712,14 +3772,23 @@ export function useSmartCanvasController() {
         } : item);
         return { ...doc, nodes, edges };
       }, true, generator.type === "video_generation" ? "提交视频生成" : "提交 图片生成");
-      selectSingleItem(outputIds[0] || generator.id);
       void pollTaskIntoGenerator(task.id, generator.id, outputIds);
     } catch (error) {
       const message = error instanceof Error ? error.message : "提交生成失败";
       updateCanvas((doc) => ({
         ...doc,
-        nodes: doc.nodes.map((item) => item.id === generator.id
-          ? { ...item, data: { ...item.data, status: "error", error: message, last_run_error_detail: message, updated_at: new Date().toISOString() } }
+        nodes: doc.nodes.map((item) => item.id === generator.id || outputIds.includes(item.id)
+          ? {
+              ...item,
+              name: item.type === "result" ? generationOutputNodeName("error") : item.name,
+              data: {
+                ...item.data,
+                status: "error",
+                error: message,
+                last_run_error_detail: message,
+                updated_at: new Date().toISOString(),
+              },
+            }
           : item),
       }), true, "图片生成失败");
       toast.error(message);
