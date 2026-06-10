@@ -662,6 +662,9 @@ func (a *App) writeLoginResponseWithExtra(w http.ResponseWriter, identity servic
 		"api_permissions":           permissions.APIPermissions,
 		"menus":                     service.FilterMenuPermissions(permissions.MenuPaths),
 	}
+	if binding, ok := a.sub2APISessionBindingForIdentity(identity); ok {
+		payload["sub2api"] = binding.PublicMap()
+	}
 	if token == "" {
 		delete(payload, "token")
 	}

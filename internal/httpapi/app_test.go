@@ -6215,6 +6215,43 @@ func TestLuoyeIndependentModeRedirectsAnonymousWebPages(t *testing.T) {
 	}
 }
 
+func TestSub2APISessionResponseIncludesSessionBinding(t *testing.T) {
+	app := newIndependentTestApp(t, "http://sub2.test/internal/redeem", "secret", "http://gateway.test")
+	defer app.Close()
+
+	owner := service.AuthOwner{ID: "sub2api:100", Name: "Alice", Provider: service.AuthProviderSub2API}
+	_, sessionKey, err := app.auth.UpsertSub2APISession(owner)
+	if err != nil {
+		t.Fatalf("sub2api session: %v", err)
+	}
+	if err := app.sub2Bindings.Save(service.Sub2APIBinding{
+		OwnerID:        owner.ID,
+		Sub2APIUserID:  "100",
+		UserEmail:      "alice@example.com",
+		UserName:       "Alice",
+		SessionToken:   "studio-bridge:100",
+		GatewayBaseURL: "http://gateway.test",
+	}); err != nil {
+		t.Fatalf("save sub2api binding: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/auth/session", nil)
+	req.AddCookie(&http.Cookie{Name: authSessionCookieName, Value: sessionKey})
+	res := httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("session status=%d body=%s", res.Code, res.Body.String())
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("session json: %v", err)
+	}
+	binding := util.StringMap(payload["sub2api"])
+	if binding["sub2api_user_id"] != "100" || binding["owner_id"] != "sub2api:100" {
+		t.Fatalf("session sub2api binding = %#v", binding)
+	}
+}
+
 func TestLuoyeIndependentModeDisablesProtocolAPIForSub2APIUsers(t *testing.T) {
 	app := newIndependentTestApp(t, "http://sub2.test/internal/redeem", "secret", "http://gateway.test")
 	defer app.Close()

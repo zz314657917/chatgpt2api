@@ -1,6 +1,6 @@
 # Current Task
 
-最后更新：2026-06-10 05:00 +08:00
+最后更新：2026-06-10 13:50 +08:00
 
 ## 背景
 
@@ -28,6 +28,10 @@ Sub2API 对应桥接提交为 `fe2f80be1 feat: add studio bridge integration`。
 - 2026-06-10 本地扣费验收确认：Sub2API Studio Bridge `reserve / commit / refund` 使用 `(app_id, charge_key)` 幂等；重复 reserve/commit/refund 不重复扣退；commit 后 refund 被拒绝；同 charge_key 改金额被拒绝；余额不足返回明确错误；普通用户直打协议 API 被独立模式 403 拦截。
 - 2026-06-10 对话价格显示 `¥0.00` 的原因已确认：Sub2API 扣费记录正常写入 `0.001` 元，落叶创艺团队页按两位小数展示 `cny_milli` 导致 `1 -> ¥0.00`；已改为千分元最多 3 位小数展示，并让运行中任务可展示 `billing_charged_amount` 预扣金额。
 - 2026-06-10 独立站体验收口：团队成员可主动退出团队，团队使用记录可显示运行中预扣金额，创作台图片库支持个人/团队/公共分组，图片库页面布局改为稳定高度容器以减少加载/空状态跳动。
+- 2026-06-10 登录态同步修复：落叶创艺顶栏通过隐藏 iframe 探测 Sub2API 当前浏览器登录态，Sub2 未登录或切到不同用户时会调用落叶本地 `/auth/logout` 清 HttpOnly cookie，再清前端缓存并跳 `/login`；同用户时强制刷新 `/auth/session` 和钱包，避免余额/账号信息停留在旧缓存。
+- 2026-06-10 Sub2API 探针安全修复：新增 `/studio-bridge/session-probe` 页面和用户接口，只返回当前 Sub2 用户 ID；后端校验 `parent_origin` 必须命中落叶配置的 `launch_return_url` 同源或 `allowed_return_domains`，并且只对该探针路径动态放开 CSP `frame-ancestors`，其它页面仍保持禁止嵌入。
+- 2026-06-10 会话响应修复：落叶 `/auth/session` 对 Sub2 用户会带回保存的 `sub2api` binding，至少包含 `sub2api_user_id`，前端也能从 `subject_id=sub2api:<id>` fallback 推出探针目标，避免刷新后探针组件不渲染。
+- 2026-06-10 浏览器验收确认：Sub2 登录后 launch 到落叶 `/image`，探针 iframe 存在且源为 `http://127.0.0.1:62080/studio-bridge/session-probe`；清空 Sub2 登录态后访问落叶会自动跳 `/login`，随后 `/auth/session` 返回 401，再访问 `/image` 仍停在 `/login`，不会继续读旧账号。
 
 ## 下一步
 
@@ -35,6 +39,7 @@ Sub2API 对应桥接提交为 `fe2f80be1 feat: add studio bridge integration`。
 - 使用真实账号做浏览器 E2E：注册、登录回跳、充值、创作成功/失败扣费、使用记录、团队创建/加入/团队扣费。
 - 如继续核对团队使用记录，优先用真实团队账号提交一条对话和一条生图，验证团队表价格分别显示类似 `¥0.001` / `¥0.051`，Sub2API 使用记录同步存在对应 commit 记录。
 - 如继续开发，优先补生产联调脚本和 Playwright 最小闭环，而不是继续扩展新功能。
+- 如继续会话/余额同步，优先做真实浏览器人工切号测试：Sub2 账号 A -> 落叶 -> Sub2 切账号 B -> 回落叶，应跳 `/login` 后重新 launch，不能静默继续用账号 A。
 - 生产环境仍需人工确认真实支付回调、真实上游创作扣费、网络超时/DB 故障注入和迁移演练；本地验收不触碰真钱支付，也不消耗真实上游模型。
 
 ## 证据入口
@@ -75,3 +80,15 @@ Sub2API 对应桥接提交为 `fe2f80be1 feat: add studio bridge integration`。
   - `cd F:/java/chatgpt2api/web && npm.cmd run build` 通过。
   - `cd F:/java/chatgpt2api && go test ./...` 通过。
   - `cd F:/java/chatgpt2api && git diff --check` 无 whitespace 错误，仅 LF/CRLF 工作区提示。
+- 2026-06-10 13:50 登录态/余额同步修复验证：
+  - `curl.exe -fsS http://127.0.0.1:8081/health` 返回 `{"status":"ok","version":"0.0.0-dev"}`；`curl.exe -fsS -o NUL -w "%{http_code}" http://127.0.0.1:62080/health` 返回 `200`。
+  - `curl.exe -sSI "http://127.0.0.1:62080/studio-bridge/session-probe?app_id=luoye-ai&parent_origin=http%3A%2F%2F127.0.0.1%3A8081"` 确认 CSP 含 `frame-ancestors http://127.0.0.1:8081`，且不再返回 `X-Frame-Options: DENY`。
+  - Playwright 本地浏览器验证：Sub2 测试账号 launch 到落叶 `/image`，`/auth/session` 包含 `sub2api_user_id`，页面没有 API Key/Token/OpenAI-compatible/API 选择/限制 API 文案；清空 Sub2 localStorage 后回落叶自动跳 `/login`，`/auth/session` 为 401，再访问 `/image` 仍停留 `/login`。
+  - `cd F:/java/chatgpt2api/web && npm.cmd run lint` 通过。
+  - `cd F:/java/chatgpt2api/web && npm.cmd run build` 通过。
+  - `cd F:/java/chatgpt2api && go test ./internal/httpapi -run "TestSub2APISessionResponseIncludesSessionBinding|TestLuoyeIndependent" -count=1` 通过。
+  - `cd F:/java/chatgpt2api && go test ./...` 通过。
+  - `cd F:/mcplugins/sub2api/backend && go test ./internal/server/middleware ./internal/server -run "TestSecurityHeaders|TestSetDirective|TestStudioBridgeFrameAncestor|TestAppendFrameOrigin|TestFrameOrigin" -count=1` 通过。
+  - `cd F:/mcplugins/sub2api/backend && go test ./...` 通过。
+  - `git diff --check` 两仓库均通过，仅 chatgpt2api 有 LF/CRLF 工作区提示。
+  - 本地容器已用新 Linux 二进制注入并重启，`chatgpt2api:local-patched` commit 镜像 ID `sha256:5f2592f1d664...`，`sub2api:local` commit 镜像 ID `sha256:0bbba03435a4...`。

@@ -1,6 +1,6 @@
 "use client";
 
-import { lazy, Suspense, useEffect, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { ChevronDown, ChevronUp, Clock3, LogOut, MoonStar, Sun, UserCircle2, UserPlus, WalletCards } from "lucide-react";
 import { motion, useReducedMotion, type Transition } from "motion/react";
 import { Link, NavLink, useLocation, useNavigate } from "react-router-dom";
@@ -11,6 +11,7 @@ import {
   clearVerifiedAuthSession,
   getCachedAuthSession,
   getVerifiedAuthSession,
+  refreshVerifiedAuthSession,
 } from "@/lib/session";
 import {
   canAccessPath,
@@ -38,6 +39,13 @@ const profileNavItem = { href: "/profile", label: "个人中心" };
 const teamNavItem = { href: "/team", label: "团队空间" };
 const PRIMARY_NAV_ID = "primary-navigation";
 const NAV_ACTIVE_LAYOUT_ID = "top-nav-active-pill";
+const QUOTA_REFRESH_EVENT = "chatgpt2api:quota-refresh";
+const SESSION_REVALIDATE_INTERVAL_MS = 5000;
+const WALLET_REFRESH_INTERVAL_MS = 8000;
+const STUDIO_BRIDGE_APP_ID = "luoye-ai";
+const SUB2API_SESSION_MESSAGE_TYPE = "sub2api:studio-bridge-session";
+const SUB2API_SESSION_PROBE_REQUEST_TYPE = "sub2api:studio-bridge-session-probe";
+const SUB2API_SESSION_PROBE_REFRESH_INTERVAL_MS = 5000;
 const navActiveTransition: Transition = {
   type: "spring",
   stiffness: 520,
@@ -90,6 +98,57 @@ function formatWalletBalance(value: unknown) {
     return value === undefined || value === null || value === "" ? "--" : String(value);
   }
   return Math.max(0, numeric).toFixed(2);
+}
+
+function normalizeExternalUserID(value: unknown) {
+  return String(value ?? "").trim();
+}
+
+function sub2APIUserIDFromSession(session: StoredAuthSession) {
+  const fromBinding = normalizeExternalUserID(session.sub2api?.sub2api_user_id);
+  if (fromBinding) {
+    return fromBinding;
+  }
+  const subjectID = normalizeExternalUserID(session.subjectId);
+  return subjectID.toLowerCase().startsWith("sub2api:") ? subjectID.slice("sub2api:".length).trim() : "";
+}
+
+function resolveHTTPOrigin(value: unknown) {
+  const raw = String(value ?? "").trim();
+  if (!raw || typeof window === "undefined") {
+    return "";
+  }
+  try {
+    const url = new URL(raw, window.location.href);
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      return "";
+    }
+    return url.origin;
+  } catch {
+    return "";
+  }
+}
+
+function resolveSub2APIOrigin(...urls: unknown[]) {
+  for (const url of urls) {
+    const origin = resolveHTTPOrigin(url);
+    if (origin) {
+      return origin;
+    }
+  }
+  return "";
+}
+
+function buildSub2APISessionProbeURL(origin: string, nonce: number) {
+  if (!origin || typeof window === "undefined") {
+    return "";
+  }
+  const params = new URLSearchParams({
+    app_id: STUDIO_BRIDGE_APP_ID,
+    parent_origin: window.location.origin,
+    nonce: String(nonce),
+  });
+  return `${origin}/studio-bridge/session-probe?${params.toString()}`;
 }
 
 function ThemeToggleButton({
@@ -175,18 +234,22 @@ function AccountMenu({
   session,
   roleLabel,
   availableQuota,
+  walletQuota,
+  rechargeURL,
   pathname,
   onLogout,
+  onRefreshWallet,
 }: {
   session: StoredAuthSession;
   roleLabel: string;
   availableQuota: string;
+  walletQuota: string;
+  rechargeURL: string;
   pathname: string;
   onLogout: () => Promise<void>;
+  onRefreshWallet: (force?: boolean) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const [rechargeURL, setRechargeURL] = useState("");
-  const [walletQuota, setWalletQuota] = useState("");
   const displayName = accountDisplayName(session, roleLabel === "管理员" ? roleLabel : "落叶创艺用户");
   const quotaLabel = walletQuota || availableQuota;
   const initial = (displayName.trim() || "U").slice(0, 1).toUpperCase();
@@ -194,32 +257,6 @@ function AccountMenu({
   const profileActive = isActivePath(pathname, profileNavItem.href) && !usageActive;
   const teamActive = pathname === "/team";
   const showTeamEntry = session.role === "user";
-
-  useEffect(() => {
-    let active = true;
-    void Promise.allSettled([fetchSub2APIWalletSummary(), fetchAuthProviders()])
-      .then(([walletResult, providersResult]) => {
-        if (!active) {
-          return;
-        }
-        const wallet = walletResult.status === "fulfilled" ? walletResult.value : null;
-        const providers = providersResult.status === "fulfilled" ? providersResult.value : null;
-        const walletBalance = wallet?.available ?? wallet?.balance;
-        if (walletBalance !== undefined && walletBalance !== null && walletBalance !== "") {
-          setWalletQuota(formatWalletBalance(walletBalance));
-        }
-        const sub2api = providers?.sub2api;
-        setRechargeURL(String(wallet?.recharge_url || sub2api?.recharge_url || sub2api?.launch_url || "").trim());
-      })
-      .catch(() => {
-        if (active) {
-          setRechargeURL("");
-        }
-      });
-    return () => {
-      active = false;
-    };
-  }, []);
 
   const openRecharge = () => {
     if (rechargeURL) {
@@ -243,7 +280,15 @@ function AccountMenu({
           <span className="hidden sm:inline">团队</span>
         </Link>
       ) : null}
-      <Popover open={open} onOpenChange={setOpen}>
+      <Popover
+        open={open}
+        onOpenChange={(nextOpen) => {
+          setOpen(nextOpen);
+          if (nextOpen) {
+            onRefreshWallet();
+          }
+        }}
+      >
         <PopoverTrigger asChild>
         <Button
           type="button"
@@ -363,6 +408,124 @@ function AccountMenu({
   );
 }
 
+function Sub2APISessionProbe({
+  session,
+  sub2APIOrigin,
+  onConfirmed,
+  onMismatch,
+}: {
+  session: StoredAuthSession;
+  sub2APIOrigin: string;
+  onConfirmed: () => void;
+  onMismatch: () => void;
+}) {
+  const iframeRef = useRef<HTMLIFrameElement | null>(null);
+  const lastProbeRefreshAtRef = useRef(0);
+  const expectedUserID = sub2APIUserIDFromSession(session);
+  const [probeNonce, setProbeNonce] = useState(() => Date.now());
+  const probeURL = buildSub2APISessionProbeURL(sub2APIOrigin, probeNonce);
+
+  const requestProbe = useCallback((force = false) => {
+    const now = Date.now();
+    if (!force && now - lastProbeRefreshAtRef.current < SUB2API_SESSION_PROBE_REFRESH_INTERVAL_MS) {
+      return;
+    }
+    lastProbeRefreshAtRef.current = now;
+
+    const targetWindow = iframeRef.current?.contentWindow;
+    if (targetWindow && sub2APIOrigin) {
+      targetWindow.postMessage(
+        {
+          type: SUB2API_SESSION_PROBE_REQUEST_TYPE,
+          app_id: STUDIO_BRIDGE_APP_ID,
+        },
+        sub2APIOrigin,
+      );
+      return;
+    }
+
+    setProbeNonce(now);
+  }, [sub2APIOrigin]);
+
+  useEffect(() => {
+    const handleMessage = (event: MessageEvent) => {
+      if (!sub2APIOrigin || event.origin !== sub2APIOrigin) {
+        return;
+      }
+      const data = event.data as {
+        type?: unknown;
+        app_id?: unknown;
+        authenticated?: unknown;
+        user_id?: unknown;
+        error?: unknown;
+      } | null;
+      if (!data || typeof data !== "object") {
+        return;
+      }
+      if (data.type !== SUB2API_SESSION_MESSAGE_TYPE || data.app_id !== STUDIO_BRIDGE_APP_ID) {
+        return;
+      }
+      if (data.error) {
+        return;
+      }
+      if (data.authenticated === true && normalizeExternalUserID(data.user_id) === expectedUserID) {
+        onConfirmed();
+        return;
+      }
+      onMismatch();
+    };
+
+    window.addEventListener("message", handleMessage);
+    return () => {
+      window.removeEventListener("message", handleMessage);
+    };
+  }, [expectedUserID, onConfirmed, onMismatch, sub2APIOrigin]);
+
+  useEffect(() => {
+    const refreshAfterReturn = () => {
+      if (document.visibilityState === "hidden") {
+        return;
+      }
+      requestProbe();
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        refreshAfterReturn();
+      }
+    };
+
+    window.addEventListener("focus", refreshAfterReturn);
+    window.addEventListener("pageshow", refreshAfterReturn);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      window.removeEventListener("focus", refreshAfterReturn);
+      window.removeEventListener("pageshow", refreshAfterReturn);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [requestProbe]);
+
+  useEffect(() => {
+    lastProbeRefreshAtRef.current = 0;
+    setProbeNonce(Date.now());
+  }, [expectedUserID, sub2APIOrigin]);
+
+  if (session.provider !== "sub2api" || !expectedUserID || !probeURL) {
+    return null;
+  }
+
+  return (
+    <iframe
+      ref={iframeRef}
+      title="Sub2API 会话同步"
+      src={probeURL}
+      tabIndex={-1}
+      aria-hidden="true"
+      className="pointer-events-none fixed h-0 w-0 border-0 opacity-0"
+      onLoad={() => requestProbe(true)}
+    />
+  );
+}
+
 export function TopNav({ alignToShellTop = false }: { alignToShellTop?: boolean }) {
   const location = useLocation();
   const navigate = useNavigate();
@@ -370,6 +533,99 @@ export function TopNav({ alignToShellTop = false }: { alignToShellTop?: boolean 
   const [session, setSession] = useState<StoredAuthSession | null | undefined>(() => getCachedAuthSession());
   const [theme, setTheme] = useState<ColorTheme>(() => getPreferredColorTheme());
   const [navCollapsed, setNavCollapsed] = useState(false);
+  const [rechargeURL, setRechargeURL] = useState("");
+  const [walletQuota, setWalletQuota] = useState("");
+  const [sub2APIOrigin, setSub2APIOrigin] = useState("");
+  const sessionIdentityKey = session ? `${session.provider || ""}:${session.subjectId}:${session.key}` : "";
+  const sessionIdentityRef = useRef(sessionIdentityKey);
+  const sessionRefreshInFlightRef = useRef<Promise<StoredAuthSession | null> | null>(null);
+  const lastSessionRefreshAtRef = useRef(0);
+  const walletRefreshInFlightRef = useRef<Promise<void> | null>(null);
+  const lastWalletRefreshAtRef = useRef(0);
+  const externalSessionResetRef = useRef(false);
+
+  const loadWallet = useCallback((force = false) => {
+    const requestIdentityKey = sessionIdentityKey;
+    if (!session || session.provider !== "sub2api") {
+      setWalletQuota("");
+      setRechargeURL("");
+      setSub2APIOrigin("");
+      return;
+    }
+
+    const now = Date.now();
+    if (!force && now - lastWalletRefreshAtRef.current < WALLET_REFRESH_INTERVAL_MS) {
+      return;
+    }
+    if (walletRefreshInFlightRef.current) {
+      return;
+    }
+
+    lastWalletRefreshAtRef.current = now;
+    const request = Promise.allSettled([fetchSub2APIWalletSummary(), fetchAuthProviders()])
+      .then(([walletResult, providersResult]) => {
+        if (sessionIdentityRef.current !== requestIdentityKey) {
+          return;
+        }
+        const wallet = walletResult.status === "fulfilled" ? walletResult.value : null;
+        const providers = providersResult.status === "fulfilled" ? providersResult.value : null;
+        const walletBalance = wallet?.available ?? wallet?.balance;
+        setWalletQuota(
+          walletBalance !== undefined && walletBalance !== null && walletBalance !== ""
+            ? formatWalletBalance(walletBalance)
+            : "",
+        );
+        const sub2api = providers?.sub2api;
+        const nextRechargeURL = String(wallet?.recharge_url || sub2api?.recharge_url || sub2api?.launch_url || "").trim();
+        setRechargeURL(nextRechargeURL);
+        setSub2APIOrigin(resolveSub2APIOrigin(nextRechargeURL, sub2api?.launch_url));
+      })
+      .catch(() => {
+        if (sessionIdentityRef.current === requestIdentityKey) {
+          setWalletQuota("");
+          setRechargeURL("");
+          setSub2APIOrigin("");
+        }
+      })
+      .finally(() => {
+        if (walletRefreshInFlightRef.current === request) {
+          walletRefreshInFlightRef.current = null;
+        }
+      });
+    walletRefreshInFlightRef.current = request;
+  }, [session, sessionIdentityKey]);
+
+  const refreshCurrentSession = useCallback((force = false) => {
+    if (pathname === "/login" || pathname.startsWith("/auth/")) {
+      return Promise.resolve(getCachedAuthSession() ?? null);
+    }
+
+    const now = Date.now();
+    if (!force && now - lastSessionRefreshAtRef.current < SESSION_REVALIDATE_INTERVAL_MS) {
+      return Promise.resolve(getCachedAuthSession() ?? null);
+    }
+    if (sessionRefreshInFlightRef.current) {
+      return sessionRefreshInFlightRef.current;
+    }
+
+    lastSessionRefreshAtRef.current = now;
+    const request = refreshVerifiedAuthSession()
+      .then((nextSession) => {
+        setSession(nextSession);
+        if (!nextSession) {
+          navigate("/login", { replace: true });
+        }
+        return nextSession;
+      })
+      .catch(() => getCachedAuthSession() ?? null)
+      .finally(() => {
+        if (sessionRefreshInFlightRef.current === request) {
+          sessionRefreshInFlightRef.current = null;
+        }
+      });
+    sessionRefreshInFlightRef.current = request;
+    return request;
+  }, [navigate, pathname]);
 
   useEffect(() => {
     let active = true;
@@ -405,6 +661,72 @@ export function TopNav({ alignToShellTop = false }: { alignToShellTop?: boolean 
       window.removeEventListener(AUTH_SESSION_CHANGE_EVENT, handleSessionChange);
     };
   }, []);
+
+  useEffect(() => {
+    sessionIdentityRef.current = sessionIdentityKey;
+    if (!session) {
+      setWalletQuota("");
+      setRechargeURL("");
+      setSub2APIOrigin("");
+      lastWalletRefreshAtRef.current = 0;
+    }
+    externalSessionResetRef.current = false;
+  }, [session, sessionIdentityKey]);
+
+  useEffect(() => {
+    if (session) {
+      loadWallet(true);
+    }
+  }, [loadWallet, session, sessionIdentityKey]);
+
+  useEffect(() => {
+    const refreshAfterReturn = () => {
+      if (document.visibilityState === "hidden") {
+        return;
+      }
+      void refreshCurrentSession();
+      loadWallet();
+    };
+    const refreshWallet = () => {
+      loadWallet(true);
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        refreshAfterReturn();
+      }
+    };
+
+    window.addEventListener("focus", refreshAfterReturn);
+    window.addEventListener("pageshow", refreshAfterReturn);
+    window.addEventListener(QUOTA_REFRESH_EVENT, refreshWallet);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      window.removeEventListener("focus", refreshAfterReturn);
+      window.removeEventListener("pageshow", refreshAfterReturn);
+      window.removeEventListener(QUOTA_REFRESH_EVENT, refreshWallet);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [loadWallet, refreshCurrentSession]);
+
+  const handleSub2APISessionConfirmed = useCallback(() => {
+    void refreshCurrentSession(true);
+    loadWallet(true);
+  }, [loadWallet, refreshCurrentSession]);
+
+  const handleSub2APISessionMismatch = useCallback(() => {
+    if (externalSessionResetRef.current) {
+      return;
+    }
+    externalSessionResetRef.current = true;
+    void logout()
+      .catch(() => {
+        // The local cookie might already be gone; clearing client state still matters.
+      })
+      .finally(() => clearVerifiedAuthSession())
+      .finally(() => {
+        navigate("/login", { replace: true });
+      });
+  }, [navigate]);
 
   const handleLogout = async () => {
     try {
@@ -444,7 +766,14 @@ export function TopNav({ alignToShellTop = false }: { alignToShellTop?: boolean 
   const availableQuota = session.role === "user" ? sessionQuotaLabel(session) : "--";
 
   return (
-    <header className={cn("sticky z-40 rounded-[24px] border border-border bg-card/90 shadow-[0_0_22.576px_rgba(44,74,116,0.09)] backdrop-blur dark:border-border dark:bg-card/92", alignToShellTop ? "top-0" : "top-2")}>
+    <>
+      <Sub2APISessionProbe
+        session={session}
+        sub2APIOrigin={sub2APIOrigin}
+        onConfirmed={handleSub2APISessionConfirmed}
+        onMismatch={handleSub2APISessionMismatch}
+      />
+      <header className={cn("sticky z-40 rounded-[24px] border border-border bg-card/90 shadow-[0_0_22.576px_rgba(44,74,116,0.09)] backdrop-blur dark:border-border dark:bg-card/92", alignToShellTop ? "top-0" : "top-2")}>
       <div className="flex min-h-14 flex-col gap-2 px-3 py-2 lg:flex-row lg:items-center lg:justify-between lg:gap-4 lg:px-4">
         <div className="flex min-w-0 items-center justify-between gap-2 lg:justify-start">
           <Button
@@ -480,8 +809,11 @@ export function TopNav({ alignToShellTop = false }: { alignToShellTop?: boolean 
               session={session}
               roleLabel={roleLabel}
               availableQuota={availableQuota}
+              walletQuota={walletQuota}
+              rechargeURL={rechargeURL}
               pathname={pathname}
               onLogout={handleLogout}
+              onRefreshWallet={loadWallet}
             />
           </div>
         </div>
@@ -508,11 +840,15 @@ export function TopNav({ alignToShellTop = false }: { alignToShellTop?: boolean 
             session={session}
             roleLabel={roleLabel}
             availableQuota={availableQuota}
+            walletQuota={walletQuota}
+            rechargeURL={rechargeURL}
             pathname={pathname}
             onLogout={handleLogout}
+            onRefreshWallet={loadWallet}
           />
         </div>
       </div>
-    </header>
+      </header>
+    </>
   );
 }
