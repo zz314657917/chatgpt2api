@@ -23,7 +23,7 @@ export function AppShell() {
           isViewportWorkspacePage ? "h-full min-h-0 max-w-none overflow-hidden" : "min-h-screen",
         )}
       >
-        <TopNav />
+        <TopNav alignToShellTop={isViewportWorkspacePage} />
         <div
           className={cn(
             "flex w-full min-w-0 flex-col",

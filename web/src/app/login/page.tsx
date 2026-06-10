@@ -27,7 +27,11 @@ const loginBackgroundClass =
   "bg-[#fff9fb] bg-[radial-gradient(rgba(20,86,240,0.12)_1px,transparent_1px),linear-gradient(145deg,#fff8fa_0%,#ffffff_48%,#f4f8ff_100%)] [background-position:0_0,center] [background-size:12px_12px,cover] dark:bg-[#090d16] dark:bg-[radial-gradient(rgba(96,165,250,0.16)_1px,transparent_1px),linear-gradient(145deg,#080b13_0%,#101827_52%,#070b12_100%)]";
 
 const defaultLeafNetworkBrandName = "落叶创艺";
-const defaultLeafNetworkLoginURL = "https://ai.3zapi.top/login";
+
+function enabledSub2APILaunchURL(providers?: AuthProviders | null) {
+  const launchURL = String(providers?.sub2api?.launch_url || "").trim();
+  return providers?.sub2api?.enabled && launchURL ? launchURL : "";
+}
 
 export default function LoginPage() {
   const appMeta = useAppMeta();
@@ -35,10 +39,10 @@ export default function LoginPage() {
   const authProviderRequestRef = useRef<Promise<AuthProviders> | null>(null);
   const [theme, setTheme] = useState<ColorTheme>(() => getPreferredColorTheme());
   const [leafNetworkBrandName, setLeafNetworkBrandName] = useState(defaultLeafNetworkBrandName);
-  const [leafNetworkLoginURL, setLeafNetworkLoginURL] = useState(defaultLeafNetworkLoginURL);
   const [authProviders, setAuthProviders] = useState<AuthProviders | null>(null);
   const [isRedirecting, setIsRedirecting] = useState(false);
   const { isCheckingAuth } = useRedirectIfAuthenticated();
+  const leafNetworkLoginURL = enabledSub2APILaunchURL(authProviders);
 
   const loadAuthProviders = useCallback(() => {
     if (!authProviderRequestRef.current) {
@@ -58,17 +62,13 @@ export default function LoginPage() {
         }
         setAuthProviders(providers);
         const sub2api = providers.sub2api;
-        const launchURL = String(sub2api?.launch_url || "").trim();
         const brandName = String(sub2api?.brand_name || "").trim();
         if (brandName) {
           setLeafNetworkBrandName(brandName);
         }
-        if (sub2api?.enabled && launchURL) {
-          setLeafNetworkLoginURL(launchURL);
-        }
       })
       .catch(() => {
-        // Keep the public fallback URL when provider discovery is unavailable.
+        // Keep the user on the current site when provider discovery is unavailable.
       });
     return () => {
       active = false;
@@ -83,19 +83,20 @@ export default function LoginPage() {
         providers = await loadAuthProviders();
         setAuthProviders(providers);
       } catch {
-        // Fall through to the configured fallback URL.
+        setIsRedirecting(false);
+        return;
       }
     }
-    const launchURL = String(providers?.sub2api?.launch_url || "").trim();
-    if (providers?.sub2api?.enabled && launchURL) {
-      window.location.href = launchURL;
+    const launchURL = enabledSub2APILaunchURL(providers);
+    if (!launchURL) {
+      setIsRedirecting(false);
       return;
     }
-    window.location.href = leafNetworkLoginURL;
-  }, [authProviders, leafNetworkLoginURL, loadAuthProviders]);
+    window.location.href = launchURL;
+  }, [authProviders, loadAuthProviders]);
 
   useEffect(() => {
-    if (isCheckingAuth || isRedirecting) {
+    if (isCheckingAuth || isRedirecting || !leafNetworkLoginURL) {
       return;
     }
     const timer = window.setTimeout(() => {
@@ -104,7 +105,7 @@ export default function LoginPage() {
     return () => {
       window.clearTimeout(timer);
     };
-  }, [handleLeafNetworkLogin, isCheckingAuth, isRedirecting]);
+  }, [handleLeafNetworkLogin, isCheckingAuth, isRedirecting, leafNetworkLoginURL]);
 
   const handleThemeToggle = () => {
     const nextTheme = theme === "dark" ? "light" : "dark";
@@ -198,6 +199,7 @@ export default function LoginPage() {
                 variant="outline"
                 className="relative h-12 w-full overflow-hidden rounded-[1.45rem] border-slate-300/85 bg-white/72 text-[#18181b] shadow-[0_12px_28px_rgba(148,163,184,0.18)] backdrop-blur-md transition-all duration-200 hover:-translate-y-0.5 hover:border-slate-300 hover:bg-white/90 hover:text-[#18181b] hover:shadow-[0_16px_34px_rgba(148,163,184,0.22)] focus-visible:ring-slate-300/55 disabled:border-slate-200/80 disabled:bg-white/58 disabled:text-slate-500 disabled:opacity-100 disabled:shadow-none disabled:hover:translate-y-0 dark:border-white/15 dark:bg-white/12 dark:text-white dark:shadow-[0_14px_30px_rgba(2,6,23,0.32)] dark:hover:border-white/22 dark:hover:bg-white/16 dark:hover:text-white dark:hover:shadow-[0_18px_36px_rgba(2,6,23,0.38)] dark:disabled:border-white/10 dark:disabled:bg-white/8 dark:disabled:text-white/45"
                 onClick={handleLeafNetworkLogin}
+                disabled={authProviders !== null && !leafNetworkLoginURL}
               >
                 <span className="pointer-events-none absolute inset-x-4 top-1 h-3 rounded-full bg-white/75 blur-sm dark:bg-white/14" />
                 <span className="pointer-events-none absolute inset-[1px] rounded-[1.35rem] border border-white/55 dark:border-white/10" />
