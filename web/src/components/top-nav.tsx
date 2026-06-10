@@ -468,7 +468,11 @@ function Sub2APISessionProbe({
       if (data.error) {
         return;
       }
-      if (data.authenticated === true && normalizeExternalUserID(data.user_id) === expectedUserID) {
+      if (data.authenticated !== true) {
+        // Cross-site iframe probes can lose cookies even while the local studio session is still valid.
+        return;
+      }
+      if (normalizeExternalUserID(data.user_id) === expectedUserID) {
         onConfirmed();
         return;
       }
