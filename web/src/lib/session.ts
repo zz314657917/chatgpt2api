@@ -43,6 +43,20 @@ export function getCachedAuthSession() {
   return cachedAuthSession;
 }
 
+async function storeVerifiedAuthSession(verifiedSession: StoredAuthSession | null) {
+  cachedAuthSession = verifiedSession;
+  if (verifiedSession?.key) {
+    await setStoredAuthSession(verifiedSession);
+    return;
+  }
+  clearAuthenticatedImageCache();
+  if (!verifiedSession) {
+    await clearStoredAuthSession();
+    return;
+  }
+  await clearStoredAuthSession();
+}
+
 export async function getVerifiedAuthSession(): Promise<StoredAuthSession | null> {
   if (cachedAuthSession !== undefined) {
     return cachedAuthSession;
@@ -53,15 +67,26 @@ export async function getVerifiedAuthSession(): Promise<StoredAuthSession | null
   try {
     const verifiedSession = await verifyAuthSessionPromise;
     if (verifyStartedAtVersion === authSessionVersion) {
-      cachedAuthSession = verifiedSession;
-      if (verifiedSession?.key) {
-        await setStoredAuthSession(verifiedSession);
-      } else {
-        clearAuthenticatedImageCache();
-        if (!verifiedSession) {
-          await clearStoredAuthSession();
-        }
-      }
+      await storeVerifiedAuthSession(verifiedSession);
+      return verifiedSession;
+    }
+    return cachedAuthSession ?? null;
+  } finally {
+    if (verifyStartedAtVersion === authSessionVersion) {
+      verifyAuthSessionPromise = null;
+    }
+  }
+}
+
+export async function refreshVerifiedAuthSession(): Promise<StoredAuthSession | null> {
+  const verifyStartedAtVersion = authSessionVersion + 1;
+  authSessionVersion = verifyStartedAtVersion;
+  verifyAuthSessionPromise = verifyStoredAuthSession();
+  try {
+    const verifiedSession = await verifyAuthSessionPromise;
+    if (verifyStartedAtVersion === authSessionVersion) {
+      await storeVerifiedAuthSession(verifiedSession);
+      emitAuthSessionChange();
       return verifiedSession;
     }
     return cachedAuthSession ?? null;

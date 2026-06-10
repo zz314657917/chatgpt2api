@@ -1228,6 +1228,7 @@ export type TeamAuditLog = {
 export type TeamUsageTask = {
   id: string;
   status: string;
+  error?: string;
   mode: string;
   model?: string;
   size?: string;

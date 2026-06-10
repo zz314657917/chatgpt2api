@@ -9,7 +9,7 @@ import {
   type AuthRole,
   type StoredAuthSession,
 } from "@/store/auth";
-import { getCachedAuthSession, getVerifiedAuthSession } from "@/lib/session";
+import { AUTH_SESSION_CHANGE_EVENT, getCachedAuthSession, getVerifiedAuthSession } from "@/lib/session";
 
 type UseAuthGuardResult = {
   isCheckingAuth: boolean;
@@ -24,10 +24,9 @@ export function useAuthGuard(allowedRoles?: AuthRole[], requiredPath?: string): 
 
   useEffect(() => {
     let active = true;
+    const roleList = allowedRolesKey ? (allowedRolesKey.split(",") as AuthRole[]) : [];
 
-    const load = async () => {
-      const roleList = allowedRolesKey ? (allowedRolesKey.split(",") as AuthRole[]) : [];
-      const storedSession = await getVerifiedAuthSession();
+    const applySession = (storedSession: StoredAuthSession | null) => {
       if (!active) {
         return;
       }
@@ -57,9 +56,18 @@ export function useAuthGuard(allowedRoles?: AuthRole[], requiredPath?: string): 
       setIsCheckingAuth(false);
     };
 
+    const load = async () => {
+      applySession(await getVerifiedAuthSession());
+    };
+    const handleSessionChange = () => {
+      applySession(getCachedAuthSession() ?? null);
+    };
+
     void load();
+    window.addEventListener(AUTH_SESSION_CHANGE_EVENT, handleSessionChange);
     return () => {
       active = false;
+      window.removeEventListener(AUTH_SESSION_CHANGE_EVENT, handleSessionChange);
     };
   }, [allowedRolesKey, navigate, requiredPath]);
 

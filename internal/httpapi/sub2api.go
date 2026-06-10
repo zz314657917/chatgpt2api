@@ -140,11 +140,16 @@ func (a *App) requireSub2APIIdentity(w http.ResponseWriter, r *http.Request) (se
 }
 
 func (a *App) sub2APIBindingForIdentity(identity service.Identity) (service.Sub2APIBinding, bool) {
+	binding, ok := a.sub2APISessionBindingForIdentity(identity)
+	return binding, ok && binding.HasAPIKey()
+}
+
+func (a *App) sub2APISessionBindingForIdentity(identity service.Identity) (service.Sub2APIBinding, bool) {
 	if a == nil || a.sub2Bindings == nil || identity.Provider != service.AuthProviderSub2API {
 		return service.Sub2APIBinding{}, false
 	}
 	binding, ok := a.sub2Bindings.Get(identityScope(identity))
-	return binding, ok && binding.HasAPIKey()
+	return binding, ok
 }
 
 func (a *App) sub2APIBindingForMode(ctx context.Context, identity service.Identity, mode string) (service.Sub2APIBinding, bool) {

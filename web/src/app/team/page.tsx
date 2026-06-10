@@ -612,7 +612,15 @@ function UsageTable({ items, loading }: { items: TeamUsageTask[]; loading: boole
               <TableCell className="max-w-[180px] truncate text-muted-foreground" title={item.model || undefined}>{item.model || "auto"}</TableCell>
               <TableCell className="text-muted-foreground">{formatBillingAmount(usageBillingAmount(item))}</TableCell>
               <TableCell className="whitespace-nowrap text-muted-foreground">{formatDurationSeconds(item.duration_seconds)}</TableCell>
-              <TableCell><Badge variant={item.status === "success" ? "success" : item.status === "error" ? "danger" : "secondary"} className="rounded-md">{statusLabel(item.status)}</Badge></TableCell>
+              <TableCell>
+                <Badge
+                  variant={item.status === "success" ? "success" : item.status === "error" ? "danger" : "secondary"}
+                  className="rounded-md"
+                  title={item.status === "error" && item.error ? item.error : undefined}
+                >
+                  {statusLabel(item.status)}
+                </Badge>
+              </TableCell>
               <TableCell className="text-right">
                 <div className="flex items-center justify-end gap-1">
                   <code className="max-w-[150px] truncate font-mono text-xs text-muted-foreground" title={item.id}>{item.id}</code>
