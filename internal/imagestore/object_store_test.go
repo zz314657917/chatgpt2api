@@ -2,11 +2,15 @@ package imagestore
 
 import (
 	"context"
+	"crypto/md5"
+	"encoding/hex"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestConfigObjectKeyAndPublicURLForCOS(t *testing.T) {
@@ -106,5 +110,92 @@ func TestStoreUploadGetAndDeleteUsesS3CompatibleRequests(t *testing.T) {
 	}
 	if !seenPut || !seenGet || !seenDelete {
 		t.Fatalf("seenPut=%v seenGet=%v seenDelete=%v", seenPut, seenGet, seenDelete)
+	}
+}
+
+func TestStorePresignGetDownloadURL(t *testing.T) {
+	store, err := New(context.Background(), Config{
+		Backend:         "cos",
+		Endpoint:        "https://cos.ap-guangzhou.myqcloud.com",
+		Region:          "ap-guangzhou",
+		Bucket:          "bucket",
+		AccessKeyID:     "ak",
+		SecretAccessKey: "sk",
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	u, err := store.PresignGetDownloadURL(context.Background(), "prefix/sample.png", 2*time.Minute, "sample.png")
+	if err != nil {
+		t.Fatalf("PresignGetDownloadURL() error = %v", err)
+	}
+	if !strings.HasPrefix(u, "https://bucket.cos.ap-guangzhou.myqcloud.com/prefix/sample.png?") {
+		t.Fatalf("presigned url = %q", u)
+	}
+	for _, token := range []string{"X-Amz-Signature=", "X-Amz-Expires=", "response-content-disposition="} {
+		if !strings.Contains(u, token) {
+			t.Fatalf("presigned url missing %s: %q", token, u)
+		}
+	}
+}
+
+func TestStorePresignGetDownloadURLUsesCDNTypeA(t *testing.T) {
+	store, err := New(context.Background(), Config{
+		Backend:         "cos",
+		Endpoint:        "https://cos.ap-guangzhou.myqcloud.com",
+		Region:          "ap-guangzhou",
+		Bucket:          "bucket",
+		AccessKeyID:     "ak",
+		SecretAccessKey: "sk",
+		PublicBaseURL:   "https://cdn.example.com/images",
+		CDNAuthKey:      "cdn-secret",
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	signed, err := store.PresignGetDownloadURL(context.Background(), "prefix/sample.png", 2*time.Minute, "sample.png")
+	if err != nil {
+		t.Fatalf("PresignGetDownloadURL() error = %v", err)
+	}
+	if strings.Contains(signed, "X-Amz-Signature=") {
+		t.Fatalf("CDN URL should not be S3-presigned: %q", signed)
+	}
+	parsed, err := url.Parse(signed)
+	if err != nil {
+		t.Fatalf("url.Parse() error = %v", err)
+	}
+	if parsed.Scheme != "https" || parsed.Host != "cdn.example.com" || parsed.EscapedPath() != "/images/prefix/sample.png" {
+		t.Fatalf("signed URL = %q", signed)
+	}
+	parts := strings.Split(parsed.Query().Get("sign"), "-")
+	if len(parts) != 4 {
+		t.Fatalf("sign = %q", parsed.Query().Get("sign"))
+	}
+	if parts[0] == "" || parts[1] == "" || parts[2] != "0" || parts[3] == "" {
+		t.Fatalf("sign parts = %#v", parts)
+	}
+	sum := md5.Sum([]byte(parsed.EscapedPath() + "-" + parts[0] + "-" + parts[1] + "-" + parts[2] + "-cdn-secret"))
+	if got, want := parts[3], hex.EncodeToString(sum[:]); got != want {
+		t.Fatalf("md5hash = %q, want %q", got, want)
+	}
+}
+
+func TestDownloadURLTTLFromEnvUsesCDNAuthTTL(t *testing.T) {
+	t.Setenv(EnvImageObjectStoragePublicBase, "")
+	t.Setenv(EnvImageObjectStorageCDNAuthKey, "")
+	t.Setenv(EnvImageObjectStorageCDNAuthTTL, "")
+
+	fallback := 5 * time.Minute
+	if got := DownloadURLTTLFromEnv(fallback); got != fallback {
+		t.Fatalf("DownloadURLTTLFromEnv() = %v, want %v", got, fallback)
+	}
+
+	t.Setenv(EnvImageObjectStoragePublicBase, "https://cdn.example.com")
+	t.Setenv(EnvImageObjectStorageCDNAuthKey, "cdn-secret")
+	t.Setenv(EnvImageObjectStorageCDNAuthTTL, "1800")
+	if got := DownloadURLTTLFromEnv(fallback); got != 30*time.Minute {
+		t.Fatalf("DownloadURLTTLFromEnv() = %v, want 30m", got)
 	}
 }

@@ -597,6 +597,12 @@ export type ManagedImageDetail = ManagedImageSummary & {
 
 export type ManagedImage = ManagedImageDetail;
 
+export type ManagedImageDownloadURL = {
+  download_url: string;
+  expires_at?: string;
+  direct?: boolean;
+};
+
 export type ManagedImageListScope = "mine" | "team" | "public" | "all";
 
 export type ManagedImageListFilters = {
@@ -2317,6 +2323,20 @@ export async function fetchManagedImageDetail(
     { signal: options.signal },
   );
   return data.item;
+}
+
+export async function fetchManagedImageDownloadURL(
+  path: string,
+  filters: { scope?: ManagedImageListScope; team_id?: string } = {},
+  options: { signal?: AbortSignal } = {},
+) {
+  const params = new URLSearchParams({ path });
+  if (filters.scope) params.set("scope", filters.scope);
+  if (filters.team_id) params.set("team_id", filters.team_id);
+  return httpRequest<ManagedImageDownloadURL>(
+    `/api/images/download-url?${params.toString()}`,
+    { signal: options.signal },
+  );
 }
 
 export async function uploadManagedImages(

@@ -7,7 +7,7 @@ import { AuthenticatedImage } from "@/components/authenticated-image";
 import { Button } from "@/components/ui/button";
 import { IMAGE_RESULT_DRAG_MIME, type ImageResultDragPayload } from "@/app/image/image-result-drag";
 import type { ImagePromptPreset } from "@/app/image/image-presets";
-import { fetchManagedImageDetail, IMAGE_MODEL_ROUTE_DETAILS } from "@/lib/api";
+import { fetchManagedImageDetail, fetchManagedImageDownloadURL, IMAGE_MODEL_ROUTE_DETAILS } from "@/lib/api";
 import type { ImageVisibility } from "@/lib/api";
 import {
   fetchAuthenticatedImageBlob,
@@ -42,6 +42,7 @@ type DownloadableImage = {
   id: string;
   selectionKey: string;
   src: string;
+  path?: string;
   fileName: string;
   imageIndex: number;
 };
@@ -269,11 +270,28 @@ async function downloadImage(image: DownloadableImage) {
   let href = image.src;
   let objectUrl = "";
 
-  if (!image.src.startsWith("data:")) {
+  if (image.path) {
+    const directDownload = await fetchManagedImageDownloadURL(image.path).catch(() => null);
+    if (directDownload?.direct && directDownload.download_url) {
+      const link = document.createElement("a");
+      link.href = directDownload.download_url;
+      link.download = image.fileName;
+      link.rel = "noopener noreferrer";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      return;
+    }
+    if (directDownload?.download_url) {
+      href = directDownload.download_url;
+    }
+  }
+
+  if (!href.startsWith("data:")) {
     try {
-      const blob = shouldUseAuthenticatedImageFallback(image.src)
-        ? await fetchAuthenticatedImageBlob(image.src)
-        : await fetch(image.src).then((response) => (response.ok ? response.blob() : null));
+      const blob = shouldUseAuthenticatedImageFallback(href)
+        ? await fetchAuthenticatedImageBlob(href)
+        : await fetch(href).then((response) => (response.ok ? response.blob() : null));
       if (blob) {
         objectUrl = URL.createObjectURL(blob);
         href = objectUrl;
@@ -518,6 +536,7 @@ export function ImageResults({
                   id: image.id,
                   selectionKey: imageSelectionKey(selectedConversation.id, turn.id, image.id),
                   src,
+                  path: imagePathForMetadata(image),
                   fileName: buildDownloadName(turn.createdAt, turn.id, index, image.outputFormat || turn.outputFormat, src),
                   imageIndex: index,
                 },

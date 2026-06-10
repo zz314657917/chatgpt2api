@@ -1,6 +1,6 @@
 # Current Task
 
-最后更新：2026-06-10 13:50 +08:00
+最后更新：2026-06-10 18:21 +08:00
 
 ## 背景
 
@@ -32,11 +32,16 @@ Sub2API 对应桥接提交为 `fe2f80be1 feat: add studio bridge integration`。
 - 2026-06-10 Sub2API 探针安全修复：新增 `/studio-bridge/session-probe` 页面和用户接口，只返回当前 Sub2 用户 ID；后端校验 `parent_origin` 必须命中落叶配置的 `launch_return_url` 同源或 `allowed_return_domains`，并且只对该探针路径动态放开 CSP `frame-ancestors`，其它页面仍保持禁止嵌入。
 - 2026-06-10 会话响应修复：落叶 `/auth/session` 对 Sub2 用户会带回保存的 `sub2api` binding，至少包含 `sub2api_user_id`，前端也能从 `subject_id=sub2api:<id>` fallback 推出探针目标，避免刷新后探针组件不渲染。
 - 2026-06-10 浏览器验收确认：Sub2 登录后 launch 到落叶 `/image`，探针 iframe 存在且源为 `http://127.0.0.1:62080/studio-bridge/session-probe`；清空 Sub2 登录态后访问落叶会自动跳 `/login`，随后 `/auth/session` 返回 401，再访问 `/image` 仍停在 `/login`，不会继续读旧账号。
+- 2026-06-10 对象存储安全收口：图片展示和生成结果统一返回站内 `/images/...`，不再向前端暴露对象存储 `object_key/object_url/storage_backend`；用户下载图片时通过 `/api/images/download-url` 鉴权后获取短期 presigned `GetObject` URL，适配私有读写 bucket，下载流量可直连国内对象存储/CDN。
+- 2026-06-10 腾讯云 CDN URL 鉴权补齐：当配置 `CHATGPT2API_IMAGE_OBJECT_STORAGE_PUBLIC_BASE_URL` 和 `CHATGPT2API_IMAGE_OBJECT_STORAGE_CDN_AUTH_KEY` 时，图片下载链接改为腾讯云 CDN TypeA `sign=timestamp-rand-uid-md5hash` 临时 URL；`expires_at` 跟 `CHATGPT2API_IMAGE_OBJECT_STORAGE_CDN_AUTH_TTL_SECONDS` 对齐，默认 1800 秒。
 
 ## 下一步
 
-- 上线前先整理生产部署清单，确认两个站点域名、回跳 URL、充值 URL、内部密钥、默认分组和对象存储地域。
+- 上线前先整理生产部署清单，确认两个站点域名、回跳 URL、充值 URL、内部密钥、默认分组、对象存储地域和 bucket 私有读写策略。
+- 对象存储生产配置建议改为私有读写：`CHATGPT2API_IMAGE_OBJECT_STORAGE_ACL=private` 或留空使用 bucket 默认私有；如配置 `CHATGPT2API_IMAGE_OBJECT_STORAGE_PUBLIC_BASE_URL`，必须同步配置 CDN TypeA 鉴权密钥和 TTL。
 - 使用真实账号做浏览器 E2E：注册、登录回跳、充值、创作成功/失败扣费、使用记录、团队创建/加入/团队扣费。
+- 使用真实账号下载个人、团队、公共图片各一次，验证 `/api/images/download-url` 返回短期签名 URL，浏览器下载流量直连对象存储域名，不走后端转发大文件。
+- CDN 生产验收需确认：下载 URL 为 CDN 域名且带 `sign`；去掉 `sign` 或等待过期后返回 403；直接访问 COS 原始对象地址失败；CDN 已具备回源私有 COS 的授权或等效配置。
 - 如继续核对团队使用记录，优先用真实团队账号提交一条对话和一条生图，验证团队表价格分别显示类似 `¥0.001` / `¥0.051`，Sub2API 使用记录同步存在对应 commit 记录。
 - 如继续开发，优先补生产联调脚本和 Playwright 最小闭环，而不是继续扩展新功能。
 - 如继续会话/余额同步，优先做真实浏览器人工切号测试：Sub2 账号 A -> 落叶 -> Sub2 切账号 B -> 回落叶，应跳 `/login` 后重新 launch，不能静默继续用账号 A。
@@ -92,3 +97,15 @@ Sub2API 对应桥接提交为 `fe2f80be1 feat: add studio bridge integration`。
   - `cd F:/mcplugins/sub2api/backend && go test ./...` 通过。
   - `git diff --check` 两仓库均通过，仅 chatgpt2api 有 LF/CRLF 工作区提示。
   - 本地容器已用新 Linux 二进制注入并重启，`chatgpt2api:local-patched` commit 镜像 ID `sha256:5f2592f1d664...`，`sub2api:local` commit 镜像 ID `sha256:0bbba03435a4...`。
+- 2026-06-10 17:17 对象存储私有读写收口验证：
+  - `cd F:/java/chatgpt2api && go test ./internal/imagestore ./internal/service ./internal/protocol ./internal/httpapi` 通过。
+  - `cd F:/java/chatgpt2api && go test ./...` 通过。
+  - `cd F:/java/chatgpt2api/web && npm.cmd run lint` 通过。
+  - `cd F:/java/chatgpt2api/web && npm.cmd run build` 通过。
+  - `cd F:/java/chatgpt2api && git diff --check` 通过，仅 Windows LF/CRLF 工作区提示。
+- 2026-06-10 18:21 CDN TypeA 鉴权下载补齐验证：
+  - `cd F:/java/chatgpt2api && go test ./internal/imagestore ./internal/service ./internal/httpapi` 通过。
+  - `cd F:/java/chatgpt2api && go test ./...` 通过。
+  - `cd F:/java/chatgpt2api/web && npm.cmd run lint` 通过。
+  - `cd F:/java/chatgpt2api/web && npm.cmd run build` 通过。
+  - `cd F:/java/chatgpt2api && git diff --check` 通过，仅 Windows LF/CRLF 工作区提示。

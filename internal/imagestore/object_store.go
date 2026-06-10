@@ -3,6 +3,9 @@ package imagestore
 import (
 	"bytes"
 	"context"
+	"crypto/md5"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -11,6 +14,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -33,8 +37,13 @@ const (
 	EnvImageObjectStorageForcePath    = "CHATGPT2API_IMAGE_OBJECT_STORAGE_FORCE_PATH_STYLE"
 	EnvImageObjectStoragePublicBase   = "CHATGPT2API_IMAGE_OBJECT_STORAGE_PUBLIC_BASE_URL"
 	EnvImageObjectStorageACL          = "CHATGPT2API_IMAGE_OBJECT_STORAGE_ACL"
+	EnvImageObjectStorageCDNAuthKey   = "CHATGPT2API_IMAGE_OBJECT_STORAGE_CDN_AUTH_KEY"
+	EnvImageObjectStorageCDNAuthParam = "CHATGPT2API_IMAGE_OBJECT_STORAGE_CDN_AUTH_PARAM"
+	EnvImageObjectStorageCDNAuthTTL   = "CHATGPT2API_IMAGE_OBJECT_STORAGE_CDN_AUTH_TTL_SECONDS"
 	defaultImageObjectStorageRegion   = "auto"
 	defaultImageObjectStorageEndpoint = ""
+	defaultCDNAuthParam               = "sign"
+	defaultCDNAuthTTL                 = 30 * time.Minute
 )
 
 var cosRegionPattern = regexp.MustCompile(`(?:^|\.)cos\.([a-z0-9-]+)\.myqcloud\.com$`)
@@ -50,6 +59,9 @@ type Config struct {
 	ForcePathStyle  bool
 	PublicBaseURL   string
 	ACL             string
+	CDNAuthKey      string
+	CDNAuthParam    string
+	CDNAuthTTL      time.Duration
 }
 
 type Store struct {
@@ -80,6 +92,9 @@ func LoadConfigFromEnv() Config {
 		ForcePathStyle:  envBool(EnvImageObjectStorageForcePath),
 		PublicBaseURL:   strings.TrimSpace(os.Getenv(EnvImageObjectStoragePublicBase)),
 		ACL:             strings.TrimSpace(os.Getenv(EnvImageObjectStorageACL)),
+		CDNAuthKey:      strings.TrimSpace(os.Getenv(EnvImageObjectStorageCDNAuthKey)),
+		CDNAuthParam:    strings.TrimSpace(os.Getenv(EnvImageObjectStorageCDNAuthParam)),
+		CDNAuthTTL:      envDurationSeconds(EnvImageObjectStorageCDNAuthTTL),
 	}
 }
 
@@ -121,6 +136,37 @@ func GetBytesFromEnv(ctx context.Context, key string) (ObjectData, bool, error) 
 	}
 	data, err := store.GetBytes(ctx, key)
 	return data, true, err
+}
+
+func PresignGetURLFromEnv(ctx context.Context, key string, expires time.Duration) (string, bool, error) {
+	return PresignGetDownloadURLFromEnv(ctx, key, expires, "")
+}
+
+func PresignGetDownloadURLFromEnv(ctx context.Context, key string, expires time.Duration, filename string) (string, bool, error) {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return "", false, nil
+	}
+	store, enabled, err := NewFromEnv(ctx)
+	if !enabled {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", true, err
+	}
+	u, err := store.PresignGetDownloadURL(ctx, key, expires, filename)
+	return u, true, err
+}
+
+func DownloadURLTTLFromEnv(fallback time.Duration) time.Duration {
+	cfg := LoadConfigFromEnv().normalized()
+	if strings.TrimSpace(cfg.PublicBaseURL) == "" || strings.TrimSpace(cfg.CDNAuthKey) == "" {
+		return fallback
+	}
+	if cfg.CDNAuthTTL > 0 {
+		return cfg.CDNAuthTTL
+	}
+	return fallback
 }
 
 func New(ctx context.Context, cfg Config) (*Store, error) {
@@ -291,6 +337,92 @@ func (s *Store) GetBytes(ctx context.Context, key string) (ObjectData, error) {
 	return ObjectData{Data: data, ContentType: contentType}, nil
 }
 
+func (s *Store) PresignGetURL(ctx context.Context, key string, expires time.Duration) (string, error) {
+	return s.PresignGetDownloadURL(ctx, key, expires, "")
+}
+
+func (s *Store) PresignGetDownloadURL(ctx context.Context, key string, expires time.Duration, filename string) (string, error) {
+	if s == nil || s.client == nil {
+		return "", errors.New("image object storage is not initialized")
+	}
+	key = strings.TrimLeft(filepath.ToSlash(strings.TrimSpace(key)), "/")
+	if key == "" {
+		return "", errors.New("image object key is empty")
+	}
+	if strings.TrimSpace(s.cfg.PublicBaseURL) != "" && strings.TrimSpace(s.cfg.CDNAuthKey) != "" {
+		signedURL, err := signTencentCDNTypeAURL(s.cfg.PublicURL(key), s.cfg.CDNAuthKey, s.cfg.CDNAuthParam)
+		if err != nil {
+			return "", fmt.Errorf("sign CDN image object: %w", err)
+		}
+		return signedURL, nil
+	}
+	if expires <= 0 {
+		expires = 5 * time.Minute
+	}
+	input := &s3.GetObjectInput{
+		Bucket: aws.String(s.cfg.Bucket),
+		Key:    aws.String(key),
+	}
+	if disposition := downloadContentDisposition(filename); disposition != "" {
+		input.ResponseContentDisposition = aws.String(disposition)
+	}
+	presigner := s3.NewPresignClient(s.client)
+	output, err := presigner.PresignGetObject(ctx, input, s3.WithPresignExpires(expires))
+	if err != nil {
+		return "", fmt.Errorf("presign image object: %w", err)
+	}
+	return output.URL, nil
+}
+
+func signTencentCDNTypeAURL(rawURL, secretKey, paramName string) (string, error) {
+	secretKey = strings.TrimSpace(secretKey)
+	if secretKey == "" {
+		return "", errors.New("CDN auth key is empty")
+	}
+	paramName = strings.TrimSpace(paramName)
+	if paramName == "" {
+		paramName = defaultCDNAuthParam
+	}
+	u, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return "", err
+	}
+	uri := u.EscapedPath()
+	if uri == "" {
+		uri = "/"
+	}
+	timestamp := strconv.FormatInt(time.Now().Unix(), 10)
+	nonce, err := cdnAuthNonce()
+	if err != nil {
+		return "", err
+	}
+	uid := "0"
+	sum := md5.Sum([]byte(uri + "-" + timestamp + "-" + nonce + "-" + uid + "-" + secretKey))
+	sign := timestamp + "-" + nonce + "-" + uid + "-" + hex.EncodeToString(sum[:])
+	query := u.Query()
+	query.Set(paramName, sign)
+	u.RawQuery = query.Encode()
+	return u.String(), nil
+}
+
+func cdnAuthNonce() (string, error) {
+	var buf [8]byte
+	if _, err := rand.Read(buf[:]); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(buf[:]), nil
+}
+
+func downloadContentDisposition(filename string) string {
+	filename = strings.TrimSpace(filepath.Base(filepath.ToSlash(filename)))
+	if filename == "" || filename == "." || filename == "/" {
+		return ""
+	}
+	quoted := strings.ReplaceAll(filename, `\`, `\\`)
+	quoted = strings.ReplaceAll(quoted, `"`, `\"`)
+	return `attachment; filename="` + quoted + `"; filename*=UTF-8''` + url.PathEscape(filename)
+}
+
 func (c Config) normalized() Config {
 	c.Backend = normalizeBackend(c.Backend)
 	if c.Backend == "" {
@@ -307,6 +439,15 @@ func (c Config) normalized() Config {
 	}
 	c.Prefix = cleanObjectPrefix(c.Prefix)
 	c.ACL = normalizeACL(c.ACL)
+	c.PublicBaseURL = strings.TrimSpace(c.PublicBaseURL)
+	c.CDNAuthKey = strings.TrimSpace(c.CDNAuthKey)
+	c.CDNAuthParam = strings.TrimSpace(c.CDNAuthParam)
+	if c.CDNAuthParam == "" {
+		c.CDNAuthParam = defaultCDNAuthParam
+	}
+	if c.CDNAuthKey != "" && c.CDNAuthTTL <= 0 {
+		c.CDNAuthTTL = defaultCDNAuthTTL
+	}
 	return c
 }
 
@@ -357,6 +498,18 @@ func envBool(name string) bool {
 	default:
 		return false
 	}
+}
+
+func envDurationSeconds(name string) time.Duration {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return 0
+	}
+	seconds, err := strconv.Atoi(value)
+	if err != nil || seconds <= 0 {
+		return 0
+	}
+	return time.Duration(seconds) * time.Second
 }
 
 func deriveRegionFromEndpoint(endpoint string) string {

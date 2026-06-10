@@ -93,6 +93,7 @@ func (a *App) routes() []appRoute {
 		exact(http.MethodPatch, "/api/images/library-scope", a.handleImageLibraryScope),
 		exact("", "/api/images/tags", a.handleImageTags),
 		exact(http.MethodPost, "/api/images/uploads", a.handleImageUploads),
+		exact(http.MethodGet, "/api/images/download-url", a.handleImageDownloadURL),
 		exact(http.MethodGet, "/api/images/detail", a.handleImageDetail),
 		exact("", "/api/images", a.handleImages),
 		exact("", "/api/images/storage-governance", a.handleImageStorageGovernance),

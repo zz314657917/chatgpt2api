@@ -25,10 +25,11 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   deleteManagedImages,
-  fetchTeamWorkspace,
-  fetchManagedImageTags,
+  fetchManagedImageDownloadURL,
   fetchManagedImageDetail,
   fetchManagedImages,
+  fetchManagedImageTags,
+  fetchTeamWorkspace,
   moveManagedImagesToTeamLibrary,
   updateManagedImageTags,
   updateManagedImageVisibility,
@@ -99,10 +100,29 @@ function imageDownloadErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : "下载图片失败";
 }
 
-async function downloadManagedImage(item: ManagedImageDetail, index: number) {
+async function downloadManagedImage(
+  item: ManagedImageDetail,
+  index: number,
+  scope: { scope?: ImageGalleryView; team_id?: string } = {},
+) {
   let objectUrl = "";
-  const downloadUrl = item.url || (item.path ? getManagedImageUrlFromPath(item.path) : "");
+  const directDownload = item.path
+    ? await fetchManagedImageDownloadURL(item.path, scope).catch(() => null)
+    : null;
+  const directDownloadUrl = directDownload?.download_url || "";
+  const downloadUrl = directDownloadUrl || item.url || (item.path ? getManagedImageUrlFromPath(item.path) : "");
   const fallbackUrl = item.path ? getManagedImageUrlFromPath(item.path) : "";
+
+  if (directDownload?.direct && directDownloadUrl) {
+    const link = document.createElement("a");
+    link.href = directDownloadUrl;
+    link.download = buildManagedImageDownloadName(item, index);
+    link.rel = "noopener noreferrer";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    return;
+  }
 
   try {
     const fetchBlob = (url: string) => shouldUseAuthenticatedImageFallback(url)
@@ -513,12 +533,17 @@ function ImageManagerContent({
       return null;
     }
     const detail = await loadManagedImageDetail(item);
+    const directDownload = await fetchManagedImageDownloadURL(item.path, {
+      scope: galleryView,
+      team_id: galleryView === "team" ? activeTeam?.id || "" : "",
+    }).catch(() => null);
     return {
-      src: detail.url,
+      src: directDownload?.download_url || detail.url,
       fileName: detail.name,
       outputFormat: detail.output_format,
+      direct: directDownload?.direct === true,
     };
-  }, [items, loadManagedImageDetail]);
+  }, [activeTeam?.id, galleryView, items, loadManagedImageDetail]);
   const selectedItems = useMemo(
     () => items.filter((item) => selectedImageIds[managedImageKey(item)]),
     [items, selectedImageIds],
@@ -912,7 +937,10 @@ function ImageManagerContent({
       for (let index = 0; index < downloadItems.length; index += 1) {
         const item = downloadItems[index];
         const detail = await loadManagedImageDetail(item);
-        await downloadManagedImage(detail, items.indexOf(item));
+        await downloadManagedImage(detail, items.indexOf(item), {
+          scope: galleryView,
+          team_id: galleryView === "team" ? activeTeam?.id || "" : "",
+        });
         if (index < downloadItems.length - 1) {
           await sleep(120);
         }

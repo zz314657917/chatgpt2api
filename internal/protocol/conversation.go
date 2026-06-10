@@ -1264,9 +1264,6 @@ func (e *Engine) SaveImageBytesForOwnerWithFormatResult(imageData []byte, baseUR
 	width, height := imageBytesDimensions(imageData)
 	stored := e.uploadImageObject(rel, imageData, outputFormat)
 	e.writeImageOwnerMetadata(rel, ownerID, ownerName, stored)
-	if stored.URL != "" {
-		return savedImageResult{URL: stored.URL, LocalURL: localURL, Width: width, Height: height}
-	}
 	return savedImageResult{URL: localURL, LocalURL: localURL, Width: width, Height: height}
 }
 
