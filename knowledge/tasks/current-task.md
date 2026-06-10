@@ -1,6 +1,6 @@
 # Current Task
 
-最后更新：2026-06-10 02:38 +08:00
+最后更新：2026-06-10 05:00 +08:00
 
 ## 背景
 
@@ -26,11 +26,14 @@ Sub2API 对应桥接提交为 `fe2f80be1 feat: add studio bridge integration`。
 - `.codex-runtime/` 是本地重包目录，已加入 ignore，不应进入提交。
 - 2026-06-10 本地验收确认：Sub2API launch/redeem 能进入落叶创艺 `/image`，页面和账号菜单不暴露 API Key、Token、OpenAI-compatible、API 选择、限制 API 或 `sub2api:` 内部标识；团队页可创建团队并切换到 team scope。
 - 2026-06-10 本地扣费验收确认：Sub2API Studio Bridge `reserve / commit / refund` 使用 `(app_id, charge_key)` 幂等；重复 reserve/commit/refund 不重复扣退；commit 后 refund 被拒绝；同 charge_key 改金额被拒绝；余额不足返回明确错误；普通用户直打协议 API 被独立模式 403 拦截。
+- 2026-06-10 对话价格显示 `¥0.00` 的原因已确认：Sub2API 扣费记录正常写入 `0.001` 元，落叶创艺团队页按两位小数展示 `cny_milli` 导致 `1 -> ¥0.00`；已改为千分元最多 3 位小数展示，并让运行中任务可展示 `billing_charged_amount` 预扣金额。
+- 2026-06-10 独立站体验收口：团队成员可主动退出团队，团队使用记录可显示运行中预扣金额，创作台图片库支持个人/团队/公共分组，图片库页面布局改为稳定高度容器以减少加载/空状态跳动。
 
 ## 下一步
 
 - 上线前先整理生产部署清单，确认两个站点域名、回跳 URL、充值 URL、内部密钥、默认分组和对象存储地域。
 - 使用真实账号做浏览器 E2E：注册、登录回跳、充值、创作成功/失败扣费、使用记录、团队创建/加入/团队扣费。
+- 如继续核对团队使用记录，优先用真实团队账号提交一条对话和一条生图，验证团队表价格分别显示类似 `¥0.001` / `¥0.051`，Sub2API 使用记录同步存在对应 commit 记录。
 - 如继续开发，优先补生产联调脚本和 Playwright 最小闭环，而不是继续扩展新功能。
 - 生产环境仍需人工确认真实支付回调、真实上游创作扣费、网络超时/DB 故障注入和迁移演练；本地验收不触碰真钱支付，也不消耗真实上游模型。
 
@@ -59,3 +62,16 @@ Sub2API 对应桥接提交为 `fe2f80be1 feat: add studio bridge integration`。
   - `cd F:/mcplugins/sub2api/frontend && npm.cmd run build` 通过，仅有既有 Vite chunk、Browserslist 和 Node deprecation 警告。
   - `git diff --check` 两仓库均无 whitespace 错误，仅 LF/CRLF 工作区提示。
   - 浏览器截图证据：`output/playwright/luoye-image-after-launch.png`、`output/playwright/luoye-account-menu.png`、`output/playwright/luoye-team-page.png`、`output/playwright/luoye-profile-page.png`。
+- 2026-06-10 04:40 对话价格展示修复验证：
+  - `cd F:/java/chatgpt2api && go test ./internal/service -run TestImageTaskServicePublicTaskIncludesPendingBillingCharge -count=1` 通过。
+  - `cd F:/java/chatgpt2api/web && npm.cmd run lint` 通过。
+  - `cd F:/java/chatgpt2api/web && npm.cmd run build` 通过。
+  - `cd F:/java/chatgpt2api && go test ./...` 通过。
+  - 本地 `chatgpt2api:local-patched` 已重建并替换 `127.0.0.1:8081` 容器，`/health` 返回 `{"status":"ok","version":"0.0.0-dev"}`。
+- 2026-06-10 05:00 独立站体验收口验证：
+  - `cd F:/java/chatgpt2api && go test ./internal/httpapi -run TestTeamMembersCanLeaveButOwnerCannot -count=1` 通过。
+  - `cd F:/java/chatgpt2api && go test ./internal/service -run TestImageTaskServicePublicTaskIncludesPendingBillingCharge -count=1` 通过。
+  - `cd F:/java/chatgpt2api/web && npm.cmd run lint` 通过。
+  - `cd F:/java/chatgpt2api/web && npm.cmd run build` 通过。
+  - `cd F:/java/chatgpt2api && go test ./...` 通过。
+  - `cd F:/java/chatgpt2api && git diff --check` 无 whitespace 错误，仅 LF/CRLF 工作区提示。

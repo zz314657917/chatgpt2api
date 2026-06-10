@@ -6,7 +6,7 @@ pending_action: production-deployment-verification
 project_type: web
 qa_mode: browser
 approval_required: false
-last_verified: 2026-06-09
+last_verified: 2026-06-10
 ---
 
 # Workflow Status
@@ -34,7 +34,7 @@ last_verified: 2026-06-09
   - 登录回跳后进入创作台。
   - 右上角余额和充值入口可见。
   - 普通用户 UI 不出现 API Key、Token、OpenAI-compatible、API 选择。
-  - 团队创建、定向邀请、切换和团队任务记录可用。
+  - 团队空间入口与创建/加入/切换控件可见；团队 backend mutations 和团队任务记录闭环未纳入本轮浏览器 smoke，需在真实账号 E2E 中补验。
 - 已完成开发 worker：
   - `task-001-sub2-studio-bridge`
   - `task-002-luoye-backend`
@@ -56,6 +56,8 @@ last_verified: 2026-06-09
   - 主控修复独立模式 Web 首屏守卫：匿名访问 `/image`、`/canvas`、`/social`、`/image-manager`、`/profile` 会先进入 `/login`，再由登录页跳 Sub2API。
   - 主控修复 Sub2API 钱包 `cny_milli` 单位透传和前端余额格式化，余额显示为 `¥123.45`。
   - 最终本地 mock bridge 浏览器 smoke 通过，证据位于 `docs/workflow/evidence/task-004-qa-browser/browser-smoke-result.json`。
+  - QA contract 要求的报告已补到 `docs/workflow/qa-reports/task-004-qa-browser-qa.md`；该报告明确记录团队 backend mutations 未提交。
 - 未验证项：
   - 真实 Sub2API 生产登录/注册、真实充值支付、真实扣费链路需要部署域名、密钥和支付配置后验证。
+  - 团队创建/加入/切换 backend mutations 与团队任务记录闭环需要真实账号 E2E 补验。
   - Sub2API 扣费幂等当前是 Redis-backed 状态，不是生产级 SQL ledger；悬挂预扣恢复建议后续单独开 contract。
