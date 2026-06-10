@@ -363,7 +363,7 @@ function AccountMenu({
   );
 }
 
-export function TopNav() {
+export function TopNav({ alignToShellTop = false }: { alignToShellTop?: boolean }) {
   const location = useLocation();
   const navigate = useNavigate();
   const pathname = location.pathname.replace(/\/+$/, "") || "/";
@@ -444,7 +444,7 @@ export function TopNav() {
   const availableQuota = session.role === "user" ? sessionQuotaLabel(session) : "--";
 
   return (
-    <header className="sticky top-2 z-40 rounded-[24px] border border-border bg-card/90 shadow-[0_0_22.576px_rgba(44,74,116,0.09)] backdrop-blur dark:border-border dark:bg-card/92">
+    <header className={cn("sticky z-40 rounded-[24px] border border-border bg-card/90 shadow-[0_0_22.576px_rgba(44,74,116,0.09)] backdrop-blur dark:border-border dark:bg-card/92", alignToShellTop ? "top-0" : "top-2")}>
       <div className="flex min-h-14 flex-col gap-2 px-3 py-2 lg:flex-row lg:items-center lg:justify-between lg:gap-4 lg:px-4">
         <div className="flex min-w-0 items-center justify-between gap-2 lg:justify-start">
           <Button
