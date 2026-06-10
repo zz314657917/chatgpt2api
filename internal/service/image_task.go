@@ -1534,6 +1534,8 @@ func publicTask(task map[string]any) map[string]any {
 	}
 	if consumed := util.ToInt(task["billing_consumed_amount"], -1); consumed >= 0 {
 		item["billing_consumed_amount"] = consumed
+	} else if charged := util.ToInt(task[imageTaskBillingChargedAmountKey], 0); charged > 0 {
+		item[imageTaskBillingChargedAmountKey] = charged
 	}
 	copyStoredTaskContextFields(item, task)
 	if unitAmount := util.ToInt(task[imageTaskBillingUnitAmountKey], 0); unitAmount > 0 {

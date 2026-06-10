@@ -132,6 +132,38 @@ func TestImageTaskServicePublicTaskIncludesDurationSeconds(t *testing.T) {
 	}
 }
 
+func TestImageTaskServicePublicTaskIncludesPendingBillingCharge(t *testing.T) {
+	item := publicTask(map[string]any{
+		"id":                             "task-1",
+		"status":                         TaskStatusRunning,
+		"mode":                           "chat",
+		"model":                          "gpt-5.1",
+		imageTaskBillingChargedAmountKey: 1,
+		imageTaskBillingUnitAmountKey:    1,
+	})
+	if got := util.ToInt(item[imageTaskBillingChargedAmountKey], -1); got != 1 {
+		t.Fatalf("billing_charged_amount = %d, want 1 in %#v", got, item)
+	}
+	if got := util.ToInt(item["billing_consumed_amount"], -1); got != -1 {
+		t.Fatalf("billing_consumed_amount = %d, want absent in %#v", got, item)
+	}
+
+	settled := publicTask(map[string]any{
+		"id":                             "task-2",
+		"status":                         TaskStatusSuccess,
+		"mode":                           "chat",
+		"model":                          "gpt-5.1",
+		imageTaskBillingChargedAmountKey: 1,
+		"billing_consumed_amount":        1,
+	})
+	if got := util.ToInt(settled["billing_consumed_amount"], -1); got != 1 {
+		t.Fatalf("settled billing_consumed_amount = %d, want 1 in %#v", got, settled)
+	}
+	if _, ok := settled[imageTaskBillingChargedAmountKey]; ok {
+		t.Fatalf("settled task should not expose pending charge: %#v", settled)
+	}
+}
+
 func TestImageTaskServiceRejectsBlankPromptBeforeQueueing(t *testing.T) {
 	svc := newTestImageTaskService(t, failingImageTaskHandler, failingImageTaskHandler, failingImageTaskHandler, func() int { return 30 })
 	identity := Identity{ID: "alice", Name: "Alice", Role: "user"}

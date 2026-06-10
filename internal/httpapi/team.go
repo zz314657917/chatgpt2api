@@ -75,6 +75,19 @@ func (a *App) handleTeams(w http.ResponseWriter, r *http.Request) {
 		util.WriteJSON(w, http.StatusOK, map[string]any{"invite": invite, "teams": a.teamWorkspaceTeams(identity)})
 		return
 	}
+	if len(parts) == 4 && parts[0] == "api" && parts[1] == "teams" && parts[3] == "leave" {
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		workspace, err := a.teams.Leave(identity, parts[2])
+		if err != nil {
+			util.WriteError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		util.WriteJSON(w, http.StatusOK, map[string]any{"workspace": a.attachTeamUsageSummaries(identity, workspace), "teams": a.teamWorkspaceTeams(identity)})
+		return
+	}
 	if len(parts) == 5 && parts[0] == "api" && parts[1] == "teams" && parts[3] == "members" {
 		switch r.Method {
 		case http.MethodDelete:

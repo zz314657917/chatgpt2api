@@ -7107,6 +7107,86 @@ func TestTeamOwnerAndManagerRoleBoundaries(t *testing.T) {
 	}
 }
 
+func TestTeamMembersCanLeaveButOwnerCannot(t *testing.T) {
+	app := newTestApp(t)
+	defer app.Close()
+	owner := service.AuthOwner{ID: "sub2api:leave-owner", Name: "Leave Owner", Provider: service.AuthProviderSub2API}
+	manager := service.AuthOwner{ID: "sub2api:leave-manager", Name: "Leave Manager", Provider: service.AuthProviderSub2API}
+	member := service.AuthOwner{ID: "sub2api:leave-member", Name: "Leave Member", Provider: service.AuthProviderSub2API}
+	_, ownerSession, err := app.auth.UpsertSub2APISession(owner)
+	if err != nil {
+		t.Fatalf("owner session: %v", err)
+	}
+	_, managerSession, err := app.auth.UpsertSub2APISession(manager)
+	if err != nil {
+		t.Fatalf("manager session: %v", err)
+	}
+	_, memberSession, err := app.auth.UpsertSub2APISession(member)
+	if err != nil {
+		t.Fatalf("member session: %v", err)
+	}
+	saveTestSub2APIBinding(t, app, owner.ID, "leave-owner@example.com")
+	saveTestSub2APIBinding(t, app, manager.ID, "leave-manager@example.com")
+	saveTestSub2APIBinding(t, app, member.ID, "leave-member@example.com")
+
+	teamID := createHTTPTestTeam(t, app, ownerSession)
+	managerInvite := createHTTPTestInvite(t, app, ownerSession, teamID, "leave-manager@example.com", "manager")
+	acceptHTTPTestInvite(t, app, managerSession, managerInvite)
+	memberInvite := createHTTPTestInvite(t, app, ownerSession, teamID, "leave-member@example.com", "member")
+	acceptHTTPTestInvite(t, app, memberSession, memberInvite)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/teams/"+teamID+"/leave", nil)
+	req.Header.Set("Authorization", "Bearer "+managerSession)
+	res := httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("manager leave status = %d body = %s", res.Code, res.Body.String())
+	}
+	var leaveBody map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &leaveBody); err != nil {
+		t.Fatalf("manager leave json: %v", err)
+	}
+	workspace := util.StringMap(leaveBody["workspace"])
+	if scope := util.StringMap(workspace["scope"]); util.Clean(scope["type"]) != "personal" {
+		t.Fatalf("manager leave scope = %#v", workspace)
+	}
+	if teams := util.AsMapSlice(workspace["teams"]); len(teams) != 0 {
+		t.Fatalf("manager still has teams after leave: %#v", teams)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/teams/"+teamID+"/leave", nil)
+	req.Header.Set("Authorization", "Bearer "+memberSession)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("member leave status = %d body = %s", res.Code, res.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/teams/"+teamID+"/leave", nil)
+	req.Header.Set("Authorization", "Bearer "+ownerSession)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("owner leave status = %d body = %s", res.Code, res.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/teams", nil)
+	req.Header.Set("Authorization", "Bearer "+ownerSession)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("owner teams status = %d body = %s", res.Code, res.Body.String())
+	}
+	var ownerBody map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &ownerBody); err != nil {
+		t.Fatalf("owner teams json: %v", err)
+	}
+	teams := util.AsMapSlice(ownerBody["teams"])
+	if len(teams) != 1 || util.ToInt(teams[0]["member_count"], 0) != 1 {
+		t.Fatalf("owner teams member count after leaves: %#v", ownerBody)
+	}
+}
+
 func TestTeamMemberDailyLimitHTTP(t *testing.T) {
 	app := newTestApp(t)
 	defer app.Close()

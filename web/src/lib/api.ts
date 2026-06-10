@@ -1237,6 +1237,7 @@ export type TeamUsageTask = {
   actor_user_id?: string;
   actor_name?: string;
   billing_consumed_amount?: number;
+  billing_charged_amount?: number;
   billing_unit_amount?: number;
   duration_seconds?: number;
   created_at?: string | null;
@@ -1574,6 +1575,12 @@ export async function updateTeamMemberDailyLimit(teamId: string, userId: string,
 export async function removeTeamMember(teamId: string, userId: string) {
   return httpRequest<{ team: TeamSummary; teams?: TeamSummary[]; workspace?: TeamWorkspaceState }>(`/api/teams/${encodeURIComponent(teamId)}/members/${encodeURIComponent(userId)}`, {
     method: "DELETE",
+  });
+}
+
+export async function leaveTeam(teamId: string) {
+  return httpRequest<{ teams?: TeamSummary[]; workspace?: TeamWorkspaceState }>(`/api/teams/${encodeURIComponent(teamId)}/leave`, {
+    method: "POST",
   });
 }
 
