@@ -56,6 +56,7 @@ const (
 	ImageLibraryScopePersonal      = "personal"
 	ImageLibraryScopeTeam          = "team"
 	DefaultTeamStorageLimitBytes   = int64(2 * 1024 * 1024 * 1024)
+	defaultImageDownloadURLTTL     = 5 * time.Minute
 )
 
 type ImageConfig interface {
@@ -92,6 +93,12 @@ type TeamStorageQuotaExceededError struct {
 
 func (e TeamStorageQuotaExceededError) Error() string {
 	return "team storage quota exceeded"
+}
+
+type ImageDownloadURL struct {
+	URL       string
+	ExpiresAt string
+	Direct    bool
 }
 
 type imageMetadata struct {
@@ -1006,7 +1013,7 @@ func (s *ImageService) managedImageItem(baseURL string, ref imageFileRef, info o
 		"path":       ref.rel,
 		"date":       day,
 		"size":       info.Size(),
-		"url":        firstNonEmptyString(meta.ObjectURL, publicAssetURL(baseURL, "images", ref.rel)),
+		"url":        publicAssetURL(baseURL, "images", ref.rel),
 		"created_at": info.ModTime().Format("2006-01-02 15:04:05"),
 		"visibility": meta.Visibility,
 		"tags":       append([]string(nil), meta.Tags...),
@@ -1592,6 +1599,51 @@ func (s *ImageService) ImageBytes(value string, scope ImageAccessScope) ([]byte,
 		return nil, "", errors.New("unsupported image file")
 	}
 	return data, mimeType, nil
+}
+
+func (s *ImageService) ImageDownloadURL(baseURL, value string, scope ImageAccessScope) (ImageDownloadURL, error) {
+	rel, err := imageRelativePathFromValue(value)
+	if err != nil {
+		return ImageDownloadURL{}, err
+	}
+	meta := s.imageMetadata(rel)
+	entry, hasEntry := s.imageIndexEntry(rel)
+	if hasEntry {
+		meta = mergeImageMetadataWithIndexEntry(meta, entry)
+	}
+	if !imageMetadataAllowsAccess(meta, scope) {
+		return ImageDownloadURL{}, errors.New("image not found")
+	}
+	if meta.ObjectKey != "" {
+		expires := imagestore.DownloadURLTTLFromEnv(defaultImageDownloadURLTTL)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		u, enabled, signErr := imagestore.PresignGetDownloadURLFromEnv(ctx, meta.ObjectKey, expires, filepath.Base(filepath.FromSlash(rel)))
+		cancel()
+		if signErr != nil {
+			return ImageDownloadURL{}, signErr
+		}
+		if enabled && strings.TrimSpace(u) != "" {
+			return ImageDownloadURL{
+				URL:       u,
+				ExpiresAt: time.Now().UTC().Add(expires).Format(time.RFC3339),
+				Direct:    true,
+			}, nil
+		}
+	}
+	imageRoot, err := filepath.Abs(s.config.ImagesDir())
+	if err != nil {
+		return ImageDownloadURL{}, err
+	}
+	if _, err := s.imageFileRef(imageRoot, rel); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return ImageDownloadURL{}, errors.New("image not found")
+		}
+		return ImageDownloadURL{}, err
+	}
+	return ImageDownloadURL{
+		URL:    publicAssetURL(baseURL, "images", rel),
+		Direct: false,
+	}, nil
 }
 
 func (s *ImageService) DeleteImages(paths []string, scope ImageAccessScope) (map[string]any, error) {
@@ -2184,6 +2236,40 @@ func (s *ImageService) imageMetadata(rel string) imageMetadata {
 		}
 	}
 	return normalizeImageMetadata(raw)
+}
+
+func mergeImageMetadataWithIndexEntry(meta imageMetadata, entry imageIndexEntry) imageMetadata {
+	if meta.OwnerID == "" {
+		meta.OwnerID = entry.OwnerID
+	}
+	if meta.OwnerName == "" {
+		meta.OwnerName = entry.OwnerName
+	}
+	if meta.LibraryScope == "" || meta.LibraryScope == ImageLibraryScopePersonal && entry.LibraryScope == ImageLibraryScopeTeam {
+		meta.LibraryScope = entry.LibraryScope
+	}
+	if meta.TeamID == "" {
+		meta.TeamID = entry.TeamID
+	}
+	if meta.TeamName == "" {
+		meta.TeamName = entry.TeamName
+	}
+	if meta.Visibility == "" || meta.Visibility == ImageVisibilityPrivate && entry.Visibility == ImageVisibilityPublic {
+		meta.Visibility = entry.Visibility
+	}
+	if meta.StorageBackend == "" {
+		meta.StorageBackend = entry.StorageBackend
+	}
+	if meta.ObjectKey == "" {
+		meta.ObjectKey = entry.ObjectKey
+	}
+	if meta.ObjectURL == "" {
+		meta.ObjectURL = entry.ObjectURL
+	}
+	if meta.OutputFormat == "" {
+		meta.OutputFormat = entry.OutputFormat
+	}
+	return meta
 }
 
 func normalizeImageMetadata(raw map[string]any) imageMetadata {
@@ -3256,15 +3342,6 @@ func addImageMetadataFields(item map[string]any, meta imageMetadata, optionsValu
 	}
 	if meta.PublishedAt != "" {
 		item["published_at"] = meta.PublishedAt
-	}
-	if meta.StorageBackend != "" {
-		item["storage_backend"] = meta.StorageBackend
-	}
-	if meta.ObjectKey != "" {
-		item["object_key"] = meta.ObjectKey
-	}
-	if meta.ObjectURL != "" {
-		item["object_url"] = meta.ObjectURL
 	}
 	item["share_prompt_parameters"] = meta.SharePromptParams
 	item["share_reference_images"] = meta.ShareReferences

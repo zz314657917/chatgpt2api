@@ -372,14 +372,14 @@ func TestFormatImageResultUploadsToObjectStorage(t *testing.T) {
 		t.Fatalf("FormatImageResult() data = %#v", result["data"])
 	}
 	imageURL, _ := items[0]["url"].(string)
-	if !strings.HasPrefix(imageURL, "https://cdn.example.com/images/chatgpt2api/") {
+	if !strings.HasPrefix(imageURL, "https://example.test/images/") {
 		t.Fatalf("url = %q", imageURL)
 	}
 	localURL, _ := items[0]["local_url"].(string)
-	if !strings.HasPrefix(localURL, "https://example.test/images/") {
+	if localURL != "" {
 		t.Fatalf("local_url = %q", localURL)
 	}
-	rel := strings.TrimPrefix(localURL, "https://example.test/images/")
+	rel := strings.TrimPrefix(imageURL, "https://example.test/images/")
 	metaData, err := os.ReadFile(filepath.Join(config.ImageMetadataDir(), filepath.FromSlash(rel)+".json"))
 	if err != nil {
 		t.Fatalf("ReadFile(metadata) error = %v", err)
@@ -388,7 +388,8 @@ func TestFormatImageResultUploadsToObjectStorage(t *testing.T) {
 	if err := json.Unmarshal(metaData, &meta); err != nil {
 		t.Fatalf("Unmarshal(metadata) error = %v", err)
 	}
-	if meta["object_url"] != imageURL || meta["storage_backend"] != "cos" {
+	objectURL, _ := meta["object_url"].(string)
+	if !strings.HasPrefix(objectURL, "https://cdn.example.com/images/chatgpt2api/") || meta["storage_backend"] != "cos" {
 		t.Fatalf("metadata = %#v", meta)
 	}
 	objectKey, _ := meta["object_key"].(string)

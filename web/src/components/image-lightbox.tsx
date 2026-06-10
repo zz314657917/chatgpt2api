@@ -16,12 +16,14 @@ type LightboxImage = {
   outputFormat?: string;
   sizeLabel?: string;
   dimensions?: string;
+  direct?: boolean;
 };
 
 type LightboxDownloadSource = {
   src: string;
   fileName?: string;
   outputFormat?: string;
+  direct?: boolean;
 };
 
 type ImageLightboxProps = {
@@ -162,7 +164,7 @@ export function ImageLightbox({
         const downloadImage = resolved ? { ...current, ...resolved } : current;
         let href = downloadImage.src;
 
-        if (!downloadImage.src.startsWith("data:") && !downloadImage.src.startsWith("blob:")) {
+        if (!downloadImage.direct && !downloadImage.src.startsWith("data:") && !downloadImage.src.startsWith("blob:")) {
           const blob = shouldUseAuthenticatedImageFallback(downloadImage.src)
             ? await fetchAuthenticatedImageBlob(downloadImage.src)
             : await fetch(downloadImage.src).then((response) => {

@@ -1,5 +1,25 @@
 # Project Timeline
 
+## 2026-06-10 18:21 +08:00 - CDN TypeA 鉴权下载补齐
+
+- 当前阶段：对象存储私有读写方案已追加腾讯云 CDN TypeA 临时下载 URL 支持。
+- 本段重点：后端新增 `CHATGPT2API_IMAGE_OBJECT_STORAGE_CDN_AUTH_KEY/PARAM/TTL_SECONDS` 配置；当 `PUBLIC_BASE_URL` 和 CDN 鉴权密钥同时存在时，下载接口返回 CDN 域名 `sign=timestamp-rand-uid-md5hash` 链接，否则保持 COS/S3 presigned URL。
+- 已完成：实现 TypeA 签名生成、CDN 下载 TTL 对齐、`.env.example` 配置说明，以及 `imagestore` 单测覆盖 MD5 反推校验和 TTL env 读取。
+- 关键决策：CDN 主密钥只由服务器环境变量读取，不进入代码、git、知识库或聊天记录；bucket 继续按私有读写收口。
+- 验证记录：`go test ./internal/imagestore ./internal/service ./internal/httpapi` PASS；`go test ./...` PASS；`cd web && npm.cmd run lint` PASS；`cd web && npm.cmd run build` PASS；`git diff --check` PASS，仅 Windows LF/CRLF 工作区提示。
+- 遗留问题：未连接真实腾讯云 COS/CDN 验证回源私有桶授权；上线后需测试带 `sign` 下载成功、去掉 `sign` 或过期后 403、COS 原始对象地址不可直读。
+- 下一步：生产服务器 `.env` 填入 CDN 域名和 TypeA 主密钥后重启服务，用真实登录用户下载个人/团队/公共图片各一次并检查 Network 域名和鉴权结果。
+
+## 2026-06-10 17:17 +08:00 - 对象存储私有读写与临时下载链接
+
+- 当前阶段：落叶创艺图片对象存储访问策略已从“公有读私有写”收口为“私有读写 + 后端鉴权签名下载”。
+- 本段重点：生成结果和图片库详情不再向前端暴露对象存储 `object_key/object_url/storage_backend`，展示 URL 统一走站内 `/images/...`；用户下载时调用 `/api/images/download-url`，后端按 owner/team/public/admin 权限生成短期 S3/COS presigned `GetObject` URL。
+- 已完成：新增对象存储 presign 能力、后端下载链接接口、普通用户权限项、前端图片库/灯箱/生成结果下载调用；`.env.example` 改为推荐私有 bucket，`PUBLIC_BASE_URL` 仅作为已做 CDN 鉴权或 legacy public-read 场景。
+- 关键决策：展示流量仍可通过站内鉴权 `/images/...` 读取，下载大图走国内对象存储临时直链，不经日本后端转发；对象存储可配置 `CHATGPT2API_IMAGE_OBJECT_STORAGE_ACL=private` 或留空使用 bucket 默认私有策略。
+- 验证记录：`go test ./internal/imagestore ./internal/service ./internal/protocol ./internal/httpapi` PASS；`go test ./...` PASS；`cd web && npm.cmd run lint` PASS；`cd web && npm.cmd run build` PASS；`git diff --check` PASS，仅 Windows LF/CRLF 工作区提示。
+- 遗留问题：未连接真实 COS/CDN 做生产域名下载验收；上线前仍需确认 bucket 已私有、临时签名 URL 可被浏览器下载、CDN 如启用必须配置 URL 鉴权或不再配置 `PUBLIC_BASE_URL`。
+- 下一步：生产配置中把 bucket 改为私有读写，移除未鉴权的 `CHATGPT2API_IMAGE_OBJECT_STORAGE_PUBLIC_BASE_URL`，用真实登录用户下载个人/团队/公共图片各一次并确认流量直连对象存储域名。
+
 ## 2026-06-10 02:38 +08:00 - 落叶创艺本地验收复核
 
 - 当前阶段：落叶创艺独立用户版和 Sub2API Studio Bridge 已完成一轮本地验收复核，未发现阻断上线前提测的问题。

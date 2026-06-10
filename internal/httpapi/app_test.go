@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"chatgpt2api/internal/backend"
+	"chatgpt2api/internal/imagestore"
 	"chatgpt2api/internal/protocol"
 	"chatgpt2api/internal/service"
 	"chatgpt2api/internal/storage"
@@ -2572,6 +2573,93 @@ func TestSub2APIImageDeletePermissionIsOwnerScoped(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(app.config.ImagesDir(), filepath.FromSlash(otherRel))); err != nil {
 		t.Fatalf("other image should not be deleted by Sub2API user, stat error = %v", err)
+	}
+}
+
+func TestImageDownloadURLEndpointReturnsPresignedObjectURL(t *testing.T) {
+	var uploadedPath string
+	var uploadedBytes []byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPut:
+			uploadedPath = r.URL.Path
+			uploadedBytes, _ = io.ReadAll(r.Body)
+			w.WriteHeader(http.StatusOK)
+		case http.MethodGet:
+			if r.URL.Path != uploadedPath {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			w.Header().Set("Content-Type", "image/png")
+			_, _ = w.Write(uploadedBytes)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+	t.Setenv(imagestore.EnvImageStorageBackend, "cos")
+	t.Setenv(imagestore.EnvImageObjectStorageEndpoint, server.URL)
+	t.Setenv(imagestore.EnvImageObjectStorageRegion, "ap-guangzhou")
+	t.Setenv(imagestore.EnvImageObjectStorageBucket, "bucket")
+	t.Setenv(imagestore.EnvImageObjectStorageAccessKeyID, "ak")
+	t.Setenv(imagestore.EnvImageObjectStorageSecretKey, "sk")
+	t.Setenv(imagestore.EnvImageObjectStorageForcePath, "true")
+
+	app := newTestApp(t)
+	defer app.Close()
+
+	var imageBuffer bytes.Buffer
+	if err := encodeHTTPTestPNG(&imageBuffer); err != nil {
+		t.Fatalf("encodeHTTPTestPNG() error = %v", err)
+	}
+	item, err := app.images.StoreUploadedImage("http://example.com", service.UploadedManagedImage{
+		Filename:    "object-download.png",
+		ContentType: "image/png",
+		Data:        imageBuffer.Bytes(),
+	}, "admin", "Admin", service.ImageVisibilityPrivate)
+	if err != nil {
+		t.Fatalf("StoreUploadedImage() error = %v", err)
+	}
+	rel, _ := item["path"].(string)
+	if rel == "" {
+		t.Fatalf("uploaded item = %#v", item)
+	}
+	if _, err := os.Stat(filepath.Join(app.config.ImagesDir(), filepath.FromSlash(rel))); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("local original stat error = %v, want os.ErrNotExist", err)
+	}
+	detail, err := app.images.ImageDetail("http://example.com", rel, service.ImageAccessScope{All: true})
+	if err != nil {
+		t.Fatalf("ImageDetail() error = %v", err)
+	}
+	if detail["object_key"] != nil || detail["object_url"] != nil || detail["storage_backend"] != nil {
+		t.Fatalf("image detail exposed object storage fields = %#v", detail)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/images/download-url?path="+url.QueryEscape(rel), nil)
+	req.Header.Set("Authorization", adminAuthHeader(t, app))
+	res := httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("download-url status = %d body = %s", res.Code, res.Body.String())
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("download-url json: %v", err)
+	}
+	downloadURL, _ := payload["download_url"].(string)
+	if payload["direct"] != true || downloadURL == "" {
+		t.Fatalf("download-url payload = %#v", payload)
+	}
+	if !strings.HasPrefix(downloadURL, server.URL+"/bucket/"+rel+"?") {
+		t.Fatalf("download_url = %q", downloadURL)
+	}
+	for _, token := range []string{"X-Amz-Signature=", "X-Amz-Expires=", "response-content-disposition="} {
+		if !strings.Contains(downloadURL, token) {
+			t.Fatalf("download_url missing %s: %q", token, downloadURL)
+		}
+	}
+	if payload["expires_at"] == "" {
+		t.Fatalf("expires_at missing in %#v", payload)
 	}
 }
 

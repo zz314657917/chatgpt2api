@@ -1098,6 +1098,41 @@ func (a *App) handleImageDetail(w http.ResponseWriter, r *http.Request) {
 	util.WriteJSON(w, http.StatusOK, map[string]any{"item": item})
 }
 
+func (a *App) handleImageDownloadURL(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	identity, ok := a.requireIdentity(w, r, "")
+	if !ok {
+		return
+	}
+	scope, _, status, message := a.imageListAccessScope(identity, r.URL.Query())
+	if status != 0 {
+		util.WriteError(w, status, message)
+		return
+	}
+	value := firstNonEmpty(util.Clean(r.URL.Query().Get("path")), util.Clean(r.URL.Query().Get("url")))
+	if value == "" {
+		util.WriteError(w, http.StatusBadRequest, "path is required")
+		return
+	}
+	download, err := a.images.ImageDownloadURL(a.resolveImageBaseURL(r), value, scope)
+	if err != nil {
+		status := http.StatusBadRequest
+		if err.Error() == "image not found" {
+			status = http.StatusNotFound
+		}
+		util.WriteError(w, status, err.Error())
+		return
+	}
+	util.WriteJSON(w, http.StatusOK, map[string]any{
+		"download_url": download.URL,
+		"expires_at":   download.ExpiresAt,
+		"direct":       download.Direct,
+	})
+}
+
 func (a *App) handleImageUploads(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)

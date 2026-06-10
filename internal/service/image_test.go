@@ -188,8 +188,11 @@ func TestImageServiceStoreUploadedImageUsesObjectStorageAsPrimary(t *testing.T) 
 	if err != nil {
 		t.Fatalf("ImageDetail() error = %v", err)
 	}
-	if detail["object_key"] == "" || detail["url"] == "" {
-		t.Fatalf("detail missing object metadata: %#v", detail)
+	if detail["url"] != "http://127.0.0.1:8000/images/"+rel {
+		t.Fatalf("detail url = %#v", detail)
+	}
+	if detail["object_key"] != nil || detail["object_url"] != nil || detail["storage_backend"] != nil {
+		t.Fatalf("detail exposed object metadata: %#v", detail)
 	}
 }
 
@@ -744,7 +747,7 @@ func TestImageServiceListImagesReturnsGenerationReuseMetadata(t *testing.T) {
 	}
 }
 
-func TestImageServiceImageDetailUsesObjectURL(t *testing.T) {
+func TestImageServiceImageDetailKeepsObjectStorageInternal(t *testing.T) {
 	root := t.TempDir()
 	config := testImageConfig{root: root}
 	rel := "2026/05/16/object.png"
@@ -785,8 +788,83 @@ func TestImageServiceImageDetailUsesObjectURL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ImageDetail() error = %v", err)
 	}
-	if detail["url"] != "https://cdn.example.com/chatgpt2api/"+rel || detail["object_key"] != "chatgpt2api/"+rel {
+	if detail["url"] != "http://127.0.0.1:8000/images/"+rel {
+		t.Fatalf("image detail url = %#v", detail)
+	}
+	if detail["object_key"] != nil || detail["object_url"] != nil || detail["storage_backend"] != nil {
 		t.Fatalf("image detail = %#v", detail)
+	}
+}
+
+func TestImageServiceImageDownloadURLUsesObjectStorageWhenLocalFileRemoved(t *testing.T) {
+	root := t.TempDir()
+	config := testImageConfig{root: root}
+	var uploadedPath string
+	var uploadedBytes []byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPut:
+			uploadedPath = r.URL.Path
+			uploadedBytes, _ = io.ReadAll(r.Body)
+			w.WriteHeader(http.StatusOK)
+		case http.MethodGet:
+			if r.URL.Path != uploadedPath {
+				t.Errorf("GET path = %q, want %q", r.URL.Path, uploadedPath)
+			}
+			w.Header().Set("Content-Type", "image/png")
+			_, _ = w.Write(uploadedBytes)
+		default:
+			t.Errorf("method = %s", r.Method)
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	}))
+	defer server.Close()
+	t.Setenv(imagestore.EnvImageStorageBackend, "cos")
+	t.Setenv(imagestore.EnvImageObjectStorageEndpoint, server.URL)
+	t.Setenv(imagestore.EnvImageObjectStorageRegion, "ap-guangzhou")
+	t.Setenv(imagestore.EnvImageObjectStorageBucket, "bucket")
+	t.Setenv(imagestore.EnvImageObjectStorageAccessKeyID, "ak")
+	t.Setenv(imagestore.EnvImageObjectStorageSecretKey, "sk")
+	t.Setenv(imagestore.EnvImageObjectStorageForcePath, "true")
+
+	var imageBuffer bytes.Buffer
+	if err := png.Encode(&imageBuffer, image.NewRGBA(image.Rect(0, 0, 16, 12))); err != nil {
+		t.Fatalf("png.Encode() error = %v", err)
+	}
+	service := NewImageService(config)
+	item, err := service.StoreUploadedImage("http://127.0.0.1:8000", UploadedManagedImage{
+		Filename:    "download.png",
+		ContentType: "image/png",
+		Data:        imageBuffer.Bytes(),
+	}, "linuxdo:123", "alice", ImageVisibilityPrivate)
+	if err != nil {
+		t.Fatalf("StoreUploadedImage() error = %v", err)
+	}
+	rel := toString(item["path"])
+	if rel == "" {
+		t.Fatalf("item path is empty: %#v", item)
+	}
+	if _, err := os.Stat(filepath.Join(config.ImagesDir(), filepath.FromSlash(rel))); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("local original stat error = %v, want os.ErrNotExist", err)
+	}
+
+	download, err := service.ImageDownloadURL("http://127.0.0.1:8000", rel, ImageAccessScope{OwnerID: "linuxdo:123"})
+	if err != nil {
+		t.Fatalf("ImageDownloadURL() error = %v", err)
+	}
+	if !download.Direct || !strings.HasPrefix(download.URL, server.URL+"/bucket/") {
+		t.Fatalf("ImageDownloadURL() = %#v", download)
+	}
+	for _, token := range []string{"X-Amz-Signature=", "X-Amz-Expires=", "response-content-disposition="} {
+		if !strings.Contains(download.URL, token) {
+			t.Fatalf("download URL missing %s: %q", token, download.URL)
+		}
+	}
+	if _, err := time.Parse(time.RFC3339, download.ExpiresAt); err != nil {
+		t.Fatalf("ExpiresAt = %q", download.ExpiresAt)
+	}
+	if _, err := service.ImageDownloadURL("http://127.0.0.1:8000", rel, ImageAccessScope{OwnerID: "linuxdo:other"}); err == nil {
+		t.Fatalf("other owner ImageDownloadURL() error = nil")
 	}
 }
 
