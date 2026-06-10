@@ -6,6 +6,7 @@ import {
   ClipboardList,
   Copy,
   LoaderCircle,
+  LogOut,
   RefreshCcw,
   Trash2,
   UserPlus,
@@ -41,6 +42,7 @@ import {
   fetchTeamAuditLogs,
   fetchTeamUsage,
   fetchTeamWorkspace,
+  leaveTeam,
   removeTeamMember,
   revokeTeamInvite,
   updateTeamMemberDailyLimit,
@@ -130,12 +132,16 @@ function usageModeLabel(mode?: string) {
   }
 }
 
+function formatCnyMilliAmount(value: number) {
+  return `¥${(value / 1000).toFixed(3).replace(/(\.\d{2})0$/, "$1")}`;
+}
+
 function formatBillingAmount(value?: number) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric) || numeric <= 0) {
     return "--";
   }
-  return `¥${(numeric / 1000).toFixed(2)}`;
+  return formatCnyMilliAmount(numeric);
 }
 
 function formatDurationSeconds(value?: number) {
@@ -162,7 +168,11 @@ function formatLimitAmount(value?: number) {
   if (!Number.isFinite(numeric) || numeric < 0) {
     return "¥0.00";
   }
-  return `¥${(numeric / 1000).toFixed(2)}`;
+  return formatCnyMilliAmount(numeric);
+}
+
+function usageBillingAmount(item: TeamUsageTask) {
+  return item.billing_consumed_amount ?? item.billing_charged_amount;
 }
 
 function amountToInputValue(value?: number) {
@@ -185,12 +195,13 @@ const teamScrollClassName = "max-h-[min(58vh,520px)] overflow-auto overscroll-co
 const stickyTableHeaderClassName = "sticky top-0 z-10";
 
 function normalizeWorkspace(data?: TeamWorkspaceState): TeamWorkspaceState {
+  const teams = Array.isArray(data?.teams) ? data.teams : [];
   return {
     scope: data?.scope?.type === "team"
       ? { type: "team", team_id: data.scope.team_id || "" }
       : { type: "personal" },
-    teams: Array.isArray(data?.teams) ? data.teams : [],
-    pending_invites: Array.isArray(data?.pending_invites) ? data.pending_invites : [],
+    teams,
+    pending_invites: teams.length > 0 ? [] : Array.isArray(data?.pending_invites) ? data.pending_invites : [],
   };
 }
 
@@ -204,27 +215,37 @@ function TeamStatusCards({ team }: { team: TeamSummary }) {
   const limitText = daily?.unlimited ? "不限额" : formatLimitAmount(daily?.limit_amount);
   const usedText = formatLimitAmount(daily?.used_amount);
   const remainingText = daily?.unlimited ? "不限额" : formatLimitAmount(daily?.remaining_amount);
+  const limitAmount = Number(daily?.limit_amount) || 0;
+  const usedAmount = Number(daily?.used_amount) || 0;
+  const usagePercent = daily?.unlimited || limitAmount <= 0 ? 0 : Math.min(100, Math.max(0, (usedAmount / limitAmount) * 100));
   return (
-    <div className="grid gap-3 md:grid-cols-4">
+    <div className="grid gap-3 md:grid-cols-3">
       <div className="rounded-lg border border-sky-200 bg-sky-50/70 p-4 text-sky-700 dark:border-sky-900/60 dark:bg-sky-950/20">
         <div className="text-sm font-semibold">我的团队</div>
         <div className="mt-4 text-3xl font-bold">{members}</div>
         <div className="mt-2 truncate text-xs">{team.name || "未命名团队"}</div>
       </div>
       <div className="rounded-lg border border-violet-200 bg-violet-50/70 p-4 text-violet-700 dark:border-violet-900/60 dark:bg-violet-950/20">
-        <div className="text-sm font-semibold">我的今日限额</div>
-        <div className="mt-4 text-3xl font-bold">{limitText}</div>
+        <div className="text-sm font-semibold">今日额度</div>
+        <div className="mt-4 grid grid-cols-2 gap-4">
+          <div className="min-w-0">
+            <div className="text-xs font-medium">限额</div>
+            <div className="mt-1 truncate text-3xl font-bold">{limitText}</div>
+          </div>
+          <div className="min-w-0 text-amber-700 dark:text-amber-300">
+            <div className="text-xs font-medium">剩余</div>
+            <div className="mt-1 truncate text-3xl font-bold">{remainingText}</div>
+          </div>
+        </div>
+        <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-violet-100 dark:bg-violet-950/60">
+          <div className="h-full rounded-full bg-violet-500" style={{ width: `${usagePercent}%` }} />
+        </div>
         <div className="mt-2 text-xs">团队空间每日可用额度</div>
       </div>
       <div className="rounded-lg border border-emerald-200 bg-emerald-50/70 p-4 text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/20">
         <div className="text-sm font-semibold">今日已用</div>
         <div className="mt-4 text-3xl font-bold">{usedText}</div>
         <div className="mt-2 text-xs">团队创作扣费累计</div>
-      </div>
-      <div className="rounded-lg border border-amber-200 bg-amber-50/70 p-4 text-amber-700 dark:border-amber-900/60 dark:bg-amber-950/20">
-        <div className="text-sm font-semibold">今日剩余</div>
-        <div className="mt-4 text-3xl font-bold">{remainingText}</div>
-        <div className="mt-2 text-xs">超出后无法继续创作</div>
       </div>
     </div>
   );
@@ -589,7 +610,7 @@ function UsageTable({ items, loading }: { items: TeamUsageTask[]; loading: boole
               <TableCell><Badge variant="secondary" className="rounded-md">{usageModeLabel(item.mode)}</Badge></TableCell>
               <TableCell className="max-w-[140px] truncate text-muted-foreground" title={item.actor_name || undefined}>{item.actor_name || "--"}</TableCell>
               <TableCell className="max-w-[180px] truncate text-muted-foreground" title={item.model || undefined}>{item.model || "auto"}</TableCell>
-              <TableCell className="text-muted-foreground">{formatBillingAmount(item.billing_consumed_amount)}</TableCell>
+              <TableCell className="text-muted-foreground">{formatBillingAmount(usageBillingAmount(item))}</TableCell>
               <TableCell className="whitespace-nowrap text-muted-foreground">{formatDurationSeconds(item.duration_seconds)}</TableCell>
               <TableCell><Badge variant={item.status === "success" ? "success" : item.status === "error" ? "danger" : "secondary"} className="rounded-md">{statusLabel(item.status)}</Badge></TableCell>
               <TableCell className="text-right">
@@ -784,9 +805,10 @@ export default function TeamPage() {
     setPending({ type: "accept", id: invite.id });
     try {
       const result = await acceptTeamInvite(invite.id);
-      await refreshAfterMutation(result.teams);
+      await refreshAfterMutation(result.workspace ?? result.teams);
       toast.success("已加入团队");
     } catch (error) {
+      await refreshAfterMutation();
       toast.error(error instanceof Error ? error.message : "接受邀请失败");
     } finally {
       setPending(null);
@@ -855,6 +877,26 @@ export default function TeamPage() {
     }
   };
 
+  const handleLeaveTeam = async () => {
+    if (!activeTeam) {
+      return;
+    }
+    if (!window.confirm("确定退出团队吗？退出后需要创建者重新邀请才能加入。")) {
+      return;
+    }
+    setPending({ type: "leave", id: activeTeam.id });
+    try {
+      const result = await leaveTeam(activeTeam.id);
+      setActiveTab("members");
+      await refreshAfterMutation(result.workspace ?? result.teams);
+      toast.success("已退出团队");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "退出团队失败");
+    } finally {
+      setPending(null);
+    }
+  };
+
   if (isCheckingAuth || !session) {
     return (
       <div className="flex min-h-[40vh] items-center justify-center">
@@ -895,9 +937,23 @@ export default function TeamPage() {
                 </Button>
               </div>
             )}
-            <Button type="button" variant="outline" size="icon" className="size-9 rounded-lg" onClick={() => void loadWorkspace()} disabled={loading}>
-              {loading ? <LoaderCircle className="size-4 animate-spin" /> : <RefreshCcw className="size-4" />}
-            </Button>
+            <div className="flex items-center gap-2">
+              {activeTeam && activeTeam.member_role !== "owner" ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="h-9 rounded-lg text-muted-foreground hover:text-rose-600"
+                  onClick={() => void handleLeaveTeam()}
+                  disabled={pending?.type === "leave"}
+                >
+                  {pending?.type === "leave" ? <LoaderCircle className="size-4 animate-spin" /> : <LogOut className="size-4" />}
+                  退出团队
+                </Button>
+              ) : null}
+              <Button type="button" variant="outline" size="icon" className="size-9 rounded-lg" onClick={() => void loadWorkspace()} disabled={loading}>
+                {loading ? <LoaderCircle className="size-4 animate-spin" /> : <RefreshCcw className="size-4" />}
+              </Button>
+            </div>
           </div>
         </div>
         {!activeTeam ? (

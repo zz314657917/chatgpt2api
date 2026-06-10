@@ -333,6 +333,51 @@ func (s *TeamService) RemoveMember(identity Identity, teamID, memberUserID strin
 	return s.publicTeamForActorLocked(team, actor), nil
 }
 
+func (s *TeamService) Leave(identity Identity, teamID string) (map[string]any, error) {
+	actor := teamActorID(identity)
+	if actor == "" {
+		return nil, fmt.Errorf("user session is required")
+	}
+	teamID = util.Clean(teamID)
+	if teamID == "" {
+		return nil, fmt.Errorf("team id is required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	team := s.teams[teamID]
+	member := teamMember(team, actor)
+	if team == nil || member == nil {
+		return nil, fmt.Errorf("team not found")
+	}
+	if actor == util.Clean(team["owner_user_id"]) || normalizeTeamMemberRole(util.Clean(member["role"])) == TeamRoleOwner {
+		return nil, fmt.Errorf("team owner cannot leave")
+	}
+	members := util.AsMapSlice(team["members"])
+	next := make([]map[string]any, 0, len(members))
+	removed := false
+	for _, item := range members {
+		if util.Clean(item["user_id"]) == actor {
+			removed = true
+			continue
+		}
+		next = append(next, item)
+	}
+	if !removed {
+		return nil, fmt.Errorf("team member not found")
+	}
+	now := util.NowISO()
+	team["members"] = next
+	team["updated_at"] = now
+	if s.current[actor] == teamID {
+		delete(s.current, actor)
+	}
+	s.appendAuditLocked(team, identity, "member.left", "退出团队", map[string]any{"target_user_id": actor})
+	if err := s.saveLocked(); err != nil {
+		return nil, err
+	}
+	return s.workspaceStateForActorLocked(identity, ""), nil
+}
+
 func (s *TeamService) UpdateMemberRole(identity Identity, teamID, memberUserID, role string) (map[string]any, error) {
 	actor := teamActorID(identity)
 	teamID = util.Clean(teamID)
