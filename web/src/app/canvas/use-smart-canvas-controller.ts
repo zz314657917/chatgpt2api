@@ -24,8 +24,10 @@ import {
   fetchCanvasModels,
   fetchCanvases,
   fetchCreationTasks,
+  fetchManagedImageCollections,
   fetchManagedImages,
   fetchTeamWorkspace,
+  MANAGED_IMAGE_UNCLASSIFIED_COLLECTION_ID,
   saveCanvas,
   supportsImageOutputControls,
   uploadManagedImages,
@@ -34,6 +36,7 @@ import {
   type CreationTask,
   type ImageModel,
   type ImageVisibility,
+  type ManagedImageCollection,
   type ManagedImageSummary,
   type TeamSummary,
 } from "@/lib/api";
@@ -53,6 +56,7 @@ import {
   type SmartCanvasFlowTemplateId,
   type SmartCanvasHelpTopic,
 } from "./canvas-help";
+import { consumeCanvasAssetIntent } from "./canvas-asset-intent";
 import { hasCanvasImageDragPayload, parseCanvasImageDragPayload } from "./canvas-image-drag";
 import { dispatchSmartCanvasQueueChanged } from "./canvas-events";
 import { createSmartCanvasFromPreset, type SmartCanvasPresetId } from "./canvas-presets";
@@ -934,6 +938,17 @@ export function useSmartCanvasController() {
   const [hasMoreTeamAssets, setHasMoreTeamAssets] = useState(false);
   const [teamAssetsLoaded, setTeamAssetsLoaded] = useState(false);
   const [assetLibraryScope, setAssetLibraryScope] = useState<SmartCanvasAssetLibraryScope>("mine");
+  const [assetCollections, setAssetCollections] = useState<Record<SmartCanvasAssetLibraryScope, ManagedImageCollection[]>>({
+    mine: [],
+    team: [],
+    public: [],
+  });
+  const [assetUnclassifiedCounts, setAssetUnclassifiedCounts] = useState<Record<SmartCanvasAssetLibraryScope, number>>({
+    mine: 0,
+    team: 0,
+    public: 0,
+  });
+  const [activeAssetCollectionId, setActiveAssetCollectionId] = useState("");
   const [assetSidebarActivated, setAssetSidebarActivated] = useState(false);
   const [selectedItemId, setSelectedItemId] = useState("");
   const [selectedItemIds, setSelectedItemIds] = useState<string[]>([]);
@@ -1006,11 +1021,13 @@ export function useSmartCanvasController() {
   );
   const blankNodeCount = useMemo(() => blankSmartCanvasItemIds(canvas).length, [canvas]);
   const selectedImageToolDisabledReason = useMemo(() => imageToolUnavailableReason(selectedItem), [selectedItem]);
+  const activeAssetCollections = useMemo(() => assetCollections[assetLibraryScope] || [], [assetCollections, assetLibraryScope]);
+  const activeAssetUnclassifiedCount = assetUnclassifiedCounts[assetLibraryScope] || 0;
   const mentionItems = useMemo(() => mentionCandidateImages(canvas, [...assets, ...teamAssets, ...publicAssets]), [assets, canvas, publicAssets, teamAssets]);
   const assetLibraryTabs = useMemo(() => [
-    { id: "mine", label: "我的图库", count: assets.length },
-    ...(activeTeam?.id ? [{ id: "team", label: "团队图库", count: teamAssets.length }] : []),
-    { id: "public", label: "公共图库", count: publicAssets.length },
+    { id: "mine", label: "个人", count: assets.length },
+    ...(activeTeam?.id ? [{ id: "team", label: "团队", count: teamAssets.length }] : []),
+    { id: "public", label: "公共", count: publicAssets.length },
   ], [activeTeam?.id, assets.length, publicAssets.length, teamAssets.length]);
   const angleControlPrompt = useMemo(() => buildAngleControlPrompt(angleControlValues), [angleControlValues]);
   const angleControlResultItem = useMemo(() => {
@@ -1078,6 +1095,13 @@ export function useSmartCanvasController() {
       setAssetLibraryScope("mine");
     }
   }, [activeTeam?.id, assetLibraryScope]);
+
+  useEffect(() => {
+    const exists = activeAssetCollectionId === MANAGED_IMAGE_UNCLASSIFIED_COLLECTION_ID || activeAssetCollections.some((collection) => collection.id === activeAssetCollectionId);
+    if (activeAssetCollectionId && activeAssetCollections.length > 0 && !exists) {
+      setActiveAssetCollectionId("");
+    }
+  }, [activeAssetCollectionId, activeAssetCollections]);
 
   useEffect(() => {
     if (typeof window === "undefined" || isCheckingAuth || loading) {
@@ -1184,18 +1208,18 @@ export function useSmartCanvasController() {
     assetsLoadingRequestRef.current = true;
     setLoadingAssets(true);
     try {
-      const result = await fetchManagedImages({ scope: "mine", page_size: CANVAS_ASSET_PAGE_SIZE });
+      const result = await fetchManagedImages({ scope: "mine", page_size: CANVAS_ASSET_PAGE_SIZE, collection_id: activeAssetCollectionId });
       setAssets(result.items);
       setAssetNextCursor(result.next_cursor);
       setHasMoreAssets(result.has_more);
       setAssetsLoaded(true);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "加载图片库失败");
+      toast.error(error instanceof Error ? error.message : "加载素材库失败");
     } finally {
       assetsLoadingRequestRef.current = false;
       setLoadingAssets(false);
     }
-  }, []);
+  }, [activeAssetCollectionId]);
 
   const loadMoreAssets = useCallback(async () => {
     if (loadingAssets || loadingMoreAssets || !hasMoreAssets || !assetNextCursor) {
@@ -1207,6 +1231,7 @@ export function useSmartCanvasController() {
         scope: "mine",
         page_size: CANVAS_ASSET_PAGE_SIZE,
         cursor: assetNextCursor,
+        collection_id: activeAssetCollectionId,
       });
       setAssets((current) => {
         const seen = new Set(current.map((asset) => asset.path));
@@ -1219,7 +1244,7 @@ export function useSmartCanvasController() {
     } finally {
       setLoadingMoreAssets(false);
     }
-  }, [assetNextCursor, hasMoreAssets, loadingAssets, loadingMoreAssets]);
+  }, [activeAssetCollectionId, assetNextCursor, hasMoreAssets, loadingAssets, loadingMoreAssets]);
 
   const loadPublicAssets = useCallback(async () => {
     if (publicAssetsLoadingRequestRef.current) {
@@ -1228,18 +1253,18 @@ export function useSmartCanvasController() {
     publicAssetsLoadingRequestRef.current = true;
     setLoadingPublicAssets(true);
     try {
-      const result = await fetchManagedImages({ scope: "public", page_size: CANVAS_ASSET_PAGE_SIZE });
+      const result = await fetchManagedImages({ scope: "public", page_size: CANVAS_ASSET_PAGE_SIZE, collection_id: activeAssetCollectionId });
       setPublicAssets(result.items);
       setPublicAssetNextCursor(result.next_cursor);
       setHasMorePublicAssets(result.has_more);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "加载公共图片库失败");
+      toast.error(error instanceof Error ? error.message : "加载公共素材库失败");
     } finally {
       setPublicAssetsLoaded(true);
       publicAssetsLoadingRequestRef.current = false;
       setLoadingPublicAssets(false);
     }
-  }, []);
+  }, [activeAssetCollectionId]);
 
   const loadTeamAssets = useCallback(async () => {
     if (teamAssetsLoadingRequestRef.current) {
@@ -1255,18 +1280,18 @@ export function useSmartCanvasController() {
     teamAssetsLoadingRequestRef.current = true;
     setLoadingPublicAssets(true);
     try {
-      const result = await fetchManagedImages({ scope: "team", team_id: activeTeam.id, page_size: CANVAS_ASSET_PAGE_SIZE });
+      const result = await fetchManagedImages({ scope: "team", team_id: activeTeam.id, page_size: CANVAS_ASSET_PAGE_SIZE, collection_id: activeAssetCollectionId });
       setTeamAssets(result.items);
       setTeamAssetNextCursor(result.next_cursor);
       setHasMoreTeamAssets(result.has_more);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "加载团队图片库失败");
+      toast.error(error instanceof Error ? error.message : "加载团队素材库失败");
     } finally {
       setTeamAssetsLoaded(true);
       teamAssetsLoadingRequestRef.current = false;
       setLoadingPublicAssets(false);
     }
-  }, [activeTeam?.id]);
+  }, [activeAssetCollectionId, activeTeam?.id]);
 
   const loadMoreTeamAssets = useCallback(async () => {
     if (!activeTeam?.id || loadingPublicAssets || loadingMorePublicAssets || !hasMoreTeamAssets || !teamAssetNextCursor) {
@@ -1279,6 +1304,7 @@ export function useSmartCanvasController() {
         team_id: activeTeam.id,
         page_size: CANVAS_ASSET_PAGE_SIZE,
         cursor: teamAssetNextCursor,
+        collection_id: activeAssetCollectionId,
       });
       setTeamAssets((current) => {
         const seen = new Set(current.map((asset) => asset.path));
@@ -1291,7 +1317,7 @@ export function useSmartCanvasController() {
     } finally {
       setLoadingMorePublicAssets(false);
     }
-  }, [activeTeam?.id, hasMoreTeamAssets, loadingMorePublicAssets, loadingPublicAssets, teamAssetNextCursor]);
+  }, [activeAssetCollectionId, activeTeam?.id, hasMoreTeamAssets, loadingMorePublicAssets, loadingPublicAssets, teamAssetNextCursor]);
 
   const loadMorePublicAssets = useCallback(async () => {
     if (loadingPublicAssets || loadingMorePublicAssets || !hasMorePublicAssets || !publicAssetNextCursor) {
@@ -1303,6 +1329,7 @@ export function useSmartCanvasController() {
         scope: "public",
         page_size: CANVAS_ASSET_PAGE_SIZE,
         cursor: publicAssetNextCursor,
+        collection_id: activeAssetCollectionId,
       });
       setPublicAssets((current) => {
         const seen = new Set(current.map((asset) => asset.path));
@@ -1315,7 +1342,25 @@ export function useSmartCanvasController() {
     } finally {
       setLoadingMorePublicAssets(false);
     }
-  }, [hasMorePublicAssets, loadingMorePublicAssets, loadingPublicAssets, publicAssetNextCursor]);
+  }, [activeAssetCollectionId, hasMorePublicAssets, loadingMorePublicAssets, loadingPublicAssets, publicAssetNextCursor]);
+
+  const loadAssetCollections = useCallback(async (scope: SmartCanvasAssetLibraryScope) => {
+    if (scope === "team" && !activeTeam?.id) {
+      setAssetCollections((current) => ({ ...current, team: [] }));
+      return;
+    }
+    try {
+      const result = await fetchManagedImageCollections({
+        scope,
+        team_id: scope === "team" ? activeTeam?.id || "" : "",
+      });
+      setAssetCollections((current) => ({ ...current, [scope]: result.items }));
+      setAssetUnclassifiedCounts((current) => ({ ...current, [scope]: result.unclassified_count }));
+    } catch {
+      setAssetCollections((current) => ({ ...current, [scope]: [] }));
+      setAssetUnclassifiedCounts((current) => ({ ...current, [scope]: 0 }));
+    }
+  }, [activeTeam?.id]);
 
   useEffect(() => {
     if (assetSidebarActivated && assetLibraryScope === "public" && !publicAssetsLoaded && !loadingPublicAssets) {
@@ -1329,11 +1374,22 @@ export function useSmartCanvasController() {
     }
   }, [activeTeam?.id, assetLibraryScope, assetSidebarActivated, loadTeamAssets, loadingPublicAssets, teamAssetsLoaded]);
 
+  useEffect(() => {
+    if (assetSidebarActivated) {
+      void loadAssetCollections(assetLibraryScope);
+    }
+  }, [assetLibraryScope, assetSidebarActivated, loadAssetCollections]);
+
   const selectAssetLibraryScope = useCallback((scope: string) => {
     if (scope === "mine" || scope === "public" || (scope === "team" && activeTeam?.id)) {
       setAssetLibraryScope(scope);
+      setActiveAssetCollectionId("");
     }
   }, [activeTeam?.id]);
+
+  const selectAssetCollection = useCallback((collectionId: string) => {
+    setActiveAssetCollectionId(collectionId);
+  }, []);
 
   const refreshAssetLibrary = useCallback(() => {
     if (assetLibraryScope === "public") {
@@ -1344,6 +1400,29 @@ export function useSmartCanvasController() {
     }
     return loadAssets();
   }, [assetLibraryScope, loadAssets, loadPublicAssets, loadTeamAssets]);
+
+  useEffect(() => {
+    if (!assetSidebarActivated) {
+      return;
+    }
+    if (assetLibraryScope === "public") {
+      setPublicAssetsLoaded(false);
+      setPublicAssets([]);
+      setPublicAssetNextCursor("");
+      setHasMorePublicAssets(false);
+    } else if (assetLibraryScope === "team") {
+      setTeamAssetsLoaded(false);
+      setTeamAssets([]);
+      setTeamAssetNextCursor("");
+      setHasMoreTeamAssets(false);
+    } else {
+      setAssetsLoaded(false);
+      setAssets([]);
+      setAssetNextCursor("");
+      setHasMoreAssets(false);
+    }
+    void refreshAssetLibrary();
+  }, [activeAssetCollectionId, assetSidebarActivated, assetLibraryScope, refreshAssetLibrary]);
 
   const ensureAssetLibraryLoaded = useCallback(() => {
     if (assetLibraryScope === "public") {
@@ -1973,6 +2052,18 @@ export function useSmartCanvasController() {
     selectSingleItem(item.id);
   }, [selectSingleItem, selectedItemId, updateCanvas]);
 
+  useEffect(() => {
+    if (loading || !canvas) {
+      return;
+    }
+    const intent = consumeCanvasAssetIntent();
+    if (!intent) {
+      return;
+    }
+    addImagesToCanvas(managedImagesToRefs(intent.assets));
+    setAssetSidebarActivated(true);
+  }, [addImagesToCanvas, canvas, loading]);
+
   const createImageNodeLinkedToGenerator = useCallback((
     refs: CanvasImageRef[],
     generator: SmartCanvasItem,
@@ -2259,7 +2350,7 @@ export function useSmartCanvasController() {
       }
       addImagesToCanvas(refs, point);
     } catch {
-      toast.error("读取图片库素材失败");
+      toast.error("读取素材库素材失败");
     }
   }, [addImagesNearGenerator, addImagesToCanvas]);
 
@@ -4307,6 +4398,9 @@ export function useSmartCanvasController() {
     assetSidebarActivated,
     assetLibraryScope,
     assetLibraryTabs,
+    assetCollections: activeAssetCollections,
+    assetUnclassifiedCount: activeAssetUnclassifiedCount,
+    activeAssetCollectionId,
     selectedItemId,
     selectedItemIds,
     selectedItem,
@@ -4360,6 +4454,7 @@ export function useSmartCanvasController() {
     setOnboardingOpen,
     setLeftRailCollapsed,
     setAssetLibraryScope: selectAssetLibraryScope,
+    setAssetCollection: selectAssetCollection,
     undoCanvas,
     redoCanvas,
     restoreHistoryEntry,

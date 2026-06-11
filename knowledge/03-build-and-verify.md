@@ -2,7 +2,7 @@
 title: Build And Verify
 type: build
 repo: chatgpt2api
-last_verified: 2026-06-09
+last_verified: 2026-06-12
 ---
 
 # 构建与验证
@@ -94,6 +94,18 @@ Sub2API launch/redeem、登录态桥接、图片任务路由或对象存储类�
 4. `git diff --check`
 5. 如本地预览或容器环境可用，至少补一次真实或 mock 的 `Sub2API 登录/回跳 -> /image 或 /canvas -> 余额展示 -> 创作扣费/失败退款` 最小闭环回读
 
+对象存储私有读写、`/api/images/download-url`、CDN TypeA 签名下载或素材库 collections 类修改：
+
+1. `go test ./internal/imagestore ./internal/service ./internal/protocol ./internal/httpapi`
+2. `go test ./...`
+3. `cd web && npm run lint`
+4. `cd web && npm run build`
+5. `git diff --check`
+6. 如本地预览或容器环境可用，至少补一次真实浏览器回读：
+   - 下载个人、团队、公共图片各一次
+   - 确认 `/api/images/download-url` 返回短期签名 URL
+   - 确认 `/image-manager`、`/image`、`/canvas` 可按全部 / 未归类 / 素材集筛选
+
 ## 当前稳定验证心智
 
 - 当前 image workspace 主线至少应覆盖：
@@ -128,6 +140,19 @@ Sub2API launch/redeem、登录态桥接、图片任务路由或对象存储类�
   - 顶部余额和充值入口优先读取 Sub2API 钱包摘要，并正确展示 `cny_milli` 金额
   - 创作任务的预扣、确认、退款链路不因独立用户版 UI 或 bridge 接口改动而退化
   - 团队空间最小闭环至少保留 `team_id`、`payer_user_id`、`actor_user_id` 这组真实生产语义
+  - 切换或退出 Sub2 登录态后，隐藏 iframe 探针和本地 `/auth/logout` 清理能把落叶会话带回正确用户，不继续沿用旧缓存
+  - `session-probe` iframe 只加载 Sub2API `/studio-bridge/session-probe`，而不是退回根路径或被 `frame-ancestors` 拦截
+- 当前对象存储 / 下载主线至少应覆盖：
+  - 前端展示不暴露原始 `object_key/object_url/storage_backend`
+  - 用户下载走 `/api/images/download-url` 鉴权，而不是后端直转大文件
+  - 如启用腾讯云 CDN TypeA，下载链接包含 `sign` 且会按 TTL 失效
+  - 私有 bucket 下，直接访问原始对象地址不能绕过站内权限
+- 当前素材库主线至少应覆盖：
+  - `/image-manager`、`/image`、`/canvas` 都能按素材集筛选
+  - `__unclassified__` 未归类筛选可用
+  - 公共图库保持只读
+  - 团队素材集只对 owner / manager 可写
+  - 一张图只能属于一个素材集
 - 只跑前端 build 不足以证明 Sub2API launch/redeem 或图片任务链路正确；涉及登录态、任务、配置和存储时必须带后端测试。
 - 只跑 `go test ./...` 也不足以证明 `/image` 工作台 UI 没被破坏；涉及编辑器、拖拽和展示流时应至少补前端 build。
 - 只跑命令行构建也不足以证明 `/canvas` 交互没退化；涉及节点拖拽、连线、画布缩放、自动保存和运行状态时，应至少补浏览器侧最小回读。
@@ -143,3 +168,4 @@ Sub2API launch/redeem、登录态桥接、图片任务路由或对象存储类�
 - 对 embedded session recovery / bound key preservation 这类修复，知识库目前还缺一份更细的最小人工检查清单，例如“从 launch 进入后刷新页面、模拟前端 token 失效、确认 cookie 恢复后仍保留已绑定 key”。
 - 对视频节点与 composer 分辨率预设这类 6 月初新增主线，仓库还缺更细的最小人工检查清单，例如“无绑定时视频节点隐藏、有绑定时可见；`/image` 里切换预设后 payload 不回退到旧字段”。
 - 对独立用户版 / Studio Bridge / 团队空间这条 2026-06-09 新主线，仓库还缺更细的生产联调 checklist，例如“真实域名、launch URL、recharge URL、internal secret、默认分组、余额显示、预扣/确认/退款、团队 payer/actor 记录”的统一回读入口。
+- 对 2026-06-10~2026-06-11 新进入默认面的对象存储私有下载、CDN TypeA 签名和素材库 collections，目前仍缺一份更细的专题入口；优先读 `knowledge/08-luoye-independent-mode.md`。

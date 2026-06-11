@@ -7,13 +7,18 @@ import { AuthenticatedImage } from "@/components/authenticated-image";
 import { Button } from "@/components/ui/button";
 import { IMAGE_RESULT_DRAG_MIME, type ImageResultDragPayload } from "@/app/image/image-result-drag";
 import type { ImagePromptPreset } from "@/app/image/image-presets";
-import { fetchManagedImageDetail, fetchManagedImageDownloadURL, IMAGE_MODEL_ROUTE_DETAILS } from "@/lib/api";
+import { fetchManagedImageDetail, IMAGE_MODEL_ROUTE_DETAILS } from "@/lib/api";
 import type { ImageVisibility } from "@/lib/api";
 import {
   fetchAuthenticatedImageBlob,
   getCachedAuthenticatedImageByteSize,
   shouldUseAuthenticatedImageFallback,
 } from "@/lib/authenticated-image";
+import {
+  buildTimestampedImageDownloadName,
+  downloadImageFile,
+  type DownloadableImage as DownloadableImageFile,
+} from "@/lib/image-download";
 import { getManagedImagePathFromUrl, getManagedImageThumbnailUrlFromPath, getManagedImageUrlFromPath } from "@/lib/image-path";
 import { formatImageSizeDisplay, getImageSizeRequirementLabel, isHighResolutionImageSize, supportsImageOutputCompression } from "@/lib/image-parameters";
 import { formatBase64ImageFileSize, formatImageFileSize } from "@/lib/image-size";
@@ -38,12 +43,8 @@ export type ImageLightboxItem = {
   dimensions?: string;
 };
 
-type DownloadableImage = {
-  id: string;
+type DownloadableImage = DownloadableImageFile & {
   selectionKey: string;
-  src: string;
-  path?: string;
-  fileName: string;
   imageIndex: number;
 };
 
@@ -229,88 +230,15 @@ function blurFocusedElementInContainer(container: HTMLElement) {
   }
 }
 
-function imageExtensionFromSrc(src?: string) {
-  const dataUrlFormat = src?.match(/^data:image\/([^;,]+)/i)?.[1];
-  const urlFormat = src?.split(/[?#]/, 1)[0]?.match(/\.([a-z0-9]+)$/i)?.[1];
-  const format = String(dataUrlFormat || urlFormat || "").toLowerCase();
-  if (format === "jpg" || format === "jpeg") {
-    return "jpg";
-  }
-  if (format === "png" || format === "webp") {
-    return format;
-  }
-  return "";
-}
-
-function imageExtension(outputFormat?: string, src?: string) {
-  if (outputFormat === "jpeg") {
-    return "jpg";
-  }
-  return outputFormat || imageExtensionFromSrc(src) || "png";
-}
-
 function buildDownloadName(createdAt: string, turnId: string, index: number, outputFormat?: string, src?: string) {
-  const date = new Date(createdAt);
-  const safeIndex = String(index + 1).padStart(2, "0");
-  const extension = imageExtension(outputFormat, src);
-  if (Number.isNaN(date.getTime())) {
-    return `chatgpt-image-${turnId.slice(0, 8)}-${safeIndex}.${extension}`;
-  }
-
-  const yyyy = String(date.getFullYear());
-  const mm = String(date.getMonth() + 1).padStart(2, "0");
-  const dd = String(date.getDate()).padStart(2, "0");
-  const hh = String(date.getHours()).padStart(2, "0");
-  const min = String(date.getMinutes()).padStart(2, "0");
-  const sec = String(date.getSeconds()).padStart(2, "0");
-  return `chatgpt-image-${yyyy}${mm}${dd}-${hh}${min}${sec}-${safeIndex}.${extension}`;
-}
-
-async function downloadImage(image: DownloadableImage) {
-  let href = image.src;
-  let objectUrl = "";
-
-  if (image.path) {
-    const directDownload = await fetchManagedImageDownloadURL(image.path).catch(() => null);
-    if (directDownload?.direct && directDownload.download_url) {
-      const link = document.createElement("a");
-      link.href = directDownload.download_url;
-      link.download = image.fileName;
-      link.rel = "noopener noreferrer";
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      return;
-    }
-    if (directDownload?.download_url) {
-      href = directDownload.download_url;
-    }
-  }
-
-  if (!href.startsWith("data:")) {
-    try {
-      const blob = shouldUseAuthenticatedImageFallback(href)
-        ? await fetchAuthenticatedImageBlob(href)
-        : await fetch(href).then((response) => (response.ok ? response.blob() : null));
-      if (blob) {
-        objectUrl = URL.createObjectURL(blob);
-        href = objectUrl;
-      }
-    } catch {
-      href = image.src;
-    }
-  }
-
-  const link = document.createElement("a");
-  link.href = href;
-  link.download = image.fileName;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-
-  if (objectUrl) {
-    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
-  }
+  return buildTimestampedImageDownloadName({
+    prefix: "chatgpt-image",
+    createdAt,
+    id: turnId,
+    index,
+    outputFormat,
+    src,
+  });
 }
 
 function sleep(ms: number) {
@@ -455,7 +383,7 @@ export function ImageResults({
     setDownloadingKey(key);
     try {
       for (let index = 0; index < items.length; index += 1) {
-        await downloadImage(items[index]);
+        await downloadImageFile(items[index]);
         if (index < items.length - 1) {
           await sleep(120);
         }

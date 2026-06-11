@@ -1,6 +1,8 @@
 "use client";
 
 import * as React from "react";
+import { format } from "date-fns";
+import { zhCN } from "date-fns/locale";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { DayPicker } from "react-day-picker";
 
@@ -15,6 +17,13 @@ function Calendar({
   return (
     <DayPicker
       showOutsideDays={showOutsideDays}
+      locale={zhCN}
+      weekStartsOn={0}
+      formatters={{
+        formatCaption: (date) => format(date, "yyyy年M月", { locale: zhCN }),
+        formatWeekdayName: (date) => format(date, "EEEEE", { locale: zhCN }),
+        ...props.formatters,
+      }}
       className={cn("relative p-1 text-sm", className)}
       classNames={{
         months: "relative flex flex-col gap-4 sm:flex-row",

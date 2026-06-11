@@ -86,6 +86,7 @@ type ImageComposerProps = {
   estimatedImagePriceLabel?: string;
   billingBlocked: boolean;
   referenceImages: Array<{ name: string; dataUrl: string }>;
+  mentionAssets?: ManagedImageSummary[];
   textareaRef: RefObject<HTMLTextAreaElement | null>;
   fileInputRef: RefObject<HTMLInputElement | null>;
   onComposerModeChange: (mode: "chat" | "image") => void;
@@ -346,6 +347,7 @@ export function ImageComposer({
   estimatedImagePriceLabel,
   billingBlocked,
   referenceImages,
+  mentionAssets = [],
   textareaRef,
   fileInputRef,
   onComposerModeChange,
@@ -374,6 +376,7 @@ export function ImageComposer({
   const [isAspectRatioMenuOpen, setIsAspectRatioMenuOpen] = useState(false);
   const [isResolutionMenuOpen, setIsResolutionMenuOpen] = useState(false);
   const [isImageSettingsOpen, setIsImageSettingsOpen] = useState(false);
+  const [isAssetMentionOpen, setIsAssetMentionOpen] = useState(false);
   const [promptAreaHeight, setPromptAreaHeight] = useState(PROMPT_AREA_DEFAULT_HEIGHT);
   const [isPromptAreaResizing, setIsPromptAreaResizing] = useState(false);
   const [isReferenceImageDragActive, setIsReferenceImageDragActive] = useState(false);
@@ -461,6 +464,7 @@ export function ImageComposer({
             : "当前链路不支持手动宽高"
           : "宽高需要填写正整数"
         : "不指定画幅或尺寸";
+  const mentionAssetItems = useMemo(() => mentionAssets.slice(0, 18), [mentionAssets]);
 
   useEffect(() => {
     if (composerMode === "chat") {
@@ -904,6 +908,57 @@ export function ImageComposer({
                     </div>
                   ) : null}
                 </div>
+                <Popover open={isAssetMentionOpen} onOpenChange={setIsAssetMentionOpen}>
+                  <PopoverTrigger asChild>
+                    <button
+                      type="button"
+                      className={cn(
+                        "inline-flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-full px-3 text-xs font-medium text-[#686b73] transition hover:bg-black/[0.05] dark:text-muted-foreground dark:hover:bg-accent/60 dark:hover:text-foreground sm:h-8",
+                        isAssetMentionOpen && "bg-[#eef4ff] text-[#1456f0] dark:bg-sky-950/30 dark:text-sky-300",
+                      )}
+                      title="从素材库加入参考图"
+                    >
+                      @素材
+                    </button>
+                  </PopoverTrigger>
+                  <PopoverContent align="start" side="top" sideOffset={8} className="z-[80] w-[min(calc(100vw-2rem),20rem)] p-2">
+                    {mentionAssetItems.length > 0 ? (
+                      <div className="grid max-h-64 grid-cols-3 gap-2 overflow-y-auto">
+                        {mentionAssetItems.map((asset) => (
+                          <button
+                            key={asset.path}
+                            type="button"
+                            className="group min-w-0 overflow-hidden rounded-lg border border-border bg-background text-left transition hover:border-[#bfdbfe] hover:bg-[#eef4ff] dark:hover:border-sky-900/70 dark:hover:bg-sky-950/30"
+                            onClick={() => {
+                              setIsAssetMentionOpen(false);
+                              void onManagedImageDrop(asset);
+                            }}
+                            title={asset.name || asset.path}
+                          >
+                            {asset.thumbnail_url || asset.preview_url ? (
+                              <img
+                                src={asset.thumbnail_url || asset.preview_url || ""}
+                                alt={asset.name || "素材"}
+                                className="aspect-square w-full bg-muted object-cover"
+                                loading="lazy"
+                                decoding="async"
+                              />
+                            ) : (
+                              <div className="aspect-square w-full bg-muted" />
+                            )}
+                            <span className="block truncate px-1.5 py-1 text-[10px] text-muted-foreground group-hover:text-[#1456f0]">
+                              {asset.collection_name || asset.name || "素材"}
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="rounded-lg border border-dashed border-border p-3 text-center text-xs text-muted-foreground">
+                        当前筛选下暂无素材
+                      </div>
+                    )}
+                  </PopoverContent>
+                </Popover>
                 {composerMode === "image" ? (
                   <button
                     type="button"

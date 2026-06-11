@@ -3550,6 +3550,125 @@ func TestManagedImageTagsEndpointUpdatesAndFilters(t *testing.T) {
 	}
 }
 
+func TestImageCollectionsEndpointCreatesAssignsAndFilters(t *testing.T) {
+	app := newTestApp(t)
+	defer app.Close()
+	_, rawKey, err := app.auth.CreateAPIKey(service.AuthRoleUser, "collection-user", service.AuthOwner{ID: "linuxdo:collection-user", Name: "collection-user", Provider: service.AuthProviderLinuxDo})
+	if err != nil {
+		t.Fatalf("CreateAPIKey() error = %v", err)
+	}
+	rels := []string{
+		"2026/04/29/collection-a.png",
+		"2026/04/29/collection-b.png",
+	}
+	for _, rel := range rels {
+		imagePath := filepath.Join(app.config.ImagesDir(), filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(imagePath), 0o755); err != nil {
+			t.Fatalf("MkdirAll() error = %v", err)
+		}
+		if err := writeHTTPTestPNG(imagePath); err != nil {
+			t.Fatalf("writeHTTPTestPNG() error = %v", err)
+		}
+	}
+	app.images.RecordGeneratedImages(rels, "linuxdo:collection-user", "collection-user", service.ImageVisibilityPrivate)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/image-collections", strings.NewReader(`{"name":"角色"}`))
+	req.Header.Set("Authorization", "Bearer "+rawKey)
+	res := httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("create collection status = %d body = %s", res.Code, res.Body.String())
+	}
+	var createPayload map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &createPayload); err != nil {
+		t.Fatalf("create collection json: %v", err)
+	}
+	collection := util.StringMap(createPayload["item"])
+	collectionID := util.Clean(collection["id"])
+	if collectionID == "" || collection["name"] != "角色" {
+		t.Fatalf("created collection = %#v", createPayload)
+	}
+	if util.ToInt(createPayload["unclassified_count"], -1) != 2 {
+		t.Fatalf("create collection unclassified_count = %#v", createPayload)
+	}
+
+	req = httptest.NewRequest(http.MethodPatch, "/api/image-collections/items", strings.NewReader(jsonString(map[string]any{"collection_id": collectionID, "paths": []string{rels[0]}})))
+	req.Header.Set("Authorization", "Bearer "+rawKey)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("assign collection status = %d body = %s", res.Code, res.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/images?collection_id="+url.QueryEscape(collectionID), nil)
+	req.Header.Set("Authorization", "Bearer "+rawKey)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("filter collection status = %d body = %s", res.Code, res.Body.String())
+	}
+	var listPayload map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &listPayload); err != nil {
+		t.Fatalf("filter collection json: %v", err)
+	}
+	items := util.AsMapSlice(listPayload["items"])
+	if len(items) != 1 || util.Clean(items[0]["path"]) != rels[0] || util.Clean(items[0]["collection_name"]) != "角色" {
+		t.Fatalf("collection filtered items = %#v", listPayload)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/images?collection_id="+url.QueryEscape(service.ImageCollectionUnclassifiedID), nil)
+	req.Header.Set("Authorization", "Bearer "+rawKey)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("filter unclassified status = %d body = %s", res.Code, res.Body.String())
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &listPayload); err != nil {
+		t.Fatalf("filter unclassified json: %v", err)
+	}
+	items = util.AsMapSlice(listPayload["items"])
+	if len(items) != 1 || util.Clean(items[0]["path"]) != rels[1] {
+		t.Fatalf("unclassified filtered items = %#v", listPayload)
+	}
+
+	req = httptest.NewRequest(http.MethodDelete, "/api/image-collections/"+url.PathEscape(collectionID), nil)
+	req.Header.Set("Authorization", "Bearer "+rawKey)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("delete collection status = %d body = %s", res.Code, res.Body.String())
+	}
+	req = httptest.NewRequest(http.MethodGet, "/api/images?collection_id="+url.QueryEscape(collectionID), nil)
+	req.Header.Set("Authorization", "Bearer "+rawKey)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("filter deleted collection status = %d body = %s", res.Code, res.Body.String())
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &listPayload); err != nil {
+		t.Fatalf("filter deleted collection json: %v", err)
+	}
+	if items := util.AsMapSlice(listPayload["items"]); len(items) != 0 {
+		t.Fatalf("deleted collection should clear image assignment = %#v", listPayload)
+	}
+}
+
+func TestImageCollectionsEndpointRejectsPublicMutation(t *testing.T) {
+	app := newTestApp(t)
+	defer app.Close()
+	_, rawKey, err := app.auth.CreateAPIKey(service.AuthRoleUser, "collection-user", service.AuthOwner{ID: "linuxdo:collection-public", Name: "collection-public", Provider: service.AuthProviderLinuxDo})
+	if err != nil {
+		t.Fatalf("CreateAPIKey() error = %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/image-collections", strings.NewReader(`{"name":"公共","scope":"public"}`))
+	req.Header.Set("Authorization", "Bearer "+rawKey)
+	res := httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("public collection mutation status = %d body = %s", res.Code, res.Body.String())
+	}
+}
+
 func TestCreationTaskReferenceImageUploadAndJSONEdit(t *testing.T) {
 	app := newTestApp(t)
 	defer app.Close()

@@ -546,6 +546,8 @@ export type ManagedImageSummary = {
   owner_name?: string;
   owner_id?: string;
   library_scope?: "personal" | "team" | string;
+  collection_id?: string;
+  collection_name?: string;
   team_id?: string;
   team_name?: string;
   moved_by_user_id?: string;
@@ -618,6 +620,7 @@ export type ManagedImageListFilters = {
   orientation?: string;
   resolution?: string;
   aspect_ratio?: string;
+  collection_id?: string;
   tags?: string[];
 };
 
@@ -635,6 +638,25 @@ export type ManagedImageListResult = {
     storage_limit_bytes?: number;
   };
   team_storage?: TeamImageStorageSummary;
+};
+
+export type ManagedImageCollection = {
+  id: string;
+  name: string;
+  library_scope: "personal" | "team" | string;
+  owner_id?: string;
+  team_id?: string;
+  team_name?: string;
+  created_at: string;
+  updated_at: string;
+  images_count: number;
+};
+
+export const MANAGED_IMAGE_UNCLASSIFIED_COLLECTION_ID = "__unclassified__";
+
+export type ManagedImageCollectionsResult = {
+  items: ManagedImageCollection[];
+  unclassified_count: number;
 };
 
 export type SystemLog = {
@@ -2386,6 +2408,63 @@ export async function fetchManagedImageTags(filters: { scope?: ManagedImageListS
     `/api/images/tags${params.toString() ? `?${params.toString()}` : ""}`,
   );
   return Array.isArray(data.tags) ? data.tags : [];
+}
+
+export async function fetchManagedImageCollections(filters: { scope?: ManagedImageListScope; team_id?: string } = {}) {
+  const params = new URLSearchParams();
+  if (filters.scope) params.set("scope", filters.scope);
+  if (filters.team_id) params.set("team_id", filters.team_id);
+  const data = await httpRequest<{ items?: ManagedImageCollection[] | null; unclassified_count?: number | string | null }>(
+    `/api/image-collections${params.toString() ? `?${params.toString()}` : ""}`,
+  );
+  const unclassifiedCount = Number(data.unclassified_count);
+  return {
+    items: Array.isArray(data.items) ? data.items : [],
+    unclassified_count: Number.isFinite(unclassifiedCount) ? Math.max(0, unclassifiedCount) : 0,
+  };
+}
+
+export async function createManagedImageCollection(name: string, options: { scope?: ManagedImageListScope; team_id?: string } = {}) {
+  return httpRequest<{ item: ManagedImageCollection; items?: ManagedImageCollection[] | null; unclassified_count?: number | string | null }>("/api/image-collections", {
+    method: "POST",
+    body: { name, ...(options.scope ? { scope: options.scope } : {}), ...(options.team_id ? { team_id: options.team_id } : {}) },
+  });
+}
+
+export async function renameManagedImageCollection(id: string, name: string, options: { scope?: ManagedImageListScope; team_id?: string } = {}) {
+  return httpRequest<{ item: ManagedImageCollection; items?: ManagedImageCollection[] | null; unclassified_count?: number | string | null }>(`/api/image-collections/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    body: { name, ...(options.scope ? { scope: options.scope } : {}), ...(options.team_id ? { team_id: options.team_id } : {}) },
+  });
+}
+
+export async function deleteManagedImageCollection(id: string, options: { scope?: ManagedImageListScope; team_id?: string } = {}) {
+  const params = new URLSearchParams();
+  if (options.scope) params.set("scope", options.scope);
+  if (options.team_id) params.set("team_id", options.team_id);
+  return httpRequest<{ deleted: boolean; collection_id: string; cleared: number; items?: ManagedImageCollection[] | null; unclassified_count?: number | string | null }>(
+    `/api/image-collections/${encodeURIComponent(id)}${params.toString() ? `?${params.toString()}` : ""}`,
+    { method: "DELETE" },
+  );
+}
+
+export async function updateManagedImageCollectionItems(
+  collectionId: string,
+  paths: string[],
+  options: { scope?: ManagedImageListScope; team_id?: string } = {},
+) {
+  return httpRequest<{
+    updated: number;
+    missing: number;
+    paths: string[];
+    collection_id: string;
+    collection_name?: string;
+    items?: ManagedImageCollection[] | null;
+    unclassified_count?: number | string | null;
+  }>("/api/image-collections/items", {
+    method: "PATCH",
+    body: { collection_id: collectionId, paths, ...(options.scope ? { scope: options.scope } : {}), ...(options.team_id ? { team_id: options.team_id } : {}) },
+  });
 }
 
 export async function updateManagedImageTags(path: string, tags: string[], options: { scope?: ManagedImageListScope; team_id?: string } = {}) {

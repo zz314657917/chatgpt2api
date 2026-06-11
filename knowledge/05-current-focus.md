@@ -2,7 +2,7 @@
 title: Current Focus
 type: status
 repo: chatgpt2api
-last_verified: 2026-06-09
+last_verified: 2026-06-12
 ---
 
 # 当前稳定心智模型
@@ -20,6 +20,10 @@ chatgpt2api 当前不应再被理解为单纯“ChatGPT 官网能力封装服务
 - Sub2API 是用户、余额、充值、管理配置和扣费的唯一真源；chatgpt2api 只保留必要用户映射、创作站会话和前端产品面。
 - 未登录访问用户页时，会先进入 `/login`，再由登录页跳 Sub2API；普通用户默认不再暴露 API Key、Token、OpenAI-compatible 或本地管理员相关入口。
 - 顶部余额、充值入口和团队共享额度语义已经进入默认产品面；后续问题不要再只按 image workspace 或 white-label 细节理解。
+- 6 月 10 日之后，这条默认产品链又补进了三个稳定层：
+  - `session-probe` iframe + 本地 `/auth/logout` 清理组成的登录态同步层
+  - 站内 `/images/...` 展示 + `/api/images/download-url` + CDN TypeA 临时签名组成的对象存储下载层
+  - `collection_id` / 未归类筛选 / 团队素材权限组成的素材库 collections 层
 - `/image` 与 `/canvas` 仍是创作底座：连续编辑、继续创作、结果回填、自研画布、视频节点 fail-closed 和参数归一规则继续成立，但它们现在服务于独立用户版而不再是唯一主线。
 - `embedded session recovery + bound Sub2API key preservation` 仍是这条链路的稳定默认约束，而不只是 launch 页或登录页的小修。
 
@@ -41,6 +45,10 @@ chatgpt2api 当前不应再被理解为单纯“ChatGPT 官网能力封装服务
   - 嵌入模式下的认证保持优先级高于主题 reveal、provider 名称提示等纯展示体验；后者可以降级，认证连续性不能退化。
 - 管理端异步创作任务资源仍以 `/api/creation-tasks` 为根，并通过 `image-generations`、`image-edits`、`chat-completions`、`video-generations` 等子资源表达场景。
 - 团队模式 v1 当前只承诺“团队共享额度”最小可用闭环，知识入口应优先记录 `team_id`、`payer_user_id`、`actor_user_id` 语义，而不是把它误写成“调用队长 API”。
+- 隐藏 iframe 探针现在是默认登录态恢复机制的一部分；它不是临时调试页。若 Sub2 用户切换或退出，落叶必须清本地 HttpOnly cookie、前端缓存并回到 `/login`，不能继续持有旧用户。
+- 图片前端展示和下载已不再直接暴露对象存储元数据；如果要看真实下载能力，默认应从站内 `/images/...` 和 `/api/images/download-url` 入手，而不是继续假设前端持有 `object_url`。
+- 腾讯云 CDN TypeA 临时签名已经是当前受支持的生产下载路径之一；因此对象存储验收不再只是“图能打开”，还要验证 `sign`、TTL 和原始对象地址不可直读。
+- 素材库 collections 已进入当前稳定产品面：`/image-manager`、`/image`、`/canvas` 都能按全部 / 未归类 / 素材集筛选；公共只读、团队 owner/manager 写权限和“一图一素材集”是默认边界。
 - `/canvas` 当前仍是“复用现有能力的前端工作台”，不是独立后端系统：
   - 节点数据不保存 API key、`base_url`、`group_id`。
   - 图片本体继续由现有图片库和对象存储管理，画布只保存引用。
@@ -85,6 +93,9 @@ chatgpt2api 当前不应再被理解为单纯“ChatGPT 官网能力封装服务
 - 当前也不是通用多模型扩展仓库；最近主线集中在独立用户版入口、钱包/扣费桥接，以及图片工作台与节点画布的实际创作闭环。
 - 不要把 `/canvas` 误判成引入了 ComfyUI、Infinite-Canvas 代码或新的图像调度后端；当前只是站内已有图片链路上的新工作台。
 - 不要把 embedded session / bound key 修复误判成单纯 auth store 小修；它直接影响从 Sub2API 进入 `/image`、`/canvas` 后是否还能保持正确账号身份和路由。
+- 不要把 `session-probe` 当成纯前端调试 iframe；它已经直接决定切号、登出和余额同步是否正确。
+- 不要把对象存储下载能力误判成“前端拿 object_url 直接下”；当前默认路径是站内鉴权 + presign / CDN TypeA 临时签名。
+- 不要把素材库 collections 当成 `image-manager` 的孤立功能；它已经影响 `/image` 参考图选择和 `/canvas` 资产侧栏的默认工作流。
 - 不要把“视频模型隐藏”误判成纯前端展示条件；它反映的是当前能力边界依赖 Sub2API 绑定这一真实产品约束。
 - 不要把当前仓库默认理解成“继续做 `/canvas` 功能”或“继续打磨 image workspace UI”；最近更高优先级的是 bridge 配置、真实账号回跳、充值扣费、余额展示和团队空间闭环。
 - 仅看 README 和旧任务快照，容易漏掉独立用户版入口、Sub2API 钱包真源、团队共享额度 v1、per-user retention、continued edit、embedded session recovery、bound Sub2API key preservation、视频节点 fail-closed，以及 `/canvas` 自研节点画布这些新默认约束。

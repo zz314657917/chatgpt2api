@@ -7,7 +7,7 @@ import { Images, LoaderCircle, Maximize2, Minimize2, PanelRightOpen, Pin, Refres
 import { AuthenticatedImage } from "@/components/authenticated-image";
 import { setManagedImageDragData } from "@/components/managed-image-drag";
 import { Button } from "@/components/ui/button";
-import type { ManagedImageSummary } from "@/lib/api";
+import { MANAGED_IMAGE_UNCLASSIFIED_COLLECTION_ID, type ManagedImageCollection, type ManagedImageSummary } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 export type ManagedImageAssetSidebarTab = {
@@ -41,6 +41,10 @@ export type ManagedImageAssetSidebarProps = {
   tabs?: ManagedImageAssetSidebarTab[];
   activeTabId?: string;
   onActiveTabChange?: (tabId: string) => void;
+  collections?: ManagedImageCollection[];
+  unclassifiedCount?: number;
+  activeCollectionId?: string;
+  onCollectionChange?: (collectionId: string) => void;
   onExpandedChange?: (expanded: boolean) => void;
 };
 
@@ -68,14 +72,18 @@ export function ManagedImageAssetSidebar({
   wideClassName = "w-[680px] translate-x-0 p-3",
   defaultPinned = false,
   defaultExpanded = false,
-  title = "图片库",
+  title = "素材库",
   subtitle,
-  emptyLabel = "图片库暂无图片",
-  collapsedTitle = "展开图片库",
+  emptyLabel = "素材库暂无图片",
+  collapsedTitle = "展开素材库",
   accent = "sky",
   tabs,
   activeTabId,
   onActiveTabChange,
+  collections,
+  unclassifiedCount = 0,
+  activeCollectionId = "",
+  onCollectionChange,
   onExpandedChange,
 }: ManagedImageAssetSidebarProps) {
   const pinnedStorageKey = `${storagePrefix}-pinned`;
@@ -188,7 +196,7 @@ export function ManagedImageAssetSidebar({
               setPinnedState(!pinned);
             }
           }}
-          title={pinned ? "取消固定图片库" : expanded ? "固定图片库" : collapsedTitle}
+          title={pinned ? "取消固定素材库" : expanded ? "固定素材库" : collapsedTitle}
         >
           {expanded ? <Pin className={cn("size-4", pinned && "fill-current")} /> : <Images className="size-5" />}
         </button>
@@ -218,7 +226,7 @@ export function ManagedImageAssetSidebar({
               variant="ghost"
               className={cn("size-8 rounded-lg", iconButtonClass)}
               onClick={() => setWideState(!wide)}
-              title={wide ? "收回图片库宽度" : "扩大图片库显示范围"}
+              title={wide ? "收回素材库宽度" : "扩大素材库显示范围"}
             >
               {wide ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />}
             </Button>
@@ -228,11 +236,11 @@ export function ManagedImageAssetSidebar({
               variant="ghost"
               className={cn("size-8 rounded-lg", iconButtonClass)}
               onClick={() => setPinnedState(!pinned)}
-              title={pinned ? "取消固定图片库" : "固定图片库"}
+              title={pinned ? "取消固定素材库" : "固定素材库"}
             >
               <Pin className={cn("size-4", pinned && "fill-current")} />
             </Button>
-            <Button type="button" size="icon" variant="ghost" className={cn("size-8 rounded-lg", iconButtonClass)} onClick={onRefreshAssets} title="刷新图片库">
+            <Button type="button" size="icon" variant="ghost" className={cn("size-8 rounded-lg", iconButtonClass)} onClick={onRefreshAssets} title="刷新素材库">
               {loadingAssets ? <LoaderCircle className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
             </Button>
           </div>
@@ -265,6 +273,75 @@ export function ManagedImageAssetSidebar({
             })}
           </div>
         ) : null}
+        {collections && onCollectionChange ? (
+          <div className="mt-3 min-w-0 rounded-xl border border-border bg-muted/30 p-2 dark:border-slate-800 dark:bg-slate-950/30">
+            <div className="mb-1.5 flex items-center justify-between gap-2">
+              <span className={cn("text-[11px] font-semibold", subtleTextClass)}>素材集</span>
+              {activeCollectionId ? (
+                <button
+                  type="button"
+                  className="text-[11px] font-medium text-sky-600 dark:text-sky-300"
+                  onClick={() => onCollectionChange("")}
+                >
+                  清空
+                </button>
+              ) : null}
+            </div>
+            <div className="flex max-h-20 flex-wrap gap-1 overflow-y-auto">
+              <button
+                type="button"
+                className={cn(
+                  "inline-flex h-7 max-w-full items-center gap-1 rounded-lg px-2 text-[11px] font-medium transition",
+                  !activeCollectionId
+                    ? "bg-background text-foreground shadow-sm dark:bg-slate-900 dark:text-slate-100"
+                    : "text-muted-foreground hover:bg-background/70 hover:text-foreground dark:text-slate-500 dark:hover:bg-slate-900/80 dark:hover:text-slate-200",
+                )}
+                onClick={() => onCollectionChange("")}
+                title="全部素材"
+              >
+                全部
+              </button>
+              <button
+                type="button"
+                className={cn(
+                  "inline-flex h-7 max-w-full items-center gap-1 rounded-lg px-2 text-[11px] font-medium transition",
+                  activeCollectionId === MANAGED_IMAGE_UNCLASSIFIED_COLLECTION_ID
+                    ? "bg-background text-foreground shadow-sm dark:bg-slate-900 dark:text-slate-100"
+                    : "text-muted-foreground hover:bg-background/70 hover:text-foreground dark:text-slate-500 dark:hover:bg-slate-900/80 dark:hover:text-slate-200",
+                )}
+                onClick={() => onCollectionChange(MANAGED_IMAGE_UNCLASSIFIED_COLLECTION_ID)}
+                title="未归类素材"
+              >
+                <span className="truncate">未归类</span>
+                <span className={cn("rounded-full px-1.5 py-0.5 text-[10px]", activeCollectionId === MANAGED_IMAGE_UNCLASSIFIED_COLLECTION_ID ? countClass : "bg-background/80 dark:bg-slate-900")}>
+                  {unclassifiedCount}
+                </span>
+              </button>
+              {collections.map((collection) => {
+                const active = collection.id === activeCollectionId;
+                return (
+                  <button
+                    key={collection.id}
+                    type="button"
+                    className={cn(
+                      "inline-flex h-7 max-w-full items-center gap-1 rounded-lg px-2 text-[11px] font-medium transition",
+                      active
+                        ? "bg-background text-foreground shadow-sm dark:bg-slate-900 dark:text-slate-100"
+                        : "text-muted-foreground hover:bg-background/70 hover:text-foreground dark:text-slate-500 dark:hover:bg-slate-900/80 dark:hover:text-slate-200",
+                    )}
+                    onClick={() => onCollectionChange(collection.id)}
+                    title={collection.name}
+                  >
+                    <span className="truncate">{collection.name}</span>
+                    <span className={cn("rounded-full px-1.5 py-0.5 text-[10px]", active ? countClass : "bg-background/80 dark:bg-slate-900")}>
+                      {collection.images_count}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ) : null}
         <div className="mt-3 min-h-0 flex-1 overflow-auto pr-1">
           {assets.length > 0 ? (
             <VirtuosoGrid
@@ -287,7 +364,7 @@ export function ManagedImageAssetSidebar({
               )}
             />
           ) : (
-            <div className={cn("rounded-xl border p-4 text-center text-xs", dashedClass)}>{loadingAssets ? "正在加载图片库..." : emptyLabel}</div>
+            <div className={cn("rounded-xl border p-4 text-center text-xs", dashedClass)}>{loadingAssets ? "正在加载素材库..." : emptyLabel}</div>
           )}
         </div>
       </div>
@@ -324,6 +401,9 @@ function ManagedImageAssetTile({
       </button>
       <div className="space-y-1 px-2 py-2">
         <div className="truncate text-[11px] font-medium text-foreground dark:text-slate-300">{asset.name || asset.path}</div>
+        {asset.collection_name ? (
+          <div className="truncate text-[10px] font-medium text-sky-600 dark:text-sky-300">{asset.collection_name}</div>
+        ) : null}
         <div className={cn("grid gap-1", showCanvasAction ? "grid-cols-2" : "grid-cols-1")}>
           <Button type="button" size="sm" variant="ghost" className={cn("h-7 rounded-md px-1 text-[11px]", iconButtonClass)} onClick={onAddToComposer}>
             输入
