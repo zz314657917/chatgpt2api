@@ -1,6 +1,6 @@
 # Current Task
 
-最后更新：2026-06-10 18:21 +08:00
+最后更新：2026-06-11 09:34 +08:00
 
 ## 背景
 
@@ -34,6 +34,8 @@ Sub2API 对应桥接提交为 `fe2f80be1 feat: add studio bridge integration`。
 - 2026-06-10 浏览器验收确认：Sub2 登录后 launch 到落叶 `/image`，探针 iframe 存在且源为 `http://127.0.0.1:62080/studio-bridge/session-probe`；清空 Sub2 登录态后访问落叶会自动跳 `/login`，随后 `/auth/session` 返回 401，再访问 `/image` 仍停在 `/login`，不会继续读旧账号。
 - 2026-06-10 对象存储安全收口：图片展示和生成结果统一返回站内 `/images/...`，不再向前端暴露对象存储 `object_key/object_url/storage_backend`；用户下载图片时通过 `/api/images/download-url` 鉴权后获取短期 presigned `GetObject` URL，适配私有读写 bucket，下载流量可直连国内对象存储/CDN。
 - 2026-06-10 腾讯云 CDN URL 鉴权补齐：当配置 `CHATGPT2API_IMAGE_OBJECT_STORAGE_PUBLIC_BASE_URL` 和 `CHATGPT2API_IMAGE_OBJECT_STORAGE_CDN_AUTH_KEY` 时，图片下载链接改为腾讯云 CDN TypeA `sign=timestamp-rand-uid-md5hash` 临时 URL；`expires_at` 跟 `CHATGPT2API_IMAGE_OBJECT_STORAGE_CDN_AUTH_TTL_SECONDS` 对齐，默认 1800 秒。
+- 2026-06-11 可复用素材库 v1 已落地：图片元数据支持 `collection_id/collection_name`；新增 `/api/image-collections`；`/image-manager` 提供素材集侧栏、详情面板、批量归类和创作引用；`/image`、`/canvas` 侧边图库可按素材集筛选；`/image` 输入区有轻量 `@素材` 选择器，可从当前素材筛选结果加入参考图；公共图库只读、团队素材集修改仍受 owner/manager 权限约束。
+- 2026-06-11 素材库体验补齐已落地：用户可见“图片库/图库”已统一为“素材库”；`/api/images?collection_id=__unclassified__` 支持未归类筛选；素材集接口返回 `unclassified_count`；`/image-manager`、`/image`、`/canvas` 均支持全部/未归类/素材集筛选；详情与批量归类入口补充“一张图只能属于一个素材集”、公共只读和团队权限提示；session-probe iframe 只加载 `/studio-bridge/session-probe`。
 
 ## 下一步
 
@@ -44,6 +46,7 @@ Sub2API 对应桥接提交为 `fe2f80be1 feat: add studio bridge integration`。
 - CDN 生产验收需确认：下载 URL 为 CDN 域名且带 `sign`；去掉 `sign` 或等待过期后返回 403；直接访问 COS 原始对象地址失败；CDN 已具备回源私有 COS 的授权或等效配置。
 - 如继续核对团队使用记录，优先用真实团队账号提交一条对话和一条生图，验证团队表价格分别显示类似 `¥0.001` / `¥0.051`，Sub2API 使用记录同步存在对应 commit 记录。
 - 如继续开发，优先补生产联调脚本和 Playwright 最小闭环，而不是继续扩展新功能。
+- 如继续素材库验收，入口链路和 `/image` 素材库 smoke 已通过；下一步优先用有真实图片的登录态浏览器跑 `/image-manager` 新建 `ui` 素材集、批量加入/移出、团队 manager 与普通成员权限、公共图库只读，以及 `/canvas` 从素材集加入画布。
 - 如继续会话/余额同步，优先做真实浏览器人工切号测试：Sub2 账号 A -> 落叶 -> Sub2 切账号 B -> 回落叶，应跳 `/login` 后重新 launch，不能静默继续用账号 A。
 - 生产环境仍需人工确认真实支付回调、真实上游创作扣费、网络超时/DB 故障注入和迁移演练；本地验收不触碰真钱支付，也不消耗真实上游模型。
 
@@ -109,3 +112,19 @@ Sub2API 对应桥接提交为 `fe2f80be1 feat: add studio bridge integration`。
   - `cd F:/java/chatgpt2api/web && npm.cmd run lint` 通过。
   - `cd F:/java/chatgpt2api/web && npm.cmd run build` 通过。
   - `cd F:/java/chatgpt2api && git diff --check` 通过，仅 Windows LF/CRLF 工作区提示。
+- 2026-06-11 可复用素材库 v1 验证：
+  - `cd F:/java/chatgpt2api/web && npm.cmd run lint` 通过。
+  - `cd F:/java/chatgpt2api/web && npm.cmd run build` 通过。
+  - `cd F:/java/chatgpt2api && go test ./internal/service ./internal/httpapi` 通过。
+  - `cd F:/java/chatgpt2api && go test ./...` 通过。
+  - `cd F:/java/chatgpt2api && git diff --check` 通过，仅 Windows LF/CRLF 工作区提示。
+  - 首轮未执行真实浏览器素材库验收，需后续用登录态补测个人/团队/公共 scope 和创作台/Canvas 引用链路。
+- 2026-06-11 素材库体验补齐与 Studio Bridge 本地修复验证：
+  - `cd F:/java/chatgpt2api/web && npm.cmd run lint` 通过。
+  - `cd F:/java/chatgpt2api/web && npm.cmd run build` 通过。
+  - `cd F:/java/chatgpt2api && go test ./internal/service ./internal/httpapi` 通过。
+  - `cd F:/mcplugins/sub2api/backend && go test ./internal/service ./internal/server` 通过。
+  - 两仓库 `git diff --check` 通过，仅 chatgpt2api 有 Windows LF/CRLF 工作区提示。
+  - 本地容器已更新并健康：`chatgpt2api:local-patched` 运行在 `127.0.0.1:8081`，`sub2api:local` 运行在 `127.0.0.1:62080`；`/health` 均正常。
+  - 浏览器 smoke：一次性本地用户注册后从 `http://127.0.0.1:62080/chat-images` 成功跳转到 `http://127.0.0.1:8081/image`；网络记录显示 `POST /api/v1/user/studio-bridge/launch`、`POST /auth/sub2api/launch`、Sub2API `redeem/user-summary` 均 200；iframe `src` 为 `/studio-bridge/session-probe?...parent_origin=http://127.0.0.1:8081`，performance entries 中没有 `http://127.0.0.1:62080/` 根路径 iframe 请求，控制台未出现 `frame-ancestors 'none'` / CSP iframe 报错。
+  - 仍未完整跑 `/image-manager` 有图归类和 `/canvas` 加入画布的点击验收；需要后续用有素材数据的登录态继续补。

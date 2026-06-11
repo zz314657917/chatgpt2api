@@ -295,7 +295,7 @@ export function ImageStorageGovernanceCard() {
               {cleanupAction === "thumbnails"
                 ? "将删除缩略图和中图预览缓存，原图和参考图不会被删除。"
                 : cleanupAction === "quota"
-                  ? "将按容量上限删除最旧的非公开图片，公开图库图片默认保留。"
+                  ? "将按容量上限删除最旧的非公开图片，公共素材库图片默认保留。"
                   : "将删除保留窗口以前的非公开图片，并同步清理缩略图、元数据和参考图。"}
             </DialogDescription>
           </DialogHeader>

@@ -167,12 +167,16 @@ export default function CanvasPage() {
             onAddAssetToComposer={canvas.addAssetToComposer}
             storagePrefix="smart-canvas-asset-sidebar"
             showOpenButton={false}
-            title={canvas.assetLibraryScope === "public" ? "公共图片库" : "图片库"}
+            title={canvas.assetLibraryScope === "team" ? "团队素材库" : canvas.assetLibraryScope === "public" ? "公共素材库" : "个人素材库"}
             subtitle={canvas.assetLibraryScope === "public" ? `${canvas.assets.length} 张公开素材 · 点击加入输入` : undefined}
-            emptyLabel={canvas.assetLibraryScope === "public" ? "公共图片库暂无图片" : undefined}
+            emptyLabel={canvas.assetLibraryScope === "team" ? "团队素材库暂无图片" : canvas.assetLibraryScope === "public" ? "公共素材库暂无图片" : undefined}
             tabs={canvas.assetLibraryTabs}
             activeTabId={canvas.assetLibraryScope}
             onActiveTabChange={canvas.setAssetLibraryScope}
+            collections={canvas.assetCollections}
+            unclassifiedCount={canvas.assetUnclassifiedCount}
+            activeCollectionId={canvas.activeAssetCollectionId}
+            onCollectionChange={canvas.setAssetCollection}
             defaultExpanded
             onExpandedChange={canvas.handleAssetSidebarExpandedChange}
           />

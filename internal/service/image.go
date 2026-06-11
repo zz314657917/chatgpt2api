@@ -47,7 +47,10 @@ const (
 	ImageVisibilityPrivate = "private"
 	ImageVisibilityPublic  = "public"
 
+	ImageCollectionUnclassifiedID = "__unclassified__"
+
 	imageIndexDocumentName         = "image_index.json"
+	imageCollectionsDocumentName   = "image_collections.json"
 	tempImageReferenceDocumentName = "temp_image_references.json"
 	imageIndexVersion              = 1
 	defaultImagePageSize           = 50
@@ -105,6 +108,8 @@ type imageMetadata struct {
 	OwnerID           string
 	OwnerName         string
 	LibraryScope      string
+	CollectionID      string
+	CollectionName    string
 	TeamID            string
 	TeamName          string
 	MovedByUserID     string
@@ -279,7 +284,31 @@ type ImageListOptions struct {
 	Orientation      string
 	ResolutionPreset string
 	AspectRatio      string
+	CollectionID     string
 	Tags             []string
+}
+
+type ImageCollection struct {
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	LibraryScope string `json:"library_scope"`
+	OwnerID      string `json:"owner_id,omitempty"`
+	TeamID       string `json:"team_id,omitempty"`
+	TeamName     string `json:"team_name,omitempty"`
+	CreatedAt    string `json:"created_at"`
+	UpdatedAt    string `json:"updated_at"`
+	ImagesCount  int    `json:"images_count"`
+}
+
+type ImageCollectionsResult struct {
+	Items             []ImageCollection `json:"items"`
+	UnclassifiedCount int               `json:"unclassified_count"`
+}
+
+type imageCollectionDocument struct {
+	Version   int               `json:"version"`
+	UpdatedAt string            `json:"updated_at"`
+	Items     []ImageCollection `json:"items"`
 }
 
 type ImageService struct {
@@ -356,6 +385,8 @@ type imageIndexEntry struct {
 	OwnerID           string   `json:"owner_id,omitempty"`
 	OwnerName         string   `json:"owner_name,omitempty"`
 	LibraryScope      string   `json:"library_scope,omitempty"`
+	CollectionID      string   `json:"collection_id,omitempty"`
+	CollectionName    string   `json:"collection_name,omitempty"`
 	TeamID            string   `json:"team_id,omitempty"`
 	TeamName          string   `json:"team_name,omitempty"`
 	MovedByUserID     string   `json:"moved_by_user_id,omitempty"`
@@ -705,6 +736,12 @@ func (s *ImageService) managedImageSummaryItem(baseURL string, entry imageIndexE
 	if entry.OwnerName != "" {
 		item["owner_name"] = entry.OwnerName
 	}
+	if entry.CollectionID != "" {
+		item["collection_id"] = entry.CollectionID
+	}
+	if entry.CollectionName != "" {
+		item["collection_name"] = entry.CollectionName
+	}
 	if entry.TeamID != "" {
 		item["team_id"] = entry.TeamID
 	}
@@ -983,6 +1020,8 @@ func (s *ImageService) imageIndexEntryFromRef(ref imageFileRef) imageIndexEntry 
 		OwnerID:           meta.OwnerID,
 		OwnerName:         meta.OwnerName,
 		LibraryScope:      meta.LibraryScope,
+		CollectionID:      meta.CollectionID,
+		CollectionName:    meta.CollectionName,
 		TeamID:            meta.TeamID,
 		TeamName:          meta.TeamName,
 		MovedByUserID:     meta.MovedByUserID,
@@ -1106,6 +1145,15 @@ func imageIndexEntryMatchesOptions(entry imageIndexEntry, options ImageListOptio
 	if ratio := strings.TrimSpace(strings.ToLower(options.AspectRatio)); ratio != "" && ratio != "all" && imageIndexAspectRatioFilter(entry) != ratio {
 		return false
 	}
+	if collectionID := normalizeImageCollectionID(options.CollectionID); collectionID != "" {
+		if collectionID == ImageCollectionUnclassifiedID {
+			if entry.CollectionID != "" {
+				return false
+			}
+		} else if entry.CollectionID != collectionID {
+			return false
+		}
+	}
 	if len(options.Tags) > 0 && !imageTagsContainAll(entry.Tags, options.Tags) {
 		return false
 	}
@@ -1124,6 +1172,8 @@ func imageIndexEntryContainsKeyword(entry imageIndexEntry, keyword string) bool 
 		entry.CreatedAt,
 		entry.OwnerID,
 		entry.OwnerName,
+		entry.CollectionID,
+		entry.CollectionName,
 		entry.Visibility,
 		entry.OutputFormat,
 		entry.StorageBackend,
@@ -1795,6 +1845,8 @@ func (s *ImageService) MoveImagesToTeamLibrary(paths []string, actorID, teamID, 
 	for _, candidate := range candidates {
 		meta := candidate.meta
 		meta.LibraryScope = ImageLibraryScopeTeam
+		meta.CollectionID = ""
+		meta.CollectionName = ""
 		meta.TeamID = teamID
 		meta.TeamName = teamName
 		meta.MovedByUserID = actorID
@@ -2248,6 +2300,12 @@ func mergeImageMetadataWithIndexEntry(meta imageMetadata, entry imageIndexEntry)
 	if meta.LibraryScope == "" || meta.LibraryScope == ImageLibraryScopePersonal && entry.LibraryScope == ImageLibraryScopeTeam {
 		meta.LibraryScope = entry.LibraryScope
 	}
+	if meta.CollectionID == "" {
+		meta.CollectionID = entry.CollectionID
+	}
+	if meta.CollectionName == "" {
+		meta.CollectionName = entry.CollectionName
+	}
 	if meta.TeamID == "" {
 		meta.TeamID = entry.TeamID
 	}
@@ -2287,6 +2345,8 @@ func normalizeImageMetadata(raw map[string]any) imageMetadata {
 		OwnerID:           strings.TrimSpace(toString(raw["owner_id"])),
 		OwnerName:         strings.TrimSpace(toString(raw["owner_name"])),
 		LibraryScope:      libraryScope,
+		CollectionID:      normalizeImageCollectionID(toString(raw["collection_id"])),
+		CollectionName:    normalizeImageCollectionName(toString(raw["collection_name"])),
 		TeamID:            teamID,
 		TeamName:          strings.TrimSpace(toString(raw["team_name"])),
 		MovedByUserID:     strings.TrimSpace(toString(raw["moved_by_user_id"])),
@@ -2514,6 +2574,429 @@ func (s *ImageService) DeleteImageTag(tag string, scope ImageAccessScope) (map[s
 	return map[string]any{"deleted": updated, "tag": tag, "paths": paths}, nil
 }
 
+func (s *ImageService) loadImageCollections() []ImageCollection {
+	var value any
+	if s.store != nil {
+		value = loadStoredJSON(s.store, imageCollectionsDocumentName)
+	} else {
+		data, err := os.ReadFile(s.imageCollectionsDocumentPath())
+		if err == nil {
+			_ = json.Unmarshal(data, &value)
+		}
+	}
+	rawItems := util.AsMapSlice(value)
+	if len(rawItems) == 0 {
+		rawItems = util.AsMapSlice(util.StringMap(value)["items"])
+	}
+	items := make([]ImageCollection, 0, len(rawItems))
+	seen := map[string]struct{}{}
+	for _, raw := range rawItems {
+		item := normalizeImageCollection(raw)
+		if item.ID == "" {
+			continue
+		}
+		if _, ok := seen[item.ID]; ok {
+			continue
+		}
+		seen[item.ID] = struct{}{}
+		items = append(items, item)
+	}
+	return items
+}
+
+func (s *ImageService) saveImageCollections(items []ImageCollection) error {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	out := make([]ImageCollection, 0, len(items))
+	seen := map[string]struct{}{}
+	for _, item := range items {
+		item = normalizeImageCollection(structToMapImageCollection(item))
+		if item.ID == "" {
+			continue
+		}
+		if item.CreatedAt == "" {
+			item.CreatedAt = now
+		}
+		if item.UpdatedAt == "" {
+			item.UpdatedAt = now
+		}
+		if _, ok := seen[item.ID]; ok {
+			continue
+		}
+		seen[item.ID] = struct{}{}
+		out = append(out, item)
+	}
+	doc := imageCollectionDocument{Version: 1, UpdatedAt: now, Items: out}
+	if s.store != nil {
+		return saveStoredJSON(s.store, imageCollectionsDocumentName, doc)
+	}
+	if err := os.MkdirAll(filepath.Dir(s.imageCollectionsDocumentPath()), 0o755); err != nil {
+		return err
+	}
+	return writeJSONFile(s.imageCollectionsDocumentPath(), doc)
+}
+
+func (s *ImageService) imageCollectionsDocumentPath() string {
+	return filepath.Join(s.config.ImageMetadataDir(), imageCollectionsDocumentName)
+}
+
+func (s *ImageService) imageCollectionByID(id string, scope ImageAccessScope) (ImageCollection, bool) {
+	id = normalizeImageCollectionID(id)
+	if id == "" {
+		return ImageCollection{}, false
+	}
+	for _, collection := range s.loadImageCollections() {
+		if collection.ID == id && imageCollectionMatchesScope(collection, scope) {
+			return collection, true
+		}
+	}
+	return ImageCollection{}, false
+}
+
+func (s *ImageService) imageCollectionCounts(scope ImageAccessScope) map[string]int {
+	counts := map[string]int{}
+	for _, entry := range s.imageIndexEntries() {
+		if !imageIndexEntryMatchesScope(entry, scope) || entry.CollectionID == "" {
+			continue
+		}
+		counts[entry.CollectionID]++
+	}
+	return counts
+}
+
+func (s *ImageService) unclassifiedImageCount(scope ImageAccessScope) int {
+	count := 0
+	for _, entry := range s.imageIndexEntries() {
+		if imageIndexEntryMatchesScope(entry, scope) && entry.CollectionID == "" {
+			count++
+		}
+	}
+	return count
+}
+
+func (s *ImageService) renameImageCollectionOnImages(collectionID, name string, scope ImageAccessScope) error {
+	imageRoot, err := filepath.Abs(s.config.ImagesDir())
+	if err != nil {
+		return err
+	}
+	for _, entry := range s.imageIndexEntries() {
+		if entry.CollectionID != collectionID || !imageIndexEntryMatchesScope(entry, scope) {
+			continue
+		}
+		ref, err := s.imageFileRef(imageRoot, entry.Path)
+		if err != nil {
+			continue
+		}
+		meta := s.imageMetadata(ref.rel)
+		if !imageMetadataAllowsMutation(meta, scope) || meta.CollectionID != collectionID {
+			continue
+		}
+		meta.CollectionName = name
+		if err := s.writeImageMetadata(ref.rel, meta); err != nil {
+			return err
+		}
+		s.upsertImageIndexEntry(ref)
+	}
+	return nil
+}
+
+func (s *ImageService) clearImageCollectionOnImages(collectionID string, scope ImageAccessScope) (int, error) {
+	imageRoot, err := filepath.Abs(s.config.ImagesDir())
+	if err != nil {
+		return 0, err
+	}
+	cleared := 0
+	for _, entry := range s.imageIndexEntries() {
+		if entry.CollectionID != collectionID || !imageIndexEntryMatchesScope(entry, scope) {
+			continue
+		}
+		ref, err := s.imageFileRef(imageRoot, entry.Path)
+		if err != nil {
+			continue
+		}
+		meta := s.imageMetadata(ref.rel)
+		if !imageMetadataAllowsMutation(meta, scope) || meta.CollectionID != collectionID {
+			continue
+		}
+		meta.CollectionID = ""
+		meta.CollectionName = ""
+		if err := s.writeImageMetadata(ref.rel, meta); err != nil {
+			return cleared, err
+		}
+		s.upsertImageIndexEntry(ref)
+		cleared++
+	}
+	return cleared, nil
+}
+
+func newImageCollectionForScope(name string, scope ImageAccessScope, teamName string) (ImageCollection, error) {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	collection := ImageCollection{
+		ID:        "col_" + util.SHA1Short(util.NewUUID()+":"+name, 20),
+		Name:      name,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	if scope.TeamID != "" {
+		collection.LibraryScope = ImageLibraryScopeTeam
+		collection.TeamID = strings.TrimSpace(scope.TeamID)
+		collection.TeamName = strings.TrimSpace(teamName)
+		return collection, nil
+	}
+	if scope.OwnerID != "" {
+		collection.LibraryScope = ImageLibraryScopePersonal
+		collection.OwnerID = strings.TrimSpace(scope.OwnerID)
+		return collection, nil
+	}
+	return ImageCollection{}, errors.New("collection scope is required")
+}
+
+func normalizeImageCollection(raw map[string]any) ImageCollection {
+	scope := normalizeImageLibraryScope(toString(raw["library_scope"]))
+	teamID := strings.TrimSpace(toString(raw["team_id"]))
+	if scope != ImageLibraryScopeTeam || teamID == "" {
+		scope = ImageLibraryScopePersonal
+		teamID = ""
+	}
+	id := normalizeImageCollectionID(toString(raw["id"]))
+	return ImageCollection{
+		ID:           id,
+		Name:         normalizeImageCollectionName(toString(raw["name"])),
+		LibraryScope: scope,
+		OwnerID:      strings.TrimSpace(toString(raw["owner_id"])),
+		TeamID:       teamID,
+		TeamName:     strings.TrimSpace(toString(raw["team_name"])),
+		CreatedAt:    strings.TrimSpace(toString(raw["created_at"])),
+		UpdatedAt:    strings.TrimSpace(toString(raw["updated_at"])),
+		ImagesCount:  util.ToInt(raw["images_count"], 0),
+	}
+}
+
+func structToMapImageCollection(item ImageCollection) map[string]any {
+	return map[string]any{
+		"id":            item.ID,
+		"name":          item.Name,
+		"library_scope": item.LibraryScope,
+		"owner_id":      item.OwnerID,
+		"team_id":       item.TeamID,
+		"team_name":     item.TeamName,
+		"created_at":    item.CreatedAt,
+		"updated_at":    item.UpdatedAt,
+		"images_count":  item.ImagesCount,
+	}
+}
+
+func imageCollectionMatchesScope(collection ImageCollection, scope ImageAccessScope) bool {
+	if scope.All {
+		return true
+	}
+	if scope.TeamID != "" {
+		return collection.LibraryScope == ImageLibraryScopeTeam && collection.TeamID == scope.TeamID
+	}
+	if scope.Public {
+		return false
+	}
+	return scope.OwnerID != "" && collection.LibraryScope == ImageLibraryScopePersonal && collection.OwnerID == scope.OwnerID
+}
+
+func (s *ImageService) ListImageCollections(scope ImageAccessScope) []ImageCollection {
+	collections := s.loadImageCollections()
+	counts := s.imageCollectionCounts(scope)
+	byID := make(map[string]ImageCollection, len(collections)+len(counts))
+	for _, collection := range collections {
+		if !imageCollectionMatchesScope(collection, scope) {
+			continue
+		}
+		collection.ImagesCount = counts[collection.ID]
+		byID[collection.ID] = collection
+	}
+	for _, entry := range s.imageIndexEntries() {
+		if !imageIndexEntryMatchesScope(entry, scope) || entry.CollectionID == "" {
+			continue
+		}
+		if _, ok := byID[entry.CollectionID]; ok {
+			continue
+		}
+		collection := ImageCollection{
+			ID:           entry.CollectionID,
+			Name:         firstNonEmptyString(entry.CollectionName, "素材集"),
+			LibraryScope: normalizeImageLibraryScope(entry.LibraryScope),
+			OwnerID:      entry.OwnerID,
+			TeamID:       entry.TeamID,
+			TeamName:     entry.TeamName,
+			ImagesCount:  counts[entry.CollectionID],
+		}
+		byID[collection.ID] = collection
+	}
+	result := make([]ImageCollection, 0, len(byID))
+	for _, collection := range byID {
+		result = append(result, collection)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].ImagesCount != result[j].ImagesCount {
+			return result[i].ImagesCount > result[j].ImagesCount
+		}
+		return strings.ToLower(result[i].Name) < strings.ToLower(result[j].Name)
+	})
+	return result
+}
+
+func (s *ImageService) ListImageCollectionsResult(scope ImageAccessScope) ImageCollectionsResult {
+	return ImageCollectionsResult{
+		Items:             s.ListImageCollections(scope),
+		UnclassifiedCount: s.unclassifiedImageCount(scope),
+	}
+}
+
+func (s *ImageService) CreateImageCollection(name string, scope ImageAccessScope, teamName string) (ImageCollection, error) {
+	name = normalizeImageCollectionName(name)
+	if name == "" {
+		return ImageCollection{}, errors.New("collection name is required")
+	}
+	collection, err := newImageCollectionForScope(name, scope, teamName)
+	if err != nil {
+		return ImageCollection{}, err
+	}
+	collections := s.loadImageCollections()
+	for _, existing := range collections {
+		if imageCollectionMatchesScope(existing, scope) && strings.EqualFold(existing.Name, collection.Name) {
+			return ImageCollection{}, errors.New("collection name already exists")
+		}
+	}
+	collections = append(collections, collection)
+	if err := s.saveImageCollections(collections); err != nil {
+		return ImageCollection{}, err
+	}
+	return collection, nil
+}
+
+func (s *ImageService) RenameImageCollection(id, name string, scope ImageAccessScope) (ImageCollection, error) {
+	id = normalizeImageCollectionID(id)
+	name = normalizeImageCollectionName(name)
+	if id == "" {
+		return ImageCollection{}, errors.New("collection id is required")
+	}
+	if name == "" {
+		return ImageCollection{}, errors.New("collection name is required")
+	}
+	collections := s.loadImageCollections()
+	index := -1
+	for i, collection := range collections {
+		if collection.ID == id && imageCollectionMatchesScope(collection, scope) {
+			index = i
+			break
+		}
+	}
+	if index < 0 {
+		return ImageCollection{}, errors.New("collection not found")
+	}
+	for _, existing := range collections {
+		if existing.ID != id && imageCollectionMatchesScope(existing, scope) && strings.EqualFold(existing.Name, name) {
+			return ImageCollection{}, errors.New("collection name already exists")
+		}
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	collections[index].Name = name
+	collections[index].UpdatedAt = now
+	if err := s.saveImageCollections(collections); err != nil {
+		return ImageCollection{}, err
+	}
+	if err := s.renameImageCollectionOnImages(id, name, scope); err != nil {
+		return ImageCollection{}, err
+	}
+	counts := s.imageCollectionCounts(scope)
+	collections[index].ImagesCount = counts[id]
+	return collections[index], nil
+}
+
+func (s *ImageService) DeleteImageCollection(id string, scope ImageAccessScope) (map[string]any, error) {
+	id = normalizeImageCollectionID(id)
+	if id == "" {
+		return nil, errors.New("collection id is required")
+	}
+	collections := s.loadImageCollections()
+	next := make([]ImageCollection, 0, len(collections))
+	deleted := false
+	for _, collection := range collections {
+		if collection.ID == id && imageCollectionMatchesScope(collection, scope) {
+			deleted = true
+			continue
+		}
+		next = append(next, collection)
+	}
+	if !deleted {
+		return nil, errors.New("collection not found")
+	}
+	if err := s.saveImageCollections(next); err != nil {
+		return nil, err
+	}
+	cleared, err := s.clearImageCollectionOnImages(id, scope)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"deleted": true, "collection_id": id, "cleared": cleared}, nil
+}
+
+func (s *ImageService) UpdateImageCollectionItems(collectionID string, paths []string, scope ImageAccessScope) (map[string]any, error) {
+	collectionID = normalizeImageCollectionID(collectionID)
+	collectionName := ""
+	if collectionID != "" {
+		collection, ok := s.imageCollectionByID(collectionID, scope)
+		if !ok {
+			return nil, errors.New("collection not found")
+		}
+		collectionName = collection.Name
+	}
+	if len(paths) == 0 {
+		return nil, errors.New("paths is required")
+	}
+	imageRoot, err := filepath.Abs(s.config.ImagesDir())
+	if err != nil {
+		return nil, err
+	}
+	seen := make(map[string]struct{}, len(paths))
+	updated := 0
+	missing := 0
+	updatedPaths := make([]string, 0, len(paths))
+	for _, value := range paths {
+		rel, err := cleanImageRelativePath(value)
+		if err != nil {
+			return nil, err
+		}
+		if _, ok := seen[rel]; ok {
+			continue
+		}
+		seen[rel] = struct{}{}
+		ref, err := s.imageFileRef(imageRoot, rel)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				missing++
+				continue
+			}
+			return nil, err
+		}
+		meta := s.imageMetadata(ref.rel)
+		if !imageMetadataAllowsMutation(meta, scope) {
+			missing++
+			continue
+		}
+		meta.CollectionID = collectionID
+		meta.CollectionName = collectionName
+		if err := s.writeImageMetadata(ref.rel, meta); err != nil {
+			return nil, err
+		}
+		s.upsertImageIndexEntry(ref)
+		updated++
+		updatedPaths = append(updatedPaths, ref.rel)
+	}
+	return map[string]any{
+		"updated":         updated,
+		"missing":         missing,
+		"paths":           updatedPaths,
+		"collection_id":   collectionID,
+		"collection_name": collectionName,
+	}, nil
+}
+
 func (s *ImageService) uploadImageObject(rel string, data []byte, contentType string) imagestore.StoredObject {
 	ctx, cancel := imagestore.UploadTimeoutContext()
 	defer cancel()
@@ -2548,6 +3031,12 @@ func (s *ImageService) writeImageMetadata(rel string, meta imageMetadata) error 
 		value["owner_name"] = meta.OwnerName
 	}
 	value["library_scope"] = normalizeImageLibraryScope(meta.LibraryScope)
+	if meta.CollectionID != "" {
+		value["collection_id"] = meta.CollectionID
+	}
+	if meta.CollectionName != "" {
+		value["collection_name"] = meta.CollectionName
+	}
 	if meta.TeamID != "" {
 		value["team_id"] = meta.TeamID
 	}
@@ -3328,6 +3817,12 @@ func addImageMetadataFields(item map[string]any, meta imageMetadata, optionsValu
 		item["owner_name"] = meta.OwnerName
 	}
 	item["library_scope"] = meta.LibraryScope
+	if meta.CollectionID != "" {
+		item["collection_id"] = meta.CollectionID
+	}
+	if meta.CollectionName != "" {
+		item["collection_name"] = meta.CollectionName
+	}
 	if meta.TeamID != "" {
 		item["team_id"] = meta.TeamID
 	}
@@ -3509,6 +4004,39 @@ func removeImageTag(tags []string, target string) []string {
 		}
 	}
 	return out
+}
+
+func normalizeImageCollectionID(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	var builder strings.Builder
+	for _, char := range value {
+		switch {
+		case char >= 'a' && char <= 'z':
+			builder.WriteRune(char)
+		case char >= 'A' && char <= 'Z':
+			builder.WriteRune(char + ('a' - 'A'))
+		case char >= '0' && char <= '9':
+			builder.WriteRune(char)
+		case char == '-' || char == '_':
+			builder.WriteRune(char)
+		}
+		if builder.Len() >= 64 {
+			break
+		}
+	}
+	return builder.String()
+}
+
+func normalizeImageCollectionName(value string) string {
+	value = strings.TrimSpace(value)
+	value = strings.Join(strings.Fields(value), " ")
+	if len([]rune(value)) > 40 {
+		value = string([]rune(value)[:40])
+	}
+	return value
 }
 
 func uploadedImageContentType(data []byte, value string) string {

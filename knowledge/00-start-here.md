@@ -1,6 +1,6 @@
 # ChatGPT2API Knowledge Entry
 
-Last updated: 2026-06-09
+Last updated: 2026-06-12
 
 ## Purpose
 
@@ -13,7 +13,7 @@ This directory stores project-local context that is useful across Codex sessions
 3. Read `knowledge/03-build-and-verify.md` for build/test commands and image-workspace verification entry points.
 4. Read `knowledge/tasks/current-task.md` when continuing an unfinished task.
 5. Read `knowledge/tasks/timeline.md` when the user asks for recent history, phase summary, or recovery context.
-6. Read domain notes only when they match the current task. For `/canvas`, Sub2API launch/redeem, or embedded-session issues, read `knowledge/06-canvas-and-embedded-session.md`. For `/canvas` browser acceptance, read `knowledge/07-canvas-manual-checklist.md`. Existing ChatGPT web protocol research remains under `jshook/docs/`.
+6. Read domain notes only when they match the current task. For `luoye` independent-user mode, Sub2API launch/redeem, wallet billing, session-probe, object storage downloads, or image collections, read `knowledge/08-luoye-independent-mode.md`. For `/canvas`, Sub2API launch/redeem, or embedded-session issues, read `knowledge/06-canvas-and-embedded-session.md`. For `/canvas` browser acceptance, read `knowledge/07-canvas-manual-checklist.md`. Existing ChatGPT web protocol research remains under `jshook/docs/`.
 
 ## Stable Project Facts
 
@@ -23,6 +23,11 @@ This directory stores project-local context that is useful across Codex sessions
 - Admin async creation-task routes use `/api/creation-tasks` with explicit child resources: `image-generations`, `image-edits`, `chat-completions`, and `video-generations`.
 - The project currently targets ChatGPT web account capabilities, an independent end-user creative studio, and OpenAI-compatible image/text endpoints behind a Sub2API-funded wallet flow.
 - The current product-facing default is no longer a generic ChatGPT web wrapper or only a Sub2API-launched image workspace; it has moved to a `luoye` independent-user mode where registration, login, recharge, balance, and billing truth all come from Sub2API while users directly enter creation flows.
+- Stable facts added on 2026-06-10 to 2026-06-11 should no longer stay only in `current-task.md`:
+  - top-nav session sync now depends on a hidden Sub2API `session-probe` iframe and local `/auth/logout` cleanup when the Sub2 user changes or logs out
+  - image display and downloads no longer expose raw object storage metadata to the frontend; downloads go through `/api/images/download-url`
+  - Tencent CDN TypeA signed download URLs are part of the supported production path when CDN auth env vars are configured
+  - image collections / `collection_id` / unclassified filtering are now part of the default `/image-manager`, `/image`, and `/canvas` asset workflow
 
 ## Current Known Capability Notes
 

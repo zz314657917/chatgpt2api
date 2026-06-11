@@ -1,12 +1,13 @@
 "use client";
 
 import { forwardRef, useCallback, useEffect, useMemo, useRef, useState, type HTMLAttributes } from "react";
-import { Check, Copy, Download, Eye, Globe2, ImageIcon, Info, LoaderCircle, Lock, MoreHorizontal, RefreshCw, Search, Send, SlidersHorizontal, Sparkles, Tag, Trash2, Users, X } from "lucide-react";
+import { Check, Copy, Download, Eye, Folder, FolderPlus, Globe2, ImageIcon, ImagePlus, Info, LoaderCircle, Lock, MoreHorizontal, Pencil, RefreshCw, Search, Send, SlidersHorizontal, Sparkles, Tag, Trash2, Users, X } from "lucide-react";
 import { VirtuosoGrid, type VirtuosoGridHandle } from "react-virtuoso";
 import { useLocation, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 
 import { writeSimilarImageIntent } from "@/app/image/similar-image-intent";
+import { writeCanvasAssetIntent } from "@/app/canvas/canvas-asset-intent";
 import { AuthenticatedImage } from "@/components/authenticated-image";
 import { DateRangeFilter } from "@/components/date-range-filter";
 import { ImageLightbox } from "@/components/image-lightbox";
@@ -25,15 +26,22 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   deleteManagedImages,
+  createManagedImageCollection,
+  deleteManagedImageCollection,
   fetchManagedImageDownloadURL,
+  fetchManagedImageCollections,
   fetchManagedImageDetail,
   fetchManagedImages,
   fetchManagedImageTags,
   fetchTeamWorkspace,
   moveManagedImagesToTeamLibrary,
+  MANAGED_IMAGE_UNCLASSIFIED_COLLECTION_ID,
+  renameManagedImageCollection,
+  updateManagedImageCollectionItems,
   updateManagedImageTags,
   updateManagedImageVisibility,
   type ImageVisibility,
+  type ManagedImageCollection,
   type ManagedImageDetail,
   type ManagedImageSummary,
   type TeamImageStorageSummary,
@@ -178,6 +186,19 @@ type PublishImageTarget = {
 
 type MoveTeamTarget = {
   items: ManagedImageSummary[];
+};
+
+type CollectionEditTarget =
+  | { mode: "create" }
+  | { mode: "rename"; collection: ManagedImageCollection };
+
+type CollectionDeleteTarget = {
+  collection: ManagedImageCollection;
+};
+
+type CollectionAssignTarget = {
+  items: ManagedImageSummary[];
+  collectionId: string;
 };
 
 type PublishRecipeOptions = {
@@ -403,6 +424,7 @@ function ImageManagerContent({
   canUpdateImageVisibility,
   canEditImageTags,
   canMoveImagesToTeam,
+  canManageCollections,
   isAdmin,
 }: {
   cacheScope: string;
@@ -411,6 +433,7 @@ function ImageManagerContent({
   canUpdateImageVisibility: boolean;
   canEditImageTags: boolean;
   canMoveImagesToTeam: boolean;
+  canManageCollections: boolean;
   isAdmin: boolean;
 }) {
   const navigate = useNavigate();
@@ -436,6 +459,14 @@ function ImageManagerContent({
     shareReferenceImages: false,
   });
   const [teamImagesTarget, setTeamImagesTarget] = useState<MoveTeamTarget | null>(null);
+  const [collections, setCollections] = useState<ManagedImageCollection[]>([]);
+  const [unclassifiedCount, setUnclassifiedCount] = useState(0);
+  const [selectedCollectionId, setSelectedCollectionId] = useState("");
+  const [collectionEditTarget, setCollectionEditTarget] = useState<CollectionEditTarget | null>(null);
+  const [collectionNameInput, setCollectionNameInput] = useState("");
+  const [collectionDeleteTarget, setCollectionDeleteTarget] = useState<CollectionDeleteTarget | null>(null);
+  const [collectionAssignTarget, setCollectionAssignTarget] = useState<CollectionAssignTarget | null>(null);
+  const [collectionMutating, setCollectionMutating] = useState(false);
   const [activeTeam, setActiveTeam] = useState<TeamSummary | null>(null);
   const [teamStorage, setTeamStorage] = useState<TeamImageStorageSummary | null>(null);
   const [isMovingToTeam, setIsMovingToTeam] = useState(false);
@@ -468,6 +499,7 @@ function ImageManagerContent({
     orientationFilter,
     resolutionFilter,
     aspectRatioFilter,
+    selectedCollectionId,
     selectedTagKey,
   );
   const initialCache = getImageManagerCache(currentCacheKey);
@@ -487,7 +519,8 @@ function ImageManagerContent({
     orientationFilter !== "all" ||
     resolutionFilter !== "all" ||
     aspectRatioFilter !== "all" ||
-    selectedTags.length > 0;
+    selectedTags.length > 0 ||
+    selectedCollectionId !== "";
   const hasActiveFilters = hasLocalFilters || startDate !== "" || endDate !== "";
   const activeFilterLabels = [
     startDate && endDate ? `${startDate} 至 ${endDate}` : startDate ? startDate : "",
@@ -496,6 +529,11 @@ function ImageManagerContent({
     orientationFilter !== "all" ? imageOrientationFilterLabel(orientationFilter) : "",
     resolutionFilter !== "all" ? imageResolutionFilterLabel(resolutionFilter) : "",
     aspectRatioFilter !== "all" ? imageAspectRatioFilterLabel(aspectRatioFilter) : "",
+    selectedCollectionId
+      ? selectedCollectionId === MANAGED_IMAGE_UNCLASSIFIED_COLLECTION_ID
+        ? "素材集：未归类"
+        : `素材集：${collections.find((item) => item.id === selectedCollectionId)?.name || "未命名"}`
+      : "",
     ...selectedTags.map((tag) => `标签：${tag}`),
   ].filter(Boolean);
   const activeFilterCount = activeFilterLabels.length;
@@ -556,8 +594,27 @@ function ImageManagerContent({
     () => selectedItems.filter((item) => item.visibility === "public"),
     [selectedItems],
   );
+  const focusedItem = useMemo(() => {
+    if (focusedImagePath) {
+      const focused = items.find((item) => managedImageKey(item) === focusedImagePath);
+      if (focused) {
+        return focused;
+      }
+    }
+    return selectedItems[0] || items[0] || null;
+  }, [focusedImagePath, items, selectedItems]);
+  const focusedDetail = focusedItem ? detailItemsByPath[managedImageDetailCacheKey(focusedItem, galleryView)] : undefined;
   const hasTeamLibrary = Boolean(activeTeam?.id);
   const teamManager = canManageTeamImages(activeTeam);
+  const canMutateCollections = canManageCollections && (galleryView === "mine" || Boolean(galleryView === "team" && teamManager && activeTeam?.id));
+  const selectedRealCollection = selectedCollectionId && selectedCollectionId !== MANAGED_IMAGE_UNCLASSIFIED_COLLECTION_ID;
+  const collectionReadOnlyHint = canMutateCollections
+    ? "一张图只能属于一个素材集，调整归类会替换原素材集。"
+    : galleryView === "public"
+      ? "公共素材库只读，可查看和引用，不能修改素材集。"
+      : galleryView === "team"
+        ? "团队普通成员可查看素材集，归类修改需要 owner 或 manager 权限。"
+        : "";
   const selectedCount = selectedItems.length;
   const allSelected = items.length > 0 && selectedCount === items.length;
   const libraryViewLabel = galleryView === "team" ? "团队" : galleryView === "all" ? "全部" : galleryView === "public" ? "公共" : "个人";
@@ -565,9 +622,18 @@ function ImageManagerContent({
   const libraryHintText = galleryView === "team" && teamStorage
     ? `容量 ${formatStorageBytes(teamStorage.used_bytes)} / ${formatStorageBytes(teamStorage.limit_bytes)}，剩余 ${formatStorageBytes(teamStorage.remaining_bytes)}。`
     : galleryView === "public"
-      ? "公共图库展示已公开的图片，可直接引用。"
+      ? "公共素材库展示已公开的图片，可直接引用。"
       : `仅保留最近 ${imageRetentionDays} 天，过期图片会自动清理。`;
-  const isMutatingImages = downloadingKey !== null || isDeleting || isMovingToTeam || visibilityMutatingPath !== null || tagMutatingPath !== null;
+  const isMutatingImages = downloadingKey !== null || isDeleting || isMovingToTeam || visibilityMutatingPath !== null || tagMutatingPath !== null || collectionMutating;
+  const collectionFilterMatchesItem = useCallback((item: Pick<ManagedImageSummary, "collection_id">) => {
+    if (!selectedCollectionId) {
+      return true;
+    }
+    if (selectedCollectionId === MANAGED_IMAGE_UNCLASSIFIED_COLLECTION_ID) {
+      return !item.collection_id;
+    }
+    return item.collection_id === selectedCollectionId;
+  }, [selectedCollectionId]);
   const showImageLoadingState = isLoading && items.length === 0;
   const showImageErrorState = !isLoading && loadError !== "" && items.length === 0;
   const showImageEmptyState = !isLoading && loadError === "" && items.length === 0;
@@ -589,8 +655,9 @@ function ImageManagerContent({
     orientation: orientationFilter,
     resolution: resolutionFilter,
     aspect_ratio: aspectRatioFilter,
+    collection_id: selectedCollectionId,
     tags: selectedTags,
-  }), [activeTeam?.id, aspectRatioFilter, endDate, formatFilter, galleryView, orientationFilter, resolutionFilter, searchKeyword, selectedTags, startDate, visibilityFilter]);
+  }), [activeTeam?.id, aspectRatioFilter, endDate, formatFilter, galleryView, orientationFilter, resolutionFilter, searchKeyword, selectedCollectionId, selectedTags, startDate, visibilityFilter]);
 
   const keepImageGridScrollInBounds = useCallback(() => {
     window.requestAnimationFrame(() => {
@@ -655,6 +722,252 @@ function ImageManagerContent({
       toast.error(error instanceof Error ? error.message : "复制图片地址失败");
     }
   }, [loadManagedImageDetail]);
+
+  const collectionScopeOptions = useCallback(() => ({
+    scope: galleryView,
+    team_id: galleryView === "team" ? activeTeam?.id || "" : "",
+  }), [activeTeam?.id, galleryView]);
+
+  const loadCollections = useCallback(async () => {
+    try {
+      const data = await fetchManagedImageCollections(collectionScopeOptions());
+      setCollections(data.items);
+      setUnclassifiedCount(data.unclassified_count);
+      if (
+        selectedCollectionId &&
+        selectedCollectionId !== MANAGED_IMAGE_UNCLASSIFIED_COLLECTION_ID &&
+        !data.items.some((item) => item.id === selectedCollectionId)
+      ) {
+        setSelectedCollectionId("");
+        clearLoadedItemsForQueryChange();
+      }
+    } catch {
+      setCollections([]);
+      setUnclassifiedCount(0);
+      if (selectedCollectionId) {
+        setSelectedCollectionId("");
+        clearLoadedItemsForQueryChange();
+      }
+    }
+  }, [clearLoadedItemsForQueryChange, collectionScopeOptions, selectedCollectionId]);
+
+  const openCollectionEditor = (target: CollectionEditTarget) => {
+    if (!canMutateCollections) {
+      toast.error(galleryView === "public" ? "公共素材库不允许修改素材集" : "当前账号没有素材集管理权限");
+      return;
+    }
+    setCollectionEditTarget(target);
+    setCollectionNameInput(target.mode === "rename" ? target.collection.name : "");
+  };
+
+  const handleSaveCollection = async () => {
+    if (!canMutateCollections || !collectionEditTarget || collectionMutating) {
+      return;
+    }
+    const name = collectionNameInput.trim();
+    if (!name) {
+      toast.error("请输入素材集名称");
+      return;
+    }
+    setCollectionMutating(true);
+    try {
+      const options = collectionScopeOptions();
+      const data = collectionEditTarget.mode === "create"
+        ? await createManagedImageCollection(name, options)
+        : await renameManagedImageCollection(collectionEditTarget.collection.id, name, options);
+      const nextCollectionsResult = Array.isArray(data.items)
+        ? { items: data.items, unclassified_count: Number(data.unclassified_count) || 0 }
+        : await fetchManagedImageCollections(options);
+      const nextCollections = nextCollectionsResult.items;
+      setCollections(nextCollections);
+      setUnclassifiedCount(nextCollectionsResult.unclassified_count);
+      if (collectionEditTarget.mode === "create") {
+        setSelectedCollectionId(data.item.id);
+      } else {
+        clearImageManagerCache();
+        setItems((current) => {
+          const next = current.map((item) => item.collection_id === data.item.id ? { ...item, collection_name: data.item.name } : item);
+          updateImageManagerCache(currentCacheKey, next, nextCursor, hasMoreItems, imageRetentionDays);
+          return next;
+        });
+        setDetailItemsByPath((current) => {
+          const next = { ...current };
+          Object.entries(next).forEach(([key, detail]) => {
+            if (detail.collection_id === data.item.id) {
+              next[key] = { ...detail, collection_name: data.item.name };
+            }
+          });
+          return next;
+        });
+      }
+      setCollectionEditTarget(null);
+      setCollectionNameInput("");
+      toast.success(collectionEditTarget.mode === "create" ? "素材集已创建" : "素材集已重命名");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "保存素材集失败");
+    } finally {
+      setCollectionMutating(false);
+    }
+  };
+
+  const handleDeleteCollection = async () => {
+    if (!canMutateCollections || !collectionDeleteTarget || collectionMutating) {
+      return;
+    }
+    const collection = collectionDeleteTarget.collection;
+    setCollectionMutating(true);
+    try {
+      const options = collectionScopeOptions();
+      const data = await deleteManagedImageCollection(collection.id, options);
+      const nextCollectionsResult = Array.isArray(data.items)
+        ? { items: data.items, unclassified_count: Number(data.unclassified_count) || 0 }
+        : await fetchManagedImageCollections(options);
+      const nextCollections = nextCollectionsResult.items;
+      setCollections(nextCollections);
+      setUnclassifiedCount(nextCollectionsResult.unclassified_count);
+      clearImageManagerCache();
+      if (selectedCollectionId === collection.id) {
+        setSelectedCollectionId("");
+        clearLoadedItemsForQueryChange();
+      } else {
+        setItems((current) => {
+          const next = current.map((item) => item.collection_id === collection.id ? { ...item, collection_id: "", collection_name: "" } : item);
+          updateImageManagerCache(currentCacheKey, next, nextCursor, hasMoreItems, imageRetentionDays);
+          return next;
+        });
+      }
+      setDetailItemsByPath((current) => {
+        const next = { ...current };
+        Object.entries(next).forEach(([key, detail]) => {
+          if (detail.collection_id === collection.id) {
+            next[key] = { ...detail, collection_id: "", collection_name: "" };
+          }
+        });
+        return next;
+      });
+      setCollectionDeleteTarget(null);
+      toast.success(data.cleared > 0 ? `素材集已删除，已移出 ${data.cleared} 张图片` : "素材集已删除");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "删除素材集失败");
+    } finally {
+      setCollectionMutating(false);
+    }
+  };
+
+  const openCollectionAssign = (targetItems: ManagedImageSummary[], collectionId = "") => {
+    if (!canMutateCollections) {
+      toast.error(galleryView === "public" ? "公共素材库不允许修改素材集" : "当前账号没有素材集管理权限");
+      return;
+    }
+    if (targetItems.length === 0) {
+      toast.error("请先选择图片");
+      return;
+    }
+    if (collections.length === 0 && collectionId) {
+      toast.error("当前没有可用素材集");
+      return;
+    }
+    setCollectionAssignTarget({ items: targetItems, collectionId });
+  };
+
+  const handleConfirmAssignCollection = async () => {
+    if (!canMutateCollections || !collectionAssignTarget || collectionMutating) {
+      return;
+    }
+    const paths = Array.from(new Set(collectionAssignTarget.items.map((item) => item.path)));
+    if (paths.length === 0) {
+      setCollectionAssignTarget(null);
+      return;
+    }
+    const collection = collections.find((item) => item.id === collectionAssignTarget.collectionId);
+    if (collectionAssignTarget.collectionId && !collection) {
+      toast.error("请选择素材集");
+      return;
+    }
+    setCollectionMutating(true);
+    try {
+      const data = await updateManagedImageCollectionItems(collectionAssignTarget.collectionId, paths, collectionScopeOptions());
+      const collectionID = data.collection_id || "";
+      const collectionName = data.collection_name || collection?.name || "";
+      const pathSet = new Set(data.paths || paths);
+      const nextCollectionsResult = Array.isArray(data.items)
+        ? { items: data.items, unclassified_count: Number(data.unclassified_count) || 0 }
+        : await fetchManagedImageCollections(collectionScopeOptions());
+      const nextCollections = nextCollectionsResult.items;
+      setCollections(nextCollections);
+      setUnclassifiedCount(nextCollectionsResult.unclassified_count);
+      clearImageManagerCache();
+      setItems((current) => {
+        const next = current
+          .map((item) => pathSet.has(item.path) ? { ...item, collection_id: collectionID, collection_name: collectionName } : item)
+          .filter(collectionFilterMatchesItem);
+        updateImageManagerCache(currentCacheKey, next, nextCursor, hasMoreItems, imageRetentionDays);
+        return next;
+      });
+      setDetailItemsByPath((current) => {
+        const next = { ...current };
+        Object.entries(next).forEach(([key, detail]) => {
+          if (pathSet.has(detail.path)) {
+            next[key] = { ...detail, collection_id: collectionID, collection_name: collectionName };
+          }
+        });
+        return next;
+      });
+      setSelectedImageIds((current) => {
+        const next = { ...current };
+        pathSet.forEach((path) => {
+          if (selectedCollectionId && pathSet.has(path) && !collectionFilterMatchesItem({ collection_id: collectionID })) {
+            delete next[path];
+          }
+        });
+        return next;
+      });
+      setCollectionAssignTarget(null);
+      toast.success(collectionID ? `已加入素材集「${collectionName}」` : `已从素材集移出 ${data.updated} 张图片`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "更新素材集归类失败");
+    } finally {
+      setCollectionMutating(false);
+    }
+  };
+
+  const copyImagePrompt = async (item: ManagedImageSummary) => {
+    try {
+      const detail = await loadManagedImageDetail(item);
+      const prompt = reusableImagePrompt(detail);
+      await navigator.clipboard.writeText(prompt);
+      toast.success("提示词已复制");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "复制提示词失败");
+    }
+  };
+
+  const addImageToCanvas = (item: ManagedImageSummary) => {
+    writeCanvasAssetIntent([item]);
+    navigate(location.search.includes("ui_mode=embedded") ? "/canvas?ui_mode=embedded" : "/canvas");
+    toast.success("已准备加入画布");
+  };
+
+  const addImageAsReference = async (item: ManagedImageSummary) => {
+    try {
+      const detail = await loadManagedImageDetail(item);
+      writeSimilarImageIntent({
+        prompt: "参考这张图继续创作。",
+        sourceImageUrl: detail.url,
+        sourceImageUrls: [detail.url],
+        sourceKind: "public_image",
+        sourceImageName: detail.name,
+      });
+      navigate(location.search.includes("ui_mode=embedded") ? "/image?ui_mode=embedded" : "/image");
+      toast.success("已加入创作台参考图");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "读取图片失败");
+    }
+  };
+
+  useEffect(() => {
+    void loadCollections();
+  }, [loadCollections]);
 
   const loadImages = useCallback(async ({ force = false }: { force?: boolean } = {}) => {
     const cached = getImageManagerCache(currentCacheKey);
@@ -797,9 +1110,16 @@ function ImageManagerContent({
       return;
     }
     setGalleryView(view);
+    setSelectedCollectionId("");
     setSelectedImageIds({});
     clearLoadedItemsForQueryChange();
     setLoadError("");
+  };
+
+  const updateCollectionFilter = (collectionId: string) => {
+    setSelectedCollectionId(collectionId);
+    setSelectedImageIds({});
+    clearLoadedItemsForQueryChange();
   };
 
   const updateSearchKeyword = (value: string) => {
@@ -857,6 +1177,7 @@ function ImageManagerContent({
     setOrientationFilter("all");
     setResolutionFilter("all");
     setAspectRatioFilter("all");
+    setSelectedCollectionId("");
     setSelectedTags([]);
     setSelectedImageIds({});
     clearLoadedItemsForQueryChange();
@@ -996,7 +1317,7 @@ function ImageManagerContent({
 
   const openMoveToTeamConfirm = (targetItems: ManagedImageSummary[]) => {
     if (!canMoveImagesToTeam) {
-      toast.error("当前账号没有移动到团队图片库权限");
+      toast.error("当前账号没有移动到团队素材库权限");
       return;
     }
     if (!activeTeam?.id) {
@@ -1005,7 +1326,7 @@ function ImageManagerContent({
     }
     const pendingItems = targetItems.filter((item) => item.library_scope !== "team");
     if (pendingItems.length === 0) {
-      toast.info("所选图片已在团队图片库");
+      toast.info("所选图片已在团队素材库");
       return;
     }
     setTeamImagesTarget({ items: pendingItems });
@@ -1038,9 +1359,9 @@ function ImageManagerContent({
       });
       setTeamImagesTarget(null);
       keepImageGridScrollInBounds();
-      toast.success(`已移动 ${data.moved} 张图片到团队图片库`);
+      toast.success(`已移动 ${data.moved} 张图片到团队素材库`);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "移动到团队图片库失败");
+      toast.error(error instanceof Error ? error.message : "移动到团队素材库失败");
     } finally {
       setIsMovingToTeam(false);
     }
@@ -1141,7 +1462,7 @@ function ImageManagerContent({
         updateImageManagerCache(currentCacheKey, next, nextCursor, hasMoreItems, imageRetentionDays);
         return next;
       });
-      toast.success(visibility === "public" ? "已公开到公开图库" : "已取消公开");
+      toast.success(visibility === "public" ? "已公开到公共素材库" : "已取消公开");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "更新公开状态失败");
     } finally {
@@ -1285,6 +1606,21 @@ function ImageManagerContent({
   useEffect(() => {
     void loadImages();
   }, [loadImages]);
+
+  useEffect(() => {
+    if (!focusedItem || focusedDetail) {
+      return;
+    }
+    let canceled = false;
+    loadManagedImageDetail(focusedItem).catch((error) => {
+      if (!canceled) {
+        toast.error(error instanceof Error ? error.message : "加载图片详情失败");
+      }
+    });
+    return () => {
+      canceled = true;
+    };
+  }, [focusedDetail, focusedItem, loadManagedImageDetail]);
 
   useEffect(() => {
     let canceled = false;
@@ -1570,8 +1906,8 @@ function ImageManagerContent({
         className="size-10 rounded-lg"
         disabled={isLoading || isMutatingImages}
         onClick={() => void loadImages({ force: true })}
-        aria-label="刷新图片库"
-        title="刷新图片库"
+        aria-label="刷新素材库"
+        title="刷新素材库"
       >
         <RefreshCw className={cn("size-4", isLoading && "animate-spin")} />
       </Button>
@@ -1580,7 +1916,7 @@ function ImageManagerContent({
 
   return (
     <section className="flex h-full min-h-0 flex-col gap-4 pt-3 pb-20 sm:pb-24">
-      <div className="grid min-w-0 gap-4 lg:grid-cols-[300px_minmax(0,1fr)] xl:grid-cols-[320px_minmax(0,1fr)]">
+      <div className="grid min-w-0 gap-4 lg:grid-cols-[300px_minmax(0,1fr)] xl:grid-cols-[320px_minmax(0,1fr)_320px]">
         <aside className="flex min-w-0 flex-col gap-3 rounded-[18px] border border-border bg-background/80 p-3 shadow-[0_6px_20px_rgba(15,23,42,0.04)] sm:p-4 lg:sticky lg:top-4 lg:self-start">
           <div className="flex h-[64px] shrink-0 min-w-0 flex-col justify-start gap-1 overflow-hidden">
             <div className="inline-flex h-10 w-full shrink-0 items-center rounded-lg border border-border bg-muted/50 p-1">
@@ -1614,6 +1950,108 @@ function ImageManagerContent({
               <span className="shrink-0">{libraryViewLabel}</span>
               <span className="min-w-0 truncate">{imageCountLabel}</span>
             </div>
+          </div>
+
+          <div className="flex min-w-0 flex-col gap-2 rounded-xl border border-border bg-background/70 p-2">
+            <div className="flex items-center justify-between gap-2">
+              <div className="inline-flex min-w-0 items-center gap-1.5 text-sm font-medium text-foreground">
+                <Folder className="size-4 text-muted-foreground" />
+                <span>素材集</span>
+              </div>
+              {canMutateCollections ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 shrink-0 rounded-lg px-2 text-xs"
+                  onClick={() => openCollectionEditor({ mode: "create" })}
+                >
+                  <FolderPlus className="size-3.5" />
+                  新建
+                </Button>
+              ) : null}
+            </div>
+            <div className="flex max-h-44 flex-col gap-1 overflow-y-auto pr-1">
+              <button
+                type="button"
+                className={cn(
+                  "flex h-9 min-w-0 items-center justify-between gap-2 rounded-lg px-2 text-left text-sm transition",
+                  !selectedCollectionId
+                    ? "bg-[#eef4ff] text-[#1456f0] dark:bg-sky-950/30 dark:text-sky-300"
+                    : "text-muted-foreground hover:bg-muted hover:text-foreground",
+                )}
+                onClick={() => updateCollectionFilter("")}
+              >
+                <span className="min-w-0 truncate">全部素材</span>
+                <span className="shrink-0 rounded-full bg-background px-2 py-0.5 text-[11px] text-muted-foreground">{items.length}</span>
+              </button>
+              <button
+                type="button"
+                className={cn(
+                  "flex h-9 min-w-0 items-center justify-between gap-2 rounded-lg px-2 text-left text-sm transition",
+                  selectedCollectionId === MANAGED_IMAGE_UNCLASSIFIED_COLLECTION_ID
+                    ? "bg-[#eef4ff] text-[#1456f0] dark:bg-sky-950/30 dark:text-sky-300"
+                    : "text-muted-foreground hover:bg-muted hover:text-foreground",
+                )}
+                onClick={() => updateCollectionFilter(MANAGED_IMAGE_UNCLASSIFIED_COLLECTION_ID)}
+              >
+                <span className="min-w-0 truncate">未归类</span>
+                <span className="shrink-0 rounded-full bg-background px-2 py-0.5 text-[11px] text-muted-foreground">{unclassifiedCount}</span>
+              </button>
+              {collections.length > 0 ? collections.map((collection) => {
+                const active = selectedCollectionId === collection.id;
+                return (
+                  <div
+                    key={collection.id}
+                    className={cn(
+                      "group flex min-w-0 items-center gap-1 rounded-lg transition",
+                      active ? "bg-[#eef4ff] text-[#1456f0] dark:bg-sky-950/30 dark:text-sky-300" : "text-muted-foreground hover:bg-muted hover:text-foreground",
+                    )}
+                  >
+                    <button
+                      type="button"
+                      className="flex h-9 min-w-0 flex-1 items-center justify-between gap-2 px-2 text-left text-sm"
+                      onClick={() => updateCollectionFilter(collection.id)}
+                      title={collection.name}
+                    >
+                      <span className="min-w-0 truncate">{collection.name}</span>
+                      <span className="shrink-0 rounded-full bg-background px-2 py-0.5 text-[11px] text-muted-foreground">{collection.images_count}</span>
+                    </button>
+                    {canMutateCollections && active ? (
+                      <div className="flex shrink-0 items-center pr-1">
+                        <button
+                          type="button"
+                          className="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition hover:bg-background hover:text-foreground"
+                          onClick={() => openCollectionEditor({ mode: "rename", collection })}
+                          title="重命名素材集"
+                          aria-label="重命名素材集"
+                        >
+                          <Pencil className="size-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          className="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition hover:bg-rose-50 hover:text-rose-600"
+                          onClick={() => setCollectionDeleteTarget({ collection })}
+                          title="删除素材集"
+                          aria-label="删除素材集"
+                        >
+                          <Trash2 className="size-3.5" />
+                        </button>
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              }) : (
+                <div className="rounded-lg border border-dashed border-border px-3 py-2 text-xs text-muted-foreground">
+                  {canMutateCollections ? "暂无素材集，可先新建角色、场景或风格分组。" : "暂无素材集"}
+                </div>
+              )}
+            </div>
+            {collectionReadOnlyHint ? (
+              <div className="rounded-lg border border-dashed border-border px-3 py-2 text-xs leading-5 text-muted-foreground">
+                {collectionReadOnlyHint}
+              </div>
+            ) : null}
           </div>
 
           <div className="flex min-w-0 flex-col gap-2">
@@ -1797,8 +2235,40 @@ function ImageManagerContent({
                     }}
                   >
                     {isMovingToTeam ? <LoaderCircle className="size-4 animate-spin" /> : <Send className="size-4" />}
-                    移动到团队图片库 ({selectedCount})
+                    移动到团队素材库 ({selectedCount})
                   </Button>
+                ) : null}
+                {canMutateCollections ? (
+                  <>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      className="h-10 justify-start rounded-lg px-3 text-sm"
+                      disabled={selectedCount === 0 || collections.length === 0 || isMutatingImages}
+                      onClick={() => {
+                        setIsImageActionsOpen(false);
+                        openCollectionAssign(selectedItems, collections[0]?.id || "");
+                      }}
+                    >
+                      <Folder className="size-4" />
+                      加入素材集 ({selectedCount})
+                    </Button>
+                    {selectedRealCollection ? (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        className="h-10 justify-start rounded-lg px-3 text-sm"
+                        disabled={selectedCount === 0 || isMutatingImages}
+                        onClick={() => {
+                          setIsImageActionsOpen(false);
+                          openCollectionAssign(selectedItems, "");
+                        }}
+                      >
+                        <X className="size-4" />
+                        移出当前素材集 ({selectedCount})
+                      </Button>
+                    ) : null}
+                  </>
                 ) : null}
                 <Button
                   type="button"
@@ -1876,7 +2346,7 @@ function ImageManagerContent({
                 <ImageIcon className="size-7" />
               </div>
               <div className="space-y-1">
-                <p className="text-sm font-medium text-foreground">图片库加载失败</p>
+                <p className="text-sm font-medium text-foreground">素材库加载失败</p>
                 <p className="max-w-[32rem] text-sm leading-6 text-muted-foreground">{loadError}</p>
               </div>
               <Button variant="outline" className="h-9 rounded-lg px-3" onClick={() => void loadImages({ force: true })}>
@@ -1931,6 +2401,7 @@ function ImageManagerContent({
                         if (!window.matchMedia("(hover: hover)").matches) {
                           setFocusedImagePath(selected ? null : imageKey);
                         }
+                        setFocusedImagePath(imageKey);
                         toggleImageSelection(item);
                         if (window.matchMedia("(hover: hover)").matches) {
                           event.currentTarget.blur();
@@ -1957,6 +2428,7 @@ function ImageManagerContent({
                         if (!window.matchMedia("(hover: hover)").matches) {
                           setFocusedImagePath(selected ? null : imageKey);
                         }
+                        setFocusedImagePath(imageKey);
                         toggleImageSelection(item);
                         if (window.matchMedia("(hover: hover)").matches) {
                           event.currentTarget.blur();
@@ -2069,8 +2541,8 @@ function ImageManagerContent({
                           }}
                           disabled={isMovingToTeam}
                           className="inline-flex h-8 max-w-[10rem] items-center gap-1.5 rounded-full bg-white/95 px-3 text-xs font-medium text-[#1456f0] shadow-sm ring-1 ring-blue-100 transition hover:bg-[#e8f2ff] disabled:cursor-not-allowed disabled:opacity-60"
-                          aria-label="移动到团队图片库"
-                          title="移动到团队图片库"
+                          aria-label="移动到团队素材库"
+                          title="移动到团队素材库"
                         >
                           {isMovingToTeam && teamImagesTarget?.items.some((target) => target.path === item.path) ? <LoaderCircle className="size-3.5 shrink-0 animate-spin" /> : <Send className="size-3.5 shrink-0" />}
                           <span className="truncate">移到团队</span>
@@ -2136,6 +2608,11 @@ function ImageManagerContent({
                             ))}
                           </div>
                         ) : null}
+                        {item.collection_name ? (
+                          <div className="mt-1 inline-flex max-w-full rounded-full bg-white/20 px-1.5 py-0.5 text-[10px] font-medium text-white">
+                            <span className="truncate">{item.collection_name}</span>
+                          </div>
+                        ) : null}
                       </div>
                     </div>
                   </figure>
@@ -2152,18 +2629,129 @@ function ImageManagerContent({
                   {hasActiveFilters
                     ? "调整关键词、状态、格式或方向筛选后再试。"
                     : galleryView === "mine"
-                      ? "图片生成成功后会自动进入个人图库。"
+                      ? "图片生成成功后会自动进入个人素材库。"
                       : galleryView === "team"
-                        ? "团队图片库暂无图片，可从个人图库移动图片到团队空间。"
+                        ? "团队素材库暂无图片，可从个人素材库移动图片到团队空间。"
                       : galleryView === "all"
                         ? "暂无可管理图片。"
-                        : "公开图库暂无公开图片。"}
+                        : "公共素材库暂无公开图片。"}
                 </p>
               </div>
             </div>
           ) : null}
         </div>
         </div>
+        <aside className="hidden min-w-0 flex-col gap-3 rounded-[18px] border border-border bg-background/80 p-3 shadow-[0_6px_20px_rgba(15,23,42,0.04)] xl:flex xl:sticky xl:top-4 xl:self-start">
+          <div className="flex items-center justify-between gap-2">
+            <div className="min-w-0">
+              <div className="text-sm font-semibold text-foreground">素材详情</div>
+              <div className="truncate text-xs text-muted-foreground">{focusedItem?.name || "选择一张素材查看详情"}</div>
+            </div>
+            {focusedItem ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="size-8 rounded-lg"
+                onClick={() => {
+                  const index = items.findIndex((item) => item.path === focusedItem.path);
+                  openImagePreview(focusedItem, Math.max(0, index));
+                }}
+                title="预览原图"
+                aria-label="预览原图"
+              >
+                <Eye className="size-4" />
+              </Button>
+            ) : null}
+          </div>
+
+          {focusedItem ? (
+            <>
+              <AuthenticatedImage
+                src={managedImagePreviewSource(focusedItem)}
+                alt={focusedItem.name || "素材预览"}
+                className="aspect-square w-full rounded-xl object-cover"
+                placeholderClassName="aspect-square rounded-xl bg-muted"
+              />
+              <div className="space-y-2 text-xs">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-muted-foreground">状态</span>
+                  <span className={cn("inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-medium", imageVisibilityPillClass(focusedItem.visibility))}>
+                    {focusedItem.visibility === "public" ? <Globe2 className="size-3" /> : <Lock className="size-3" />}
+                    {imageVisibilityLabel(focusedItem.visibility)}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-muted-foreground">素材集</span>
+                  <span className="min-w-0 truncate font-medium text-foreground">{focusedItem.collection_name || "未归类"}</span>
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-muted-foreground">尺寸</span>
+                  <span className="font-medium text-foreground">{getManagedImageResolutionSummary(focusedItem) || "未知"}</span>
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-muted-foreground">大小</span>
+                  <span className="font-medium text-foreground">{formatImageFileSize(focusedItem.size)}</span>
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-muted-foreground">模型</span>
+                  <span className="min-w-0 truncate font-medium text-foreground">{focusedDetail?.model || "未公开"}</span>
+                </div>
+              </div>
+              {focusedDetail?.prompt ? (
+                <div className="max-h-28 overflow-y-auto rounded-xl border border-border bg-muted/40 p-3 text-xs leading-5 text-muted-foreground">
+                  {focusedDetail.prompt}
+                </div>
+              ) : (
+                <div className="rounded-xl border border-dashed border-border p-3 text-xs text-muted-foreground">暂无可展示提示词</div>
+              )}
+              {focusedItem.tags && focusedItem.tags.length > 0 ? (
+                <div className="flex max-h-16 flex-wrap gap-1 overflow-y-auto">
+                  {focusedItem.tags.map((tag) => (
+                    <span key={tag} className="max-w-full truncate rounded-full bg-muted px-2 py-1 text-[11px] font-medium text-muted-foreground">
+                      {tag}
+                    </span>
+                  ))}
+                </div>
+              ) : null}
+              {collectionReadOnlyHint ? (
+                <div className="rounded-xl border border-dashed border-border p-3 text-xs leading-5 text-muted-foreground">
+                  {collectionReadOnlyHint}
+                </div>
+              ) : null}
+              <div className="grid grid-cols-2 gap-2">
+                <Button type="button" variant="outline" className="h-9 rounded-lg text-xs" onClick={() => void addImageAsReference(focusedItem)}>
+                  <ImagePlus className="size-3.5" />
+                  参考图
+                </Button>
+                <Button type="button" variant="outline" className="h-9 rounded-lg text-xs" onClick={() => void handleGenerateSimilar(focusedItem)} disabled={!canGenerateSimilar}>
+                  <Sparkles className="size-3.5" />
+                  同款生成
+                </Button>
+                <Button type="button" variant="outline" className="h-9 rounded-lg text-xs" onClick={() => addImageToCanvas(focusedItem)}>
+                  <Send className="size-3.5" />
+                  加入画布
+                </Button>
+                <Button type="button" variant="outline" className="h-9 rounded-lg text-xs" onClick={() => void copyImagePrompt(focusedItem)}>
+                  <Copy className="size-3.5" />
+                  复制提示词
+                </Button>
+                {canMutateCollections ? (
+                <Button type="button" variant="outline" className="col-span-2 h-9 rounded-lg text-xs" onClick={() => openCollectionAssign([focusedItem], focusedItem.collection_id || collections[0]?.id || "")} disabled={collections.length === 0} title={collections.length === 0 ? "先新建素材集后再归类" : "一张图只能属于一个素材集"}>
+                  <Folder className="size-3.5" />
+                  {focusedItem.collection_id ? "调整素材集" : "加入素材集"}
+                </Button>
+                ) : null}
+                <Button type="button" variant="outline" className="col-span-2 h-9 rounded-lg text-xs" onClick={() => void downloadItems(focusedItem.path, [focusedItem])}>
+                  {downloadingKey === focusedItem.path ? <LoaderCircle className="size-3.5 animate-spin" /> : <Download className="size-3.5" />}
+                  下载
+                </Button>
+              </div>
+            </>
+          ) : (
+            <div className="rounded-xl border border-dashed border-border p-4 text-center text-xs text-muted-foreground">当前素材库暂无可查看素材</div>
+          )}
+        </aside>
       </div>
       <ImageLightbox
         images={lightboxImages}
@@ -2177,9 +2765,9 @@ function ImageManagerContent({
         <Dialog open onOpenChange={(open) => (!open && !isMovingToTeam ? setTeamImagesTarget(null) : null)}>
           <DialogContent showCloseButton={false} className="rounded-2xl p-6">
             <DialogHeader className="gap-2">
-              <DialogTitle>移动到团队图片库</DialogTitle>
+              <DialogTitle>移动到团队素材库</DialogTitle>
               <DialogDescription className="text-sm leading-6">
-                将 {teamImagesTarget.items.length} 张图片移动到 {activeTeam?.name || "团队图片库"}。移动后不再计入个人图库保留数量。
+                将 {teamImagesTarget.items.length} 张图片移动到 {activeTeam?.name || "团队素材库"}。移动后不再计入个人素材库保留数量。
               </DialogDescription>
             </DialogHeader>
             <div className="rounded-xl border border-border bg-muted/40 p-3 text-sm">
@@ -2231,7 +2819,7 @@ function ImageManagerContent({
             <DialogHeader className="gap-2">
               <DialogTitle>公开图片</DialogTitle>
               <DialogDescription className="text-sm leading-6">
-                将 {publishTarget.items.length} 张图片加入公开图库。
+                将 {publishTarget.items.length} 张图片加入公共素材库。
               </DialogDescription>
             </DialogHeader>
             <div className="grid gap-3 py-1">
@@ -2248,7 +2836,7 @@ function ImageManagerContent({
                 />
                 <span className="min-w-0">
                   <span className="block font-medium text-stone-900">公开原始提示词和生成参数</span>
-                  <span className="mt-0.5 block text-xs leading-5 text-stone-500">公开图库会展示可复用的 prompt、模型、尺寸和输出设置。</span>
+                  <span className="mt-0.5 block text-xs leading-5 text-stone-500">公共素材库会展示可复用的 prompt、模型、尺寸和输出设置。</span>
                 </span>
               </label>
               <label className="flex items-start gap-3 rounded-xl border border-stone-200 bg-white px-3 py-3 text-sm">
@@ -2392,6 +2980,134 @@ function ImageManagerContent({
           </DialogContent>
         </Dialog>
       ) : null}
+      {collectionEditTarget ? (
+        <Dialog open onOpenChange={(open) => (!open && !collectionMutating ? setCollectionEditTarget(null) : null)}>
+          <DialogContent showCloseButton={false} className="rounded-2xl p-6">
+            <DialogHeader className="gap-2">
+              <DialogTitle>{collectionEditTarget.mode === "create" ? "新建素材集" : "重命名素材集"}</DialogTitle>
+              <DialogDescription className="text-sm leading-6">
+                素材集用于把图片按角色、场景、风格或项目组织起来，不会复制或移动原始图片文件。
+              </DialogDescription>
+            </DialogHeader>
+            <Input
+              value={collectionNameInput}
+              onChange={(event) => setCollectionNameInput(event.target.value)}
+              placeholder="例如：角色、场景、产品图"
+              className="h-10 rounded-xl"
+              disabled={collectionMutating}
+              autoFocus
+            />
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                className="h-10 rounded-xl border-stone-200 bg-white px-5 text-stone-700 hover:bg-stone-50"
+                onClick={() => setCollectionEditTarget(null)}
+                disabled={collectionMutating}
+              >
+                取消
+              </Button>
+              <Button
+                type="button"
+                className="h-10 rounded-xl px-5"
+                onClick={() => void handleSaveCollection()}
+                disabled={collectionMutating}
+              >
+                {collectionMutating ? <LoaderCircle className="size-4 animate-spin" /> : <Folder className="size-4" />}
+                保存
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      ) : null}
+      {collectionDeleteTarget ? (
+        <Dialog open onOpenChange={(open) => (!open && !collectionMutating ? setCollectionDeleteTarget(null) : null)}>
+          <DialogContent showCloseButton={false} className="rounded-2xl p-6">
+            <DialogHeader className="gap-2">
+              <DialogTitle>删除素材集</DialogTitle>
+              <DialogDescription className="text-sm leading-6">
+                删除「{collectionDeleteTarget.collection.name}」只会移除图片归类，不会删除图片。
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                className="h-10 rounded-xl border-stone-200 bg-white px-5 text-stone-700 hover:bg-stone-50"
+                onClick={() => setCollectionDeleteTarget(null)}
+                disabled={collectionMutating}
+              >
+                取消
+              </Button>
+              <Button
+                type="button"
+                className="h-10 rounded-xl bg-rose-600 px-5 text-white hover:bg-rose-700"
+                onClick={() => void handleDeleteCollection()}
+                disabled={collectionMutating}
+              >
+                {collectionMutating ? <LoaderCircle className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
+                删除
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      ) : null}
+      {collectionAssignTarget ? (
+        <Dialog open onOpenChange={(open) => (!open && !collectionMutating ? setCollectionAssignTarget(null) : null)}>
+          <DialogContent showCloseButton={false} className="rounded-2xl p-6">
+            <DialogHeader className="gap-2">
+              <DialogTitle>{collectionAssignTarget.collectionId ? "加入素材集" : "移出素材集"}</DialogTitle>
+              <DialogDescription className="text-sm leading-6">
+                本次处理 {collectionAssignTarget.items.length} 张图片。一张图只能属于一个素材集，归类变更不会影响公开状态、标签或原图文件。
+              </DialogDescription>
+            </DialogHeader>
+            {collectionAssignTarget.collectionId ? (
+              <Select
+                value={collectionAssignTarget.collectionId}
+                onValueChange={(value) => setCollectionAssignTarget((current) => current ? { ...current, collectionId: value } : current)}
+                disabled={collectionMutating}
+              >
+                <SelectTrigger className="h-10 rounded-xl">
+                  <SelectValue placeholder="选择素材集" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    {collections.map((collection) => (
+                      <SelectItem key={collection.id} value={collection.id}>
+                        {collection.name}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+            ) : (
+              <div className="rounded-xl border border-dashed border-border p-3 text-sm text-muted-foreground">
+                确认把所选图片从当前素材集中移出。
+              </div>
+            )}
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                className="h-10 rounded-xl border-stone-200 bg-white px-5 text-stone-700 hover:bg-stone-50"
+                onClick={() => setCollectionAssignTarget(null)}
+                disabled={collectionMutating}
+              >
+                取消
+              </Button>
+              <Button
+                type="button"
+                className="h-10 rounded-xl px-5"
+                onClick={() => void handleConfirmAssignCollection()}
+                disabled={collectionMutating || (collectionAssignTarget.collectionId !== "" && collections.length === 0)}
+              >
+                {collectionMutating ? <LoaderCircle className="size-4 animate-spin" /> : <Folder className="size-4" />}
+                确认
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      ) : null}
     </section>
   );
 }
@@ -2406,6 +3122,10 @@ export default function ImageManagerPage() {
   const canUpdateImageVisibility = hasAPIPermission(session, "PATCH", "/api/images/visibility");
   const canEditImageTags = hasAPIPermission(session, "PATCH", "/api/images/tags");
   const canMoveImagesToTeam = hasAPIPermission(session, "PATCH", "/api/images/library-scope");
+  const canManageCollections =
+    hasAPIPermission(session, "POST", "/api/image-collections") &&
+    hasAPIPermission(session, "PATCH", "/api/image-collections") &&
+    hasAPIPermission(session, "DELETE", "/api/image-collections");
   return (
     <ImageManagerContent
       cacheScope={imageManagerCacheScope(session)}
@@ -2414,6 +3134,7 @@ export default function ImageManagerPage() {
       canUpdateImageVisibility={canUpdateImageVisibility}
       canEditImageTags={canEditImageTags}
       canMoveImagesToTeam={canMoveImagesToTeam}
+      canManageCollections={canManageCollections}
       isAdmin={session.role === "admin"}
     />
   );

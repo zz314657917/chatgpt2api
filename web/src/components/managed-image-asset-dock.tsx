@@ -50,7 +50,7 @@ function ManagedImageAssetDockTrigger({
         type="button"
         className="mt-1 flex size-10 items-center justify-center rounded-2xl bg-sky-500/10 text-sky-600 transition hover:bg-sky-500/15 dark:text-sky-300"
         onClick={onActivate}
-        title="展开图片库"
+        title="展开素材库"
       >
         <Images className="size-5" />
       </button>
@@ -62,7 +62,7 @@ function ManagedImageAssetDockTrigger({
           type="button"
           className="mt-1 flex size-9 items-center justify-center rounded-2xl text-muted-foreground transition hover:bg-muted hover:text-foreground dark:text-slate-400 dark:hover:bg-slate-900 dark:hover:text-slate-100"
           onClick={onActivate}
-          title="展开图片库"
+          title="展开素材库"
         >
           <PanelRightOpen className="size-4" />
         </button>
@@ -94,7 +94,7 @@ export function ManagedImageAssetDock({
   onActivate,
   triggerClassName,
   loadingClassName,
-  loadingLabel = "加载图片库...",
+  loadingLabel = "加载素材库...",
   showOpenButton = true,
   ...sidebarProps
 }: ManagedImageAssetDockProps) {

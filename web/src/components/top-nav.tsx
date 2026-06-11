@@ -33,7 +33,7 @@ const navItems = [
   { href: "/image", label: "创作台" },
   { href: "/canvas", label: "无限画布" },
   { href: "/social", label: "社媒运营" },
-  { href: "/image-manager", label: "图片库" },
+  { href: "/image-manager", label: "素材库" },
 ];
 const profileNavItem = { href: "/profile", label: "个人中心" };
 const teamNavItem = { href: "/team", label: "团队空间" };
@@ -519,9 +519,11 @@ function Sub2APISessionProbe({
 
   return (
     <iframe
+      key={probeURL}
       ref={iframeRef}
       title="Sub2API 会话同步"
       src={probeURL}
+      referrerPolicy="no-referrer"
       tabIndex={-1}
       aria-hidden="true"
       className="pointer-events-none fixed h-0 w-0 border-0 opacity-0"

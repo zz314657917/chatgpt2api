@@ -47,7 +47,7 @@ export const CANVAS_NODE_HELP: SmartCanvasNodeHelp[] = [
     id: "image",
     title: "图片",
     summary: "保存参考图、上传图或生成结果图。",
-    upstream: "可由上传、粘贴、图片库或 Output 结果创建。",
+    upstream: "可由上传、粘贴、素材库或 Output 结果创建。",
     downstream: "AI 提示词、图片生成、循环、组。",
     controls: ["点击图片可预览。", "右下角拖拽可调整节点大小。"],
     reminders: ["连到 图片生成 会作为图生图输入。", "连到 AI 提示词 会让模型先看图再产出提示词。"],

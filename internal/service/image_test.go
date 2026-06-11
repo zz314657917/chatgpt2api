@@ -1362,6 +1362,127 @@ func TestImageServiceMoveImagesToTeamLibraryRequiresOwnerAndQuota(t *testing.T) 
 	}
 }
 
+func TestImageServiceCollectionsCreateAssignFilterRenameAndDelete(t *testing.T) {
+	root := t.TempDir()
+	config := testImageConfig{root: root}
+	rels := []string{
+		"2026/04/29/asset-a.png",
+		"2026/04/29/asset-b.png",
+	}
+	for _, rel := range rels {
+		path := filepath.Join(config.ImagesDir(), filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("MkdirAll() error = %v", err)
+		}
+		if err := writeTestPNG(path); err != nil {
+			t.Fatalf("writeTestPNG(%s) error = %v", rel, err)
+		}
+	}
+
+	service := NewImageService(config)
+	scope := ImageAccessScope{OwnerID: "linuxdo:123"}
+	service.RecordGeneratedImages(rels, "linuxdo:123", "alice", ImageVisibilityPrivate)
+	collection, err := service.CreateImageCollection("角色", scope, "")
+	if err != nil {
+		t.Fatalf("CreateImageCollection() error = %v", err)
+	}
+	if collection.ID == "" || collection.Name != "角色" || collection.LibraryScope != ImageLibraryScopePersonal {
+		t.Fatalf("CreateImageCollection() = %#v", collection)
+	}
+	result, err := service.UpdateImageCollectionItems(collection.ID, []string{rels[0]}, scope)
+	if err != nil {
+		t.Fatalf("UpdateImageCollectionItems() error = %v", err)
+	}
+	if result["updated"] != 1 {
+		t.Fatalf("UpdateImageCollectionItems() = %#v", result)
+	}
+	filtered := service.ListImagesPage("http://127.0.0.1:8000", ImageListOptions{CollectionID: collection.ID, PageSize: 50}, scope)
+	items := filtered["items"].([]map[string]any)
+	if len(items) != 1 || items[0]["path"] != rels[0] || items[0]["collection_name"] != "角色" {
+		t.Fatalf("collection filtered images = %#v", filtered)
+	}
+	unclassified := service.ListImagesPage("http://127.0.0.1:8000", ImageListOptions{CollectionID: ImageCollectionUnclassifiedID, PageSize: 50}, scope)
+	unclassifiedItems := unclassified["items"].([]map[string]any)
+	if len(unclassifiedItems) != 1 || unclassifiedItems[0]["path"] != rels[1] {
+		t.Fatalf("unclassified filtered images = %#v", unclassified)
+	}
+	collections := service.ListImageCollections(scope)
+	if len(collections) != 1 || collections[0].ImagesCount != 1 {
+		t.Fatalf("ListImageCollections() = %#v", collections)
+	}
+	collectionsResult := service.ListImageCollectionsResult(scope)
+	if collectionsResult.UnclassifiedCount != 1 {
+		t.Fatalf("ListImageCollectionsResult() = %#v", collectionsResult)
+	}
+	renamed, err := service.RenameImageCollection(collection.ID, "场景", scope)
+	if err != nil {
+		t.Fatalf("RenameImageCollection() error = %v", err)
+	}
+	if renamed.Name != "场景" || renamed.ImagesCount != 1 {
+		t.Fatalf("RenameImageCollection() = %#v", renamed)
+	}
+	detail, err := service.ImageDetail("http://127.0.0.1:8000", rels[0], scope)
+	if err != nil {
+		t.Fatalf("ImageDetail() error = %v", err)
+	}
+	if detail["collection_name"] != "场景" {
+		t.Fatalf("renamed collection should update image detail = %#v", detail)
+	}
+	deleted, err := service.DeleteImageCollection(collection.ID, scope)
+	if err != nil {
+		t.Fatalf("DeleteImageCollection() error = %v", err)
+	}
+	if deleted["cleared"] != 1 {
+		t.Fatalf("DeleteImageCollection() = %#v", deleted)
+	}
+	after := service.ListImagesPage("http://127.0.0.1:8000", ImageListOptions{CollectionID: collection.ID, PageSize: 50}, scope)
+	if got := after["items"].([]map[string]any); len(got) != 0 {
+		t.Fatalf("deleted collection filter should be empty = %#v", after)
+	}
+}
+
+func TestImageServiceTeamCollectionsRequireManagerScope(t *testing.T) {
+	root := t.TempDir()
+	config := testImageConfig{root: root}
+	rel := "2026/04/29/team-collection.png"
+	path := filepath.Join(config.ImagesDir(), filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := writeTestPNG(path); err != nil {
+		t.Fatalf("writeTestPNG() error = %v", err)
+	}
+
+	service := NewImageService(config)
+	service.RecordGeneratedImages([]string{rel}, "linuxdo:123", "alice", ImageVisibilityPrivate)
+	if _, err := service.MoveImagesToTeamLibrary([]string{rel}, "linuxdo:123", "team-1", "Design Team", DefaultTeamStorageLimitBytes); err != nil {
+		t.Fatalf("MoveImagesToTeamLibrary() error = %v", err)
+	}
+	managerScope := ImageAccessScope{TeamID: "team-1", TeamManager: true}
+	collection, err := service.CreateImageCollection("团队素材", managerScope, "Design Team")
+	if err != nil {
+		t.Fatalf("CreateImageCollection(team) error = %v", err)
+	}
+	if collection.LibraryScope != ImageLibraryScopeTeam || collection.TeamID != "team-1" {
+		t.Fatalf("team collection = %#v", collection)
+	}
+	memberScope := ImageAccessScope{TeamID: "team-1"}
+	memberResult, err := service.UpdateImageCollectionItems(collection.ID, []string{rel}, memberScope)
+	if err != nil {
+		t.Fatalf("UpdateImageCollectionItems(member) error = %v", err)
+	}
+	if memberResult["updated"] != 0 || memberResult["missing"] != 1 {
+		t.Fatalf("UpdateImageCollectionItems(member) = %#v", memberResult)
+	}
+	if _, err := service.UpdateImageCollectionItems(collection.ID, []string{rel}, managerScope); err != nil {
+		t.Fatalf("UpdateImageCollectionItems(manager) error = %v", err)
+	}
+	collections := service.ListImageCollections(memberScope)
+	if len(collections) != 1 || collections[0].ImagesCount != 1 {
+		t.Fatalf("ListImageCollections(member) = %#v", collections)
+	}
+}
+
 func TestImageServiceCleanupStorageUserLimitSkipsTeamImages(t *testing.T) {
 	root := t.TempDir()
 	config := testImageConfig{root: root}

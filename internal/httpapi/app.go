@@ -964,6 +964,7 @@ func (a *App) handleImages(w http.ResponseWriter, r *http.Request) {
 			Orientation:      strings.TrimSpace(r.URL.Query().Get("orientation")),
 			ResolutionPreset: strings.TrimSpace(r.URL.Query().Get("resolution")),
 			AspectRatio:      strings.TrimSpace(r.URL.Query().Get("aspect_ratio")),
+			CollectionID:     strings.TrimSpace(r.URL.Query().Get("collection_id")),
 			Tags:             imageTagsFromQuery(r.URL.Query()),
 		}, scope)
 		a.decorateImageList(payload)
@@ -1064,6 +1065,134 @@ func (a *App) handleImageTags(w http.ResponseWriter, r *http.Request) {
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
+}
+
+func (a *App) handleImageCollections(w http.ResponseWriter, r *http.Request) {
+	identity, ok := a.requireIdentity(w, r, "")
+	if !ok {
+		return
+	}
+	cleanPath := strings.Trim(strings.TrimPrefix(path.Clean(r.URL.Path), "/api/image-collections"), "/")
+	if cleanPath == "." {
+		cleanPath = ""
+	}
+	if cleanPath == "items" {
+		a.handleImageCollectionItems(w, r, identity)
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		scope, _, status, message := a.imageListAccessScope(identity, r.URL.Query())
+		if status != 0 {
+			util.WriteError(w, status, message)
+			return
+		}
+		collections := a.images.ListImageCollectionsResult(scope)
+		util.WriteJSON(w, http.StatusOK, map[string]any{"items": collections.Items, "unclassified_count": collections.UnclassifiedCount})
+	case http.MethodPost:
+		if cleanPath != "" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		body, err := readJSONMap(r)
+		if err != nil {
+			util.WriteError(w, http.StatusBadRequest, "invalid json body")
+			return
+		}
+		scope, teamContext, status, message := a.imageCollectionMutationScope(identity, util.Clean(body["scope"]), util.Clean(body["team_id"]))
+		if status != 0 {
+			util.WriteError(w, status, message)
+			return
+		}
+		item, err := a.images.CreateImageCollection(util.Clean(body["name"]), scope, teamContext.TeamName)
+		if err != nil {
+			util.WriteError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		collections := a.images.ListImageCollectionsResult(scope)
+		util.WriteJSON(w, http.StatusOK, map[string]any{"item": item, "items": collections.Items, "unclassified_count": collections.UnclassifiedCount})
+	case http.MethodPatch:
+		if cleanPath == "" {
+			util.WriteError(w, http.StatusBadRequest, "collection id is required")
+			return
+		}
+		body, err := readJSONMap(r)
+		if err != nil {
+			util.WriteError(w, http.StatusBadRequest, "invalid json body")
+			return
+		}
+		scope, _, status, message := a.imageCollectionMutationScope(identity, util.Clean(body["scope"]), util.Clean(body["team_id"]))
+		if status != 0 {
+			util.WriteError(w, status, message)
+			return
+		}
+		item, err := a.images.RenameImageCollection(cleanPath, util.Clean(body["name"]), scope)
+		if err != nil {
+			status := http.StatusBadRequest
+			if err.Error() == "collection not found" {
+				status = http.StatusNotFound
+			}
+			util.WriteError(w, status, err.Error())
+			return
+		}
+		collections := a.images.ListImageCollectionsResult(scope)
+		util.WriteJSON(w, http.StatusOK, map[string]any{"item": item, "items": collections.Items, "unclassified_count": collections.UnclassifiedCount})
+	case http.MethodDelete:
+		if cleanPath == "" {
+			util.WriteError(w, http.StatusBadRequest, "collection id is required")
+			return
+		}
+		scope, _, status, message := a.imageCollectionMutationScope(identity, strings.TrimSpace(r.URL.Query().Get("scope")), strings.TrimSpace(r.URL.Query().Get("team_id")))
+		if status != 0 {
+			util.WriteError(w, status, message)
+			return
+		}
+		result, err := a.images.DeleteImageCollection(cleanPath, scope)
+		if err != nil {
+			status := http.StatusBadRequest
+			if err.Error() == "collection not found" {
+				status = http.StatusNotFound
+			}
+			util.WriteError(w, status, err.Error())
+			return
+		}
+		collections := a.images.ListImageCollectionsResult(scope)
+		result["items"] = collections.Items
+		result["unclassified_count"] = collections.UnclassifiedCount
+		util.WriteJSON(w, http.StatusOK, result)
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func (a *App) handleImageCollectionItems(w http.ResponseWriter, r *http.Request, identity service.Identity) {
+	if r.Method != http.MethodPatch {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	body, err := readJSONMap(r)
+	if err != nil {
+		util.WriteError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	scope, _, status, message := a.imageCollectionMutationScope(identity, util.Clean(body["scope"]), util.Clean(body["team_id"]))
+	if status != 0 {
+		util.WriteError(w, status, message)
+		return
+	}
+	result, err := a.images.UpdateImageCollectionItems(util.Clean(body["collection_id"]), util.AsStringSlice(body["paths"]), scope)
+	if err != nil {
+		status := http.StatusBadRequest
+		if err.Error() == "collection not found" {
+			status = http.StatusNotFound
+		}
+		util.WriteError(w, status, err.Error())
+		return
+	}
+	collections := a.images.ListImageCollectionsResult(scope)
+	result["items"] = collections.Items
+	result["unclassified_count"] = collections.UnclassifiedCount
+	util.WriteJSON(w, http.StatusOK, result)
 }
 
 func (a *App) handleImageDetail(w http.ResponseWriter, r *http.Request) {
@@ -2586,6 +2715,24 @@ func (a *App) imageMutationAccessScope(identity service.Identity, scopeValue, te
 		return service.ImageAccessScope{}, http.StatusForbidden, "team manager permission required"
 	}
 	return service.ImageAccessScope{TeamID: context.TeamID, TeamManager: true}, 0, ""
+}
+
+func (a *App) imageCollectionMutationScope(identity service.Identity, scopeValue, teamID string) (service.ImageAccessScope, service.TeamImageLibraryContext, int, string) {
+	scopeValue = strings.TrimSpace(scopeValue)
+	if scopeValue == "" || scopeValue == "mine" {
+		return imageAccessScope(identity), service.TeamImageLibraryContext{}, 0, ""
+	}
+	if scopeValue != "team" {
+		return service.ImageAccessScope{}, service.TeamImageLibraryContext{}, http.StatusBadRequest, "scope must be mine or team"
+	}
+	context, status, message := a.imageTeamContext(identity, teamID)
+	if status != 0 {
+		return service.ImageAccessScope{}, service.TeamImageLibraryContext{}, status, message
+	}
+	if !service.TeamRoleCanManageImages(context.Role) {
+		return service.ImageAccessScope{}, service.TeamImageLibraryContext{}, http.StatusForbidden, "team manager permission required"
+	}
+	return service.ImageAccessScope{TeamID: context.TeamID, TeamManager: true}, context, 0, ""
 }
 
 func (a *App) imageTeamContext(identity service.Identity, teamID string) (service.TeamImageLibraryContext, int, string) {

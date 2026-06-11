@@ -14,6 +14,7 @@ import {
   Clapperboard,
   Clock3,
   Copy,
+  Download,
   Eraser,
   Repeat2,
   FileText,
@@ -52,6 +53,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import type { CanvasImageRef, CanvasModelOption, CanvasVideoRef, CreationTask, ImageVisibility } from "@/lib/api";
 import { supportsImageOutputControls } from "@/lib/api";
+import {
+  buildTimestampedImageDownloadName,
+  downloadImageFile,
+  type DownloadableImage,
+} from "@/lib/image-download";
+import { getManagedImagePathFromUrl } from "@/lib/image-path";
 import {
   IMAGE_ASPECT_RATIO_OPTIONS,
   IMAGE_RESOLUTION_OPTIONS,
@@ -119,6 +126,8 @@ const NODE_SIZE: Record<SmartCanvasItem["type"], { w: number; h: number }> = {
 };
 const EMPTY_SMART_CANVAS_NODES: SmartCanvasItem[] = [];
 const EMPTY_SMART_CANVAS_EDGES: SmartCanvasDocument["edges"] = [];
+const EMPTY_CANVAS_IMAGES: CanvasImageRef[] = [];
+const EMPTY_CANVAS_VIDEOS: CanvasVideoRef[] = [];
 const CANVAS_NODE_MENU_WIDTH = 224;
 const CANVAS_NODE_MENU_GAP = 12;
 const CANVAS_GRAPH_KEY_SEPARATOR = "\u001f";
@@ -2221,6 +2230,37 @@ function stopNodeInteraction(event: ReactPointerEvent<HTMLElement>) {
   event.stopPropagation();
 }
 
+function sleep(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function canvasImageDownloadId(image: CanvasImageRef, index: number) {
+  return `${canvasImageKey(image) || canvasImageSource(image) || image.name || "image"}-${index}`;
+}
+
+function canvasImageDownloadItem(
+  image: CanvasImageRef,
+  index: number,
+  context: { nodeId: string; createdAt?: string },
+): DownloadableImage | null {
+  const src = canvasImageSource(image);
+  if (!src) {
+    return null;
+  }
+  return {
+    id: canvasImageDownloadId(image, index),
+    src,
+    path: image.path || getManagedImagePathFromUrl(src),
+    fileName: buildTimestampedImageDownloadName({
+      prefix: "canvas-output",
+      createdAt: context.createdAt,
+      id: context.nodeId,
+      index,
+      src,
+    }),
+  };
+}
+
 function isNodeInViewBounds(item: SmartCanvasItem, nodeSizes: SmartCanvasNodeSizeMap, bounds: SmartCanvasViewBounds | null) {
   if (!bounds) {
     return true;
@@ -3991,14 +4031,75 @@ function OutputNodeBody({
   onStopNode: () => void;
   lightweight: boolean;
 }) {
-  const images = item.data?.output?.images || item.data?.images || [];
-  const videos = item.data?.output?.videos || item.data?.videos || [];
+  const images = item.data?.output?.images || item.data?.images || EMPTY_CANVAS_IMAGES;
+  const videos = item.data?.output?.videos || item.data?.videos || EMPTY_CANVAS_VIDEOS;
   const loading = item.data?.status === "running" || item.data?.status === "queued";
   const loopRaw = item.data?.output?.raw?.mode === "loop" ? item.data.output.raw : null;
   const startedAt = item.data?.started_at || item.data?.created_at || "";
+  const downloadNodeId = itemIdForDownload(item);
   const [showAllImages, setShowAllImages] = useState(false);
+  const [selectedImageIds, setSelectedImageIds] = useState<Record<string, boolean>>({});
+  const [downloadingImageIds, setDownloadingImageIds] = useState<Record<string, boolean>>({});
+  const [bulkDownloadKey, setBulkDownloadKey] = useState<"selected" | "all" | "single" | null>(null);
+  const downloadableImages = useMemo(() => images.flatMap((image, index) => {
+    const downloadItem = canvasImageDownloadItem(image, index, { nodeId: downloadNodeId, createdAt: startedAt });
+    return downloadItem ? [downloadItem] : [];
+  }), [downloadNodeId, images, startedAt]);
+  const selectedDownloadableImages = downloadableImages.filter((image) => selectedImageIds[image.id]);
+  const toggleImageSelection = useCallback((image: CanvasImageRef, index: number) => {
+    const id = canvasImageDownloadId(image, index);
+    setSelectedImageIds((current) => ({
+      ...current,
+      [id]: !current[id],
+    }));
+  }, []);
+  const downloadItems = useCallback(async (key: "selected" | "all" | "single", items: DownloadableImage[]) => {
+    if (items.length === 0 || bulkDownloadKey) {
+      return;
+    }
+
+    setBulkDownloadKey(key);
+    setDownloadingImageIds((current) => ({
+      ...current,
+      ...Object.fromEntries(items.map((image) => [image.id, true])),
+    }));
+    try {
+      for (let index = 0; index < items.length; index += 1) {
+        await downloadImageFile(items[index]);
+        if (index < items.length - 1) {
+          await sleep(120);
+        }
+      }
+    } finally {
+      setDownloadingImageIds((current) => {
+        const next = { ...current };
+        for (const image of items) {
+          delete next[image.id];
+        }
+        return next;
+      });
+      setBulkDownloadKey(null);
+    }
+  }, [bulkDownloadKey]);
+  const downloadImage = useCallback((image: CanvasImageRef, index: number) => {
+    const downloadItem = canvasImageDownloadItem(image, index, { nodeId: downloadNodeId, createdAt: startedAt });
+    if (!downloadItem || downloadingImageIds[downloadItem.id]) {
+      return;
+    }
+    void downloadItems("single", [downloadItem]);
+  }, [downloadItems, downloadNodeId, downloadingImageIds, startedAt]);
+  const downloadToolbar = downloadableImages.length > 0 ? (
+    <CanvasOutputDownloadToolbar
+      selectedCount={selectedDownloadableImages.length}
+      totalCount={downloadableImages.length}
+      downloadingKey={bulkDownloadKey}
+      onDownloadSelected={() => void downloadItems("selected", selectedDownloadableImages)}
+      onDownloadAll={() => void downloadItems("all", downloadableImages)}
+    />
+  ) : null;
   return (
     <div className="p-3">
+      {downloadToolbar}
       {loopRaw ? (
         <LoopOutputSlots
           images={images}
@@ -4006,12 +4107,29 @@ function OutputNodeBody({
           status={item.data?.status}
           startedAt={startedAt}
           onOpenImage={onOpenImage}
+          onDownloadImage={downloadImage}
+          onToggleImageSelect={toggleImageSelection}
+          selectedImageIds={selectedImageIds}
+          downloadingImageIds={downloadingImageIds}
           lightweight={lightweight}
         />
       ) : videos.length > 0 ? (
         <CanvasVideoStrip videos={videos} limit={2} />
       ) : images.length > 0 ? (
-        <CanvasImageStrip images={images} limit={4} onOpen={onOpenImage} onOpenAll={() => setShowAllImages(true)} onDelete={onDeleteImage} className="grid-cols-4" large lightweight={lightweight} />
+        <CanvasImageStrip
+          images={images}
+          limit={4}
+          onOpen={onOpenImage}
+          onOpenAll={() => setShowAllImages(true)}
+          onDelete={onDeleteImage}
+          onDownload={downloadImage}
+          onToggleSelect={toggleImageSelection}
+          selectedImageIds={selectedImageIds}
+          downloadingImageIds={downloadingImageIds}
+          className="grid-cols-4"
+          large
+          lightweight={lightweight}
+        />
       ) : loading ? (
         <CanvasGenerationLoading status={item.data?.status} onStop={onStopNode} />
       ) : (
@@ -4030,10 +4148,71 @@ function OutputNodeBody({
             Output 图片
           </div>
           <div className="max-h-[68vh] overflow-auto p-4">
-            <CanvasImageStrip images={images} onOpen={onOpenImage} onDelete={onDeleteImage} className="grid-cols-2 sm:grid-cols-3 md:grid-cols-4" />
+            <CanvasImageStrip
+              images={images}
+              onOpen={onOpenImage}
+              onDelete={onDeleteImage}
+              onDownload={downloadImage}
+              onToggleSelect={toggleImageSelection}
+              selectedImageIds={selectedImageIds}
+              downloadingImageIds={downloadingImageIds}
+              className="grid-cols-2 sm:grid-cols-3 md:grid-cols-4"
+            />
           </div>
         </DialogContent>
       </Dialog>
+    </div>
+  );
+}
+
+function itemIdForDownload(item: SmartCanvasItem) {
+  return item.id || item.data?.task_id || item.data?.output?.task_id || "output";
+}
+
+function CanvasOutputDownloadToolbar({
+  selectedCount,
+  totalCount,
+  downloadingKey,
+  onDownloadSelected,
+  onDownloadAll,
+}: {
+  selectedCount: number;
+  totalCount: number;
+  downloadingKey: "selected" | "all" | "single" | null;
+  onDownloadSelected: () => void;
+  onDownloadAll: () => void;
+}) {
+  return (
+    <div className="mb-2 flex items-center justify-between gap-2">
+      <span className={cn("min-w-0 truncate text-[11px] font-semibold", canvasSubtleTextClass)}>
+        {selectedCount > 0 ? `已选 ${selectedCount} / ${totalCount}` : `${totalCount} 张输出图片`}
+      </span>
+      <div className="flex shrink-0 items-center gap-1">
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          className={cn("h-7 rounded-lg px-2 text-[11px] font-black", canvasIconButtonClass)}
+          disabled={selectedCount === 0 || downloadingKey !== null}
+          onClick={onDownloadSelected}
+          title="下载已选图片"
+        >
+          {downloadingKey === "selected" ? <LoaderCircle className="size-3.5 animate-spin" /> : <Download className="size-3.5" />}
+          下载已选
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          className={cn("h-7 rounded-lg px-2 text-[11px] font-black", canvasIconButtonClass)}
+          disabled={downloadingKey !== null}
+          onClick={onDownloadAll}
+          title="下载全部输出图片"
+        >
+          {downloadingKey === "all" ? <LoaderCircle className="size-3.5 animate-spin" /> : <Download className="size-3.5" />}
+          全部
+        </Button>
+      </div>
     </div>
   );
 }
@@ -4147,6 +4326,10 @@ function LoopOutputSlots({
   status,
   startedAt,
   onOpenImage,
+  onDownloadImage,
+  onToggleImageSelect,
+  selectedImageIds,
+  downloadingImageIds,
   lightweight,
 }: {
   images: CanvasImageRef[];
@@ -4154,6 +4337,10 @@ function LoopOutputSlots({
   status?: CreationTask["status"];
   startedAt?: string;
   onOpenImage: (image: CanvasImageRef) => void;
+  onDownloadImage?: (image: CanvasImageRef, index: number) => void;
+  onToggleImageSelect?: (image: CanvasImageRef, index: number) => void;
+  selectedImageIds?: Record<string, boolean>;
+  downloadingImageIds?: Record<string, boolean>;
   lightweight: boolean;
 }) {
   const total = Math.max(1, Math.min(40, loopRawNumber(raw, "total", images.length || 1)));
@@ -4180,6 +4367,10 @@ function LoopOutputSlots({
             status={slot.status}
             elapsedLabel={slot.status === "running" ? elapsedLabel : ""}
             onOpenImage={onOpenImage}
+            onDownloadImage={onDownloadImage}
+            onToggleImageSelect={onToggleImageSelect}
+            selected={slot.image ? Boolean(selectedImageIds?.[canvasImageDownloadId(slot.image, slot.index)]) : false}
+            downloading={slot.image ? Boolean(downloadingImageIds?.[canvasImageDownloadId(slot.image, slot.index)]) : false}
             lightweight={lightweight}
           />
         ))}
@@ -4198,6 +4389,10 @@ function LoopOutputSlot({
   status,
   elapsedLabel,
   onOpenImage,
+  onDownloadImage,
+  onToggleImageSelect,
+  selected,
+  downloading,
   lightweight,
 }: {
   index: number;
@@ -4205,13 +4400,20 @@ function LoopOutputSlot({
   status?: CreationTask["status"];
   elapsedLabel?: string;
   onOpenImage: (image: CanvasImageRef) => void;
+  onDownloadImage?: (image: CanvasImageRef, index: number) => void;
+  onToggleImageSelect?: (image: CanvasImageRef, index: number) => void;
+  selected?: boolean;
+  downloading?: boolean;
   lightweight: boolean;
 }) {
   if (image) {
     return (
       <button
         type="button"
-        className="relative aspect-square overflow-hidden rounded-xl border border-border bg-muted"
+        className={cn(
+          "group relative aspect-square overflow-hidden rounded-xl border bg-muted",
+          selected ? "border-sky-500 ring-2 ring-sky-400/60 dark:border-sky-300" : "border-border",
+        )}
         onClick={() => onOpenImage(image)}
         data-node-interactive="true"
         draggable
@@ -4227,7 +4429,63 @@ function LoopOutputSlot({
         ) : (
           <AuthenticatedImage src={canvasImagePreviewSource(image)} alt={canvasImageLabel(image, index)} className="h-full w-full object-cover" />
         )}
-        <span className="absolute left-1.5 top-1.5 rounded-md bg-black/55 px-1.5 py-0.5 text-[10px] font-black text-white">{index + 1}</span>
+        {onToggleImageSelect ? (
+          <span
+            role="button"
+            tabIndex={0}
+            className={cn(
+              "absolute left-1 top-1 z-20 inline-flex size-6 items-center justify-center rounded-full border text-[10px] font-black shadow-sm transition",
+              selected
+                ? "border-sky-500 bg-sky-500 text-white opacity-100"
+                : "border-white/80 bg-black/45 text-white opacity-100 backdrop-blur-sm hover:bg-black/60",
+            )}
+            data-node-interactive="true"
+            title={selected ? "取消选择图片" : "选择图片"}
+            aria-label={selected ? "取消选择图片" : "选择图片"}
+            aria-pressed={selected}
+            onClick={(event) => {
+              event.stopPropagation();
+              onToggleImageSelect(image, index);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                event.stopPropagation();
+                onToggleImageSelect(image, index);
+              }
+            }}
+          >
+            {selected ? <Check className="size-3.5" /> : index + 1}
+          </span>
+        ) : (
+          <span className="absolute left-1.5 top-1.5 rounded-md bg-black/55 px-1.5 py-0.5 text-[10px] font-black text-white">{index + 1}</span>
+        )}
+        {onDownloadImage ? (
+          <span
+            role="button"
+            tabIndex={0}
+            className={cn(
+              "absolute right-1 top-1 z-20 flex size-6 items-center justify-center rounded-full border border-border bg-background/95 text-sky-700 opacity-0 shadow-sm transition hover:border-sky-300 hover:bg-white hover:text-sky-900 group-hover:opacity-100 dark:border-slate-700 dark:bg-slate-950/90 dark:text-sky-200 dark:hover:border-sky-400/50 dark:hover:bg-slate-900",
+              downloading && "pointer-events-none opacity-100",
+            )}
+            data-node-interactive="true"
+            title="下载图片"
+            aria-label="下载图片"
+            onClick={(event) => {
+              event.stopPropagation();
+              onDownloadImage(image, index);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                event.stopPropagation();
+                onDownloadImage(image, index);
+              }
+            }}
+          >
+            {downloading ? <LoaderCircle className="size-3.5 animate-spin" /> : <Download className="size-3.5" />}
+          </span>
+        ) : null}
       </button>
     );
   }
@@ -4350,6 +4608,10 @@ export function CanvasImageStrip({
   onOpen,
   onOpenAll,
   onDelete,
+  onDownload,
+  onToggleSelect,
+  selectedImageIds,
+  downloadingImageIds,
   className,
   large,
   lightweight,
@@ -4360,6 +4622,10 @@ export function CanvasImageStrip({
   onOpen?: (image: CanvasImageRef) => void;
   onOpenAll?: () => void;
   onDelete?: (image: CanvasImageRef) => void;
+  onDownload?: (image: CanvasImageRef, index: number) => void;
+  onToggleSelect?: (image: CanvasImageRef, index: number) => void;
+  selectedImageIds?: Record<string, boolean>;
+  downloadingImageIds?: Record<string, boolean>;
   className?: string;
   large?: boolean;
   lightweight?: boolean;
@@ -4374,12 +4640,17 @@ export function CanvasImageStrip({
     <div className={cn("grid gap-2", className || "grid-cols-3", large && "h-full")} style={style}>
       {visible.map((image, index) => {
         const src = canvasImagePreviewSource(image);
+        const imageId = canvasImageDownloadId(image, index);
+        const selected = Boolean(selectedImageIds?.[imageId]);
+        const downloading = Boolean(downloadingImageIds?.[imageId]);
+        const coveredByOverflow = overflow > 0 && index === visible.length - 1;
         return (
           <button
             key={`${canvasImageSource(image) || image.path || image.name || "image"}-${index}`}
             type="button"
             className={cn(
-              "group relative overflow-hidden rounded-xl border border-border bg-muted/60 dark:border-slate-700 dark:bg-slate-950/60",
+              "group relative overflow-hidden rounded-xl border bg-muted/60 dark:bg-slate-950/60",
+              selected ? "border-sky-500 ring-2 ring-sky-400/60 dark:border-sky-300" : "border-border dark:border-slate-700",
               large ? "h-full min-h-0" : "aspect-square",
             )}
             onClick={(event) => {
@@ -4436,13 +4707,68 @@ export function CanvasImageStrip({
                 +{overflow}
               </span>
             ) : null}
+            {onToggleSelect && !coveredByOverflow ? (
+              <span
+                role="button"
+                tabIndex={0}
+                className={cn(
+                  "absolute left-1 top-1 z-20 inline-flex size-6 items-center justify-center rounded-full border text-[10px] font-black shadow-sm transition",
+                  selected
+                    ? "border-sky-500 bg-sky-500 text-white opacity-100"
+                    : "border-white/80 bg-black/45 text-white opacity-0 backdrop-blur-sm hover:bg-black/60 group-hover:opacity-100",
+                )}
+                data-node-interactive="true"
+                title={selected ? "取消选择图片" : "选择图片"}
+                aria-label={selected ? "取消选择图片" : "选择图片"}
+                aria-pressed={selected}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onToggleSelect(image, index);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    onToggleSelect(image, index);
+                  }
+                }}
+              >
+                {selected ? <Check className="size-3.5" /> : index + 1}
+              </span>
+            ) : null}
+            {onDownload && !coveredByOverflow ? (
+              <span
+                role="button"
+                tabIndex={0}
+                className={cn(
+                  "absolute right-1 top-1 z-20 flex size-6 items-center justify-center rounded-full border border-border bg-background/95 text-sky-700 opacity-0 shadow-sm transition hover:border-sky-300 hover:bg-white hover:text-sky-900 group-hover:opacity-100 dark:border-slate-700 dark:bg-slate-950/90 dark:text-sky-200 dark:hover:border-sky-400/50 dark:hover:bg-slate-900",
+                  downloading && "pointer-events-none opacity-100",
+                )}
+                data-node-interactive="true"
+                title="下载图片"
+                aria-label="下载图片"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onDownload(image, index);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    onDownload(image, index);
+                  }
+                }}
+              >
+                {downloading ? <LoaderCircle className="size-3.5 animate-spin" /> : <Download className="size-3.5" />}
+              </span>
+            ) : null}
             {onOpen ? (
               <span
                 role="button"
                 tabIndex={0}
                 className={cn(
                   "absolute top-1 z-10 inline-flex h-6 items-center gap-1 rounded-full border border-border bg-background/95 px-2 text-[11px] font-black text-sky-700 opacity-0 shadow-sm transition hover:border-sky-300 hover:bg-white hover:text-sky-900 group-hover:opacity-100 dark:border-slate-700 dark:bg-slate-950/90 dark:text-sky-200 dark:hover:border-sky-400/50 dark:hover:bg-slate-900",
-                  onDelete ? "right-8" : "right-1",
+                  onDelete && onDownload ? "right-[3.75rem]" : onDelete || onDownload ? "right-8" : "right-1",
                 )}
                 data-node-interactive="true"
                 title="编辑图片"
@@ -4467,7 +4793,10 @@ export function CanvasImageStrip({
               <span
                 role="button"
                 tabIndex={0}
-                className="absolute right-1 top-1 z-10 flex size-6 items-center justify-center rounded-full border border-border bg-background/90 text-muted-foreground opacity-0 shadow-sm transition hover:border-rose-400 hover:text-rose-500 group-hover:opacity-100 dark:border-slate-700 dark:bg-slate-950/90 dark:text-slate-400 dark:hover:text-rose-300"
+                className={cn(
+                  "absolute top-1 z-10 flex size-6 items-center justify-center rounded-full border border-border bg-background/90 text-muted-foreground opacity-0 shadow-sm transition hover:border-rose-400 hover:text-rose-500 group-hover:opacity-100 dark:border-slate-700 dark:bg-slate-950/90 dark:text-slate-400 dark:hover:text-rose-300",
+                  onDownload ? "right-8" : "right-1",
+                )}
                 data-node-interactive="true"
                 title="从节点移除图片"
                 aria-label="从节点移除图片"

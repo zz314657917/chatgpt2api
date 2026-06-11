@@ -735,7 +735,7 @@ export default function SocialPage() {
       setLibraryNextCursor(result.next_cursor);
       setLibraryHasMore(result.has_more);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "加载图片库失败");
+      toast.error(error instanceof Error ? error.message : "加载素材库失败");
     } finally {
       setLibraryLoading(false);
       setLibraryLoadingMore(false);
@@ -1043,7 +1043,7 @@ export default function SocialPage() {
                         </Button>
                         <Button variant="outline" size="sm" className="h-8 rounded-xl" onClick={openImageLibrary}>
                           <FileText className="size-3.5" />
-                          图片库
+                          素材库
                         </Button>
                         <Button asChild variant="outline" size="sm" className="h-8 rounded-xl">
                           <label htmlFor="social-source-images" className="cursor-pointer">
@@ -1335,15 +1335,15 @@ export default function SocialPage() {
     <Dialog open={libraryOpen} onOpenChange={setLibraryOpen}>
       <DialogContent className="flex h-[min(88dvh,780px)] w-[min(94vw,980px)] max-w-none flex-col overflow-hidden rounded-3xl p-0">
         <DialogHeader className="border-b border-border px-5 pt-5 pr-12 pb-4">
-          <DialogTitle>从图片库选择</DialogTitle>
+          <DialogTitle>从素材库选择</DialogTitle>
           <DialogDescription>选择已有图片加入当前社媒项目参考图池，再绑定到卡片或顺序分配。</DialogDescription>
         </DialogHeader>
         <div className="flex items-center justify-between gap-3 border-b border-border px-5 py-3">
           <div className="flex gap-2">
             {[
               ["mine", "我的图片"],
-              ...(activeTeam?.id ? [["team", "团队图片库"]] : []),
-              ["public", "公开图库"],
+              ...(activeTeam?.id ? [["team", "团队素材库"]] : []),
+              ["public", "公共素材库"],
               ["all", "全部"],
             ].map(([scope, label]) => (
               <Button
@@ -1364,7 +1364,7 @@ export default function SocialPage() {
           {libraryLoading ? (
             <div className="flex h-64 items-center justify-center text-sm text-muted-foreground">
               <LoaderCircle className="mr-2 size-4 animate-spin" />
-              正在加载图片库
+              正在加载素材库
             </div>
           ) : libraryImages.length ? (
             <div className="grid grid-cols-3 gap-3 sm:grid-cols-4 lg:grid-cols-6">

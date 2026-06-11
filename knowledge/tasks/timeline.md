@@ -1,5 +1,24 @@
 # Project Timeline
 
+## 2026-06-11 09:34 +08:00 - 素材库体验补齐与本地桥接复核
+
+- 当前阶段：素材库从 v1 功能落地推进到日常可用体验补齐，并完成 62080 -> 8081 本地入口 smoke。
+- 本段重点：统一用户可见“素材库”文案；新增未归类筛选和 `unclassified_count`；`/image-manager`、`/image`、`/canvas` 支持全部/未归类/素材集过滤；归类入口补充单素材集、公共只读和团队权限提示；session-probe iframe 只请求探针路径。
+- 已完成：`chatgpt2api` 后端支持 `collection_id=__unclassified__`，素材集接口返回未归类数量；前端素材库侧栏和管理页接入未归类；Sub2API 本地 Studio Bridge 初始化会在占位配置下用 env secret、自适应 image/text group 和本地 return URL 修复配置；两边本地容器已更新健康。
+- 关键决策：继续保留一张图只属于一个素材集；不改 `/image-manager` 路由和 `/api/images` 根路径；Sub2API 本地自动修复只处理空配置、禁用、缺 secret/group 或 `example.com` 占位，不覆盖正式域名配置。
+- 验证记录：`chatgpt2api` 执行 `web npm.cmd run lint`、`web npm.cmd run build`、`go test ./internal/service ./internal/httpapi` 通过；Sub2API 执行 `backend go test ./internal/service ./internal/server` 通过；两仓库 `git diff --check` 通过；浏览器 smoke 从 `http://127.0.0.1:62080/chat-images` 成功跳到 `http://127.0.0.1:8081/image`，iframe 只加载 `/studio-bridge/session-probe`，未出现 `frame-ancestors 'none'` / CSP iframe 报错。
+- 遗留问题：尚未完整点击验收 `/image-manager` 有图归类、团队 manager/普通成员权限、公共只读和 `/canvas` 加入画布；本地 smoke 未执行真实 `gpt-image-2` 生图扣费闭环。
+- 下一步：用有素材数据的登录态补测创建 `ui` 素材集、批量加入/移出、创作台按 `ui` 选参考图、Canvas 加入画布；需要真实上游时再跑 `reserve -> /v1/images/generations -> commit`。
+
+## 2026-06-11 00:18 +08:00 - 可复用素材库 v1 实现
+
+- 当前阶段：图片库已升级为可复用素材库 v1，后端素材集接口和前端主要入口已落地。
+- 本段重点：在现有 `/api/images` 模型上叠加单素材集归类，支持个人/团队/公共 scope 下的素材集列表、创建、重命名、删除、批量归类和按素材集筛选；`/image-manager` 增加素材集侧栏、固定详情面板、批量归类和创作引用动作；`/image` 与 `/canvas` 侧边图库支持按素材集筛选。
+- 已完成：新增 `collection_id/collection_name` 元数据和索引字段；新增 `/api/image-collections` REST 接口；保留公开图库只读、团队 owner/manager 才能修改团队素材集；个人图移动到团队图库时清空个人素材集归属；Canvas 新增跨页素材 intent，可从图片库详情把素材加入画布。
+- 关键决策：v1 不做本地文件夹扫描、共享目录、多素材集多对多、工作流导入导出或提示词库；`/image` 的 `@素材` 是轻量弹出选择器，复用当前侧边图库/素材集筛选结果并加入参考图，Canvas 原有 `@图片` 继续可用。
+- 验证记录：`cd web && npm.cmd run lint` PASS；`cd web && npm.cmd run build` PASS；`go test ./internal/service ./internal/httpapi` PASS；`go test ./...` PASS；`git diff --check` PASS，仅 Windows LF/CRLF 工作区提示。
+- 遗留问题：尚未跑真实浏览器验收；后续需用登录态验证 `/image-manager` 创建“角色”素材集、批量加入/移出、团队 manager 与普通成员权限、公共图库只读、`/image` 从素材集选参考图、`/canvas` 从素材集加入画布。
+
 ## 2026-06-10 18:21 +08:00 - CDN TypeA 鉴权下载补齐
 
 - 当前阶段：对象存储私有读写方案已追加腾讯云 CDN TypeA 临时下载 URL 支持。

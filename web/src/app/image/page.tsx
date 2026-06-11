@@ -73,6 +73,7 @@ import {
   estimateImageDisplayPriceUSD,
   fetchCanvasModels,
   fetchCreationTasks,
+  fetchManagedImageCollections,
   fetchManagedImages,
   fetchProfile,
   fetchTeamWorkspace,
@@ -82,6 +83,7 @@ import {
   isChatModel,
   isImageModel,
   modelIDLooksImageCapable,
+  MANAGED_IMAGE_UNCLASSIFIED_COLLECTION_ID,
   supportsImageOutputControls,
   supportsImageResolutionPresets,
   supportsStructuredImageParameters,
@@ -94,6 +96,7 @@ import {
   type FallbackReferenceImage,
   type ImageVisibility,
   type ManagedImageListScope,
+  type ManagedImageCollection,
   type ManagedImageSummary,
   type TeamSummary,
 } from "@/lib/api";
@@ -1534,6 +1537,17 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
   const [assetsLoaded, setAssetsLoaded] = useState(false);
   const [publicAssetsLoaded, setPublicAssetsLoaded] = useState(false);
   const [teamAssetsLoaded, setTeamAssetsLoaded] = useState(false);
+  const [assetCollections, setAssetCollections] = useState<Record<ImageAssetLibraryScope, ManagedImageCollection[]>>({
+    mine: [],
+    team: [],
+    public: [],
+  });
+  const [assetUnclassifiedCounts, setAssetUnclassifiedCounts] = useState<Record<ImageAssetLibraryScope, number>>({
+    mine: 0,
+    team: 0,
+    public: 0,
+  });
+  const [activeAssetCollectionId, setActiveAssetCollectionId] = useState("");
   const [assetSidebarActivated, setAssetSidebarActivated] = useState(getInitialAssetSidebarActivated);
   const canInspectAccounts = session.role === "admin" || session.apiPermissions.includes("get/api/accounts");
   const canUseImageAssets = hasAPIPermission(session, "GET", "/api/images");
@@ -1713,6 +1727,8 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     () => formatHighResolutionHint(canInspectAccounts),
     [canInspectAccounts],
   );
+  const activeAssetCollections = useMemo(() => assetCollections[assetLibraryScope] || [], [assetCollections, assetLibraryScope]);
+  const activeAssetUnclassifiedCount = assetUnclassifiedCounts[assetLibraryScope] || 0;
   const visibleAssets = assetLibraryScope === "public" ? publicAssets : assetLibraryScope === "team" ? teamAssets : assets;
   const visibleAssetCount = visibleAssets.length;
   const visibleLoadingAssets = loadingAssets;
@@ -1724,12 +1740,12 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     { id: "public", label: "公共", count: publicAssets.length },
   ], [activeTeam?.id, assets.length, publicAssets.length, teamAssets.length]);
   const assetLibrarySubtitle = `${visibleAssetCount} 张素材 · 拖到输入框`;
-  const assetLibraryTitle = assetLibraryScope === "team" ? "团队图片库" : assetLibraryScope === "public" ? "公共图片库" : "个人图片库";
+  const assetLibraryTitle = assetLibraryScope === "team" ? "团队素材库" : assetLibraryScope === "public" ? "公共素材库" : "个人素材库";
   const assetLibraryEmptyLabel = assetLibraryScope === "team"
-    ? "团队图片库暂无图片"
+    ? "团队素材库暂无图片"
     : assetLibraryScope === "public"
-      ? "公共图片库暂无图片"
-      : "个人图片库暂无图片";
+      ? "公共素材库暂无图片"
+      : "个人素材库暂无图片";
 
   useEffect(() => {
     conversationsRef.current = conversations;
@@ -2425,6 +2441,35 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     }
   }, [activeTeam?.id, assetLibraryScope]);
 
+  useEffect(() => {
+    const exists = activeAssetCollectionId === MANAGED_IMAGE_UNCLASSIFIED_COLLECTION_ID || activeAssetCollections.some((collection) => collection.id === activeAssetCollectionId);
+    if (activeAssetCollectionId && activeAssetCollections.length > 0 && !exists) {
+      setActiveAssetCollectionId("");
+    }
+  }, [activeAssetCollectionId, activeAssetCollections]);
+
+  const loadAssetCollections = useCallback(async (scope: ImageAssetLibraryScope) => {
+    if (!canUseImageAssets) {
+      setAssetCollections((current) => ({ ...current, [scope]: [] }));
+      return;
+    }
+    if (scope === "team" && !activeTeam?.id) {
+      setAssetCollections((current) => ({ ...current, team: [] }));
+      return;
+    }
+    try {
+      const result = await fetchManagedImageCollections({
+        scope,
+        team_id: scope === "team" ? activeTeam?.id || "" : "",
+      });
+      setAssetCollections((current) => ({ ...current, [scope]: result.items }));
+      setAssetUnclassifiedCounts((current) => ({ ...current, [scope]: result.unclassified_count }));
+    } catch {
+      setAssetCollections((current) => ({ ...current, [scope]: [] }));
+      setAssetUnclassifiedCounts((current) => ({ ...current, [scope]: 0 }));
+    }
+  }, [activeTeam?.id, canUseImageAssets]);
+
   const loadAssets = useCallback(async () => {
     if (assetsLoadingRequestRef.current) {
       return;
@@ -2439,18 +2484,18 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     assetsLoadingRequestRef.current = true;
     setLoadingAssets(true);
     try {
-      const result = await fetchManagedImages({ scope: "mine", page_size: IMAGE_ASSET_PAGE_SIZE });
+      const result = await fetchManagedImages({ scope: "mine", page_size: IMAGE_ASSET_PAGE_SIZE, collection_id: activeAssetCollectionId });
       setAssets(result.items);
       setAssetNextCursor(result.next_cursor);
       setHasMoreAssets(result.has_more);
       setAssetsLoaded(true);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "加载个人图片库失败");
+      toast.error(error instanceof Error ? error.message : "加载个人素材库失败");
     } finally {
       assetsLoadingRequestRef.current = false;
       setLoadingAssets(false);
     }
-  }, [canUseImageAssets]);
+  }, [activeAssetCollectionId, canUseImageAssets]);
 
   const loadPublicAssets = useCallback(async () => {
     if (assetsLoadingRequestRef.current) {
@@ -2466,18 +2511,18 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     assetsLoadingRequestRef.current = true;
     setLoadingAssets(true);
     try {
-      const result = await fetchManagedImages({ scope: "public", page_size: IMAGE_ASSET_PAGE_SIZE });
+      const result = await fetchManagedImages({ scope: "public", page_size: IMAGE_ASSET_PAGE_SIZE, collection_id: activeAssetCollectionId });
       setPublicAssets(result.items);
       setPublicAssetNextCursor(result.next_cursor);
       setHasMorePublicAssets(result.has_more);
       setPublicAssetsLoaded(true);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "加载公共图片库失败");
+      toast.error(error instanceof Error ? error.message : "加载公共素材库失败");
     } finally {
       assetsLoadingRequestRef.current = false;
       setLoadingAssets(false);
     }
-  }, [canUseImageAssets]);
+  }, [activeAssetCollectionId, canUseImageAssets]);
 
   const loadTeamAssets = useCallback(async () => {
     if (assetsLoadingRequestRef.current) {
@@ -2493,18 +2538,18 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     assetsLoadingRequestRef.current = true;
     setLoadingAssets(true);
     try {
-      const result = await fetchManagedImages({ scope: "team", team_id: activeTeam.id, page_size: IMAGE_ASSET_PAGE_SIZE });
+      const result = await fetchManagedImages({ scope: "team", team_id: activeTeam.id, page_size: IMAGE_ASSET_PAGE_SIZE, collection_id: activeAssetCollectionId });
       setTeamAssets(result.items);
       setTeamAssetNextCursor(result.next_cursor);
       setHasMoreTeamAssets(result.has_more);
       setTeamAssetsLoaded(true);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "加载团队图片库失败");
+      toast.error(error instanceof Error ? error.message : "加载团队素材库失败");
     } finally {
       assetsLoadingRequestRef.current = false;
       setLoadingAssets(false);
     }
-  }, [activeTeam?.id, canUseImageAssets]);
+  }, [activeAssetCollectionId, activeTeam?.id, canUseImageAssets]);
 
   const loadMoreAssets = useCallback(async () => {
     if (!canUseImageAssets || loadingAssets || loadingMoreAssets || !hasMoreAssets || !assetNextCursor) {
@@ -2516,6 +2561,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         scope: "mine",
         page_size: IMAGE_ASSET_PAGE_SIZE,
         cursor: assetNextCursor,
+        collection_id: activeAssetCollectionId,
       });
       setAssets((current) => mergeManagedImageAssets(current, result.items));
       setAssetNextCursor(result.next_cursor);
@@ -2525,7 +2571,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     } finally {
       setLoadingMoreAssets(false);
     }
-  }, [assetNextCursor, canUseImageAssets, hasMoreAssets, loadingAssets, loadingMoreAssets]);
+  }, [activeAssetCollectionId, assetNextCursor, canUseImageAssets, hasMoreAssets, loadingAssets, loadingMoreAssets]);
 
   const loadMorePublicAssets = useCallback(async () => {
     if (!canUseImageAssets || loadingAssets || loadingMoreAssets || !hasMorePublicAssets || !publicAssetNextCursor) {
@@ -2537,6 +2583,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         scope: "public",
         page_size: IMAGE_ASSET_PAGE_SIZE,
         cursor: publicAssetNextCursor,
+        collection_id: activeAssetCollectionId,
       });
       setPublicAssets((current) => mergeManagedImageAssets(current, result.items));
       setPublicAssetNextCursor(result.next_cursor);
@@ -2546,7 +2593,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     } finally {
       setLoadingMoreAssets(false);
     }
-  }, [canUseImageAssets, hasMorePublicAssets, loadingAssets, loadingMoreAssets, publicAssetNextCursor]);
+  }, [activeAssetCollectionId, canUseImageAssets, hasMorePublicAssets, loadingAssets, loadingMoreAssets, publicAssetNextCursor]);
 
   const loadMoreTeamAssets = useCallback(async () => {
     if (!canUseImageAssets || !activeTeam?.id || loadingAssets || loadingMoreAssets || !hasMoreTeamAssets || !teamAssetNextCursor) {
@@ -2559,6 +2606,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         team_id: activeTeam.id,
         page_size: IMAGE_ASSET_PAGE_SIZE,
         cursor: teamAssetNextCursor,
+        collection_id: activeAssetCollectionId,
       });
       setTeamAssets((current) => mergeManagedImageAssets(current, result.items));
       setTeamAssetNextCursor(result.next_cursor);
@@ -2568,7 +2616,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     } finally {
       setLoadingMoreAssets(false);
     }
-  }, [activeTeam?.id, canUseImageAssets, hasMoreTeamAssets, loadingAssets, loadingMoreAssets, teamAssetNextCursor]);
+  }, [activeAssetCollectionId, activeTeam?.id, canUseImageAssets, hasMoreTeamAssets, loadingAssets, loadingMoreAssets, teamAssetNextCursor]);
 
   const loadAssetLibrary = useCallback(() => {
     if (assetLibraryScope === "public") {
@@ -2613,6 +2661,35 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
 
   useEffect(() => {
     if (assetSidebarActivated) {
+      void loadAssetCollections(assetLibraryScope);
+    }
+  }, [assetLibraryScope, assetSidebarActivated, loadAssetCollections]);
+
+  useEffect(() => {
+    if (!assetSidebarActivated) {
+      return;
+    }
+    if (assetLibraryScope === "public") {
+      setPublicAssetsLoaded(false);
+      setPublicAssets([]);
+      setPublicAssetNextCursor("");
+      setHasMorePublicAssets(false);
+    } else if (assetLibraryScope === "team") {
+      setTeamAssetsLoaded(false);
+      setTeamAssets([]);
+      setTeamAssetNextCursor("");
+      setHasMoreTeamAssets(false);
+    } else {
+      setAssetsLoaded(false);
+      setAssets([]);
+      setAssetNextCursor("");
+      setHasMoreAssets(false);
+    }
+    void loadAssetLibrary();
+  }, [activeAssetCollectionId, assetSidebarActivated, assetLibraryScope, loadAssetLibrary]);
+
+  useEffect(() => {
+    if (assetSidebarActivated) {
       ensureAssetsLoaded();
     }
   }, [assetLibraryScope, assetSidebarActivated, ensureAssetsLoaded]);
@@ -2620,8 +2697,13 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
   const selectAssetLibraryScope = useCallback((scope: string) => {
     if (scope === "mine" || scope === "public" || (scope === "team" && activeTeam?.id)) {
       setAssetLibraryScope(scope);
+      setActiveAssetCollectionId("");
     }
   }, [activeTeam?.id]);
+
+  const selectAssetCollection = useCallback((collectionId: string) => {
+    setActiveAssetCollectionId(collectionId);
+  }, []);
 
   const activateAssetSidebar = useCallback(() => {
     setAssetSidebarActivated(true);
@@ -2789,13 +2871,13 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
   }, [switchComposerToImageMode]);
 
   const handleManagedImageReference = useCallback(async (asset: ManagedImageSummary) => {
-    const toastId = toast.loading("正在读取图库图片...");
+    const toastId = toast.loading("正在读取素材库图片...");
     try {
       const referenceImage = await buildReferenceImageFromManagedImage(asset);
       appendLibraryReferenceImages([referenceImage]);
       toast.success("已加入参考图，可继续输入描述");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "读取图库图片失败");
+      toast.error(error instanceof Error ? error.message : "读取素材库图片失败");
     } finally {
       toast.dismiss(toastId);
     }
@@ -2923,7 +3005,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
       const imageUrl = targetImage.localUrl || targetImage.url || "";
       const path = targetImage.path || (imageUrl ? getManagedImagePathFromUrl(imageUrl) : "");
       if (!path) {
-        toast.error("未找到可同步到图库的图片路径");
+        toast.error("未找到可同步到素材库的图片路径");
         return;
       }
       const currentVisibility = targetImage.visibility || targetTurn.visibility || "private";
@@ -2969,7 +3051,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
           };
         });
         clearImageManagerCache();
-        toast.success(updatedVisibility === "public" ? "已公开到公开图库" : "已取消公开");
+        toast.success(updatedVisibility === "public" ? "已公开到公共素材库" : "已取消公开");
       } catch (error) {
         toast.error(error instanceof Error ? error.message : "更新公开状态失败");
       } finally {
@@ -4586,6 +4668,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                 estimatedImagePriceLabel={estimatedImagePriceLabel}
                 billingBlocked={billingBlocked}
                 referenceImages={referenceImages}
+                mentionAssets={visibleAssets}
                 textareaRef={textareaRef}
                 fileInputRef={fileInputRef}
                 onComposerModeChange={handleComposerModeChange}
@@ -4636,10 +4719,14 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
             title={assetLibraryTitle}
             subtitle={assetLibrarySubtitle}
             emptyLabel={assetLibraryEmptyLabel}
-            collapsedTitle="展开图片库"
+            collapsedTitle="展开素材库"
             tabs={assetLibraryTabs}
             activeTabId={assetLibraryScope}
             onActiveTabChange={selectAssetLibraryScope}
+            collections={activeAssetCollections}
+            unclassifiedCount={activeAssetUnclassifiedCount}
+            activeCollectionId={activeAssetCollectionId}
+            onCollectionChange={selectAssetCollection}
           />
         ) : null}
       </section>
@@ -4747,7 +4834,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
             <DialogHeader className="gap-2">
               <DialogTitle>公开图片</DialogTitle>
               <DialogDescription className="text-sm leading-6">
-                将这张图片加入公开图库。
+                将这张图片加入公共素材库。
               </DialogDescription>
             </DialogHeader>
             <div className="grid gap-3 py-1">
@@ -4764,7 +4851,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                 />
                 <span className="min-w-0">
                   <span className="block font-medium text-stone-900">公开原始提示词和生成参数</span>
-                  <span className="mt-0.5 block text-xs leading-5 text-stone-500">公开图库会展示可复用的 prompt、模型、尺寸和输出设置。</span>
+                  <span className="mt-0.5 block text-xs leading-5 text-stone-500">公共素材库会展示可复用的 prompt、模型、尺寸和输出设置。</span>
                 </span>
               </label>
               <label className="flex items-start gap-3 rounded-xl border border-stone-200 bg-white px-3 py-3 text-sm">
