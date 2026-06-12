@@ -4462,28 +4462,35 @@ function LoopOutputSlot({
         )}
         {onDownloadImage ? (
           <span
-            role="button"
-            tabIndex={0}
             className={cn(
-              "absolute right-1 top-1 z-20 flex size-6 items-center justify-center rounded-full border border-border bg-background/95 text-sky-700 opacity-0 shadow-sm transition hover:border-sky-300 hover:bg-white hover:text-sky-900 group-hover:opacity-100 dark:border-slate-700 dark:bg-slate-950/90 dark:text-sky-200 dark:hover:border-sky-400/50 dark:hover:bg-slate-900",
-              downloading && "pointer-events-none opacity-100",
+              "absolute right-1 top-1 z-20 flex flex-col gap-1 opacity-0 transition group-hover:opacity-100 group-focus-within:opacity-100",
+              downloading && "opacity-100",
             )}
-            data-node-interactive="true"
-            title="下载图片"
-            aria-label="下载图片"
-            onClick={(event) => {
-              event.stopPropagation();
-              onDownloadImage(image, index);
-            }}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" || event.key === " ") {
-                event.preventDefault();
+          >
+            <span
+              role="button"
+              tabIndex={0}
+              className={cn(
+                "flex size-6 items-center justify-center rounded-full border border-border bg-background/95 text-sky-700 shadow-sm transition hover:border-sky-300 hover:bg-white hover:text-sky-900 dark:border-slate-700 dark:bg-slate-950/90 dark:text-sky-200 dark:hover:border-sky-400/50 dark:hover:bg-slate-900",
+                downloading && "pointer-events-none",
+              )}
+              data-node-interactive="true"
+              title="下载图片"
+              aria-label="下载图片"
+              onClick={(event) => {
                 event.stopPropagation();
                 onDownloadImage(image, index);
-              }
-            }}
-          >
-            {downloading ? <LoaderCircle className="size-3.5 animate-spin" /> : <Download className="size-3.5" />}
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  onDownloadImage(image, index);
+                }
+              }}
+            >
+              {downloading ? <LoaderCircle className="size-3.5 animate-spin" /> : <Download className="size-3.5" />}
+            </span>
           </span>
         ) : null}
       </button>
@@ -4736,83 +4743,85 @@ export function CanvasImageStrip({
                 {selected ? <Check className="size-3.5" /> : index + 1}
               </span>
             ) : null}
-            {onDownload && !coveredByOverflow ? (
+            {!coveredByOverflow && (onDownload || onOpen || onDelete) ? (
               <span
-                role="button"
-                tabIndex={0}
                 className={cn(
-                  "absolute right-1 top-1 z-20 flex size-6 items-center justify-center rounded-full border border-border bg-background/95 text-sky-700 opacity-0 shadow-sm transition hover:border-sky-300 hover:bg-white hover:text-sky-900 group-hover:opacity-100 dark:border-slate-700 dark:bg-slate-950/90 dark:text-sky-200 dark:hover:border-sky-400/50 dark:hover:bg-slate-900",
-                  downloading && "pointer-events-none opacity-100",
+                  "absolute right-1 top-1 z-20 flex flex-col gap-1 opacity-0 transition group-hover:opacity-100 group-focus-within:opacity-100",
+                  downloading && "opacity-100",
                 )}
-                data-node-interactive="true"
-                title="下载图片"
-                aria-label="下载图片"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onDownload(image, index);
-                }}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" || event.key === " ") {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    onDownload(image, index);
-                  }
-                }}
               >
-                {downloading ? <LoaderCircle className="size-3.5 animate-spin" /> : <Download className="size-3.5" />}
-              </span>
-            ) : null}
-            {onOpen ? (
-              <span
-                role="button"
-                tabIndex={0}
-                className={cn(
-                  "absolute top-1 z-10 inline-flex h-6 items-center gap-1 rounded-full border border-border bg-background/95 px-2 text-[11px] font-black text-sky-700 opacity-0 shadow-sm transition hover:border-sky-300 hover:bg-white hover:text-sky-900 group-hover:opacity-100 dark:border-slate-700 dark:bg-slate-950/90 dark:text-sky-200 dark:hover:border-sky-400/50 dark:hover:bg-slate-900",
-                  onDelete && onDownload ? "right-[3.75rem]" : onDelete || onDownload ? "right-8" : "right-1",
-                )}
-                data-node-interactive="true"
-                title="编辑图片"
-                aria-label="编辑图片"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onOpen(image);
-                }}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" || event.key === " ") {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    onOpen(image);
-                  }
-                }}
-              >
-                <Pencil className="size-3" />
-                编辑
-              </span>
-            ) : null}
-            {onDelete ? (
-              <span
-                role="button"
-                tabIndex={0}
-                className={cn(
-                  "absolute top-1 z-10 flex size-6 items-center justify-center rounded-full border border-border bg-background/90 text-muted-foreground opacity-0 shadow-sm transition hover:border-rose-400 hover:text-rose-500 group-hover:opacity-100 dark:border-slate-700 dark:bg-slate-950/90 dark:text-slate-400 dark:hover:text-rose-300",
-                  onDownload ? "right-8" : "right-1",
-                )}
-                data-node-interactive="true"
-                title="从节点移除图片"
-                aria-label="从节点移除图片"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onDelete(image);
-                }}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" || event.key === " ") {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    onDelete(image);
-                  }
-                }}
-              >
-                <X className="size-3.5" />
+                {onDownload ? (
+                  <span
+                    role="button"
+                    tabIndex={0}
+                    className={cn(
+                      "flex size-6 items-center justify-center rounded-full border border-border bg-background/95 text-sky-700 shadow-sm transition hover:border-sky-300 hover:bg-white hover:text-sky-900 dark:border-slate-700 dark:bg-slate-950/90 dark:text-sky-200 dark:hover:border-sky-400/50 dark:hover:bg-slate-900",
+                      downloading && "pointer-events-none",
+                    )}
+                    data-node-interactive="true"
+                    title="下载图片"
+                    aria-label="下载图片"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onDownload(image, index);
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        onDownload(image, index);
+                      }
+                    }}
+                  >
+                    {downloading ? <LoaderCircle className="size-3.5 animate-spin" /> : <Download className="size-3.5" />}
+                  </span>
+                ) : null}
+                {onOpen ? (
+                  <span
+                    role="button"
+                    tabIndex={0}
+                    className="flex size-6 items-center justify-center rounded-full border border-border bg-background/95 text-sky-700 shadow-sm transition hover:border-sky-300 hover:bg-white hover:text-sky-900 dark:border-slate-700 dark:bg-slate-950/90 dark:text-sky-200 dark:hover:border-sky-400/50 dark:hover:bg-slate-900"
+                    data-node-interactive="true"
+                    title="编辑图片"
+                    aria-label="编辑图片"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onOpen(image);
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        onOpen(image);
+                      }
+                    }}
+                  >
+                    <Pencil className="size-3.5" />
+                  </span>
+                ) : null}
+                {onDelete ? (
+                  <span
+                    role="button"
+                    tabIndex={0}
+                    className="flex size-6 items-center justify-center rounded-full border border-border bg-background/90 text-muted-foreground shadow-sm transition hover:border-rose-400 hover:bg-white hover:text-rose-500 dark:border-slate-700 dark:bg-slate-950/90 dark:text-slate-400 dark:hover:text-rose-300"
+                    data-node-interactive="true"
+                    title="从节点移除图片"
+                    aria-label="从节点移除图片"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onDelete(image);
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        onDelete(image);
+                      }
+                    }}
+                  >
+                    <X className="size-3.5" />
+                  </span>
+                ) : null}
               </span>
             ) : null}
           </button>
