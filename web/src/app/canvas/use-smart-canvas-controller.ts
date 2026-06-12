@@ -2476,7 +2476,7 @@ export function useSmartCanvasController() {
       return;
     }
     const target = event.target;
-    if (target instanceof HTMLElement) {
+    if (target instanceof Element) {
       if (target.closest("input, textarea, select, button, [data-node-interactive='true'], [data-port]")) {
         return;
       }
@@ -4394,6 +4394,7 @@ export function useSmartCanvasController() {
     canvases,
     canvas,
     models,
+    activeTeam,
     assets: assetLibraryScope === "public" ? publicAssets : assetLibraryScope === "team" ? teamAssets : assets,
     assetSidebarActivated,
     assetLibraryScope,

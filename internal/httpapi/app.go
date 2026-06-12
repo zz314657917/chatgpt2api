@@ -55,6 +55,7 @@ type App struct {
 	proxy        *service.ProxyService
 	engine       *protocol.Engine
 	images       *service.ImageService
+	textAssets   *service.TextAssetService
 	tasks        *service.ImageTaskService
 	canvases     *service.CanvasService
 	social       *service.SocialProjectService
@@ -118,7 +119,7 @@ func NewApp() (*App, error) {
 	})
 	images := service.NewImageService(cfg, storageBackend)
 	images.SetLogger(logger)
-	app := &App{config: cfg, auth: auth, accounts: accounts, billing: billing, logs: logs, logger: logger, proxy: proxy, engine: engine, images: images, canvases: service.NewCanvasService(storageBackend), social: service.NewSocialProjectService(storageBackend), announce: service.NewAnnouncementService(storageBackend), prompts: service.NewPromptFavoriteService(storageBackend), cpa: service.NewCPAConfig(storageBackend), sub2: service.NewSub2APIConfig(storageBackend), sub2Bindings: sub2Bindings, teams: teams, update: newUpdateService(cfg), cancel: cancel}
+	app := &App{config: cfg, auth: auth, accounts: accounts, billing: billing, logs: logs, logger: logger, proxy: proxy, engine: engine, images: images, textAssets: service.NewTextAssetService(storageBackend), canvases: service.NewCanvasService(storageBackend), social: service.NewSocialProjectService(storageBackend), announce: service.NewAnnouncementService(storageBackend), prompts: service.NewPromptFavoriteService(storageBackend), cpa: service.NewCPAConfig(storageBackend), sub2: service.NewSub2APIConfig(storageBackend), sub2Bindings: sub2Bindings, teams: teams, update: newUpdateService(cfg), cancel: cancel}
 	app.cpaImport = service.NewCPAImportService(app.cpa, accounts, proxy)
 	app.sub2Import = service.NewSub2APIService(app.sub2, accounts)
 	app.sub2Launch = service.NewSub2APILaunchService(auth, sub2Bindings, cfg)
@@ -1003,6 +1004,101 @@ func (a *App) handleImages(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		util.WriteJSON(w, http.StatusOK, result)
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func (a *App) handleTextAssets(w http.ResponseWriter, r *http.Request) {
+	identity, ok := a.requireIdentity(w, r, "")
+	if !ok {
+		return
+	}
+	cleanPath := strings.Trim(strings.TrimPrefix(path.Clean(r.URL.Path), "/api/text-assets"), "/")
+	if cleanPath == "." {
+		cleanPath = ""
+	}
+	if cleanPath == "" {
+		switch r.Method {
+		case http.MethodGet:
+			scope, status, message := a.textAssetReadScope(identity, r.URL.Query())
+			if status != 0 {
+				util.WriteError(w, status, message)
+				return
+			}
+			result := a.textAssets.List(service.TextAssetListOptions{
+				PageSize: util.ToInt(r.URL.Query().Get("page_size"), 0),
+				Cursor:   strings.TrimSpace(r.URL.Query().Get("cursor")),
+				Search:   strings.TrimSpace(r.URL.Query().Get("search")),
+			}, scope)
+			util.WriteJSON(w, http.StatusOK, result)
+		case http.MethodPost:
+			body, err := readJSONMap(r)
+			if err != nil {
+				util.WriteError(w, http.StatusBadRequest, "invalid json body")
+				return
+			}
+			scope, status, message := a.textAssetMutationScope(identity, util.Clean(body["scope"]), util.Clean(body["team_id"]))
+			if status != 0 {
+				util.WriteError(w, status, message)
+				return
+			}
+			item, err := a.textAssets.Create(body, scope)
+			if err != nil {
+				util.WriteError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			util.WriteJSON(w, http.StatusOK, map[string]any{"item": item})
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+		return
+	}
+
+	parts := splitPath(r.URL.Path)
+	if len(parts) != 3 || parts[0] != "api" || parts[1] != "text-assets" {
+		http.NotFound(w, r)
+		return
+	}
+	id := parts[2]
+	switch r.Method {
+	case http.MethodPatch:
+		body, err := readJSONMap(r)
+		if err != nil {
+			util.WriteError(w, http.StatusBadRequest, "invalid json body")
+			return
+		}
+		scope, status, message := a.textAssetMutationScope(identity, util.Clean(body["scope"]), util.Clean(body["team_id"]))
+		if status != 0 {
+			util.WriteError(w, status, message)
+			return
+		}
+		item, err := a.textAssets.Update(id, body, scope)
+		if err != nil {
+			status := http.StatusBadRequest
+			if err.Error() == "text asset not found" {
+				status = http.StatusNotFound
+			}
+			util.WriteError(w, status, err.Error())
+			return
+		}
+		util.WriteJSON(w, http.StatusOK, map[string]any{"item": item})
+	case http.MethodDelete:
+		scope, status, message := a.textAssetMutationScope(identity, strings.TrimSpace(r.URL.Query().Get("scope")), strings.TrimSpace(r.URL.Query().Get("team_id")))
+		if status != 0 {
+			util.WriteError(w, status, message)
+			return
+		}
+		deleted, err := a.textAssets.Delete(id, scope)
+		if err != nil {
+			util.WriteError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if !deleted {
+			util.WriteError(w, http.StatusNotFound, "text asset not found")
+			return
+		}
+		util.WriteJSON(w, http.StatusOK, map[string]any{"deleted": true, "id": id})
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
@@ -2717,6 +2813,44 @@ func (a *App) imageMutationAccessScope(identity service.Identity, scopeValue, te
 	return service.ImageAccessScope{TeamID: context.TeamID, TeamManager: true}, 0, ""
 }
 
+func (a *App) textAssetReadScope(identity service.Identity, query url.Values) (service.TextAssetAccessScope, int, string) {
+	value := strings.TrimSpace(query.Get("scope"))
+	switch value {
+	case "", "mine":
+		return service.TextAssetAccessScope{OwnerID: identityScope(identity), OwnerName: identityDisplayName(identity)}, 0, ""
+	case "team":
+		context, status, message := a.imageTeamContext(identity, query.Get("team_id"))
+		if status != 0 {
+			return service.TextAssetAccessScope{}, status, message
+		}
+		return service.TextAssetAccessScope{
+			TeamID:      context.TeamID,
+			TeamName:    context.TeamName,
+			TeamManager: service.TeamRoleCanManageImages(context.Role),
+		}, 0, ""
+	default:
+		return service.TextAssetAccessScope{}, http.StatusBadRequest, "scope must be mine or team"
+	}
+}
+
+func (a *App) textAssetMutationScope(identity service.Identity, scopeValue, teamID string) (service.TextAssetAccessScope, int, string) {
+	scopeValue = strings.TrimSpace(scopeValue)
+	if scopeValue == "" || scopeValue == "mine" {
+		return service.TextAssetAccessScope{OwnerID: identityScope(identity), OwnerName: identityDisplayName(identity)}, 0, ""
+	}
+	if scopeValue != "team" {
+		return service.TextAssetAccessScope{}, http.StatusBadRequest, "scope must be mine or team"
+	}
+	context, status, message := a.imageTeamContext(identity, teamID)
+	if status != 0 {
+		return service.TextAssetAccessScope{}, status, message
+	}
+	if !service.TeamRoleCanManageImages(context.Role) {
+		return service.TextAssetAccessScope{}, http.StatusForbidden, "team manager permission required"
+	}
+	return service.TextAssetAccessScope{TeamID: context.TeamID, TeamName: context.TeamName, TeamManager: true}, 0, ""
+}
+
 func (a *App) imageCollectionMutationScope(identity service.Identity, scopeValue, teamID string) (service.ImageAccessScope, service.TeamImageLibraryContext, int, string) {
 	scopeValue = strings.TrimSpace(scopeValue)
 	if scopeValue == "" || scopeValue == "mine" {
@@ -3347,7 +3481,7 @@ func isIndependentProtectedWebPath(path string) bool {
 	case "", "/":
 		return true
 	}
-	for _, prefix := range []string{"/image", "/canvas", "/social", "/image-manager", "/profile"} {
+	for _, prefix := range []string{"/image", "/canvas", "/ecommerce-suite", "/social", "/image-manager", "/profile"} {
 		if path == prefix || strings.HasPrefix(path, prefix+"/") {
 			return true
 		}

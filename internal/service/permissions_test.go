@@ -97,6 +97,9 @@ func TestSocialPermissionsAreDefaultAndExplicit(t *testing.T) {
 	if !containsString(defaults.MenuPaths, "/social") {
 		t.Fatalf("default user menu paths missing /social: %#v", defaults.MenuPaths)
 	}
+	if !containsString(defaults.MenuPaths, "/ecommerce-suite") {
+		t.Fatalf("default user menu paths missing /ecommerce-suite: %#v", defaults.MenuPaths)
+	}
 	if !containsString(defaults.MenuPaths, "/image-manager") {
 		t.Fatalf("default user menu paths missing /image-manager: %#v", defaults.MenuPaths)
 	}
@@ -139,6 +142,50 @@ func TestImageTagPermissionsAreDefaultAndExplicit(t *testing.T) {
 	} {
 		if !HasAPIPermission(defaults, tc.method, tc.path) {
 			t.Fatalf("missing default image tag permission for %s %s in %#v", tc.method, tc.path, defaults.APIPermissions)
+		}
+	}
+}
+
+func TestTextAssetPermissionsAreDefaultAndSubtree(t *testing.T) {
+	defaults := DefaultPermissionSetForRole(AuthRoleUser)
+	for _, tc := range []struct {
+		method string
+		path   string
+	}{
+		{"GET", "/api/text-assets"},
+		{"POST", "/api/text-assets"},
+		{"PATCH", "/api/text-assets/ta_123"},
+		{"DELETE", "/api/text-assets/ta_123"},
+	} {
+		if !HasAPIPermission(defaults, tc.method, tc.path) {
+			t.Fatalf("missing default text asset permission for %s %s in %#v", tc.method, tc.path, defaults.APIPermissions)
+		}
+	}
+}
+
+func TestMergeDefaultManagedRoleAddsTextAssetPermissions(t *testing.T) {
+	roles := mergeDefaultManagedRole([]ManagedRole{{
+		ID:             DefaultManagedRoleID,
+		Name:           "普通用户",
+		Builtin:        true,
+		MenuPaths:      []string{"/social"},
+		APIPermissions: []string{APIPermissionKey("GET", "/api/social-projects")},
+	}})
+	if len(roles) != 1 {
+		t.Fatalf("roles = %#v", roles)
+	}
+	permissions := PermissionSet{MenuPaths: roles[0].MenuPaths, APIPermissions: roles[0].APIPermissions}
+	for _, tc := range []struct {
+		method string
+		path   string
+	}{
+		{"GET", "/api/text-assets"},
+		{"POST", "/api/text-assets"},
+		{"PATCH", "/api/text-assets/ta_123"},
+		{"DELETE", "/api/text-assets/ta_123"},
+	} {
+		if !HasAPIPermission(permissions, tc.method, tc.path) {
+			t.Fatalf("merged default role missing text asset permission for %s %s in %#v", tc.method, tc.path, roles[0].APIPermissions)
 		}
 	}
 }

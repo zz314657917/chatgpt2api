@@ -1,8 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowDownToLine,
+  Check,
   Clipboard,
   FileText,
   ImagePlus,
@@ -13,6 +14,7 @@ import {
   Save,
   Sparkles,
   Trash2,
+  Type,
   Users,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -49,17 +51,21 @@ import {
   fetchCreationTasks,
   fetchCanvasModels,
   fetchManagedImages,
+  fetchManagedTextAssets,
   fetchSocialProjects,
   fetchTeamWorkspace,
   generateSocialProjectCards,
   generateSocialProjectCopy,
   saveSocialProject,
   uploadManagedImages,
+  createManagedTextAsset,
   type CreationTask,
   type CanvasModelOption,
   type ImageModel,
   type ManagedImageListScope,
   type ManagedImageSummary,
+  type ManagedTextAsset,
+  type ManagedTextAssetListScope,
   type TeamSummary,
   type SocialCard,
   type SocialImageRef,
@@ -75,6 +81,10 @@ const XHS_CARD_WIDTH = 1080;
 const XHS_CARD_HEIGHT = 1440;
 const SOCIAL_POLL_INTERVAL_MS = 1400;
 const SOCIAL_LIBRARY_PAGE_SIZE = 36;
+const SOCIAL_TEXT_ASSET_PAGE_SIZE = 36;
+
+type SocialAssetTypeFilter = "all" | "image" | "text";
+type SocialLibraryScope = Exclude<ManagedImageListScope, "public" | "all">;
 
 type ProjectDraft = {
   topic: string;
@@ -269,6 +279,23 @@ function managedImagePreview(item: ManagedImageSummary) {
   return item.thumbnail_url || item.preview_url || (item.path ? getManagedImagePreviewUrlFromPath(item.path) : "");
 }
 
+function socialTextAssetScope(scope: SocialLibraryScope): ManagedTextAssetListScope {
+  return scope === "team" ? "team" : "mine";
+}
+
+function canManageTeamTextAssets(team: TeamSummary | null) {
+  return team?.member_role === "owner" || team?.member_role === "manager";
+}
+
+function appendTextBlock(current: string, addition: string) {
+  const cleaned = addition.trim();
+  if (!cleaned) {
+    return current;
+  }
+  const base = current.trimEnd();
+  return base ? `${base}\n\n${cleaned}` : cleaned;
+}
+
 function clearCardImagePatch(): Partial<SocialCard> {
   return {
     path: "",
@@ -433,12 +460,23 @@ export default function SocialPage() {
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [libraryLoading, setLibraryLoading] = useState(false);
   const [libraryLoadingMore, setLibraryLoadingMore] = useState(false);
-  const [libraryScope, setLibraryScope] = useState<ManagedImageListScope>("mine");
+  const [libraryScope, setLibraryScope] = useState<SocialLibraryScope>("mine");
+  const [libraryAssetType, setLibraryAssetType] = useState<SocialAssetTypeFilter>("all");
+  const [librarySearch, setLibrarySearch] = useState("");
   const [libraryImages, setLibraryImages] = useState<ManagedImageSummary[]>([]);
   const [libraryNextCursor, setLibraryNextCursor] = useState("");
   const [libraryHasMore, setLibraryHasMore] = useState(false);
+  const [libraryTextAssets, setLibraryTextAssets] = useState<ManagedTextAsset[]>([]);
+  const [libraryTextNextCursor, setLibraryTextNextCursor] = useState("");
+  const [libraryTextHasMore, setLibraryTextHasMore] = useState(false);
   const [selectedLibraryPaths, setSelectedLibraryPaths] = useState<string[]>([]);
+  const [selectedTextAssetIds, setSelectedTextAssetIds] = useState<string[]>([]);
+  const [textAssetEditorOpen, setTextAssetEditorOpen] = useState(false);
+  const [textAssetNameInput, setTextAssetNameInput] = useState("");
+  const [textAssetContentInput, setTextAssetContentInput] = useState("");
+  const [textAssetSaving, setTextAssetSaving] = useState(false);
   const [activeTeam, setActiveTeam] = useState<TeamSummary | null>(null);
+  const libraryRequestIdRef = useRef(0);
   const [chatModel, setChatModel] = useState<ImageModel>(DEFAULT_CHAT_MODEL);
   const [imageModel, setImageModel] = useState<ImageModel>(DEFAULT_IMAGE_MODEL);
   const [remoteCanvasModels, setRemoteCanvasModels] = useState<CanvasModelOption[]>([]);
@@ -712,46 +750,108 @@ export default function SocialPage() {
     }));
   };
 
-  const loadLibraryImages = useCallback(async (scope = libraryScope, cursor = "", append = false) => {
+  const loadLibraryAssets = useCallback(async (
+    scope = libraryScope,
+    search = librarySearch,
+    options: { appendImages?: boolean; appendTexts?: boolean; imageCursor?: string; textCursor?: string } = {},
+  ) => {
+    const requestId = ++libraryRequestIdRef.current;
+    const appendImages = Boolean(options.appendImages);
+    const appendTexts = Boolean(options.appendTexts);
+    const loadImages = !appendTexts;
+    const loadTexts = !appendImages;
     if (scope === "team" && !activeTeam?.id) {
       setLibraryImages([]);
       setLibraryNextCursor("");
       setLibraryHasMore(false);
+      setLibraryTextAssets([]);
+      setLibraryTextNextCursor("");
+      setLibraryTextHasMore(false);
+      setLibraryLoading(false);
+      setLibraryLoadingMore(false);
       return;
     }
+    const append = appendImages || appendTexts;
     if (append) {
       setLibraryLoadingMore(true);
     } else {
+      setLibraryImages([]);
+      setLibraryNextCursor("");
+      setLibraryHasMore(false);
+      setLibraryTextAssets([]);
+      setLibraryTextNextCursor("");
+      setLibraryTextHasMore(false);
       setLibraryLoading(true);
     }
     try {
-      const result = await fetchManagedImages({
-        scope,
-        team_id: scope === "team" ? activeTeam?.id || "" : "",
-        page_size: SOCIAL_LIBRARY_PAGE_SIZE,
-        cursor,
-      });
-      setLibraryImages((current) => append ? [...current, ...result.items] : result.items);
-      setLibraryNextCursor(result.next_cursor);
-      setLibraryHasMore(result.has_more);
+      const teamId = scope === "team" ? activeTeam?.id || "" : "";
+      const [imageResult, textResult] = await Promise.all([
+        loadImages ? fetchManagedImages({
+          scope,
+          team_id: teamId,
+          page_size: SOCIAL_LIBRARY_PAGE_SIZE,
+          cursor: options.imageCursor || "",
+          search,
+        }) : Promise.resolve(null),
+        loadTexts ? fetchManagedTextAssets({
+          scope: socialTextAssetScope(scope),
+          team_id: teamId,
+          page_size: SOCIAL_TEXT_ASSET_PAGE_SIZE,
+          cursor: options.textCursor || "",
+          search,
+        }) : Promise.resolve(null),
+      ]);
+      if (requestId !== libraryRequestIdRef.current) {
+        return;
+      }
+      if (imageResult) {
+        setLibraryImages((current) => appendImages ? [
+          ...current,
+          ...imageResult.items.filter((item) => !current.some((existing) => existing.path === item.path)),
+        ] : imageResult.items);
+        setLibraryNextCursor(imageResult.next_cursor);
+        setLibraryHasMore(imageResult.has_more);
+      }
+      if (textResult) {
+        setLibraryTextAssets((current) => appendTexts ? [
+          ...current,
+          ...textResult.items.filter((item) => !current.some((existing) => existing.id === item.id)),
+        ] : textResult.items);
+        setLibraryTextNextCursor(textResult.next_cursor);
+        setLibraryTextHasMore(textResult.has_more);
+      }
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "加载素材库失败");
+      if (requestId === libraryRequestIdRef.current) {
+        toast.error(error instanceof Error ? error.message : "加载素材库失败");
+      }
     } finally {
-      setLibraryLoading(false);
-      setLibraryLoadingMore(false);
+      if (requestId === libraryRequestIdRef.current) {
+        setLibraryLoading(false);
+        setLibraryLoadingMore(false);
+      }
     }
-  }, [activeTeam?.id, libraryScope]);
+  }, [activeTeam?.id, libraryScope, librarySearch]);
 
-  const openImageLibrary = () => {
+  const openAssetLibrary = () => {
     setLibraryOpen(true);
     setSelectedLibraryPaths([]);
-    void loadLibraryImages(libraryScope);
+    setSelectedTextAssetIds([]);
+    setLibraryImages([]);
+    setLibraryTextAssets([]);
+    void loadLibraryAssets(libraryScope, librarySearch);
   };
 
-  const changeLibraryScope = (scope: ManagedImageListScope) => {
+  const changeLibraryScope = (scope: SocialLibraryScope) => {
     setLibraryScope(scope);
     setSelectedLibraryPaths([]);
-    void loadLibraryImages(scope);
+    setSelectedTextAssetIds([]);
+    setLibraryImages([]);
+    setLibraryNextCursor("");
+    setLibraryHasMore(false);
+    setLibraryTextAssets([]);
+    setLibraryTextNextCursor("");
+    setLibraryTextHasMore(false);
+    void loadLibraryAssets(scope, librarySearch);
   };
 
   const toggleLibraryImage = (path: string) => {
@@ -760,20 +860,76 @@ export default function SocialPage() {
     );
   };
 
-  const addSelectedLibraryImages = () => {
-    const selected = libraryImages.filter((item) => selectedLibraryPaths.includes(item.path));
-    if (!selected.length) {
-      toast.error("先选择图片");
+  const toggleLibraryTextAsset = (id: string) => {
+    setSelectedTextAssetIds((current) =>
+      current.includes(id) ? current.filter((item) => item !== id) : [...current, id],
+    );
+  };
+
+  const applyLibrarySearch = () => {
+    setSelectedLibraryPaths([]);
+    setSelectedTextAssetIds([]);
+    setLibraryImages([]);
+    setLibraryNextCursor("");
+    setLibraryHasMore(false);
+    setLibraryTextAssets([]);
+    setLibraryTextNextCursor("");
+    setLibraryTextHasMore(false);
+    void loadLibraryAssets(libraryScope, librarySearch);
+  };
+
+  const createTextAssetFromLibrary = async () => {
+    if (textAssetSaving) return;
+    const content = textAssetContentInput.trim();
+    if (!content) {
+      toast.error("请输入文本素材内容");
+      return;
+    }
+    if (libraryScope === "team" && !canManageTeamTextAssets(activeTeam)) {
+      toast.error("团队文本素材需要 owner 或 manager 维护");
+      return;
+    }
+    setTextAssetSaving(true);
+    try {
+      const item = await createManagedTextAsset(
+        { name: textAssetNameInput.trim() || undefined, content },
+        { scope: socialTextAssetScope(libraryScope), team_id: libraryScope === "team" ? activeTeam?.id || "" : "" },
+      );
+      setLibraryTextAssets((current) => [item, ...current.filter((existing) => existing.id !== item.id)]);
+      setSelectedTextAssetIds((current) => current.includes(item.id) ? current : [...current, item.id]);
+      setTextAssetEditorOpen(false);
+      setTextAssetNameInput("");
+      setTextAssetContentInput("");
+      toast.success("文本素材已创建");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "创建文本素材失败");
+    } finally {
+      setTextAssetSaving(false);
+    }
+  };
+
+  const addSelectedLibraryAssets = () => {
+    const imagesByPath = new Map(libraryImages.map((item) => [item.path, item]));
+    const textsById = new Map(libraryTextAssets.map((item) => [item.id, item]));
+    const selected = selectedLibraryPaths.map((path) => imagesByPath.get(path)).filter((item): item is ManagedImageSummary => Boolean(item));
+    const selectedTexts = selectedTextAssetIds.map((id) => textsById.get(id)).filter((item): item is ManagedTextAsset => Boolean(item));
+    if (!selected.length && !selectedTexts.length) {
+      toast.error("先选择素材");
       return;
     }
     const refs = selected.map(managedImageToSocialRef);
     setDraft((current) => ({
       ...current,
       source_images: mergeSourceImages(current.source_images, refs),
+      source_text: selectedTexts.reduce((text, item) => appendTextBlock(text, item.content), current.source_text),
     }));
     setLibraryOpen(false);
     setSelectedLibraryPaths([]);
-    toast.success(`已加入 ${refs.length} 张图片`);
+    setSelectedTextAssetIds([]);
+    const parts = [];
+    if (refs.length) parts.push(`${refs.length} 张图片`);
+    if (selectedTexts.length) parts.push(`${selectedTexts.length} 条文本`);
+    toast.success(`已加入 ${parts.join("、")}`);
   };
 
   const assignSourceImageToCard = (image: SocialImageRef, cardIndex = selectedCardIndex) => {
@@ -1041,7 +1197,7 @@ export default function SocialPage() {
                           <Plus className="size-3.5" />
                           生成页
                         </Button>
-                        <Button variant="outline" size="sm" className="h-8 rounded-xl" onClick={openImageLibrary}>
+                        <Button variant="outline" size="sm" className="h-8 rounded-xl" onClick={openAssetLibrary}>
                           <FileText className="size-3.5" />
                           素材库
                         </Button>
@@ -1336,29 +1492,76 @@ export default function SocialPage() {
       <DialogContent className="flex h-[min(88dvh,780px)] w-[min(94vw,980px)] max-w-none flex-col overflow-hidden rounded-3xl p-0">
         <DialogHeader className="border-b border-border px-5 pt-5 pr-12 pb-4">
           <DialogTitle>从素材库选择</DialogTitle>
-          <DialogDescription>选择已有图片加入当前社媒项目参考图池，再绑定到卡片或顺序分配。</DialogDescription>
+          <DialogDescription>选择图片加入参考图池，选择文本会追加到项目素材。</DialogDescription>
         </DialogHeader>
-        <div className="flex items-center justify-between gap-3 border-b border-border px-5 py-3">
-          <div className="flex gap-2">
-            {[
-              ["mine", "我的图片"],
-              ...(activeTeam?.id ? [["team", "团队素材库"]] : []),
-              ["public", "公共素材库"],
-              ["all", "全部"],
-            ].map(([scope, label]) => (
-              <Button
-                key={scope}
-                variant={libraryScope === scope ? "default" : "outline"}
-                size="sm"
-                className="h-8 rounded-xl"
-                onClick={() => changeLibraryScope(scope as ManagedImageListScope)}
-              >
-                {scope === "team" ? <Users className="size-3.5" /> : null}
-                {label}
+        <div className="grid gap-3 border-b border-border px-5 py-3">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+            <Input
+              value={librarySearch}
+              onChange={(event) => setLibrarySearch(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  applyLibrarySearch();
+                }
+              }}
+              placeholder="搜索素材名称或文本内容..."
+              className="h-9 rounded-xl"
+            />
+            <div className="flex shrink-0 gap-2">
+              <Button variant="outline" className="h-9 rounded-xl" onClick={applyLibrarySearch} disabled={libraryLoading}>
+                {libraryLoading ? <LoaderCircle className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
+                搜索
               </Button>
-            ))}
+              <Button
+                variant="outline"
+                className="h-9 rounded-xl"
+                onClick={() => setTextAssetEditorOpen(true)}
+                disabled={libraryScope === "team" && !canManageTeamTextAssets(activeTeam)}
+                title={libraryScope === "team" && !canManageTeamTextAssets(activeTeam) ? "团队文本素材需要 owner 或 manager 维护" : "新建文本素材"}
+              >
+                <Type className="size-4" />
+                新建文本
+              </Button>
+            </div>
           </div>
-          <div className="text-xs text-muted-foreground">已选 {selectedLibraryPaths.length} 张</div>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-wrap gap-2">
+              {[
+                ["mine", "我的素材"],
+                ...(activeTeam?.id ? [["team", "团队素材库"]] : []),
+              ].map(([scope, label]) => (
+                <Button
+                  key={scope}
+                  variant={libraryScope === scope ? "default" : "outline"}
+                  size="sm"
+                  className="h-8 rounded-xl"
+                  onClick={() => changeLibraryScope(scope as SocialLibraryScope)}
+                >
+                  {scope === "team" ? <Users className="size-3.5" /> : null}
+                  {label}
+                </Button>
+              ))}
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              {[
+                ["all", "全部"],
+                ["image", "图片"],
+                ["text", "文本"],
+              ].map(([type, label]) => (
+                <Button
+                  key={type}
+                  variant={libraryAssetType === type ? "default" : "outline"}
+                  size="sm"
+                  className="h-8 rounded-xl"
+                  onClick={() => setLibraryAssetType(type as SocialAssetTypeFilter)}
+                >
+                  {type === "text" ? <Type className="size-3.5" /> : type === "image" ? <ImagePlus className="size-3.5" /> : null}
+                  {label}
+                </Button>
+              ))}
+              <div className="text-xs text-muted-foreground">已选 {selectedLibraryPaths.length + selectedTextAssetIds.length} 个</div>
+            </div>
+          </div>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
           {libraryLoading ? (
@@ -1366,59 +1569,173 @@ export default function SocialPage() {
               <LoaderCircle className="mr-2 size-4 animate-spin" />
               正在加载素材库
             </div>
-          ) : libraryImages.length ? (
-            <div className="grid grid-cols-3 gap-3 sm:grid-cols-4 lg:grid-cols-6">
-              {libraryImages.map((item) => {
-                const selected = selectedLibraryPaths.includes(item.path);
-                return (
-                  <button
-                    key={item.path}
-                    type="button"
-                    className={cn(
-                      "group relative aspect-square overflow-hidden rounded-2xl border bg-muted text-left transition",
-                      selected ? "border-primary ring-2 ring-primary/25" : "border-border hover:border-primary/50",
-                    )}
-                    onClick={() => toggleLibraryImage(item.path)}
-                    title={item.name}
-                  >
-                    {managedImagePreview(item) ? (
-                      <img src={managedImagePreview(item)} alt={item.name} className="h-full w-full object-cover" />
-                    ) : (
-                      <span className="flex h-full items-center justify-center text-xs text-muted-foreground">图片</span>
-                    )}
-                    <span
-                      aria-hidden="true"
-                      className={cn(
-                        "absolute left-2 top-2 flex size-5 items-center justify-center rounded-md border bg-background/90 text-[12px] font-black shadow-sm",
-                        selected ? "border-primary bg-primary text-primary-foreground" : "border-border text-transparent",
-                      )}
-                    >
-                      ✓
-                    </span>
-                    <span className="absolute inset-x-0 bottom-0 truncate bg-black/45 px-2 py-1 text-[11px] font-medium text-white opacity-0 transition group-hover:opacity-100">
-                      {item.name}
-                    </span>
-                  </button>
-                );
-              })}
+          ) : libraryImages.length || libraryTextAssets.length ? (
+            <div className="grid gap-5">
+              {libraryAssetType !== "text" ? (
+                <div className="grid gap-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-semibold text-muted-foreground">图片</span>
+                    <span className="text-xs text-muted-foreground">{libraryImages.length} 张</span>
+                  </div>
+                  {libraryImages.length ? (
+                    <div className="grid grid-cols-3 gap-3 sm:grid-cols-4 lg:grid-cols-6">
+                      {libraryImages.map((item) => {
+                        const selected = selectedLibraryPaths.includes(item.path);
+                        return (
+                          <button
+                            key={item.path}
+                            type="button"
+                            className={cn(
+                              "group relative aspect-square overflow-hidden rounded-2xl border bg-muted text-left transition",
+                              selected ? "border-primary ring-2 ring-primary/25" : "border-border hover:border-primary/50",
+                            )}
+                            onClick={() => toggleLibraryImage(item.path)}
+                            title={item.name}
+                          >
+                            {managedImagePreview(item) ? (
+                              <img src={managedImagePreview(item)} alt={item.name} className="h-full w-full object-cover" />
+                            ) : (
+                              <span className="flex h-full items-center justify-center text-xs text-muted-foreground">图片</span>
+                            )}
+                            <span
+                              aria-hidden="true"
+                              className={cn(
+                                "absolute left-2 top-2 flex size-5 items-center justify-center rounded-md border bg-background/90 text-[12px] font-black shadow-sm",
+                                selected ? "border-primary bg-primary text-primary-foreground" : "border-border text-transparent",
+                              )}
+                            >
+                              <Check className="size-3.5" />
+                            </span>
+                            <span className="absolute inset-x-0 bottom-0 truncate bg-black/45 px-2 py-1 text-[11px] font-medium text-white opacity-0 transition group-hover:opacity-100">
+                              {item.name}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="flex h-32 items-center justify-center rounded-2xl border border-dashed border-border text-sm text-muted-foreground">
+                      当前范围没有图片
+                    </div>
+                  )}
+                  {libraryHasMore ? (
+                    <div className="flex justify-center">
+                      <Button variant="outline" className="h-9 rounded-xl" onClick={() => void loadLibraryAssets(libraryScope, librarySearch, { appendImages: true, imageCursor: libraryNextCursor })} disabled={libraryLoadingMore}>
+                        {libraryLoadingMore ? <LoaderCircle className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
+                        加载更多图片
+                      </Button>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+              {libraryAssetType !== "image" ? (
+                <div className="grid gap-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-semibold text-muted-foreground">文本</span>
+                    <span className="text-xs text-muted-foreground">{libraryTextAssets.length} 条</span>
+                  </div>
+                  {libraryTextAssets.length ? (
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      {libraryTextAssets.map((item) => {
+                        const selected = selectedTextAssetIds.includes(item.id);
+                        return (
+                          <button
+                            key={item.id}
+                            type="button"
+                            className={cn(
+                              "group grid min-h-32 gap-2 rounded-2xl border bg-background p-3 text-left transition hover:border-primary/50",
+                              selected && "border-primary ring-2 ring-primary/20",
+                            )}
+                            onClick={() => toggleLibraryTextAsset(item.id)}
+                            title={item.name}
+                          >
+                            <span className="flex items-start justify-between gap-3">
+                              <span className="min-w-0">
+                                <span className="block truncate text-sm font-semibold text-foreground">{item.name}</span>
+                                <span className="block text-[11px] text-muted-foreground">{formatDateTime(item.updated_at)}</span>
+                              </span>
+                              <span
+                                aria-hidden="true"
+                                className={cn(
+                                  "flex size-5 shrink-0 items-center justify-center rounded-md border text-[12px] font-black",
+                                  selected ? "border-primary bg-primary text-primary-foreground" : "border-border text-transparent",
+                                )}
+                              >
+                                <Check className="size-3.5" />
+                              </span>
+                            </span>
+                            <span className="line-clamp-4 whitespace-pre-wrap break-words text-xs leading-5 text-muted-foreground">
+                              {item.preview || item.content}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="flex h-32 items-center justify-center rounded-2xl border border-dashed border-border text-sm text-muted-foreground">
+                      当前范围没有文本素材
+                    </div>
+                  )}
+                  {libraryTextHasMore ? (
+                    <div className="flex justify-center">
+                      <Button variant="outline" className="h-9 rounded-xl" onClick={() => void loadLibraryAssets(libraryScope, librarySearch, { appendTexts: true, textCursor: libraryTextNextCursor })} disabled={libraryLoadingMore}>
+                        {libraryLoadingMore ? <LoaderCircle className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
+                        加载更多文本
+                      </Button>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
             </div>
           ) : (
             <div className="flex h-64 items-center justify-center rounded-2xl border border-dashed border-border text-sm text-muted-foreground">
-              当前范围没有图片
+              暂无资产
             </div>
           )}
-          {libraryHasMore ? (
-            <div className="mt-4 flex justify-center">
-              <Button variant="outline" className="h-9 rounded-xl" onClick={() => void loadLibraryImages(libraryScope, libraryNextCursor, true)} disabled={libraryLoadingMore}>
-                {libraryLoadingMore ? <LoaderCircle className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
-                加载更多
-              </Button>
-            </div>
-          ) : null}
         </div>
         <DialogFooter className="border-t border-border px-5 py-4">
           <Button variant="outline" className="h-10 rounded-xl" onClick={() => setLibraryOpen(false)}>取消</Button>
-          <Button className="h-10 rounded-xl" onClick={addSelectedLibraryImages} disabled={selectedLibraryPaths.length === 0}>加入参考图</Button>
+          <Button className="h-10 rounded-xl" onClick={addSelectedLibraryAssets} disabled={selectedLibraryPaths.length + selectedTextAssetIds.length === 0}>确认选择</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+    <Dialog open={textAssetEditorOpen} onOpenChange={(open) => (!open && !textAssetSaving ? setTextAssetEditorOpen(false) : setTextAssetEditorOpen(open))}>
+      <DialogContent className="w-[min(92vw,560px)] rounded-3xl">
+        <DialogHeader>
+          <DialogTitle>新建文本素材</DialogTitle>
+          <DialogDescription>保存后可在当前素材库范围内复用。</DialogDescription>
+        </DialogHeader>
+        <div className="grid gap-3">
+          <label className="grid gap-1.5">
+            <span className="text-xs font-medium text-muted-foreground">名称</span>
+            <Input
+              value={textAssetNameInput}
+              onChange={(event) => setTextAssetNameInput(event.target.value)}
+              maxLength={80}
+              className="h-10 rounded-xl"
+              placeholder="留空时自动取正文首行"
+              disabled={textAssetSaving}
+            />
+          </label>
+          <label className="grid gap-1.5">
+            <span className="text-xs font-medium text-muted-foreground">内容</span>
+            <Textarea
+              value={textAssetContentInput}
+              onChange={(event) => setTextAssetContentInput(event.target.value)}
+              maxLength={20000}
+              className="min-h-48 rounded-xl"
+              placeholder="输入要复用的文案、提示词、产品说明或运营要求。"
+              disabled={textAssetSaving}
+            />
+          </label>
+          <div className="text-right text-xs text-muted-foreground">{textAssetContentInput.length}/20000</div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" className="h-10 rounded-xl" onClick={() => setTextAssetEditorOpen(false)} disabled={textAssetSaving}>取消</Button>
+          <Button className="h-10 rounded-xl" onClick={() => void createTextAssetFromLibrary()} disabled={textAssetSaving || !textAssetContentInput.trim()}>
+            {textAssetSaving ? <LoaderCircle className="size-4 animate-spin" /> : <Type className="size-4" />}
+            保存文本
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
