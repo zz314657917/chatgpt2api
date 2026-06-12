@@ -1,6 +1,7 @@
 "use client";
 
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { toast } from "sonner";
 import {
   Bot,
   BoxSelect,
@@ -16,6 +17,7 @@ import {
   Copy,
   Download,
   Eraser,
+  Files,
   Repeat2,
   FileText,
   Grid2X2,
@@ -34,6 +36,7 @@ import {
   RotateCw,
   Save,
   Sparkles,
+  Type,
   Trash2,
   WandSparkles,
   X,
@@ -46,13 +49,13 @@ import { AuthenticatedImage } from "@/components/authenticated-image";
 import { ImageOutputControls } from "@/components/image-output-controls";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import type { CanvasImageRef, CanvasModelOption, CanvasVideoRef, CreationTask, ImageVisibility } from "@/lib/api";
-import { supportsImageOutputControls } from "@/lib/api";
+import type { CanvasImageRef, CanvasModelOption, CanvasVideoRef, CreationTask, ImageVisibility, ManagedTextAsset, ManagedTextAssetListScope, TeamSummary } from "@/lib/api";
+import { createManagedTextAsset, fetchManagedTextAssets, supportsImageOutputControls } from "@/lib/api";
 import {
   buildTimestampedImageDownloadName,
   downloadImageFile,
@@ -138,6 +141,28 @@ type SmartCanvasGraphIndexes = {
   nodesById: Map<string, SmartCanvasItem>;
   dependencyKeysByNodeId: Map<string, string>;
 };
+
+type SmartCanvasTextAssetScope = "mine" | "team";
+
+const CANVAS_TEXT_ASSET_PAGE_SIZE = 40;
+
+function appendTextBlock(base: string, addition: string) {
+  const current = base.trimEnd();
+  const next = addition.trim();
+  if (!next) {
+    return base;
+  }
+  return current ? `${current}\n\n${next}` : next;
+}
+
+function canvasTextAssetScope(scope: SmartCanvasTextAssetScope): ManagedTextAssetListScope {
+  return scope === "team" ? "team" : "mine";
+}
+
+function canManageTeamTextAssets(team: TeamSummary | null) {
+  const role = String(team?.member_role || "").toLowerCase();
+  return role === "owner" || role === "manager";
+}
 type SmartCanvasObjectIdentityTracker = {
   nextId: number;
   ids: WeakMap<object, number>;
@@ -1329,6 +1354,7 @@ type SmartCanvasBoardProps = {
   imageModels: CanvasModelOption[];
   textModels: CanvasModelOption[];
   videoModels: CanvasModelOption[];
+  activeTeam: TeamSummary | null;
   running: boolean;
   mentionOpen: boolean;
   mentionItems: CanvasImageRef[];
@@ -1384,6 +1410,7 @@ export function SmartCanvasBoard({
   imageModels,
   textModels,
   videoModels,
+  activeTeam,
   running,
   mentionOpen,
   mentionItems,
@@ -1691,6 +1718,7 @@ export function SmartCanvasBoard({
               imageModels={imageModels}
               textModels={textModels}
               videoModels={videoModels}
+              activeTeam={activeTeam}
               running={running}
               lightweightMedia={lightweightMedia}
               mentionOpen={mentionOpen && item.id === selectedItemId}
@@ -2466,6 +2494,7 @@ type SmartCanvasNodeProps = {
   imageModels: CanvasModelOption[];
   textModels: CanvasModelOption[];
   videoModels: CanvasModelOption[];
+  activeTeam: TeamSummary | null;
   running: boolean;
   lightweightMedia: boolean;
   mentionOpen: boolean;
@@ -2503,6 +2532,7 @@ export const SmartCanvasNode = memo(function SmartCanvasNode({
   imageModels,
   textModels,
   videoModels,
+  activeTeam,
   running,
   lightweightMedia,
   mentionOpen,
@@ -2531,6 +2561,7 @@ export const SmartCanvasNode = memo(function SmartCanvasNode({
   onCreateNodeHelpTemplate,
   onMeasure,
 }: SmartCanvasNodeProps) {
+  const [textAssetPickerOpen, setTextAssetPickerOpen] = useState(false);
   const size = NODE_SIZE[item.type];
   const resizable = item.type === "image" || item.type === "group";
   const width = resizable ? Number(item.data?.width || size.w) : size.w;
@@ -2547,6 +2578,15 @@ export const SmartCanvasNode = memo(function SmartCanvasNode({
       h: Math.round(node.offsetHeight),
     });
   };
+  const insertTextAssetsToPrompt = useCallback((assets: ManagedTextAsset[]) => {
+    const nextPrompt = assets.reduce((text, asset) => appendTextBlock(text, asset.content), item.data?.prompt || "");
+    if (nextPrompt.length > 20000) {
+      toast.error("提示词最多 20,000 字符");
+      return;
+    }
+    onUpdateItemData(item.id, { prompt: nextPrompt });
+    toast.success(`已追加 ${assets.length} 条文本素材`);
+  }, [item.data?.prompt, item.id, onUpdateItemData]);
 
   useLayoutEffect(() => {
     const node = document.querySelector<HTMLDivElement>(`[data-canvas-node-id="${item.id}"]`);
@@ -2593,6 +2633,7 @@ export const SmartCanvasNode = memo(function SmartCanvasNode({
         item={item}
         onOpenHelp={() => onOpenNodeHelp(item.type)}
         onDelete={() => onDeleteItem(item.id)}
+        onOpenTextAssets={item.type === "prompt" ? () => setTextAssetPickerOpen(true) : undefined}
       />
       {item.type === "image" ? (
         <>
@@ -2677,6 +2718,14 @@ export const SmartCanvasNode = memo(function SmartCanvasNode({
       ) : (
         <OutputNodeBody item={item} onOpenImage={onOpenImage} onDeleteImage={(image) => onDeleteImage(item.id, image)} onStopNode={() => onStopNode(item.id)} lightweight={lightweightMedia} />
       )}
+      {item.type === "prompt" ? (
+        <TextAssetPickerDialog
+          open={textAssetPickerOpen}
+          activeTeam={activeTeam}
+          onOpenChange={setTextAssetPickerOpen}
+          onInsert={insertTextAssetsToPrompt}
+        />
+      ) : null}
     </div>
   );
 }, areSmartCanvasNodePropsEqual);
@@ -2688,6 +2737,7 @@ function areSmartCanvasNodePropsEqual(previous: SmartCanvasNodeProps, next: Smar
     previous.imageModels === next.imageModels &&
     previous.textModels === next.textModels &&
     previous.videoModels === next.videoModels &&
+    previous.activeTeam === next.activeTeam &&
     previous.running === next.running &&
     previous.lightweightMedia === next.lightweightMedia &&
     previous.mentionOpen === next.mentionOpen &&
@@ -2780,6 +2830,22 @@ function formatCanvasNodeTime(value?: string) {
   return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
 }
 
+function formatCanvasTextAssetTime(value?: string) {
+  if (!value) {
+    return "";
+  }
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) {
+    return value;
+  }
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+}
+
 function CanvasRunInsight({ item, compact = false }: { item: SmartCanvasItem; compact?: boolean }) {
   const status = item.data?.status;
   const blockedBy = item.data?.blocked_by_name || item.data?.blocked_by || "";
@@ -2835,10 +2901,12 @@ function NodeHeader({
   item,
   onOpenHelp,
   onDelete,
+  onOpenTextAssets,
 }: {
   item: SmartCanvasItem;
   onOpenHelp: () => void;
   onDelete: () => void;
+  onOpenTextAssets?: () => void;
 }) {
   const title = `${nodeUsageHint(item)} 点击查看完整用法。`;
   return (
@@ -2849,6 +2917,22 @@ function NodeHeader({
       </div>
       <div className="flex items-center gap-1">
         {item.data?.status ? <StatusBadge status={item.data.status} /> : null}
+        {onOpenTextAssets ? (
+          <button
+            type="button"
+            className="flex size-6 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground dark:text-slate-500 dark:hover:bg-slate-800 dark:hover:text-white"
+            data-node-interactive="true"
+            title="打开文本素材库"
+            aria-label="打开文本素材库"
+            onPointerDown={stopNodeInteraction}
+            onClick={(event) => {
+              event.stopPropagation();
+              onOpenTextAssets();
+            }}
+          >
+            <Files className="size-3.5" />
+          </button>
+        ) : null}
         <button
           type="button"
           className="flex size-6 items-center justify-center rounded-md bg-sky-500/10 text-[13px] font-black leading-none text-sky-700 hover:bg-sky-500/18 hover:text-sky-800 dark:bg-sky-400/10 dark:text-sky-200 dark:hover:bg-sky-400/18 dark:hover:text-sky-100"
@@ -3079,6 +3163,328 @@ function PromptNodeBody({
         <MentionPicker images={mentionItems} onAdd={onAddMention} />
       ) : null}
     </div>
+  );
+}
+
+function TextAssetPickerDialog({
+  open,
+  activeTeam,
+  onOpenChange,
+  onInsert,
+}: {
+  open: boolean;
+  activeTeam: TeamSummary | null;
+  onOpenChange: (open: boolean) => void;
+  onInsert: (assets: ManagedTextAsset[]) => void;
+}) {
+  const [scope, setScope] = useState<SmartCanvasTextAssetScope>("mine");
+  const [searchInput, setSearchInput] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [items, setItems] = useState<ManagedTextAsset[]>([]);
+  const [nextCursor, setNextCursor] = useState("");
+  const [hasMore, setHasMore] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [nameInput, setNameInput] = useState("");
+  const [contentInput, setContentInput] = useState("");
+  const [saving, setSaving] = useState(false);
+  const requestIdRef = useRef(0);
+  const canCreateInScope = scope !== "team" || canManageTeamTextAssets(activeTeam);
+
+  const loadTextAssets = useCallback(async (
+    options: { append?: boolean; cursor?: string; scope?: SmartCanvasTextAssetScope; search?: string } = {},
+  ) => {
+    const requestId = ++requestIdRef.current;
+    const targetScope = options.scope || scope;
+    const targetSearch = options.search ?? searchQuery;
+    if (targetScope === "team" && !activeTeam?.id) {
+      setItems([]);
+      setNextCursor("");
+      setHasMore(false);
+      setLoading(false);
+      setLoadingMore(false);
+      return;
+    }
+    if (options.append) {
+      setLoadingMore(true);
+    } else {
+      setItems([]);
+      setNextCursor("");
+      setHasMore(false);
+      setLoading(true);
+    }
+    try {
+      const result = await fetchManagedTextAssets({
+        scope: canvasTextAssetScope(targetScope),
+        team_id: targetScope === "team" ? activeTeam?.id || "" : "",
+        search: targetSearch,
+        page_size: CANVAS_TEXT_ASSET_PAGE_SIZE,
+        cursor: options.cursor || "",
+      });
+      if (requestId !== requestIdRef.current) {
+        return;
+      }
+      setItems((current) => options.append ? [
+        ...current,
+        ...result.items.filter((item) => !current.some((existing) => existing.id === item.id)),
+      ] : result.items);
+      setNextCursor(result.next_cursor);
+      setHasMore(result.has_more);
+    } catch (error) {
+      if (requestId === requestIdRef.current) {
+        toast.error(error instanceof Error ? error.message : "加载文本素材失败");
+      }
+    } finally {
+      if (requestId === requestIdRef.current) {
+        setLoading(false);
+        setLoadingMore(false);
+      }
+    }
+  }, [activeTeam?.id, scope, searchQuery]);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+    if (scope === "team" && !activeTeam?.id) {
+      setScope("mine");
+      return;
+    }
+    setSelectedIds([]);
+    void loadTextAssets();
+  }, [activeTeam?.id, loadTextAssets, open, scope]);
+
+  const changeScope = (nextScope: SmartCanvasTextAssetScope) => {
+    if (nextScope === "team" && !activeTeam?.id) {
+      return;
+    }
+    requestIdRef.current += 1;
+    setScope(nextScope);
+    setSelectedIds([]);
+    setItems([]);
+    setNextCursor("");
+    setHasMore(false);
+  };
+
+  const applySearch = () => {
+    const query = searchInput.trim();
+    requestIdRef.current += 1;
+    setSelectedIds([]);
+    setItems([]);
+    setNextCursor("");
+    setHasMore(false);
+    setSearchQuery(query);
+    if (query === searchQuery) {
+      void loadTextAssets({ search: query });
+    }
+  };
+
+  const toggleSelected = (id: string) => {
+    setSelectedIds((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
+  };
+
+  const createTextAsset = async () => {
+    if (saving) {
+      return;
+    }
+    const content = contentInput.trim();
+    if (!content) {
+      toast.error("请输入文本素材内容");
+      return;
+    }
+    if (!canCreateInScope) {
+      toast.error("团队文本素材需要 owner 或 manager 维护");
+      return;
+    }
+    setSaving(true);
+    try {
+      const item = await createManagedTextAsset(
+        { name: nameInput.trim() || undefined, content },
+        { scope: canvasTextAssetScope(scope), team_id: scope === "team" ? activeTeam?.id || "" : "" },
+      );
+      setItems((current) => [item, ...current.filter((existing) => existing.id !== item.id)]);
+      setSelectedIds((current) => current.includes(item.id) ? current : [...current, item.id]);
+      setEditorOpen(false);
+      setNameInput("");
+      setContentInput("");
+      toast.success("文本素材已创建");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "创建文本素材失败");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const confirmSelection = () => {
+    const byId = new Map(items.map((item) => [item.id, item]));
+    const selected = selectedIds.map((id) => byId.get(id)).filter((item): item is ManagedTextAsset => Boolean(item));
+    if (!selected.length) {
+      toast.error("先选择文本素材");
+      return;
+    }
+    onInsert(selected);
+    onOpenChange(false);
+    setSelectedIds([]);
+  };
+
+  return (
+    <>
+      <Dialog open={open} onOpenChange={onOpenChange}>
+        <DialogContent className="flex h-[min(84dvh,720px)] w-[min(92vw,760px)] max-w-none flex-col overflow-hidden rounded-2xl p-0" data-node-interactive="true" onPointerDown={stopNodeInteraction}>
+          <DialogHeader className="border-b border-border px-5 pt-5 pr-12 pb-4">
+            <DialogTitle>文本素材库</DialogTitle>
+            <DialogDescription>选择后会追加到当前 Prompt 节点。</DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-3 border-b border-border px-5 py-3">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+              <Input
+                value={searchInput}
+                onChange={(event) => setSearchInput(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    applySearch();
+                  }
+                }}
+                placeholder="搜索文本素材..."
+                className="h-9 rounded-lg"
+              />
+              <div className="flex shrink-0 gap-2">
+                <Button variant="outline" className="h-9 rounded-lg" onClick={applySearch} disabled={loading}>
+                  {loading ? <LoaderCircle className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
+                  搜索
+                </Button>
+                <Button
+                  variant="outline"
+                  className="h-9 rounded-lg"
+                  onClick={() => setEditorOpen(true)}
+                  disabled={!canCreateInScope}
+                  title={canCreateInScope ? "新建文本素材" : "团队文本素材需要 owner 或 manager 维护"}
+                >
+                  <Type className="size-4" />
+                  新建
+                </Button>
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex flex-wrap gap-2">
+                <Button variant={scope === "mine" ? "default" : "outline"} size="sm" className="h-8 rounded-lg" onClick={() => changeScope("mine")}>
+                  个人
+                </Button>
+                {activeTeam?.id ? (
+                  <Button variant={scope === "team" ? "default" : "outline"} size="sm" className="h-8 rounded-lg" onClick={() => changeScope("team")}>
+                    团队
+                  </Button>
+                ) : null}
+              </div>
+              <div className="text-xs text-muted-foreground">已选 {selectedIds.length} 条</div>
+            </div>
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+            {loading ? (
+              <div className="flex h-56 items-center justify-center text-sm text-muted-foreground">
+                <LoaderCircle className="mr-2 size-4 animate-spin" />
+                正在加载文本素材
+              </div>
+            ) : items.length ? (
+              <div className="grid gap-2 sm:grid-cols-2">
+                {items.map((item) => {
+                  const selected = selectedIds.includes(item.id);
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      className={cn(
+                        "grid min-h-32 gap-2 rounded-lg border bg-background p-3 text-left transition hover:border-sky-500/60",
+                        selected ? "border-sky-500 ring-2 ring-sky-500/20" : "border-border",
+                      )}
+                      onClick={() => toggleSelected(item.id)}
+                      title={item.name}
+                    >
+                      <span className="flex items-start justify-between gap-3">
+                        <span className="min-w-0">
+                          <span className="block truncate text-sm font-semibold text-foreground">{item.name}</span>
+                          <span className="block text-[11px] text-muted-foreground">{formatCanvasTextAssetTime(item.updated_at)}</span>
+                        </span>
+                        <span
+                          aria-hidden="true"
+                          className={cn(
+                            "flex size-5 shrink-0 items-center justify-center rounded-md border text-[12px] font-black",
+                            selected ? "border-sky-500 bg-sky-500 text-white" : "border-border text-transparent",
+                          )}
+                        >
+                          <Check className="size-3.5" />
+                        </span>
+                      </span>
+                      <span className="line-clamp-4 whitespace-pre-wrap break-words text-xs leading-5 text-muted-foreground">
+                        {item.preview || item.content}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="flex h-56 items-center justify-center rounded-lg border border-dashed border-border text-sm text-muted-foreground">
+                当前范围没有文本素材
+              </div>
+            )}
+            {hasMore ? (
+              <div className="mt-4 flex justify-center">
+                <Button variant="outline" className="h-9 rounded-lg" onClick={() => void loadTextAssets({ append: true, cursor: nextCursor })} disabled={loadingMore}>
+                  {loadingMore ? <LoaderCircle className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
+                  加载更多
+                </Button>
+              </div>
+            ) : null}
+          </div>
+          <DialogFooter className="border-t border-border px-5 py-4">
+            <Button variant="outline" className="h-10 rounded-lg" onClick={() => onOpenChange(false)}>取消</Button>
+            <Button className="h-10 rounded-lg" onClick={confirmSelection} disabled={selectedIds.length === 0}>追加到 Prompt</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={editorOpen} onOpenChange={(nextOpen) => (!nextOpen && saving ? undefined : setEditorOpen(nextOpen))}>
+        <DialogContent className="w-[min(92vw,560px)] rounded-2xl" data-node-interactive="true" onPointerDown={stopNodeInteraction}>
+          <DialogHeader>
+            <DialogTitle>新建文本素材</DialogTitle>
+            <DialogDescription>保存后可在当前范围内复用。</DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-3">
+            <label className="grid gap-1.5">
+              <span className="text-xs font-medium text-muted-foreground">名称</span>
+              <Input
+                value={nameInput}
+                onChange={(event) => setNameInput(event.target.value)}
+                maxLength={80}
+                className="h-10 rounded-lg"
+                placeholder="留空时自动取正文首行"
+                disabled={saving}
+              />
+            </label>
+            <label className="grid gap-1.5">
+              <span className="text-xs font-medium text-muted-foreground">内容</span>
+              <Textarea
+                value={contentInput}
+                onChange={(event) => setContentInput(event.target.value)}
+                maxLength={20000}
+                className="min-h-44 rounded-lg"
+                placeholder="输入可复用的提示词、文案或要求。"
+                disabled={saving}
+              />
+            </label>
+            <div className="text-right text-xs text-muted-foreground">{contentInput.length}/20000</div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" className="h-10 rounded-lg" onClick={() => setEditorOpen(false)} disabled={saving}>取消</Button>
+            <Button className="h-10 rounded-lg" onClick={() => void createTextAsset()} disabled={saving || !contentInput.trim()}>
+              {saving ? <LoaderCircle className="size-4 animate-spin" /> : <Type className="size-4" />}
+              保存
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
 

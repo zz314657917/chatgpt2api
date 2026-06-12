@@ -32,6 +32,7 @@ import {
 const navItems = [
   { href: "/image", label: "创作台" },
   { href: "/canvas", label: "无限画布" },
+  { href: "/ecommerce-suite", label: "电商套图" },
   { href: "/social", label: "社媒运营" },
   { href: "/image-manager", label: "素材库" },
 ];

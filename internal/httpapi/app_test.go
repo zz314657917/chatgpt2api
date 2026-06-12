@@ -2276,6 +2276,9 @@ func TestSocialProjectsPermissionsGateAndDefaultAccess(t *testing.T) {
 	if !containsHTTPTestString(util.AsStringSlice(user["menu_paths"]), "/social") {
 		t.Fatalf("default user menu_paths missing /social: %#v", user["menu_paths"])
 	}
+	if !containsHTTPTestString(util.AsStringSlice(user["menu_paths"]), "/ecommerce-suite") {
+		t.Fatalf("default user menu_paths missing /ecommerce-suite: %#v", user["menu_paths"])
+	}
 
 	req := httptest.NewRequest(http.MethodGet, "/social", nil)
 	req.Header.Set("Authorization", "Bearer "+rawKey)
@@ -4272,6 +4275,218 @@ func TestManagedImagesTeamLibraryAccessAndPermissions(t *testing.T) {
 	}
 	if deleted["deleted"] != float64(1) || deleted["team_storage"] == nil {
 		t.Fatalf("manager delete team image body = %#v", deleted)
+	}
+}
+
+func TestTextAssetsHTTPPersonalAndPermissions(t *testing.T) {
+	app := newTestApp(t)
+	defer app.Close()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/text-assets", nil)
+	res := httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusUnauthorized {
+		t.Fatalf("anonymous text assets status = %d body = %s", res.Code, res.Body.String())
+	}
+
+	alice := service.AuthOwner{ID: "linuxdo:ta-alice", Name: "Alice", Provider: service.AuthProviderLinuxDo}
+	_, aliceKey, err := app.auth.UpsertLinuxDoSession(alice)
+	if err != nil {
+		t.Fatalf("UpsertLinuxDoSession(alice) error = %v", err)
+	}
+	bob := service.AuthOwner{ID: "linuxdo:ta-bob", Name: "Bob", Provider: service.AuthProviderLinuxDo}
+	_, bobKey, err := app.auth.UpsertLinuxDoSession(bob)
+	if err != nil {
+		t.Fatalf("UpsertLinuxDoSession(bob) error = %v", err)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/text-assets?scope=public", nil)
+	req.Header.Set("Authorization", "Bearer "+aliceKey)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("invalid scope status = %d body = %s", res.Code, res.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/text-assets", strings.NewReader(jsonString(map[string]any{
+		"content": "第一条文本素材\n用于追加到输入框",
+	})))
+	req.Header.Set("Authorization", "Bearer "+aliceKey)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("create text asset status = %d body = %s", res.Code, res.Body.String())
+	}
+	var created map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &created); err != nil {
+		t.Fatalf("create text asset json: %v", err)
+	}
+	item := util.StringMap(created["item"])
+	if item["kind"] != service.TextAssetKind || item["name"] != "第一条文本素材" || item["owner_id"] != alice.ID {
+		t.Fatalf("created text asset = %#v", item)
+	}
+	id := util.Clean(item["id"])
+	if id == "" {
+		t.Fatalf("created text asset id missing: %#v", item)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/text-assets?search="+url.QueryEscape("追加"), nil)
+	req.Header.Set("Authorization", "Bearer "+aliceKey)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("search text assets status = %d body = %s", res.Code, res.Body.String())
+	}
+	var list map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &list); err != nil {
+		t.Fatalf("search text assets json: %v", err)
+	}
+	if items := util.AsMapSlice(list["items"]); len(items) != 1 || util.Clean(items[0]["id"]) != id {
+		t.Fatalf("search text assets items = %#v", list)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/text-assets", nil)
+	req.Header.Set("Authorization", "Bearer "+bobKey)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("bob list text assets status = %d body = %s", res.Code, res.Body.String())
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &list); err != nil {
+		t.Fatalf("bob list text assets json: %v", err)
+	}
+	if items := util.AsMapSlice(list["items"]); len(items) != 0 {
+		t.Fatalf("bob should not see alice text assets: %#v", list)
+	}
+
+	req = httptest.NewRequest(http.MethodPatch, "/api/text-assets/"+url.PathEscape(id), strings.NewReader(jsonString(map[string]any{
+		"name":    "已更新",
+		"content": "更新后的文本素材",
+	})))
+	req.Header.Set("Authorization", "Bearer "+aliceKey)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("update text asset status = %d body = %s", res.Code, res.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodDelete, "/api/text-assets/"+url.PathEscape(id), nil)
+	req.Header.Set("Authorization", "Bearer "+bobKey)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusNotFound {
+		t.Fatalf("bob delete text asset status = %d body = %s", res.Code, res.Body.String())
+	}
+}
+
+func TestTextAssetsHTTPTeamAccessAndManagerWrite(t *testing.T) {
+	app := newTestApp(t)
+	defer app.Close()
+
+	owner := service.AuthOwner{ID: "sub2api:ta-owner", Name: "team-owner", Provider: service.AuthProviderSub2API}
+	_, ownerKey, err := app.auth.UpsertSub2APISession(owner)
+	if err != nil {
+		t.Fatalf("UpsertSub2APISession(owner) error = %v", err)
+	}
+	manager := service.AuthOwner{ID: "sub2api:ta-manager", Name: "team-manager", Provider: service.AuthProviderSub2API}
+	_, managerKey, err := app.auth.UpsertSub2APISession(manager)
+	if err != nil {
+		t.Fatalf("UpsertSub2APISession(manager) error = %v", err)
+	}
+	member := service.AuthOwner{ID: "sub2api:ta-member", Name: "team-member", Provider: service.AuthProviderSub2API}
+	_, memberKey, err := app.auth.UpsertSub2APISession(member)
+	if err != nil {
+		t.Fatalf("UpsertSub2APISession(member) error = %v", err)
+	}
+	outsider := service.AuthOwner{ID: "sub2api:ta-outsider", Name: "team-outsider", Provider: service.AuthProviderSub2API}
+	_, outsiderKey, err := app.auth.UpsertSub2APISession(outsider)
+	if err != nil {
+		t.Fatalf("UpsertSub2APISession(outsider) error = %v", err)
+	}
+	saveTestSub2APIBinding(t, app, owner.ID, "ta-owner@example.com")
+	saveTestSub2APIBinding(t, app, manager.ID, "ta-manager@example.com")
+	saveTestSub2APIBinding(t, app, member.ID, "ta-member@example.com")
+	saveTestSub2APIBinding(t, app, outsider.ID, "ta-outsider@example.com")
+
+	teamID := createHTTPTestTeam(t, app, ownerKey)
+	acceptHTTPTestInvite(t, app, managerKey, createHTTPTestInvite(t, app, ownerKey, teamID, "ta-manager@example.com", "manager"))
+	acceptHTTPTestInvite(t, app, memberKey, createHTTPTestInvite(t, app, ownerKey, teamID, "ta-member@example.com", "member"))
+
+	req := httptest.NewRequest(http.MethodPost, "/api/text-assets", strings.NewReader(jsonString(map[string]any{
+		"scope":   "team",
+		"team_id": teamID,
+		"content": "成员不能创建",
+	})))
+	req.Header.Set("Authorization", "Bearer "+memberKey)
+	res := httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusForbidden {
+		t.Fatalf("member create team text asset status = %d body = %s", res.Code, res.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/text-assets", strings.NewReader(jsonString(map[string]any{
+		"scope":   "team",
+		"team_id": teamID,
+		"name":    "团队文本",
+		"content": "团队成员可读文本",
+	})))
+	req.Header.Set("Authorization", "Bearer "+managerKey)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("manager create team text asset status = %d body = %s", res.Code, res.Body.String())
+	}
+	var created map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &created); err != nil {
+		t.Fatalf("manager create team text asset json: %v", err)
+	}
+	item := util.StringMap(created["item"])
+	id := util.Clean(item["id"])
+	if id == "" || item["library_scope"] != service.ImageLibraryScopeTeam || item["team_id"] != teamID {
+		t.Fatalf("team text asset = %#v", item)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/text-assets?scope=team&team_id="+url.QueryEscape(teamID), nil)
+	req.Header.Set("Authorization", "Bearer "+memberKey)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("member list team text assets status = %d body = %s", res.Code, res.Body.String())
+	}
+	var list map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &list); err != nil {
+		t.Fatalf("member list team text assets json: %v", err)
+	}
+	if items := util.AsMapSlice(list["items"]); len(items) != 1 || util.Clean(items[0]["id"]) != id {
+		t.Fatalf("member list team text assets = %#v", list)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/text-assets?scope=team&team_id="+url.QueryEscape(teamID), nil)
+	req.Header.Set("Authorization", "Bearer "+outsiderKey)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusNotFound {
+		t.Fatalf("outsider list team text assets status = %d body = %s", res.Code, res.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodPatch, "/api/text-assets/"+url.PathEscape(id), strings.NewReader(jsonString(map[string]any{
+		"scope":   "team",
+		"team_id": teamID,
+		"content": "成员不能更新",
+	})))
+	req.Header.Set("Authorization", "Bearer "+memberKey)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusForbidden {
+		t.Fatalf("member update team text asset status = %d body = %s", res.Code, res.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodDelete, "/api/text-assets/"+url.PathEscape(id)+"?scope=team&team_id="+url.QueryEscape(teamID), nil)
+	req.Header.Set("Authorization", "Bearer "+managerKey)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("manager delete team text asset status = %d body = %s", res.Code, res.Body.String())
 	}
 }
 

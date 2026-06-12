@@ -185,7 +185,7 @@ export function hasAPIPermission(session: StoredAuthSession | null | undefined, 
 }
 
 export function getDefaultRouteForSession(session: StoredAuthSession) {
-  for (const path of ["/image", "/canvas", "/social", "/settings", ...session.menuPaths, "/profile"]) {
+  for (const path of ["/image", "/canvas", "/ecommerce-suite", "/social", "/settings", ...session.menuPaths, "/profile"]) {
     if (canAccessPath(session, path)) {
       return path;
     }

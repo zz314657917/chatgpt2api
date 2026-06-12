@@ -106,6 +106,7 @@ export default function CanvasPage() {
             imageModels={canvas.models.image}
             textModels={canvas.models.text}
             videoModels={canvas.models.video}
+            activeTeam={canvas.activeTeam}
             running={canvas.running}
             mentionOpen={canvas.mentionOpen}
             mentionItems={canvas.mentionItems}

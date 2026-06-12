@@ -33,14 +33,15 @@ type PermissionSet struct {
 var fullMenuPermissions = []MenuPermission{
 	{ID: "image", Label: "创作台", Path: "/image", Icon: "image", Order: 10},
 	{ID: "canvas", Label: "无限画布", Path: "/canvas", Icon: "layout-grid", Order: 20},
-	{ID: "social", Label: "社媒运营", Path: "/social", Icon: "send", Order: 30},
-	{ID: "image-manager", Label: "素材库", Path: "/image-manager", Icon: "images", Order: 40},
-	{ID: "accounts", Label: "号池管理", Path: "/accounts", Icon: "wallet-cards", Order: 50},
-	{ID: "register", Label: "注册机", Path: "/register", Icon: "user-plus", Order: 60},
-	{ID: "users", Label: "用户管理", Path: "/users", Icon: "users", Order: 70},
-	{ID: "rbac", Label: "角色权限", Path: "/rbac", Icon: "shield-check", Order: 80},
-	{ID: "logs", Label: "日志管理", Path: "/logs", Icon: "scroll-text", Order: 90},
-	{ID: "settings", Label: "设置", Path: "/settings", Icon: "settings", Order: 100},
+	{ID: "ecommerce-suite", Label: "电商套图", Path: "/ecommerce-suite", Icon: "package-search", Order: 30},
+	{ID: "social", Label: "社媒运营", Path: "/social", Icon: "send", Order: 40},
+	{ID: "image-manager", Label: "素材库", Path: "/image-manager", Icon: "images", Order: 50},
+	{ID: "accounts", Label: "号池管理", Path: "/accounts", Icon: "wallet-cards", Order: 60},
+	{ID: "register", Label: "注册机", Path: "/register", Icon: "user-plus", Order: 70},
+	{ID: "users", Label: "用户管理", Path: "/users", Icon: "users", Order: 80},
+	{ID: "rbac", Label: "角色权限", Path: "/rbac", Icon: "shield-check", Order: 90},
+	{ID: "logs", Label: "日志管理", Path: "/logs", Icon: "scroll-text", Order: 100},
+	{ID: "settings", Label: "设置", Path: "/settings", Icon: "settings", Order: 110},
 }
 
 var apiPermissionCatalog = []APIPermission{
@@ -86,6 +87,10 @@ var apiPermissionCatalog = []APIPermission{
 	apiPermission("DELETE", "/api/images", "删除图片", "素材库", false),
 	apiPermission("GET", "/api/images/storage-governance", "查看图片存储治理", "素材库", false),
 	apiPermission("POST", "/api/images/storage-governance", "清理图片存储", "素材库", false),
+	apiPermission("GET", "/api/text-assets", "查看文本素材", "素材库", true),
+	apiPermission("POST", "/api/text-assets", "创建文本素材", "素材库", true),
+	apiPermission("PATCH", "/api/text-assets", "编辑文本素材", "素材库", true),
+	apiPermission("DELETE", "/api/text-assets", "删除文本素材", "素材库", true),
 	apiPermission("GET", "/api/auth/users", "查看个人 API 令牌", "用户令牌", true),
 	apiPermission("POST", "/api/auth/users", "创建/更新个人 API 令牌", "用户令牌", true),
 	apiPermission("DELETE", "/api/auth/users", "删除个人 API 令牌", "用户令牌", true),
@@ -168,6 +173,7 @@ func DefaultPermissionSetForRole(role string) PermissionSet {
 	return PermissionSet{
 		MenuPaths: NormalizeMenuPermissions([]string{
 			"/image",
+			"/ecommerce-suite",
 			"/social",
 			"/canvas",
 			"/image-manager",
@@ -213,6 +219,10 @@ func DefaultPermissionSetForRole(role string) PermissionSet {
 			APIPermissionKey("PATCH", "/api/images/visibility"),
 			APIPermissionKey("PATCH", "/api/images/library-scope"),
 			APIPermissionKey("DELETE", "/api/images"),
+			APIPermissionKey("GET", "/api/text-assets"),
+			APIPermissionKey("POST", "/api/text-assets"),
+			APIPermissionKey("PATCH", "/api/text-assets"),
+			APIPermissionKey("DELETE", "/api/text-assets"),
 			APIPermissionKey("GET", "/api/auth/users"),
 			APIPermissionKey("POST", "/api/auth/users"),
 			APIPermissionKey("DELETE", "/api/auth/users"),

@@ -1713,6 +1713,7 @@ func mergeDefaultManagedRole(roles []ManagedRole) []ManagedRole {
 				role.Description = defaultRole.Description
 			}
 			role.MenuPaths = mergeNormalizedStrings(role.MenuPaths, []string{
+				"/ecommerce-suite",
 				"/image-manager",
 			})
 			role.APIPermissions = mergeNormalizedStrings(role.APIPermissions, []string{
@@ -1725,6 +1726,10 @@ func mergeDefaultManagedRole(roles []ManagedRole) []ManagedRole {
 				APIPermissionKey("POST", "/api/image-collections"),
 				APIPermissionKey("PATCH", "/api/image-collections"),
 				APIPermissionKey("DELETE", "/api/image-collections"),
+				APIPermissionKey("GET", "/api/text-assets"),
+				APIPermissionKey("POST", "/api/text-assets"),
+				APIPermissionKey("PATCH", "/api/text-assets"),
+				APIPermissionKey("DELETE", "/api/text-assets"),
 			})
 			out = append(out, role)
 			seenDefault = true

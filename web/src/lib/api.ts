@@ -606,6 +606,7 @@ export type ManagedImageDownloadURL = {
 };
 
 export type ManagedImageListScope = "mine" | "team" | "public" | "all";
+export type ManagedTextAssetListScope = "mine" | "team";
 
 export type ManagedImageListFilters = {
   start_date?: string;
@@ -622,6 +623,36 @@ export type ManagedImageListFilters = {
   aspect_ratio?: string;
   collection_id?: string;
   tags?: string[];
+};
+
+export type ManagedTextAsset = {
+  id: string;
+  kind: "text";
+  name: string;
+  content: string;
+  preview: string;
+  owner_name?: string;
+  owner_id?: string;
+  library_scope: "personal" | "team" | string;
+  team_id?: string;
+  team_name?: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ManagedTextAssetListFilters = {
+  scope?: ManagedTextAssetListScope;
+  team_id?: string;
+  page_size?: number;
+  cursor?: string;
+  search?: string;
+};
+
+export type ManagedTextAssetListResult = {
+  items: ManagedTextAsset[];
+  next_cursor: string;
+  has_more: boolean;
+  page_size: number;
 };
 
 export type ManagedImageListResult = {
@@ -2330,6 +2361,78 @@ export async function fetchManagedImages(
     team: data.team || undefined,
     team_storage: data.team_storage || undefined,
   };
+}
+
+export async function fetchManagedTextAssets(
+  filters: ManagedTextAssetListFilters,
+  options: { signal?: AbortSignal } = {},
+): Promise<ManagedTextAssetListResult> {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(filters)) {
+    if (value === undefined || value === null || value === "") {
+      continue;
+    }
+    params.set(key, String(value));
+  }
+  const data = await httpRequest<{
+    items?: ManagedTextAsset[] | null;
+    next_cursor?: string | null;
+    has_more?: boolean | null;
+    page_size?: number | null;
+  }>(
+    `/api/text-assets${params.toString() ? `?${params.toString()}` : ""}`,
+    { signal: options.signal },
+  );
+  return {
+    items: Array.isArray(data.items) ? data.items : [],
+    next_cursor: typeof data.next_cursor === "string" ? data.next_cursor : "",
+    has_more: data.has_more === true,
+    page_size: Number(data.page_size ?? filters.page_size ?? 50) || 50,
+  };
+}
+
+export async function createManagedTextAsset(
+  payload: { name?: string; content: string },
+  options: { scope?: ManagedTextAssetListScope; team_id?: string } = {},
+) {
+  const data = await httpRequest<{ item: ManagedTextAsset }>("/api/text-assets", {
+    method: "POST",
+    body: {
+      ...payload,
+      ...(options.scope ? { scope: options.scope } : {}),
+      ...(options.team_id ? { team_id: options.team_id } : {}),
+    },
+  });
+  return data.item;
+}
+
+export async function updateManagedTextAsset(
+  id: string,
+  payload: { name?: string; content: string },
+  options: { scope?: ManagedTextAssetListScope; team_id?: string } = {},
+) {
+  const data = await httpRequest<{ item: ManagedTextAsset }>(`/api/text-assets/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    body: {
+      ...payload,
+      ...(options.scope ? { scope: options.scope } : {}),
+      ...(options.team_id ? { team_id: options.team_id } : {}),
+    },
+  });
+  return data.item;
+}
+
+export async function deleteManagedTextAsset(
+  id: string,
+  options: { scope?: ManagedTextAssetListScope; team_id?: string } = {},
+) {
+  const params = new URLSearchParams();
+  if (options.scope) params.set("scope", options.scope);
+  if (options.team_id) params.set("team_id", options.team_id);
+  return httpRequest<{ deleted: boolean; id: string }>(
+    `/api/text-assets/${encodeURIComponent(id)}${params.toString() ? `?${params.toString()}` : ""}`,
+    { method: "DELETE" },
+  );
 }
 
 export async function fetchManagedImageDetail(
