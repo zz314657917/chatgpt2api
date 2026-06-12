@@ -1873,6 +1873,46 @@ func TestHandleImageGenerationsValidatesPromptAndCount(t *testing.T) {
 	}
 }
 
+func TestHandleImageGenerationsAllowsTenSequentialTaskOutputs(t *testing.T) {
+	engine := &Engine{
+		ImageTokenProvider: func(context.Context) (string, error) { return "test-token", nil },
+		ImageClientFactory: func(string) *backend.Client { return nil },
+		StreamImageOutputsFunc: func(ctx context.Context, client *backend.Client, request ConversationRequest, index, total int) (<-chan ImageOutput, <-chan error) {
+			out := make(chan ImageOutput, 1)
+			errCh := make(chan error, 1)
+			out <- ImageOutput{Kind: "result", Model: request.Model, Index: index, Total: total, Created: time.Now().Unix(), Data: []map[string]any{{"url": "https://example.test/image.png"}}}
+			close(out)
+			errCh <- nil
+			close(errCh)
+			return out, errCh
+		},
+	}
+	result, _, err := engine.HandleImageGenerations(context.Background(), map[string]any{
+		"prompt":                        "draw",
+		"n":                             10,
+		ImageOutputSequentialPayloadKey: true,
+	})
+	if err != nil {
+		t.Fatalf("HandleImageGenerations() error = %v", err)
+	}
+	if data := util.AsMapSlice(result["data"]); len(data) != 10 {
+		t.Fatalf("data len = %d, want 10: %#v", len(data), data)
+	}
+
+	_, _, err = engine.HandleImageGenerations(context.Background(), map[string]any{
+		"prompt":                        "draw",
+		"n":                             11,
+		ImageOutputSequentialPayloadKey: true,
+	})
+	var httpErr HTTPError
+	if !errors.As(err, &httpErr) {
+		t.Fatalf("err = %T %v, want HTTPError", err, err)
+	}
+	if httpErr.Status != 400 || httpErr.Message != "n must be between 1 and 10" {
+		t.Fatalf("HTTPError = %#v, want status 400 message %q", httpErr, "n must be between 1 and 10")
+	}
+}
+
 func TestHandleImageGenerationsRejectsBlockedPrompt(t *testing.T) {
 	engine := &Engine{}
 	_, _, err := engine.HandleImageGenerations(context.Background(), map[string]any{

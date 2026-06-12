@@ -484,6 +484,70 @@ func TestCreationTaskFailureWritesCallLog(t *testing.T) {
 	}
 }
 
+func TestCreationTaskGPTImageGenerationRunsSequentialOutputs(t *testing.T) {
+	app := newTestApp(t)
+	defer app.Close()
+
+	_, rawKey, err := app.auth.CreateAPIKey(service.AuthRoleUser, "frontend", service.AuthOwner{})
+	if err != nil {
+		t.Fatalf("CreateAPIKey() error = %v", err)
+	}
+
+	requests := make(chan protocol.ConversationRequest, 4)
+	installHTTPTestImageStreamFunc(t, app, func(ctx context.Context, client *backend.Client, request protocol.ConversationRequest, index, total int) (<-chan protocol.ImageOutput, <-chan error) {
+		requests <- request
+		return httpTestImageOutputStream(request, index)
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/creation-tasks/image-generations", strings.NewReader(`{"client_task_id":"task-sequential","prompt":"test image","model":"gpt-image-2","n":4}`))
+	req.Header.Set("Authorization", "Bearer "+rawKey)
+	res := httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("submit creation task status = %d body = %s", res.Code, res.Body.String())
+	}
+
+	var listed map[string]any
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		req = httptest.NewRequest(http.MethodGet, "/api/creation-tasks?ids=task-sequential", nil)
+		req.Header.Set("Authorization", "Bearer "+rawKey)
+		res = httptest.NewRecorder()
+		app.Handler().ServeHTTP(res, req)
+		if res.Code != http.StatusOK {
+			t.Fatalf("list creation task status = %d body = %s", res.Code, res.Body.String())
+		}
+		if err := json.Unmarshal(res.Body.Bytes(), &listed); err != nil {
+			t.Fatalf("list creation task json: %v", err)
+		}
+		items := util.AsMapSlice(listed["items"])
+		if len(items) == 1 && items[0]["status"] == service.TaskStatusSuccess {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	items := util.AsMapSlice(listed["items"])
+	if len(items) != 1 || items[0]["status"] != service.TaskStatusSuccess {
+		t.Fatalf("creation task did not finish successfully: %#v", listed)
+	}
+	if data := util.AsMapSlice(items[0]["data"]); len(data) != 4 {
+		t.Fatalf("task data len = %d, want 4: %#v", len(data), data)
+	}
+	for index := 0; index < 4; index++ {
+		select {
+		case request := <-requests:
+			if !request.SequentialImageOutputs {
+				t.Fatalf("request %d SequentialImageOutputs = false", index+1)
+			}
+			if request.N != 4 {
+				t.Fatalf("request %d N = %d, want 4", index+1, request.N)
+			}
+		default:
+			t.Fatalf("captured requests = %d, want 4", index)
+		}
+	}
+}
+
 func TestLogsEndpointUsesDefaultLogView(t *testing.T) {
 	app := newTestApp(t)
 	defer app.Close()

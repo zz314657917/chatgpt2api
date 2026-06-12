@@ -2533,7 +2533,7 @@ func cleanAuditPayloadMap(payload map[string]any) map[string]any {
 	out := make(map[string]any, len(payload))
 	for key, value := range payload {
 		switch key {
-		case "owner_id", "owner_name", "base_url", "api_key", "gateway_base_url":
+		case "owner_id", "owner_name", "base_url", "api_key", "gateway_base_url", protocol.ImageOutputSequentialPayloadKey:
 			continue
 		}
 		if isInternalPayloadValue(value) {

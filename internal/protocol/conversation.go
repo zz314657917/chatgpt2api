@@ -95,6 +95,7 @@ type ConversationRequest struct {
 	UpstreamParentMessageID string
 	FallbackReferenceImage  string
 	MessageAsError          bool
+	SequentialImageOutputs  bool
 	AcquireImageOutputSlot  ImageOutputSlotAcquirer
 	ChargeImageOutput       ImageOutputCharger
 }
@@ -509,20 +510,41 @@ func (e *Engine) StreamImageOutputsWithPool(ctx context.Context, request Convers
 		ctx, cancel := context.WithCancel(ctx)
 		defer cancel()
 
+		if request.SequentialImageOutputs {
+			emittedAny := false
+			messageOnly := false
+			lastError := ""
+			for index := 1; index <= request.N; index++ {
+				result := e.runImageOutputWithSlot(ctx, out, request, index)
+				emittedAny = emittedAny || result.emitted
+				messageOnly = messageOnly || result.returnedMessage
+				if result.lastError != "" {
+					lastError = result.lastError
+				}
+				if result.err != nil {
+					errCh <- result.err
+					return
+				}
+			}
+			if messageOnly {
+				errCh <- nil
+				return
+			}
+			if !emittedAny {
+				errCh <- NewImageGenerationError(imageStreamErrorMessage(lastError))
+				return
+			}
+			errCh <- nil
+			return
+		}
+
 		resultCh := make(chan imageRunResult, request.N)
 		var wg sync.WaitGroup
 		for index := 1; index <= request.N; index++ {
 			wg.Add(1)
 			go func(index int) {
 				defer wg.Done()
-				releaseSlot, err := request.acquireImageOutputSlot(ctx, index)
-				if err != nil {
-					cancel()
-					resultCh <- imageRunResult{lastError: err.Error(), err: err}
-					return
-				}
-				defer releaseSlot()
-				result := e.runSingleImageOutput(ctx, out, request, index)
+				result := e.runImageOutputWithSlot(ctx, out, request, index)
 				if result.err != nil {
 					cancel()
 				}
@@ -559,6 +581,15 @@ func (e *Engine) StreamImageOutputsWithPool(ctx context.Context, request Convers
 		errCh <- nil
 	}()
 	return out, errCh
+}
+
+func (e *Engine) runImageOutputWithSlot(ctx context.Context, out chan<- ImageOutput, request ConversationRequest, index int) imageRunResult {
+	releaseSlot, err := request.acquireImageOutputSlot(ctx, index)
+	if err != nil {
+		return imageRunResult{lastError: err.Error(), err: err}
+	}
+	defer releaseSlot()
+	return e.runSingleImageOutput(ctx, out, request, index)
 }
 
 func (r ConversationRequest) acquireImageOutputSlot(ctx context.Context, index int) (func(), error) {

@@ -22,7 +22,10 @@ type StreamResult struct {
 	Kind  string
 }
 
-const ImageOutputSlotAcquirerPayloadKey = "image_output_slot_acquirer"
+const (
+	ImageOutputSlotAcquirerPayloadKey = "image_output_slot_acquirer"
+	ImageOutputSequentialPayloadKey   = "image_output_sequential"
+)
 
 type accountUsageContextKey struct{}
 
@@ -104,7 +107,8 @@ func (e *Engine) HandleImageGenerations(ctx context.Context, body map[string]any
 		return nil, nil, err
 	}
 	model := firstNonEmpty(util.Clean(body["model"]), util.ImageModelAuto)
-	n, err := ParseImageCount(body["n"])
+	sequentialOutputs := util.ToBool(body[ImageOutputSequentialPayloadKey])
+	n, err := parseImageCount(body["n"], imageCountLimit(sequentialOutputs))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -114,7 +118,7 @@ func (e *Engine) HandleImageGenerations(ctx context.Context, body map[string]any
 	outputCompression, hasOutputCompression := normalizedImageOutputCompression(body["output_compression"])
 	responseFormat := firstNonEmpty(util.Clean(body["response_format"]), "b64_json")
 	baseURL := util.Clean(body["base_url"])
-	request := ConversationRequest{Prompt: prompt, Model: model, Messages: NormalizeMessages(util.AsMapSlice(body["messages"]), nil), N: n, Size: size, Quality: quality, Background: util.Clean(body["background"]), Moderation: util.Clean(body["moderation"]), Style: util.Clean(body["style"]), OutputFormat: outputFormat, ResponseFormat: responseFormat, BaseURL: baseURL, OwnerID: util.Clean(body["owner_id"]), OwnerName: util.Clean(body["owner_name"]), FrontendConversationID: util.Clean(body["frontend_conversation_id"]), FallbackReferenceImage: util.Clean(body["fallback_reference_image_b64"]), MessageAsError: true, AcquireImageOutputSlot: imageOutputSlotAcquirer(body), ChargeImageOutput: imageOutputCharger(body)}
+	request := ConversationRequest{Prompt: prompt, Model: model, Messages: NormalizeMessages(util.AsMapSlice(body["messages"]), nil), N: n, Size: size, Quality: quality, Background: util.Clean(body["background"]), Moderation: util.Clean(body["moderation"]), Style: util.Clean(body["style"]), OutputFormat: outputFormat, ResponseFormat: responseFormat, BaseURL: baseURL, OwnerID: util.Clean(body["owner_id"]), OwnerName: util.Clean(body["owner_name"]), FrontendConversationID: util.Clean(body["frontend_conversation_id"]), FallbackReferenceImage: util.Clean(body["fallback_reference_image_b64"]), MessageAsError: true, SequentialImageOutputs: sequentialOutputs, AcquireImageOutputSlot: imageOutputSlotAcquirer(body), ChargeImageOutput: imageOutputCharger(body)}
 	if partialImages, ok := normalizedPositiveInt(body["partial_images"]); ok {
 		request.PartialImages = &partialImages
 	}
@@ -163,6 +167,7 @@ func (e *Engine) HandleImageEdits(ctx context.Context, body map[string]any, imag
 		Images:                 encoded,
 		InputImageMask:         responseImageMask(body["input_image_mask"]),
 		MessageAsError:         true,
+		SequentialImageOutputs: util.ToBool(body[ImageOutputSequentialPayloadKey]),
 		AcquireImageOutputSlot: imageOutputSlotAcquirer(body),
 		ChargeImageOutput:      imageOutputCharger(body),
 	}
@@ -983,9 +988,28 @@ func ImageResultContent(result map[string]any) string {
 }
 
 func ParseImageCount(raw any) (int, error) {
+	return parseImageCount(raw, maxProtocolImageCount)
+}
+
+const (
+	maxProtocolImageCount   = 4
+	maxSequentialImageCount = 10
+)
+
+func imageCountLimit(sequential bool) int {
+	if sequential {
+		return maxSequentialImageCount
+	}
+	return maxProtocolImageCount
+}
+
+func parseImageCount(raw any, maxCount int) (int, error) {
+	if maxCount < 1 {
+		maxCount = maxProtocolImageCount
+	}
 	value := util.ToInt(raw, 1)
-	if value < 1 || value > 4 {
-		return 0, HTTPError{Status: 400, Message: "n must be between 1 and 4"}
+	if value < 1 || value > maxCount {
+		return 0, HTTPError{Status: 400, Message: fmt.Sprintf("n must be between 1 and %d", maxCount)}
 	}
 	return value, nil
 }
