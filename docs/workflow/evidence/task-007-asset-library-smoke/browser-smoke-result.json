@@ -1,0 +1,147 @@
+{
+  "task_id": "task-007-asset-library-smoke",
+  "status": "PASS",
+  "all_passed": true,
+  "message": "",
+  "chat_base_url": "http://127.0.0.1:8081",
+  "sub2_base_url": "http://127.0.0.1:62080",
+  "created_at": "2026-06-12T09:22:06.915Z",
+  "results": [
+    {
+      "name": "62080 chat-images bridge can create Luoye session",
+      "ok": true,
+      "detail": "http://127.0.0.1:8081/image"
+    },
+    {
+      "name": "session-probe iframe uses dedicated path",
+      "ok": true,
+      "detail": "[\"http://127.0.0.1:62080/studio-bridge/session-probe?app_id=luoye-ai&parent_origin=http%3A%2F%2F127.0.0.1%3A8081&nonce=1781256096298\"]"
+    },
+    {
+      "name": "session-probe iframe does not request sub2 root",
+      "ok": true,
+      "detail": "[\"http://127.0.0.1:62080/studio-bridge/session-probe?app_id=luoye-ai&parent_origin=http%3A%2F%2F127.0.0.1%3A8081&nonce=1781256096298\"]"
+    },
+    {
+      "name": "API can prepare personal and public material",
+      "ok": true,
+      "detail": "{\"personalA\":\"2026/06/12/1781256102274173500_346ed60716b32ff3.png\",\"personalB\":\"2026/06/12/1781256102286032500_346ed60716b32ff3.png\",\"publicSeed\":\"2026/06/12/1781256102297093600_4415f0fd303c7abf.png\"}"
+    },
+    {
+      "name": "API can prepare owner, manager, member and team material",
+      "ok": true,
+      "detail": "{\"team\":\"team_5ce9b7df95b255\",\"teamSeed\":\"2026/06/12/1781256102344876800_fd35e36207388a78.png\"}"
+    },
+    {
+      "name": "API supports ui collection filter",
+      "ok": true,
+      "detail": "{\"groups\":[{\"date\":\"2026-06-12\",\"items\":[{\"aspect_ratio\":\"1:1\",\"collection_id\":\"col_6e1ee515738d589d5777\",\"collection_name\":\"ui-final20260612172134\",\"created_at\":\"2026-06-12 09:21:42\",\"date\":\"2026-06-12\",\"height\":96,\"library_scope\":\"personal\",\"megapixels\":0.009216,\"name\":\"1781256102274173500_346ed60716b32ff3.png\",\"orientation\":\"square\",\"owner_name\":\"asset-owner-final20260612172134@example.test\",\"path\":\"2026/06/12/1781256102274173500_346ed60716b32ff3.png\",\"preview_url\":\"http://127.0.0.1:8081/image-previews/2026/06/12/1781256102274173500_346ed60716b32ff3.png.jpg?v=1-1781256102272794000\",\"resolution\":\"96x96\",\"size\":2156,\"tags\":null,\"thumbnail_url\":\"http://127.0.0.1:8081/image-thumbnails/2026/06/12/1781256102274173500_346ed60716b32ff3.png.jpg?v=3-1781256102272794000\",\"visibility\":\"private\",\"width\":96}]}],\"has_more\":false,\"items\":[{\"aspect_ratio\":\"1:1\",\"collection_id\":\"col_6e1ee515738d589d5777\",\"collection_name\":\"ui-final20260612172134\",\"created_at\":\"2026-06-12 09:21:42\",\"date\":\"2026-06-12\",\"height\":96,\"library_scope\":\"personal\",\"megapixels\":0.009216,\"name\":\"1781256102274173500_346ed60716b32ff3.png\",\"orientation\":\"square\",\"owner_name\":\"asset-owner-final20260612172134@example.test\",\"path\":\"2026/06/12/1781256102274173500_346ed60716b32ff3.png\",\"preview_url\":\"http://127.0.0.1:8081/image-previews/2026/06/12/1781256102274173500_346ed60716b32ff3.png.jpg?v=1-1781256102272794000\",\"resolution\":\"96x96\",\"size\":2156,\"tags\":null,\"thumbnail_url\":\"http://127.0.0.1:8081/image-thumbnails/2026/06/12/1781256102274173500_346ed60716b32ff3.png.jpg?v=3-1781256102272794000\",\"visibility\":\"private\",\"width\":96}],\"next_cursor\":\"\",\"page_size\":20,\"retention_days\":7}"
+    },
+    {
+      "name": "API supports unclassified filter",
+      "ok": true,
+      "detail": "{\"groups\":[{\"date\":\"2026-06-12\",\"items\":[{\"aspect_ratio\":\"1:1\",\"created_at\":\"2026-06-12 09:21:42\",\"date\":\"2026-06-12\",\"height\":96,\"library_scope\":\"personal\",\"megapixels\":0.009216,\"name\":\"1781256102297093600_4415f0fd303c7abf.png\",\"orientation\":\"square\",\"owner_name\":\"asset-owner-final20260612172134@example.test\",\"path\":\"2026/06/12/1781256102297093600_4415f0fd303c7abf.png\",\"preview_url\":\"http://127.0.0.1:8081/image-previews/2026/06/12/1781256102297093600_4415f0fd303c7abf.png.jpg?v=1-1781256102295794000\",\"published_at\":\"2026-06-12T09:21:42.3071858Z\",\"resolution\":\"96x96\",\"size\":1896,\"tags\":null,\"thumbnail_url\":\"http://127.0.0.1:8081/image-thumbnails/2026/06/12/1781256102297093600_4415f0fd303c7abf.png.jpg?v=3-1781256102295794000\",\"visibility\":\"public\",\"width\":96},{\"aspect_ratio\":\"1:1\",\"created_at\":\"2026-06-12 09:21:42\",\"date\":\"2026-06-12\",\"height\":96,\"library_scope\":\"personal\",\"megapixels\":0.009216,\"name\":\"1781256102286032500_346ed60716b32ff3.png\",\"orientation\":\"square\",\"owner_name\":\"asset-owner-final20260612172134@example.test\",\"path\":\"2026/06/12/1781256102286032500_346ed60716b32ff3.png\",\"preview_url\":\"http://127.0.0.1:8081/image-previews/2026/06/12/1781256102286032500_346ed60716b32ff3.png.jpg?v=1-1781256102284794000\",\"resolution\":\"96x96\",\"size\":2156,\"tags\":null,\"thumbnail_url\":\"http://127.0.0.1:8081/image-thumbnails/2026/06/12/1781256102286032500_346ed60716b32ff3.png.jpg?v=3-1781256102284794000\",\"visibility\":\"private\",\"width\":96}]}],\"has_more\":false,\"items\":[{\"aspect_ratio\":\"1:1\",\"created_at\":\"2026-06-12 09:21:42\",\"date\":\"2026-06-12\",\"height\":96,\"library_scope\":\"personal\",\"megapixels\":0.009216,\"name\":\"1781256102297093600_4415f0fd303c7abf.png\",\"orientation\":\"square\",\"owner_name\":\"asset-owner-final20260612172134@example.test\",\"path\":\"2026/06/12/1781256102297093600_4415f0fd303c7abf.png\",\"preview_url\":\"http://127.0.0.1:8081/image-previews/2026/06/12/1781256102297093600_4415f0fd303c7abf.png.jpg?v=1-1781256102295794000\",\"published_at\":\"2026-06-12T09:21:42.3071858Z\",\"resolution\":\"96x96\",\"size\":1896,\"tags\":null,\"thumbnail_url\":\"http://127.0.0.1:8081/image-thumbnails/2026/06/12/1781256102297093600_4415f0fd303c7abf.png.jpg?v=3-1781256102295794000\",\"visibility\":\"public\",\"width\":96},{\"aspect_ratio\":\"1:1\",\"created_at\":\"2026-06-12 09:21:42\",\"date\":\"2026-06-12\",\"height\":96,\"library_scope\":\"personal\",\"megapixels\":0.009216,\"name\":\"1781256102286032500_346ed60716b32ff3.png\",\"orientation\":\"square\",\"owner_name\":\"asset-owner-final20260612172134@example.test\",\"path\":\"2026/06/12/1781256102286032500_346ed60716b32ff3.png\",\"preview_url\":\"http://127.0.0.1:8081/image-previews/2026/06/12/1781256102286032500_346ed60716b32ff3.png.jpg?v=1-1781256102284794000\",\"resolution\":\"96x96\",\"size\":2156,\"tags\":null,\"thumbnail_url\":\"http://127.0.0.1:8081/image-thumbnails/2026/06/12/1781256102286032500_346ed60716b32ff3.png.jpg?v=3-1781256102284794000\",\"visibility\":\"private\",\"width\":96}],\"next_cursor\":\"\",\"page_size\":20,\"retention_days\":7}"
+    },
+    {
+      "name": "/image-manager shows collection and single-collection hint",
+      "ok": true,
+      "detail": "http://127.0.0.1:8081/image-manager"
+    },
+    {
+      "name": "/image-manager can switch to unclassified filter",
+      "ok": true,
+      "detail": "http://127.0.0.1:8081/image-manager"
+    },
+    {
+      "name": "API can remove image from current collection",
+      "ok": true,
+      "detail": "{\"groups\":[{\"date\":\"2026-06-12\",\"items\":[{\"aspect_ratio\":\"1:1\",\"created_at\":\"2026-06-12 09:21:42\",\"date\":\"2026-06-12\",\"height\":96,\"library_scope\":\"personal\",\"megapixels\":0.009216,\"name\":\"1781256102297093600_4415f0fd303c7abf.png\",\"orientation\":\"square\",\"owner_name\":\"asset-owner-final20260612172134@example.test\",\"path\":\"2026/06/12/1781256102297093600_4415f0fd303c7abf.png\",\"preview_url\":\"http://127.0.0.1:8081/image-previews/2026/06/12/1781256102297093600_4415f0fd303c7abf.png.jpg?v=1-1781256102295794000\",\"published_at\":\"2026-06-12T09:21:42.3071858Z\",\"resolution\":\"96x96\",\"size\":1896,\"tags\":null,\"thumbnail_url\":\"http://127.0.0.1:8081/image-thumbnails/2026/06/12/1781256102297093600_4415f0fd303c7abf.png.jpg?v=3-1781256102295794000\",\"visibility\":\"public\",\"width\":96},{\"aspect_ratio\":\"1:1\",\"created_at\":\"2026-06-12 09:21:42\",\"date\":\"2026-06-12\",\"height\":96,\"library_scope\":\"personal\",\"megapixels\":0.009216,\"name\":\"1781256102286032500_346ed60716b32ff3.png\",\"orientation\":\"square\",\"owner_name\":\"asset-owner-final20260612172134@example.test\",\"path\":\"2026/06/12/1781256102286032500_346ed60716b32ff3.png\",\"preview_url\":\"http://127.0.0.1:8081/image-previews/2026/06/12/1781256102286032500_346ed60716b32ff3.png.jpg?v=1-1781256102284794000\",\"resolution\":\"96x96\",\"size\":2156,\"tags\":null,\"thumbnail_url\":\"http://127.0.0.1:8081/image-thumbnails/2026/06/12/1781256102286032500_346ed60716b32ff3.png.jpg?v=3-1781256102284794000\",\"visibility\":\"private\",\"width\":96},{\"aspect_ratio\":\"1:1\",\"created_at\":\"2026-06-12 09:21:42\",\"date\":\"2026-06-12\",\"height\":96,\"library_scope\":\"personal\",\"megapixels\":0.009216,\"name\":\"1781256102274173500_346ed60716b32ff3.png\",\"orientation\":\"square\",\"owner_name\":\"asset-owner-final20260612172134@example.test\",\"path\":\"2026/06/12/1781256102274173500_346ed60716b32ff3.png\",\"preview_url\":\"http://127.0.0.1:8081/image-previews/2026/06/12/1781256102274173500_346ed60716b32ff3.png.jpg?v=1-1781256102272794000\",\"resolution\":\"96x96\",\"size\":2156,\"tags\":null,\"thumbnail_url\":\"http://127.0.0.1:8081/image-thumbnails/2026/06/12/1781256102274173500_346ed60716b32ff3.png.jpg?v=3-1781256102272794000\",\"visibility\":\"private\",\"width\":96}]}],\"has_more\":false,\"items\":[{\"aspect_ratio\":\"1:1\",\"created_at\":\"2026-06-12 09:21:42\",\"date\":\"2026-06-12\",\"height\":96,\"library_scope\":\"personal\",\"megapixels\":0.009216,\"name\":\"1781256102297093600_4415f0fd303c7abf.png\",\"orientation\":\"square\",\"owner_name\":\"asset-owner-final20260612172134@example.test\",\"path\":\"2026/06/12/1781256102297093600_4415f0fd303c7abf.png\",\"preview_url\":\"http://127.0.0.1:8081/image-previews/2026/06/12/1781256102297093600_4415f0fd303c7abf.png.jpg?v=1-1781256102295794000\",\"published_at\":\"2026-06-12T09:21:42.3071858Z\",\"resolution\":\"96x96\",\"size\":1896,\"tags\":null,\"thumbnail_url\":\"http://127.0.0.1:8081/image-thumbnails/2026/06/12/1781256102297093600_4415f0fd303c7abf.png.jpg?v=3-1781256102295794000\",\"visibility\":\"public\",\"width\":96},{\"aspect_ratio\":\"1:1\",\"created_at\":\"2026-06-12 09:21:42\",\"date\":\"2026-06-12\",\"height\":96,\"library_scope\":\"personal\",\"megapixels\":0.009216,\"name\":\"1781256102286032500_346ed60716b32ff3.png\",\"orientation\":\"square\",\"owner_name\":\"asset-owner-final20260612172134@example.test\",\"path\":\"2026/06/12/1781256102286032500_346ed60716b32ff3.png\",\"preview_url\":\"http://127.0.0.1:8081/image-previews/2026/06/12/1781256102286032500_346ed60716b32ff3.png.jpg?v=1-1781256102284794000\",\"resolution\":\"96x96\",\"size\":2156,\"tags\":null,\"thumbnail_url\":\"http://127.0.0.1:8081/image-thumbnails/2026/06/12/1781256102286032500_346ed60716b32ff3.png.jpg?v=3-1781256102284794000\",\"visibility\":\"private\",\"width\":96},{\"aspect_ratio\":\"1:1\",\"created_at\":\"2026-06-12 09:21:42\",\"date\":\"2026-06-12\",\"height\":96,\"library_scope\":\"personal\",\"megapixels\":0.009216,\"name\":\"1781256102274173500_346ed60716b32ff3.png\",\"orientation\":\"square\",\"owner_name\":\"asset-owner-final20260612172134@example.test\",\"path\":\"2026/06/12/1781256102274173500_346ed60716b32ff3.png\",\"preview_url\":\"http://127.0.0.1:8081/image-previews/2026/06/12/1781256102274173500_346ed60716b32ff3.png.jpg?v=1-1781256102272794000\",\"resolution\":\"96x96\",\"size\":2156,\"tags\":null,\"thumbnail_url\":\"http://127.0.0.1:8081/image-thumbnails/2026/06/12/1781256102274173500_346ed60716b32ff3.png.jpg?v=3-1781256102272794000\",\"visibility\":\"private\",\"width\":96}],\"next_cursor\":\"\",\"page_size\":20,\"retention_days\":7}"
+    },
+    {
+      "name": "team manager can classify team material",
+      "ok": true,
+      "detail": "{\"groups\":[{\"date\":\"2026-06-12\",\"items\":[{\"aspect_ratio\":\"1:1\",\"collection_id\":\"col_1557b89332e40c469f79\",\"collection_name\":\"team-ui-final20260612172134\",\"created_at\":\"2026-06-12 09:21:42\",\"date\":\"2026-06-12\",\"height\":96,\"library_scope\":\"team\",\"megapixels\":0.009216,\"moved_at\":\"2026-06-12T09:21:42.3582985Z\",\"moved_by_user_id\":\"sub2api:55\",\"name\":\"1781256102344876800_fd35e36207388a78.png\",\"orientation\":\"square\",\"owner_name\":\"asset-owner-final20260612172134@example.test\",\"path\":\"2026/06/12/1781256102344876800_fd35e36207388a78.png\",\"preview_url\":\"http://127.0.0.1:8081/image-previews/2026/06/12/1781256102344876800_fd35e36207388a78.png.jpg?v=1-1781256102343794000\",\"resolution\":\"96x96\",\"size\":2077,\"tags\":null,\"team_id\":\"team_5ce9b7df95b255\",\"team_name\":\"素材库验收 final20260612172134\",\"thumbnail_url\":\"http://127.0.0.1:8081/image-thumbnails/2026/06/12/1781256102344876800_fd35e36207388a78.png.jpg?v=3-1781256102343794000\",\"visibility\":\"private\",\"width\":96}]}],\"has_more\":false,\"items\":[{\"aspect_ratio\":\"1:1\",\"collection_id\":\"col_1557b89332e40c469f79\",\"collection_name\":\"team-ui-final20260612172134\",\"created_at\":\"2026-06-12 09:21:42\",\"date\":\"2026-06-12\",\"height\":96,\"library_scope\":\"team\",\"megapixels\":0.009216,\"moved_at\":\"2026-06-12T09:21:42.3582985Z\",\"moved_by_user_id\":\"sub2api:55\",\"name\":\"1781256102344876800_fd35e36207388a78.png\",\"orientation\":\"square\",\"owner_name\":\"asset-owner-final20260612172134@example.test\",\"path\":\"2026/06/12/1781256102344876800_fd35e36207388a78.png\",\"preview_url\":\"http://127.0.0.1:8081/image-previews/2026/06/12/1781256102344876800_fd35e36207388a78.png.jpg?v=1-1781256102343794000\",\"resolution\":\"96x96\",\"size\":2077,\"tags\":null,\"team_id\":\"team_5ce9b7df95b255\",\"team_name\":\"素材库验收 final20260612172134\",\"thumbnail_url\":\"http://127.0.0.1:8081/image-thumbnails/2026/06/12/1781256102344876800_fd35e36207388a78.png.jpg?v=3-1781256102343794000\",\"visibility\":\"private\",\"width\":96}],\"next_cursor\":\"\",\"page_size\":20,\"retention_days\":7,\"team\":{\"id\":\"team_5ce9b7df95b255\",\"member_role\":\"manager\",\"name\":\"素材库验收 final20260612172134\",\"storage_limit_bytes\":2147483648},\"team_storage\":{\"team_id\":\"team_5ce9b7df95b255\",\"used_bytes\":2077,\"limit_bytes\":2147483648,\"remaining_bytes\":2147481571,\"images_count\":1}}"
+    },
+    {
+      "name": "team member cannot mutate team collections",
+      "ok": true,
+      "detail": "{\"status\":403,\"ok\":false,\"data\":{\"detail\":{\"error\":\"team manager permission required\"}},\"text\":\"{\\\"detail\\\":{\\\"error\\\":\\\"team manager permission required\\\"}}\\n\"}"
+    },
+    {
+      "name": "public library collection mutation is read-only",
+      "ok": true,
+      "detail": "{\"status\":400,\"ok\":false,\"data\":{\"detail\":{\"error\":\"scope must be mine or team\"}},\"text\":\"{\\\"detail\\\":{\\\"error\\\":\\\"scope must be mine or team\\\"}}\\n\"}"
+    },
+    {
+      "name": "/image asset library exposes collection filters",
+      "ok": true,
+      "detail": "http://127.0.0.1:8081/image"
+    },
+    {
+      "name": "/image can add library asset to composer input",
+      "ok": true,
+      "detail": "已加入参考图，可继续输入描述\n落叶创艺\n创作台\n无限画布\n电商套图\n社媒运营\n素材库\n切换界面主题\n任务队列\n团队\nA\nasset-owner-final20260612172134@example.test\n新建对话\n还没有图片记录，输入提示词后会在这里显示。\n生图预设\nTurn ideas into images\n\n选择一组真实案例预设快速开始，也可以直接在下方输入自己的画面描述。\n\n9:16\n1 张\n轮廓宇宙海报\n高审美叙事海报、角色宇宙主题视觉、收藏版概念海报。\n套用这个预设\n4:3\n1 张\n青花瓷博物馆图鉴\n文博专题、器物拆解、中文信息图和展板式视觉。\n套用这个预设\n9:16\n1 张\n水墨武侠主视觉\n安全端庄的东方武侠海报、水墨电影感、群像主视觉。\n套用这个预设\n16:9\n1 张\n地平线深圳实机图\n游戏主视觉、次世代赛车截图、城市宣传感概念图。\n套用这个预设\n抠图\n对话\n作画\n模型\ngpt-image-2\n@素材\n市场\n参数\n预估价格 约 ¥0.050，仅供参考\n3\n个人素材库\n3 张素材 · 拖到输入框\n个人\n3\n团队\n0\n公共\n0\n素材集\n全部\n未归类\n3\nui-final20260612172134\n0\n1781256102297093600_4415f0fd303c7abf.png\n输入\n1781256102286032500_346ed60716b32ff3.png\n输入\n1781256102274173500_346ed60716b32ff3.png\n输入\n已显示全部素材"
+    },
+    {
+      "name": "/canvas exposes collection filters and can add asset to canvas",
+      "ok": true,
+      "detail": "{\"canvasNodeCount\":4,\"body\":\"落叶创艺\\n创作台\\n无限画布\\n电商套图\\n社媒运营\\n素材库\\n切换界面主题\\n任务队列\\n团队\\nA\\nasset-owner-final20260612172134@example.test\\n新建\\n刷新\\n暂无画布，点击新建开始创作\\n右键空白处添加节点，拖动端口连接流程\\n0\\n未命名画布\\n当前画布\\n上传\\n提示词\\nAI提示词\\n循环\\n组\\n图片生成\\n视频\\nOutput\\n帮助\\n更多\\n4\\n上一步\\n未保存\\nPROMPT\\n?\\n@图片\\n0 / 20,000\\n图片生成\\n?\\nPROMPTS\\nIMAGES\\n连接图片节点后自动作为图生图输入\\n生成\\nauto\\n默认清晰度\\n1:1\\n格式\\nPNG\\n压缩\\n张\\n运行信息\\n开始 17:21\\n图片生成\\nOUTPUT\\n?\\n连接生成节点后显示输出\\n运行信息\\n开始 17:21\\n图片\\n?\\n1781256102297093600_4415f0fd303c7abf.png\\n右键添加节点，Ctrl/⌘ 点击多选，拖动任一已选节点可一起移动，Delete 删除所选\\n3\\n个人素材库\\n3 张素材 · 点击加入输入\\n个人\\n3\\n团队\\n0\\n公共\\n0\\n素材集\\n全部\\n未归类\\n3\\nui-final20260612172134\\n0\\n1781256102297093600_4415f0fd303c7abf.png\\n输入\\n画布\\n1781256102286032500_346ed60716b32ff3.png\\n输入\\n画布\\n1781256102274173500_346ed60716b32ff3.png\\n输入\\n画布\\n已显示全部素材\"}"
+    },
+    {
+      "name": "session-probe has no root-frame CSP regression",
+      "ok": true,
+      "detail": "[{\"type\":\"error\",\"text\":\"Failed to load resource: the server responded with a status of 401 (Unauthorized)\",\"url\":\"http://127.0.0.1:8081/auth/sub2api/launch?launch_token=[redacted]\"},{\"type\":\"error\",\"text\":\"Failed to load resource: the server responded with a status of 401 (Unauthorized)\",\"url\":\"http://127.0.0.1:8081/auth/sub2api/launch?launch_token=[redacted]\"},{\"type\":\"error\",\"text\":\"Failed to load resource: the server responded with a status of 401 (Unauthorized)\",\"url\":\"http://127.0.0.1:8081/image\"},{\"type\":\"error\",\"text\":\"Failed to load resource: the server responded with a status of 401 (Unauthorized)\",\"url\":\"http://127.0.0.1:8081/auth/sub2api/launch?launch_token=[redacted]\"},{\"type\":\"error\",\"text\":\"Failed to load resource: the server responded with a status of 401 (Unauthorized)\",\"url\":\"http://127.0.0.1:8081/image\"},{\"type\":\"error\",\"text\":\"Failed to load resource: the server responded with a status of 401 (Unauthorized)\",\"url\":\"http://127.0.0.1:8081/image\"},{\"type\":\"error\",\"text\":\"Failed to load resource: the server responded with a status of 403 (Forbidden)\",\"url\":\"http://127.0.0.1:8081/image\"},{\"type\":\"error\",\"text\":\"Failed to load resource: the server responded with a status of 400 (Bad Request)\",\"url\":\"http://127.0.0.1:8081/image-manager\"}]"
+    }
+  ],
+  "failed": [],
+  "console_messages": [
+    {
+      "type": "error",
+      "text": "Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+      "url": "http://127.0.0.1:8081/auth/sub2api/launch?launch_token=[redacted]"
+    },
+    {
+      "type": "error",
+      "text": "Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+      "url": "http://127.0.0.1:8081/auth/sub2api/launch?launch_token=[redacted]"
+    },
+    {
+      "type": "error",
+      "text": "Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+      "url": "http://127.0.0.1:8081/image"
+    },
+    {
+      "type": "error",
+      "text": "Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+      "url": "http://127.0.0.1:8081/auth/sub2api/launch?launch_token=[redacted]"
+    },
+    {
+      "type": "error",
+      "text": "Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+      "url": "http://127.0.0.1:8081/image"
+    },
+    {
+      "type": "error",
+      "text": "Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+      "url": "http://127.0.0.1:8081/image"
+    },
+    {
+      "type": "error",
+      "text": "Failed to load resource: the server responded with a status of 403 (Forbidden)",
+      "url": "http://127.0.0.1:8081/image"
+    },
+    {
+      "type": "error",
+      "text": "Failed to load resource: the server responded with a status of 400 (Bad Request)",
+      "url": "http://127.0.0.1:8081/image-manager"
+    }
+  ],
+  "failed_requests": [],
+  "artifacts": [
+    "01-image-after-bridge.png",
+    "02-image-manager-ui-collection.png",
+    "03-image-manager-unclassified.png",
+    "04-image-asset-library.png",
+    "05-canvas-asset-library.png"
+  ]
+}
