@@ -28,6 +28,7 @@ const (
 	imageOutputCallbackPayloadKey      = "image_output_callback"
 	imageOutputSlotAcquirerPayloadKey  = "image_output_slot_acquirer"
 	imageOutputBatchLimitPayloadKey    = "image_output_batch_limit"
+	imageOutputSequentialPayloadKey    = "image_output_sequential"
 	imageTaskBillingBillablePayloadKey = "billing_billable"
 	imageTaskBillingChargedAmountKey   = "billing_charged_amount"
 	imageTaskBillingChargeKey          = "billing_charge_key"
@@ -61,12 +62,13 @@ type VideoGenerationOptions struct {
 }
 
 type ImageToolOptions struct {
-	Background       string
-	Moderation       string
-	Style            string
-	PartialImages    *int
-	InputImageMask   string
-	OfficialFallback *bool
+	Background        string
+	Moderation        string
+	Style             string
+	PartialImages     *int
+	InputImageMask    string
+	OfficialFallback  *bool
+	SequentialOutputs bool
 }
 
 type ImageTaskService struct {
@@ -1919,6 +1921,9 @@ func mergeImageToolOptions(payload map[string]any, options ImageToolOptions) {
 	}
 	if options.OfficialFallback != nil {
 		payload["official_fallback"] = *options.OfficialFallback
+	}
+	if options.SequentialOutputs {
+		payload[imageOutputSequentialPayloadKey] = true
 	}
 }
 

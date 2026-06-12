@@ -1126,6 +1126,86 @@ func TestStreamImageOutputsWithPoolRunsRequestedImagesConcurrently(t *testing.T)
 	}
 }
 
+func TestStreamImageOutputsWithPoolCanRunRequestedImagesSequentially(t *testing.T) {
+	engine := &Engine{
+		ImageTokenProvider: func(context.Context) (string, error) { return "test-token", nil },
+		ImageClientFactory: func(string) *backend.Client { return nil },
+	}
+
+	var mu sync.Mutex
+	active := 0
+	maxActive := 0
+	started := make(chan int, 3)
+	release := make(chan struct{})
+	engine.StreamImageOutputsFunc = func(ctx context.Context, client *backend.Client, request ConversationRequest, index, total int) (<-chan ImageOutput, <-chan error) {
+		out := make(chan ImageOutput)
+		errCh := make(chan error, 1)
+		go func() {
+			defer close(out)
+			defer close(errCh)
+			mu.Lock()
+			active++
+			if active > maxActive {
+				maxActive = active
+			}
+			mu.Unlock()
+			started <- index
+			<-release
+			out <- ImageOutput{
+				Kind:    "result",
+				Model:   request.Model,
+				Index:   index,
+				Total:   total,
+				Created: int64(index),
+				Data:    []map[string]any{{"url": imageURLForIndex(index)}},
+			}
+			mu.Lock()
+			active--
+			mu.Unlock()
+			errCh <- nil
+		}()
+		return out, errCh
+	}
+
+	outputs, errCh := engine.StreamImageOutputsWithPool(context.Background(), ConversationRequest{
+		Model:                  "gpt-image-2",
+		N:                      3,
+		SequentialImageOutputs: true,
+	})
+	done := make(chan error, 1)
+	go func() {
+		for range outputs {
+		}
+		done <- <-errCh
+	}()
+
+	for want := 1; want <= 3; want++ {
+		select {
+		case got := <-started:
+			if got != want {
+				t.Fatalf("started index = %d, want %d", got, want)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("timed out waiting for image worker %d", want)
+		}
+		select {
+		case got := <-started:
+			t.Fatalf("worker %d started before worker %d was released", got, want)
+		case <-time.After(50 * time.Millisecond):
+		}
+		release <- struct{}{}
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("StreamImageOutputsWithPool() err = %v", err)
+	}
+	mu.Lock()
+	gotMaxActive := maxActive
+	mu.Unlock()
+	if gotMaxActive != 1 {
+		t.Fatalf("max concurrent image workers = %d, want 1", gotMaxActive)
+	}
+}
+
 func TestStreamImageOutputsWithPoolHonorsImageOutputSlotAcquirer(t *testing.T) {
 	engine := &Engine{
 		ImageTokenProvider: func(context.Context) (string, error) { return "test-token", nil },

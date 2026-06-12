@@ -1596,7 +1596,9 @@ func (a *App) handleCreationTasks(w http.ResponseWriter, r *http.Request) {
 		if !a.attachCreationTaskSpace(w, identity, body) {
 			return
 		}
-		task, err := a.tasks.SubmitGenerationWithOptions(r.Context(), identity, util.Clean(body["client_task_id"]), util.Clean(body["prompt"]), firstNonEmpty(util.Clean(body["model"]), util.ImageModelAuto), util.Clean(body["size"]), util.Clean(body["quality"]), a.resolveImageBaseURL(r), util.ToInt(body["n"], 1), body["messages"], imageTaskRequestMetadata(body), imageOutputOptionsFromBody(body), imageToolOptionsFromBody(body), util.Clean(body["visibility"]))
+		model := firstNonEmpty(util.Clean(body["model"]), util.ImageModelAuto)
+		n := util.ToInt(body["n"], 1)
+		task, err := a.tasks.SubmitGenerationWithOptions(r.Context(), identity, util.Clean(body["client_task_id"]), util.Clean(body["prompt"]), model, util.Clean(body["size"]), util.Clean(body["quality"]), a.resolveImageBaseURL(r), n, body["messages"], imageTaskRequestMetadata(body), imageOutputOptionsFromBody(body), imageGenerationToolOptionsFromBody(model, n, body), util.Clean(body["visibility"]))
 		if err != nil {
 			writeCreationTaskSubmitError(w, err)
 			return
@@ -1745,6 +1747,14 @@ func imageToolOptionsFromBody(body map[string]any) service.ImageToolOptions {
 	if _, ok := body["official_fallback"]; ok {
 		officialFallback := util.ToBool(body["official_fallback"])
 		options.OfficialFallback = &officialFallback
+	}
+	return options
+}
+
+func imageGenerationToolOptionsFromBody(model string, n int, body map[string]any) service.ImageToolOptions {
+	options := imageToolOptionsFromBody(body)
+	if n > 1 && (model == util.ImageModelAuto || model == util.ImageModelGPT) {
+		options.SequentialOutputs = true
 	}
 	return options
 }
