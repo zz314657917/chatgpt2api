@@ -8,6 +8,7 @@ import {
   LoaderCircle,
   LogOut,
   RefreshCcw,
+  Trophy,
   Trash2,
   UserPlus,
   Users,
@@ -60,6 +61,16 @@ type TeamTab = "invite" | "members" | "logs" | "usage";
 type PendingAction = {
   type: string;
   id?: string;
+};
+type UsageRankingRow = {
+  actorUserID: string;
+  name: string;
+  email?: string;
+  role?: string;
+  amount: number;
+  taskCount: number;
+  successCount: number;
+  latestAt?: string | null;
 };
 
 function formatDateTime(value?: string | null) {
@@ -173,6 +184,85 @@ function formatLimitAmount(value?: number) {
 
 function usageBillingAmount(item: TeamUsageTask) {
   return item.billing_consumed_amount ?? item.billing_charged_amount;
+}
+
+function dateTimeValue(value?: string | null) {
+  if (!value) {
+    return 0;
+  }
+  const time = new Date(value).getTime();
+  return Number.isNaN(time) ? 0 : time;
+}
+
+function rankingBadgeVariant(rank: number) {
+  if (rank === 1) {
+    return "warning" as const;
+  }
+  if (rank === 2) {
+    return "info" as const;
+  }
+  if (rank === 3) {
+    return "violet" as const;
+  }
+  return "secondary" as const;
+}
+
+function buildUsageRanking(team: TeamSummary | null, items: TeamUsageTask[]) {
+  const members = team?.members || [];
+  const rows = new Map<string, UsageRankingRow>();
+  members.forEach((member) => {
+    rows.set(member.user_id, {
+      actorUserID: member.user_id,
+      name: member.name || member.email || "团队成员",
+      email: member.email,
+      role: member.role,
+      amount: 0,
+      taskCount: 0,
+      successCount: 0,
+      latestAt: null,
+    });
+  });
+  items.forEach((item) => {
+    const actorUserID = item.actor_user_id || item.actor_name || item.id;
+    if (!actorUserID) {
+      return;
+    }
+    const row = rows.get(actorUserID) || {
+      actorUserID,
+      name: item.actor_name || "团队成员",
+      amount: 0,
+      taskCount: 0,
+      successCount: 0,
+      latestAt: null,
+    };
+    const amount = Number(usageBillingAmount(item));
+    if (Number.isFinite(amount) && amount > 0) {
+      row.amount += amount;
+    }
+    row.taskCount += 1;
+    if (item.status === "success") {
+      row.successCount += 1;
+    }
+    const itemTime = item.updated_at || item.created_at || null;
+    if (dateTimeValue(itemTime) > dateTimeValue(row.latestAt)) {
+      row.latestAt = itemTime;
+    }
+    if (item.actor_name && row.name === "团队成员") {
+      row.name = item.actor_name;
+    }
+    rows.set(actorUserID, row);
+  });
+  return Array.from(rows.values())
+    .filter((row) => row.taskCount > 0)
+    .sort((a, b) => {
+      if (b.amount !== a.amount) {
+        return b.amount - a.amount;
+      }
+      if (b.taskCount !== a.taskCount) {
+        return b.taskCount - a.taskCount;
+      }
+      return dateTimeValue(b.latestAt) - dateTimeValue(a.latestAt);
+    });
 }
 
 function amountToInputValue(value?: number) {
@@ -645,6 +735,74 @@ function UsageTable({ items, loading }: { items: TeamUsageTask[]; loading: boole
   );
 }
 
+function UsageRanking({
+  team,
+  items,
+  loading,
+}: {
+  team: TeamSummary | null;
+  items: TeamUsageTask[];
+  loading: boolean;
+}) {
+  const rows = useMemo(() => buildUsageRanking(team, items), [team, items]);
+  return (
+    <Card className="overflow-hidden">
+      <div className="flex items-center justify-between gap-3 border-b border-border p-4">
+        <div className="flex min-w-0 items-center gap-2">
+          <Trophy className="size-4 text-amber-600" />
+          <div className="truncate text-base font-semibold text-foreground">消耗排行榜</div>
+        </div>
+        <Badge variant="secondary" className="rounded-md">{rows.length} 人</Badge>
+      </div>
+      <div className={teamScrollClassName}>
+        <Table className="min-w-[760px]">
+          <TableHeader className={stickyTableHeaderClassName}>
+            <TableRow>
+              <TableHead>排名</TableHead>
+              <TableHead>成员</TableHead>
+              <TableHead>消耗</TableHead>
+              <TableHead>任务数</TableHead>
+              <TableHead>成功</TableHead>
+              <TableHead>最近使用</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {loading ? (
+              <TableRow>
+                <TableCell colSpan={6} className="h-24 text-center text-muted-foreground">加载中...</TableCell>
+              </TableRow>
+            ) : rows.length === 0 ? (
+              <TableRow>
+                <TableCell colSpan={6} className="h-24 text-center text-muted-foreground">暂无消耗记录</TableCell>
+              </TableRow>
+            ) : rows.map((row, index) => {
+              const rank = index + 1;
+              return (
+                <TableRow key={row.actorUserID}>
+                  <TableCell>
+                    <Badge variant={rankingBadgeVariant(rank)} className="rounded-md">#{rank}</Badge>
+                  </TableCell>
+                  <TableCell>
+                    <div className="flex min-w-0 flex-wrap items-center gap-2">
+                      <span className="truncate font-medium text-foreground">{row.name}</span>
+                      {row.role ? <Badge variant={roleBadgeVariant(row.role)} className="rounded-md">{roleLabel(row.role)}</Badge> : null}
+                    </div>
+                    {row.email && row.email !== row.name ? <div className="mt-1 truncate text-xs text-muted-foreground">{row.email}</div> : null}
+                  </TableCell>
+                  <TableCell className="font-semibold text-emerald-700 dark:text-emerald-300">{formatCnyMilliAmount(row.amount)}</TableCell>
+                  <TableCell className="text-muted-foreground">{row.taskCount}</TableCell>
+                  <TableCell className="text-muted-foreground">{row.successCount}</TableCell>
+                  <TableCell className="whitespace-nowrap text-muted-foreground">{formatDateTime(row.latestAt)}</TableCell>
+                </TableRow>
+              );
+            })}
+          </TableBody>
+        </Table>
+      </div>
+    </Card>
+  );
+}
+
 export default function TeamPage() {
   const { isCheckingAuth, session } = useAuthGuard(undefined, "/team");
   const [workspace, setWorkspace] = useState<TeamWorkspaceState>(() => ({ scope: { type: "personal" }, teams: [], pending_invites: [] }));
@@ -1013,6 +1171,7 @@ export default function TeamPage() {
           </>
         )}
       </Card>
+      {activeTeam ? <UsageRanking team={activeTeam} items={usage} loading={loadingDetails} /> : null}
     </section>
   );
 }
