@@ -87,8 +87,8 @@ import {
   type CommerceSuiteReferenceImage,
   type CommerceSuiteResult,
 } from "@/store/ecommerce-suite-projects";
-import exampleModuleImage from "./example-module.png";
-import exampleSummaryImage from "./example-summary.png";
+import exampleModuleImage from "./example-module.webp";
+import exampleSummaryImage from "./example-summary.webp";
 
 const POLL_INTERVAL_MS = 1800;
 const MAX_REFERENCE_IMAGES = 2;
