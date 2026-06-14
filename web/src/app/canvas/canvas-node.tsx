@@ -2886,13 +2886,13 @@ function CanvasRunInsight({ item, compact = false }: { item: SmartCanvasItem; co
       )}
       title={taskId ? `任务 ID：${taskId}` : undefined}
     >
-      <div className="flex min-w-0 items-center justify-between gap-2">
-        <span className="truncate font-black">{insightTitle}</span>
+      <div className="flex min-w-0 items-center gap-1.5">
+        <span className="min-w-0 truncate font-black">{insightTitle}</span>
         {showStatusSupplement ? <span className="shrink-0 font-semibold">{currentStatusLabel}</span> : null}
+        {meta.length > 0 ? <span className="min-w-0 truncate opacity-80">{meta.join(" · ")}</span> : null}
       </div>
       {blockedBy ? <div className="truncate">阻断来源：{blockedBy}</div> : null}
       {detail?.message ? <div className={cn(compact ? "line-clamp-1" : "line-clamp-2", "whitespace-pre-wrap break-words")}>{detail.message}</div> : null}
-      {meta.length > 0 ? <div className="truncate opacity-80">{meta.join(" · ")}</div> : null}
     </div>
   );
 }
