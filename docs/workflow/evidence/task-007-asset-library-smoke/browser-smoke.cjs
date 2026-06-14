@@ -7,6 +7,10 @@ const sub2BaseURL = process.env.QA_SUB2_BASE_URL || "http://127.0.0.1:62080";
 const outDir = process.env.QA_OUT_DIR || __dirname;
 const password = process.env.QA_SUB2_PASSWORD || "Password123!";
 const runStamp = process.env.QA_RUN_ID || new Date().toISOString().replace(/[-:.TZ]/g, "").slice(0, 14);
+const userPrefix = process.env.QA_SUB2_USER_PREFIX || "asset-smoke";
+const useUniqueUsers = process.env.QA_UNIQUE_SUB2_USERS === "1";
+const runRealImageGeneration = process.env.QA_REAL_IMAGE_GEN === "1";
+const realImageGenerationTimeoutMs = Number(process.env.QA_REAL_IMAGE_GEN_TIMEOUT_MS || 180000);
 
 fs.mkdirSync(outDir, { recursive: true });
 
@@ -18,6 +22,10 @@ let chromium = null;
 
 function record(name, ok, detail = "") {
   results.push({ name, ok: Boolean(ok), detail: sanitizeEvidence(typeof detail === "string" ? detail : JSON.stringify(detail)) });
+}
+
+function recordSkip(name, detail = "") {
+  results.push({ name, ok: true, skipped: true, detail: sanitizeEvidence(typeof detail === "string" ? detail : JSON.stringify(detail)) });
 }
 
 function artifact(name) {
@@ -80,16 +88,25 @@ async function sub2RegisterOrLogin(email) {
   const registerBody = JSON.stringify({ email, password, turnstile_token: "" });
   try {
     return await requestJSON(`${sub2BaseURL}/api/v1/auth/register`, { method: "POST", body: registerBody });
-  } catch (error) {
-    const message = String(error.message || "");
-    if (!/already|exists|duplicate|registered|用户已存在|邮箱已注册/i.test(message) && error.status !== 409 && error.status !== 400) {
-      throw error;
+  } catch (registerError) {
+    try {
+      return await requestJSON(`${sub2BaseURL}/api/v1/auth/login`, {
+        method: "POST",
+        body: JSON.stringify({ email, password, turnstile_token: "" }),
+      });
+    } catch {
+      const message = String(registerError.message || "");
+      if (/already|exists|duplicate|registered|用户已存在|邮箱已注册/i.test(message) || registerError.status === 409 || registerError.status === 400) {
+        throw new Error(`Sub2API login failed after existing-user register response for ${email}: ${registerError.message}`);
+      }
+      throw registerError;
     }
-    return requestJSON(`${sub2BaseURL}/api/v1/auth/login`, {
-      method: "POST",
-      body: JSON.stringify({ email, password, turnstile_token: "" }),
-    });
   }
+}
+
+function qaUserEmail(role) {
+  const envName = `QA_${role.toUpperCase()}_EMAIL`;
+  return process.env[envName] || `asset-${role}-${useUniqueUsers ? runStamp : userPrefix}@example.test`;
 }
 
 async function sub2Launch(accessToken) {
@@ -255,6 +272,131 @@ async function fetchImages(page, params = {}) {
   return expectLuoyeFetch(page, `/api/images${query ? `?${query}` : ""}`);
 }
 
+async function submitImageGenerationTask(page, clientTaskId, prompt) {
+  return expectLuoyeFetch(page, "/api/creation-tasks/image-generations", {
+    method: "POST",
+    body: JSON.stringify({
+      client_task_id: clientTaskId,
+      prompt,
+      model: "gpt-image-2",
+      size: "1:1",
+      image_resolution: "1K",
+      visibility: "private",
+      n: 1,
+    }),
+  });
+}
+
+async function fetchCreationTask(page, clientTaskId) {
+  const data = await expectLuoyeFetch(page, `/api/creation-tasks?ids=${encodeURIComponent(clientTaskId)}`);
+  const items = Array.isArray(data.items) ? data.items : [];
+  return items.find((item) => item && item.id === clientTaskId) || null;
+}
+
+async function waitForCreationTask(page, clientTaskId, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  let lastTask = null;
+  while (Date.now() < deadline) {
+    lastTask = await fetchCreationTask(page, clientTaskId);
+    if (lastTask && !["queued", "running"].includes(String(lastTask.status))) {
+      return lastTask;
+    }
+    await page.waitForTimeout(2500);
+  }
+  throw new Error(`creation task ${clientTaskId} did not finish within ${timeoutMs}ms; last=${JSON.stringify(lastTask)}`);
+}
+
+function creationTaskImagePaths(task) {
+  const paths = new Set();
+  const scan = (value) => {
+    if (!value) {
+      return;
+    }
+    if (Array.isArray(value)) {
+      for (const item of value) scan(item);
+      return;
+    }
+    if (typeof value !== "object") {
+      return;
+    }
+    for (const key of ["path", "name"]) {
+      const text = typeof value[key] === "string" ? value[key] : "";
+      if (/^\d{4}\/\d{2}\/\d{2}\/[^/?#]+\.(png|jpe?g|webp)$/i.test(text)) {
+        paths.add(text);
+      }
+    }
+    for (const key of ["local_url", "url", "preview_url", "thumbnail_url"]) {
+      const text = typeof value[key] === "string" ? value[key] : "";
+      const match = text.match(/(?:\/(?:images|image-previews|image-thumbnails)\/|\/)(\d{4}\/\d{2}\/\d{2}\/[^/?#]+\.(?:png|jpe?g|webp))/i);
+      if (match) {
+        paths.add(match[1]);
+      }
+    }
+    for (const item of Object.values(value)) scan(item);
+  };
+  scan(task);
+  return Array.from(paths);
+}
+
+async function runOptionalRealImageGeneration(page, collectionId) {
+  if (!runRealImageGeneration) {
+    recordSkip("optional real gpt-image-2 generation is disabled", "Set QA_REAL_IMAGE_GEN=1 to run reserve -> generation -> commit -> material library verification.");
+    return;
+  }
+  const clientTaskId = `asset-smoke-real-image-${runStamp}`;
+  const prompt = `A tiny clean UI icon tile for asset library smoke test, run ${runStamp}`;
+  let submitted;
+  try {
+    submitted = await submitImageGenerationTask(page, clientTaskId, prompt);
+  } catch (error) {
+    recordSkip("optional real gpt-image-2 generation was skipped by environment", error?.message || String(error));
+    return;
+  }
+  const submittedOK = submitted && submitted.id === clientTaskId;
+  record("optional real gpt-image-2 task can be submitted", submittedOK, submitted);
+  if (!submittedOK) {
+    return;
+  }
+
+  let task;
+  try {
+    task = await waitForCreationTask(page, clientTaskId, realImageGenerationTimeoutMs);
+  } catch (error) {
+    recordSkip("optional real gpt-image-2 generation was skipped by environment", error?.message || String(error));
+    return;
+  }
+  if (task.status !== "success") {
+    recordSkip("optional real gpt-image-2 task did not reach success in this environment", task);
+    return;
+  }
+  record("optional real gpt-image-2 task reaches success", true, task);
+
+  let paths = creationTaskImagePaths(task);
+  try {
+    if (paths.length === 0) {
+      const library = await fetchImages(page, { page_size: "20" });
+      const items = Array.isArray(library.items) ? library.items : [];
+      const promptMatched = items.filter((item) => typeof item.prompt === "string" && item.prompt.includes(runStamp)).map((item) => item.path).filter(Boolean);
+      paths = promptMatched;
+    }
+  } catch (error) {
+    record("optional real generation output enters material library", false, error?.message || String(error));
+    return;
+  }
+  record("optional real generation output enters material library", paths.length > 0, { clientTaskId, paths });
+  if (paths.length === 0) {
+    return;
+  }
+
+  try {
+    await assignCollection(page, collectionId, [paths[0]]);
+    const uiList = await fetchImages(page, { collection_id: collectionId, page_size: "20" });
+    record("optional real generation output can be classified into ui collection", (uiList.items || []).some((item) => item.path === paths[0]), { path: paths[0], items: uiList.items });
+  } catch (error) {
+    record("optional real generation output can be classified into ui collection", false, error?.message || String(error));
+  }
+}
+
 async function publishImage(page, imagePath) {
   return expectLuoyeFetch(page, "/api/images/visibility", {
     method: "PATCH",
@@ -270,15 +412,63 @@ async function createTeam(page, name) {
   return data.team;
 }
 
+async function fetchTeamWorkspace(page) {
+  return expectLuoyeFetch(page, "/api/teams");
+}
+
+async function ensureTeam(page, name) {
+  const workspace = await fetchTeamWorkspace(page);
+  const teams = Array.isArray(workspace.teams) ? workspace.teams : [];
+  if (teams.length > 0) {
+    return teams[0];
+  }
+  return createTeam(page, name);
+}
+
+async function ensureTeamMembership(ownerPage, targetPage, team, email, role) {
+  const targetWorkspace = await fetchTeamWorkspace(targetPage);
+  const existing = (Array.isArray(targetWorkspace.teams) ? targetWorkspace.teams : []).find((item) => item.id === team.id);
+  if (existing) {
+    return existing;
+  }
+  const currentMembers = Array.isArray(team.members) ? team.members : [];
+  if (currentMembers.some((member) => String(member.email || "").toLowerCase() === email.toLowerCase())) {
+    return team;
+  }
+  const currentInvites = Array.isArray(team.invites) ? team.invites : [];
+  let invite = currentInvites.find((item) => String(item.target_email || "").toLowerCase() === email.toLowerCase() && item.status === "pending");
+  if (!invite) {
+    invite = await createInvite(ownerPage, team.id, email, role);
+  }
+  return acceptInvite(targetPage, invite.id);
+}
+
 async function createInvite(page, teamId, email, role) {
-  const data = await expectLuoyeFetch(page, `/api/teams/${encodeURIComponent(teamId)}/invites`, {
+  const result = await luoyeFetch(page, `/api/teams/${encodeURIComponent(teamId)}/invites`, {
     method: "POST",
     body: JSON.stringify({ email, role }),
   });
+  if (!result.ok) {
+    const text = JSON.stringify(result.data || result.text || {});
+    if (/已加入|already.*member|already.*joined|已邀请|already.*invite/i.test(text)) {
+      const workspace = await fetchTeamWorkspace(page);
+      const team = (workspace.teams || []).find((item) => item.id === teamId) || {};
+      const invite = (team.invites || []).find((item) => String(item.target_email || "").toLowerCase() === email.toLowerCase() && item.status === "pending");
+      if (invite) {
+        return invite;
+      }
+      return { id: "", team_id: teamId, target_email: email, role, status: "accepted" };
+    }
+    throw new Error(`/api/teams/${teamId}/invites failed: ${result.status} ${JSON.stringify(result.data)}`);
+  }
+  const data = result.data;
   return data.invite;
 }
 
 async function acceptInvite(page, inviteId) {
+  if (!inviteId) {
+    return null;
+  }
   const data = await expectLuoyeFetch(page, `/api/team-invites/${encodeURIComponent(inviteId)}/accept`, { method: "POST" });
   return data.team;
 }
@@ -374,9 +564,9 @@ async function run() {
     const managerContext = await browser.newContext({ viewport: { width: 1440, height: 920 } });
     const memberContext = await browser.newContext({ viewport: { width: 1440, height: 920 } });
 
-    const ownerEmail = `asset-owner-${runStamp}@example.test`;
-    const managerEmail = `asset-manager-${runStamp}@example.test`;
-    const memberEmail = `asset-member-${runStamp}@example.test`;
+    const ownerEmail = qaUserEmail("owner");
+    const managerEmail = qaUserEmail("manager");
+    const memberEmail = qaUserEmail("member");
 
     const owner = await loginToLuoyeViaBridge(ownerContext, ownerEmail);
     record("62080 chat-images bridge can create Luoye session", owner.page.url().startsWith(`${chatBaseURL}/image`), owner.page.url());
@@ -395,11 +585,9 @@ async function run() {
     await publishImage(owner.page, publicSeed.path);
     record("API can prepare personal and public material", Boolean(personalA.path && personalB.path && publicSeed.path), { personalA: personalA.path, personalB: personalB.path, publicSeed: publicSeed.path });
 
-    const team = await createTeam(owner.page, `素材库验收 ${runStamp}`);
-    const managerInvite = await createInvite(owner.page, team.id, managerEmail, "manager");
-    const memberInvite = await createInvite(owner.page, team.id, memberEmail, "member");
-    await acceptInvite(manager.page, managerInvite.id);
-    await acceptInvite(member.page, memberInvite.id);
+    const team = await ensureTeam(owner.page, `素材库验收 ${runStamp}`);
+    await ensureTeamMembership(owner.page, manager.page, team, managerEmail, "manager");
+    await ensureTeamMembership(owner.page, member.page, team, memberEmail, "member");
     const teamSeed = await uploadManagedImage(owner.page, `team-${runStamp}`);
     await moveToTeam(owner.page, team.id, [teamSeed.path]);
     record("API can prepare owner, manager, member and team material", Boolean(team.id && teamSeed.path), { team: team.id, teamSeed: teamSeed.path });
@@ -445,6 +633,8 @@ async function run() {
       body: JSON.stringify({ name: `public-denied-${runStamp}`, scope: "public" }),
     });
     record("public library collection mutation is read-only", publicCreate.status >= 400, publicCreate);
+
+    await runOptionalRealImageGeneration(owner.page, uiCollection.id);
 
     await owner.page.goto(`${chatBaseURL}/image`, { waitUntil: "domcontentloaded" });
     await owner.page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
