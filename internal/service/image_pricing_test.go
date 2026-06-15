@@ -56,6 +56,22 @@ func TestEstimateImageBillingAmount(t *testing.T) {
 			want:    153,
 		},
 		{
+			name:    "gemini flash image uses reference 2K price",
+			model:   util.ImageModelGeminiFlash,
+			count:   1,
+			size:    "2K",
+			quality: "",
+			want:    420,
+		},
+		{
+			name:    "gemini pro image uses reference 4K price",
+			model:   util.ImageModelGeminiPro,
+			count:   2,
+			size:    "4K",
+			quality: "",
+			want:    1050,
+		},
+		{
 			name:    "unknown image model keeps legacy per-image unit",
 			model:   "custom-image-model",
 			count:   3,

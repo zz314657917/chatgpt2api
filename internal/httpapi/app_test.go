@@ -978,6 +978,16 @@ func TestProtocolImageBillingUnitAmountResolutionOverridesSize(t *testing.T) {
 	}
 }
 
+func TestProtocolImageBillingUnitAmountGeminiProReferencePrice(t *testing.T) {
+	got := protocolImageBillingUnitAmount(util.ImageModelGeminiPro, map[string]any{
+		"size":             "16:9",
+		"image_resolution": "4k",
+	})
+	if got != 525 {
+		t.Fatalf("protocolImageBillingUnitAmount() = %d, want 525", got)
+	}
+}
+
 func TestWriteSub2APIImagePartUsesImageContentType(t *testing.T) {
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
@@ -3140,7 +3150,7 @@ func TestCanvasModelsUseSub2APIGatewayForBoundUser(t *testing.T) {
 		t.Fatalf("canvas models json: %v", err)
 	}
 	items := util.AsMapSlice(payload["items"])
-	if len(items) != 4 {
+	if len(items) != 6 {
 		t.Fatalf("canvas models items = %#v", items)
 	}
 	ids := map[string]string{}
@@ -3151,13 +3161,13 @@ func TestCanvasModelsUseSub2APIGatewayForBoundUser(t *testing.T) {
 		capabilities[util.Clean(item["id"])] = util.AsStringSlice(item["capabilities"])
 		enabled[util.Clean(item["id"])] = util.ToBool(item["enabled"])
 	}
-	if ids["remote-chat"] != "text" || ids[util.ImageModelGPT] != "image" || ids[util.ImageModelGPTOfficial] != "image" || ids["sora-2"] != "video" {
+	if ids["remote-chat"] != "text" || ids[util.ImageModelGPT] != "image" || ids[util.ImageModelGPTOfficial] != "image" || ids[util.ImageModelGeminiFlash] != "image" || ids[util.ImageModelGeminiPro] != "image" || ids["sora-2"] != "video" {
 		t.Fatalf("canvas model kinds = %#v", ids)
 	}
-	if fmt.Sprint(capabilities["remote-chat"]) != "[chat]" || fmt.Sprint(capabilities[util.ImageModelGPT]) != "[image]" || fmt.Sprint(capabilities[util.ImageModelGPTOfficial]) != "[image]" || fmt.Sprint(capabilities["sora-2"]) != "[video]" {
+	if fmt.Sprint(capabilities["remote-chat"]) != "[chat]" || fmt.Sprint(capabilities[util.ImageModelGPT]) != "[image]" || fmt.Sprint(capabilities[util.ImageModelGPTOfficial]) != "[image]" || fmt.Sprint(capabilities[util.ImageModelGeminiFlash]) != "[image]" || fmt.Sprint(capabilities[util.ImageModelGeminiPro]) != "[image]" || fmt.Sprint(capabilities["sora-2"]) != "[video]" {
 		t.Fatalf("canvas model capabilities = %#v", capabilities)
 	}
-	if !enabled["remote-chat"] || !enabled[util.ImageModelGPT] || !enabled[util.ImageModelGPTOfficial] || enabled["sora-2"] {
+	if !enabled["remote-chat"] || !enabled[util.ImageModelGPT] || !enabled[util.ImageModelGPTOfficial] || !enabled[util.ImageModelGeminiFlash] || !enabled[util.ImageModelGeminiPro] || enabled["sora-2"] {
 		t.Fatalf("canvas model enabled flags = %#v", enabled)
 	}
 	if _, ok := ids[util.ImageModelAuto]; ok {
@@ -3222,14 +3232,14 @@ func TestCanvasModelsFallbackToSub2APIModelsForBoundUser(t *testing.T) {
 		t.Fatalf("canvas models json: %v", err)
 	}
 	items := util.AsMapSlice(payload["items"])
-	if len(items) != 3 {
+	if len(items) != 5 {
 		t.Fatalf("canvas models items = %#v", items)
 	}
 	ids := map[string]string{}
 	for _, item := range items {
 		ids[util.Clean(item["id"])] = util.Clean(item["kind"])
 	}
-	if ids["remote-chat"] != "text" || ids[util.ImageModelGPT] != "image" || ids[util.ImageModelGPTOfficial] != "image" {
+	if ids["remote-chat"] != "text" || ids[util.ImageModelGPT] != "image" || ids[util.ImageModelGPTOfficial] != "image" || ids[util.ImageModelGeminiFlash] != "image" || ids[util.ImageModelGeminiPro] != "image" {
 		t.Fatalf("canvas model kinds = %#v", ids)
 	}
 }

@@ -205,6 +205,20 @@ var gptImage2OfficialBasePriceUSD = map[string]float64{
 	"864x2016@medium":  0.0228,
 }
 
+var geminiFlashImageBasePriceUSD = map[string]float64{
+	"default": 0.0375,
+	"1K":      0.0375,
+	"2K":      0.05,
+	"4K":      0.075,
+}
+
+var geminiProImageBasePriceUSD = map[string]float64{
+	"default": 0.05,
+	"1K":      0.05,
+	"2K":      0.05,
+	"4K":      0.0625,
+}
+
 func EstimateImageBillingAmount(model string, count int, sizeOrResolution, quality string) int {
 	if count < 1 {
 		count = 1
@@ -218,6 +232,10 @@ func EstimateImageBillingUnitAmount(model, sizeOrResolution, quality string) int
 		return 1
 	}
 	return int(math.Ceil(priceUSD * imagePriceMultiplier * imagePriceUSDCNYRate * 1000))
+}
+
+func EstimateImageUnitCost(model, sizeOrResolution, quality string) (float64, bool) {
+	return estimateImageUnitPriceUSD(model, sizeOrResolution, quality)
 }
 
 func estimateImageUnitPriceUSD(model, sizeOrResolution, quality string) (float64, bool) {
@@ -238,9 +256,21 @@ func estimateImageUnitPriceUSD(model, sizeOrResolution, quality string) (float64
 			return price, true
 		}
 		return gptImage2OfficialBasePriceUSD["default"], true
+	case util.ImageModelGeminiFlash:
+		return imageResolutionTierPrice(geminiFlashImageBasePriceUSD, sizeOrResolution), true
+	case util.ImageModelGeminiPro:
+		return imageResolutionTierPrice(geminiProImageBasePriceUSD, sizeOrResolution), true
 	default:
 		return 0, false
 	}
+}
+
+func imageResolutionTierPrice(prices map[string]float64, sizeOrResolution string) float64 {
+	key := strings.TrimSpace(sizeOrResolution)
+	if key != "1K" && key != "2K" && key != "4K" {
+		key = "default"
+	}
+	return prices[key]
 }
 
 func imagePriceSizeKey(size string) string {

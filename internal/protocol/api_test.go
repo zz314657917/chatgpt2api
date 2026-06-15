@@ -1309,6 +1309,24 @@ func TestResponseImageGenerationRequestPreservesOfficialImage2Model(t *testing.T
 	}
 }
 
+func TestResponseImageGenerationRequestRejectsExternalImageModel(t *testing.T) {
+	body := map[string]any{
+		"model": "gpt-5.5",
+		"input": "生成一张产品图",
+		"tools": []any{
+			map[string]any{"type": "image_generation", "model": util.ImageModelGeminiFlash, "size": "16:9"},
+		},
+	}
+
+	_, _, err := ResponseImageGenerationRequest(body, "linuxdo:1", nil)
+	if err == nil {
+		t.Fatal("ResponseImageGenerationRequest() error = nil, want unsupported model")
+	}
+	if !strings.Contains(err.Error(), "unsupported image_generation model: "+util.ImageModelGeminiFlash) {
+		t.Fatalf("error = %v", err)
+	}
+}
+
 func TestResponseImageGenerationRequestKeepsJPEGOutputCompression(t *testing.T) {
 	body := map[string]any{
 		"model": "gpt-5.5",

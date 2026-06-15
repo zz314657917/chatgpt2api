@@ -49,10 +49,15 @@ func TestAddBuiltInCanvasImageModelsIncludesOfficialRoute(t *testing.T) {
 	assertCanvasModelIDs(t, items, map[string]bool{
 		util.ImageModelGPT:         true,
 		util.ImageModelGPTOfficial: true,
+		util.ImageModelGeminiFlash: true,
+		util.ImageModelGeminiPro:   true,
 		util.ImageModelCodex:       false,
 		"gpt-image-1.5":            true,
 	})
 	assertCanvasModelCapabilities(t, items, util.ImageModelGPTOfficial, "image")
+	assertCanvasModelCapabilities(t, items, util.ImageModelGeminiFlash, "image")
+	assertCanvasModelName(t, items, util.ImageModelGeminiFlash, "Nano Banana 2")
+	assertCanvasModelName(t, items, util.ImageModelGeminiPro, "Nano Banana Pro")
 }
 
 func TestCanvasModelOptionsDoNotExposeVideoWithoutSub2APIBinding(t *testing.T) {
@@ -187,6 +192,20 @@ func assertCanvasModelCapabilities(t *testing.T, items []canvasModelOption, id s
 			}
 			return
 		}
+	}
+	t.Fatalf("model %q not found in %#v", id, items)
+}
+
+func assertCanvasModelName(t *testing.T, items []canvasModelOption, id string, name string) {
+	t.Helper()
+	for _, item := range items {
+		if item.ID != id {
+			continue
+		}
+		if item.Name != name {
+			t.Fatalf("model %q name = %q, want %q", id, item.Name, name)
+		}
+		return
 	}
 	t.Fatalf("model %q not found in %#v", id, items)
 }
