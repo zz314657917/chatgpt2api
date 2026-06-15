@@ -25,14 +25,9 @@ export const IMAGE_MODEL_OPTIONS = [
   { value: "gpt-image-2-official", label: "gpt-image-2-official" },
   { value: "gemini-3.1-flash-image", label: "Nano Banana 2" },
   { value: "gemini-3-pro-image", label: "Nano Banana Pro" },
-  { value: "gpt-5-mini", label: "gpt-5-mini" },
-  { value: "gpt-5-3-mini", label: "gpt-5-3-mini" },
-  { value: "gpt-5", label: "gpt-5" },
-  { value: "gpt-5-1", label: "gpt-5-1" },
-  { value: "gpt-5-2", label: "gpt-5-2" },
-  { value: "gpt-5-3", label: "gpt-5-3" },
-  { value: "gpt-5.4", label: "gpt-5.4" },
   { value: "gpt-5.5", label: "gpt-5.5" },
+  { value: "gpt-5.4", label: "gpt-5.4" },
+  { value: "gpt-5.4-mini", label: "gpt-5.4-mini" },
 ] as const;
 export type ImageModel = string;
 export const DEFAULT_IMAGE_MODEL: ImageModel = "gpt-image-2";
@@ -45,14 +40,9 @@ const GEMINI_PRO_IMAGE_MODEL = "gemini-3-pro-image";
 const IMAGE_TASK_MODEL_VALUES = new Set<string>(["gpt-image-2", "gpt-image-2-official", GEMINI_FLASH_IMAGE_MODEL, GEMINI_PRO_IMAGE_MODEL]);
 const CHAT_MODEL_VALUES = new Set<string>([
   "auto",
-  "gpt-5-mini",
-  "gpt-5-3-mini",
-  "gpt-5",
-  "gpt-5-1",
-  "gpt-5-2",
-  "gpt-5-3",
-  "gpt-5.4",
   "gpt-5.5",
+  "gpt-5.4",
+  "gpt-5.4-mini",
 ]);
 export const IMAGE_TASK_MODEL_OPTIONS = IMAGE_MODEL_OPTIONS.filter((option) => IMAGE_TASK_MODEL_VALUES.has(option.value));
 export const IMAGE_CREATION_MODEL_OPTIONS = IMAGE_TASK_MODEL_OPTIONS;

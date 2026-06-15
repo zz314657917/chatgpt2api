@@ -14,6 +14,7 @@ assert.equal(catalog.image.some((model) => model.id === "gpt-image-2-official"),
 assert.equal(catalog.text.some((model) => model.id === "auto"), true);
 assert.equal(catalog.text.some((model) => model.id === "gpt-5.5"), true);
 assert.equal(catalog.text.some((model) => model.id === "gpt-5.4"), true);
+assert.equal(catalog.text.some((model) => model.id === "gpt-5.4-mini"), true);
 assert.equal(catalog.text.some((model) => model.id === "gpt-image-2"), false);
 
 const emptyCatalog = normalizeModelCatalog([]);
