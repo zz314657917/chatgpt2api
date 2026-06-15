@@ -312,7 +312,12 @@ func (a *App) callSub2APIImageBatchesWithBinding(ctx context.Context, identity s
 			}
 		}
 	}
-	return sub2APIImageBatchResult(created, sub2APIIndexedImageData(results, false, requested), model), nil
+	out := sub2APIImageBatchResult(created, sub2APIIndexedImageData(results, false, requested), model)
+	if amount, unit := sub2APIImageBatchBillingFields(results); amount > 0 && unit != "" {
+		out["external_billing_consumed_amount"] = amount
+		out["external_billing_amount_unit"] = unit
+	}
+	return out, nil
 }
 
 type sub2APIImageBatchRequest struct {
@@ -339,10 +344,12 @@ func sub2APIImageBatchRequests(requested, batchSize int) []sub2APIImageBatchRequ
 }
 
 type sub2APIImageBatchOutput struct {
-	index   int
-	created int64
-	data    []map[string]any
-	err     error
+	index             int
+	created           int64
+	data              []map[string]any
+	billingAmount     float64
+	billingAmountUnit string
+	err               error
 }
 
 func (a *App) callSub2APIImageBatch(ctx context.Context, identity service.Identity, payload map[string]any, binding service.Sub2APIBinding, call func(context.Context, map[string]any) (map[string]any, error), acquire protocol.ImageOutputSlotAcquirer, index int, count int) sub2APIImageBatchOutput {
@@ -367,6 +374,11 @@ func (a *App) callSub2APIImageBatch(ctx context.Context, identity service.Identi
 	}
 	out.created = int64(util.ToInt(formatted["created"], int(time.Now().Unix())))
 	out.data = util.AsMapSlice(formatted["data"])
+	out.billingAmount = sub2APIBillingAmount(formatted["external_billing_consumed_amount"])
+	out.billingAmountUnit = service.ImageTaskAmountUnitAPIMartCost
+	if out.billingAmount <= 0 || util.Clean(formatted["external_billing_amount_unit"]) != service.ImageTaskAmountUnitAPIMartCost {
+		out.billingAmountUnit = ""
+	}
 	return out
 }
 
@@ -431,6 +443,24 @@ func sub2APIImageBatchResult(created int64, data []map[string]any, model string)
 		data = []map[string]any{}
 	}
 	return map[string]any{"created": created, "data": data, "model": model}
+}
+
+func sub2APIImageBatchBillingFields(results []sub2APIImageBatchOutput) (float64, string) {
+	total := 0.0
+	unit := ""
+	for _, result := range results {
+		if result.err != nil || result.billingAmount <= 0 || result.billingAmountUnit == "" {
+			continue
+		}
+		if unit == "" {
+			unit = result.billingAmountUnit
+		}
+		if unit != result.billingAmountUnit {
+			return 0, ""
+		}
+		total += result.billingAmount
+	}
+	return total, unit
 }
 
 func sub2APIImageRequestedCount(payload map[string]any) int {
@@ -1079,6 +1109,7 @@ func (a *App) formatSub2APIImageResult(ctx context.Context, result map[string]an
 	}
 	if cost, ok := sub2APITaskCost(result); ok && cost > 0 {
 		result["external_billing_consumed_amount"] = cost
+		result["external_billing_amount_unit"] = service.ImageTaskAmountUnitAPIMartCost
 	}
 	items := util.AsMapSlice(result["data"])
 	if len(items) == 0 {
@@ -1118,6 +1149,7 @@ func (a *App) formatSub2APIImageResult(ctx context.Context, result map[string]an
 	formatted := a.engine.FormatImageResultWithOptions(normalized, util.Clean(payload["prompt"]), "url", util.Clean(payload["base_url"]), identityScope(identity), identityDisplayName(identity), created, "", outputOptions)
 	if cost, ok := sub2APITaskCost(result); ok && cost > 0 {
 		formatted["external_billing_consumed_amount"] = cost
+		formatted["external_billing_amount_unit"] = service.ImageTaskAmountUnitAPIMartCost
 	}
 	return formatted, nil
 }
@@ -1136,6 +1168,14 @@ func sub2APITaskCost(result map[string]any) (float64, bool) {
 		}
 	}
 	return 0, false
+}
+
+func sub2APIBillingAmount(value any) float64 {
+	out, ok := sub2APINumber(value)
+	if !ok || out <= 0 {
+		return 0
+	}
+	return out
 }
 
 func sub2APINumber(value any) (float64, bool) {

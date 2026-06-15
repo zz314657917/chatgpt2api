@@ -7288,8 +7288,8 @@ func TestLuoyeIndependentSub2APIDefaultGroupAndBilling(t *testing.T) {
 	if generationUserHeader != "42" {
 		t.Fatalf("gateway user header = %q", generationUserHeader)
 	}
-	if reserveAmount != 0.006 {
-		t.Fatalf("reserve amount = %#v, want 0.006", reserveAmount)
+	if reserveAmount != 0.051 {
+		t.Fatalf("reserve amount = %#v, want 0.051", reserveAmount)
 	}
 	if !reflect.DeepEqual(calls, []string{"reserve", "commit"}) {
 		t.Fatalf("billing calls = %#v", calls)

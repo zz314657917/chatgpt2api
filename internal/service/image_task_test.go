@@ -195,7 +195,7 @@ func TestImageTaskServiceStoresResolvedModelFromHandlerResult(t *testing.T) {
 	}
 }
 
-func TestImageTaskServiceExternalBillingUsesRawAPIMartCost(t *testing.T) {
+func TestImageTaskServiceExternalBillingKeepsEstimatedBalanceUnit(t *testing.T) {
 	handler := func(context.Context, Identity, map[string]any) (map[string]any, error) {
 		return map[string]any{"data": []map[string]any{{"url": "https://example.test/image.png"}}}, nil
 	}
@@ -210,14 +210,14 @@ func TestImageTaskServiceExternalBillingUsesRawAPIMartCost(t *testing.T) {
 	}
 	waitForTaskStatus(t, svc, identity, "official-edit-cost", TaskStatusSuccess)
 
-	if len(billing.reserveAmounts) == 0 || billing.reserveAmounts[0] != 0.026 {
-		t.Fatalf("first external reserve amount = %#v, want 0.026", billing.reserveAmounts)
+	if len(billing.reserveAmounts) == 0 || billing.reserveAmounts[0] != 0.219 {
+		t.Fatalf("first external reserve amount = %#v, want 0.219", billing.reserveAmounts)
 	}
-	if billing.commitAmount != 0.026 {
-		t.Fatalf("external commit amount = %.12f, want 0.026", billing.commitAmount)
+	if billing.commitAmount != 0.219 {
+		t.Fatalf("external commit amount = %.12f, want 0.219", billing.commitAmount)
 	}
-	if billing.reserveUnit != imageTaskAmountUnitAPIMartCost || billing.commitUnit != imageTaskAmountUnitAPIMartCost {
-		t.Fatalf("external amount units reserve=%q commit=%q, want %q", billing.reserveUnit, billing.commitUnit, imageTaskAmountUnitAPIMartCost)
+	if billing.reserveUnit != "" || billing.commitUnit != "" {
+		t.Fatalf("external amount units reserve=%q commit=%q, want empty", billing.reserveUnit, billing.commitUnit)
 	}
 	got := svc.ListTasks(identity, []string{"official-edit-cost"})
 	item := got["items"].([]map[string]any)[0]
@@ -230,6 +230,7 @@ func TestImageTaskServiceExternalBillingUsesTaskStatusCostOverride(t *testing.T)
 	handler := func(context.Context, Identity, map[string]any) (map[string]any, error) {
 		return map[string]any{
 			"external_billing_consumed_amount": 0.11055,
+			"external_billing_amount_unit":     imageTaskAmountUnitAPIMartCost,
 			"data": []map[string]any{
 				{"url": "https://example.test/image.png"},
 			},
@@ -254,14 +255,14 @@ func TestImageTaskServiceExternalBillingUsesTaskStatusCostOverride(t *testing.T)
 	}
 	waitForTaskStatus(t, svc, identity, "official-edit-status-cost", TaskStatusSuccess)
 
-	if len(billing.commitAmounts) != 2 || billing.commitAmounts[0] != 0.026 || billing.commitAmounts[1] != 0.08455 {
-		t.Fatalf("external commit amounts = %#v, want [0.026 0.08455]", billing.commitAmounts)
+	if len(billing.commitAmounts) != 2 || billing.commitAmounts[0] != 0.219 || billing.commitAmounts[1] < 0.08447 || billing.commitAmounts[1] > 0.08449 {
+		t.Fatalf("external commit amounts = %#v, want [0.219 ~0.08448]", billing.commitAmounts)
 	}
-	if len(billing.reserveAmounts) != 2 || billing.reserveAmounts[0] != 0.026 || billing.reserveAmounts[1] != 0.08455 {
-		t.Fatalf("external reserve amounts = %#v, want [0.026 0.08455]", billing.reserveAmounts)
+	if len(billing.reserveAmounts) != 2 || billing.reserveAmounts[0] != 0.219 || billing.reserveAmounts[1] < 0.08447 || billing.reserveAmounts[1] > 0.08449 {
+		t.Fatalf("external reserve amounts = %#v, want [0.219 ~0.08448]", billing.reserveAmounts)
 	}
 	if billing.reserveUnit != imageTaskAmountUnitAPIMartCost || billing.commitUnit != imageTaskAmountUnitAPIMartCost {
-		t.Fatalf("external amount units reserve=%q commit=%q, want %q", billing.reserveUnit, billing.commitUnit, imageTaskAmountUnitAPIMartCost)
+		t.Fatalf("external amount units reserve=%q commit=%q, want %q for status-cost surcharge", billing.reserveUnit, billing.commitUnit, imageTaskAmountUnitAPIMartCost)
 	}
 	got := svc.ListTasks(identity, []string{"official-edit-status-cost"})
 	item := got["items"].([]map[string]any)[0]
@@ -290,17 +291,17 @@ func TestImageTaskServiceAutoImageModelUsesResolvedBridgeCostModel(t *testing.T)
 	}
 	waitForTaskStatus(t, svc, identity, "auto-cost", TaskStatusSuccess)
 
-	if len(billing.reserveAmounts) == 0 || billing.reserveAmounts[0] != 0.006 {
-		t.Fatalf("external reserve amount = %#v, want 0.006", billing.reserveAmounts)
+	if len(billing.reserveAmounts) == 0 || billing.reserveAmounts[0] != 0.051 {
+		t.Fatalf("external reserve amount = %#v, want 0.051", billing.reserveAmounts)
 	}
-	if billing.commitAmount != 0.006 {
-		t.Fatalf("external commit amount = %.12f, want 0.006", billing.commitAmount)
+	if billing.commitAmount != 0.051 {
+		t.Fatalf("external commit amount = %.12f, want 0.051", billing.commitAmount)
 	}
 	if billing.reserveModel != util.ImageModelGPT || billing.commitModel != util.ImageModelGPT {
 		t.Fatalf("external billing models reserve=%q commit=%q, want %q", billing.reserveModel, billing.commitModel, util.ImageModelGPT)
 	}
-	if billing.reserveUnit != imageTaskAmountUnitAPIMartCost || billing.commitUnit != imageTaskAmountUnitAPIMartCost {
-		t.Fatalf("external amount units reserve=%q commit=%q, want %q", billing.reserveUnit, billing.commitUnit, imageTaskAmountUnitAPIMartCost)
+	if billing.reserveUnit != "" || billing.commitUnit != "" {
+		t.Fatalf("external amount units reserve=%q commit=%q, want empty", billing.reserveUnit, billing.commitUnit)
 	}
 	got := svc.ListTasks(identity, []string{"auto-cost"})
 	item := got["items"].([]map[string]any)[0]
