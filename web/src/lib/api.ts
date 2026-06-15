@@ -17,6 +17,8 @@ export const IMAGE_MODEL_OPTIONS = [
   { value: "auto", label: "Auto" },
   { value: "gpt-image-2", label: "gpt-image-2" },
   { value: "gpt-image-2-official", label: "gpt-image-2-official" },
+  { value: "gemini-3.1-flash-image", label: "Nano Banana 2" },
+  { value: "gemini-3-pro-image", label: "Nano Banana Pro" },
   { value: "gpt-5-mini", label: "gpt-5-mini" },
   { value: "gpt-5-3-mini", label: "gpt-5-3-mini" },
   { value: "gpt-5", label: "gpt-5" },
@@ -32,7 +34,9 @@ export const DEFAULT_CHAT_MODEL: ImageModel = "auto";
 export const CODEX_IMAGE_MODEL: ImageModel = "codex-gpt-image-2";
 export const OFFICIAL_IMAGE_MODEL: ImageModel = "gpt-image-2-official";
 const IMAGE_MODEL_VALUES = new Set<string>(IMAGE_MODEL_OPTIONS.map((option) => option.value));
-const IMAGE_TASK_MODEL_VALUES = new Set<string>(["gpt-image-2", "gpt-image-2-official"]);
+const GEMINI_FLASH_IMAGE_MODEL = "gemini-3.1-flash-image";
+const GEMINI_PRO_IMAGE_MODEL = "gemini-3-pro-image";
+const IMAGE_TASK_MODEL_VALUES = new Set<string>(["gpt-image-2", "gpt-image-2-official", GEMINI_FLASH_IMAGE_MODEL, GEMINI_PRO_IMAGE_MODEL]);
 const CHAT_MODEL_VALUES = new Set<string>([
   "auto",
   "gpt-5-mini",
@@ -55,6 +59,20 @@ const GPT_IMAGE_2_BASE_PRICE_USD = {
   "1K": 0.006,
   "2K": 0.012,
   "4K": 0.018,
+} as const;
+
+const GEMINI_FLASH_IMAGE_BASE_PRICE_USD = {
+  default: 0.0375,
+  "1K": 0.0375,
+  "2K": 0.05,
+  "4K": 0.075,
+} as const;
+
+const GEMINI_PRO_IMAGE_BASE_PRICE_USD = {
+  default: 0.05,
+  "1K": 0.05,
+  "2K": 0.05,
+  "4K": 0.0625,
 } as const;
 
 const GPT_IMAGE_2_OFFICIAL_BASE_PRICE_USD: Record<string, number> = {
@@ -333,6 +351,14 @@ export function estimateImageDisplayPriceUSD(model: ImageModel, count: number, s
       GPT_IMAGE_2_OFFICIAL_BASE_PRICE_USD[`${normalizedSize}@${normalizedQuality}`] ??
       GPT_IMAGE_2_OFFICIAL_BASE_PRICE_USD[`${normalizedSize}@auto`] ??
       GPT_IMAGE_2_OFFICIAL_BASE_PRICE_USD.default;
+  } else if (model === GEMINI_FLASH_IMAGE_MODEL) {
+    const normalizedResolution =
+      sizeOrResolution === "2K" || sizeOrResolution === "4K" || sizeOrResolution === "1K" ? sizeOrResolution : "default";
+    basePrice = GEMINI_FLASH_IMAGE_BASE_PRICE_USD[normalizedResolution];
+  } else if (model === GEMINI_PRO_IMAGE_MODEL) {
+    const normalizedResolution =
+      sizeOrResolution === "2K" || sizeOrResolution === "4K" || sizeOrResolution === "1K" ? sizeOrResolution : "default";
+    basePrice = GEMINI_PRO_IMAGE_BASE_PRICE_USD[normalizedResolution];
   }
 
   return basePrice === null ? null : basePrice * IMAGE_PRICE_ESTIMATE_MULTIPLIER * normalizedCount;

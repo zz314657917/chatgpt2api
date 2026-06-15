@@ -21,6 +21,8 @@ const (
 	ImageModelGPT         = "gpt-image-2"
 	ImageModelGPTOfficial = "gpt-image-2-official"
 	ImageModelCodex       = "codex-gpt-image-2"
+	ImageModelGeminiFlash = "gemini-3.1-flash-image"
+	ImageModelGeminiPro   = "gemini-3-pro-image"
 	ImageModelGPT5        = "gpt-5"
 	ImageModelGPT51       = "gpt-5-1"
 	ImageModelGPT52       = "gpt-5-2"
@@ -36,12 +38,16 @@ var ImageModels = map[string]struct{}{
 	ImageModelGPT:         {},
 	ImageModelGPTOfficial: {},
 	ImageModelCodex:       {},
+	ImageModelGeminiFlash: {},
+	ImageModelGeminiPro:   {},
 }
 
 var ModelIDs = []string{
 	ImageModelGPT,
 	ImageModelGPTOfficial,
 	ImageModelCodex,
+	ImageModelGeminiFlash,
+	ImageModelGeminiPro,
 	ImageModelAuto,
 	ImageModelGPTMini,
 	ImageModelGPT53Mini,
@@ -57,6 +63,8 @@ var ImageGenerationModelIDs = []string{
 	ImageModelGPT,
 	ImageModelGPTOfficial,
 	ImageModelCodex,
+	ImageModelGeminiFlash,
+	ImageModelGeminiPro,
 	ImageModelAuto,
 }
 

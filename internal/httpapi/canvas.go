@@ -592,9 +592,9 @@ func addBuiltInCanvasImageModels(items []canvasModelOption) []canvasModelOption 
 		}
 		seen[item.ID] = item
 	}
-	for _, id := range []string{util.ImageModelGPT, util.ImageModelGPTOfficial} {
+	for _, id := range []string{util.ImageModelGPT, util.ImageModelGPTOfficial, util.ImageModelGeminiFlash, util.ImageModelGeminiPro} {
 		if _, ok := seen[id]; !ok {
-			seen[id] = newCanvasModelOption(id, id, false)
+			seen[id] = newCanvasModelOption(id, canvasModelDisplayName(id), false)
 		}
 	}
 	return sortedCanvasModelOptions(seen)
@@ -613,7 +613,7 @@ func canvasModelOptionsFromModelList(result map[string]any, includeLocal bool, a
 				continue
 			}
 			if _, ok := seen[id]; !ok {
-				seen[id] = newCanvasModelOption(id, id, allowVideo)
+				seen[id] = newCanvasModelOption(id, canvasModelDisplayName(id), allowVideo)
 			}
 		}
 	}
@@ -830,13 +830,24 @@ func canvasModelCapabilitiesForModelList(id string, allowVideo bool) []string {
 	switch id {
 	case util.ImageModelAuto:
 		return []string{"chat", "image"}
-	case util.ImageModelGPT, util.ImageModelGPTOfficial, util.ImageModelCodex:
+	case util.ImageModelGPT, util.ImageModelGPTOfficial, util.ImageModelCodex, util.ImageModelGeminiFlash, util.ImageModelGeminiPro:
 		return []string{"image"}
 	default:
 		if canvasModelLooksLikeImage(id) {
 			return []string{"image"}
 		}
 		return []string{"chat"}
+	}
+}
+
+func canvasModelDisplayName(id string) string {
+	switch strings.TrimSpace(id) {
+	case util.ImageModelGeminiFlash:
+		return "Nano Banana 2"
+	case util.ImageModelGeminiPro:
+		return "Nano Banana Pro"
+	default:
+		return id
 	}
 }
 
@@ -878,7 +889,7 @@ func canvasModelCapabilities(value any, id string) []string {
 	switch id {
 	case util.ImageModelAuto:
 		return []string{"chat", "image"}
-	case util.ImageModelGPT, util.ImageModelGPTOfficial, util.ImageModelCodex:
+	case util.ImageModelGPT, util.ImageModelGPTOfficial, util.ImageModelCodex, util.ImageModelGeminiFlash, util.ImageModelGeminiPro:
 		return []string{"image"}
 	default:
 		if canvasModelLooksLikeVideo(id) {
