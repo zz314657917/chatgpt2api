@@ -55,6 +55,7 @@ Sub2API 对应桥接提交为 `fe2f80be1 feat: add studio bridge integration`。
 - 2026-06-15 移动端左侧功能抽屉底部账号区已简化：常驻区域只保留头像、用户名和展开箭头；角色、余额、版本、深色模式、充值、个人中心和退出登录全部收进点击用户后的弹出菜单。
 - 2026-06-15 `/image` 移动端输入框位置微调：底部 composer dock 下压，外层移动端底部 padding 归零，输入框自身保留 `safe-area + 4px`，减少底部空白但不贴住手势区。
 - 2026-06-15 `/canvas` 移动端底部控制继续极简化：底部不再常驻左侧三小按钮和右侧缩放胶囊，改为单个大号“画布工具”按钮；小地图、运行记录、适配画布、上传、添加节点、最近操作、清理空白节点和保存兜底统一放入底部工具抽屉。移动端缩放主要交给双指手势，桌面端缩放工具保持不变。
+- 2026-06-15 `/canvas` 桌面端顶部 More 菜单清理：桌面主工具栏已常驻展示上传、提示词、AI 提示词、循环、组、图片生成、视频、Output、帮助；More 菜单不再重复这些节点入口，仅保留最近操作和清理空白节点等辅助操作。
 
 ## 下一步
 
@@ -177,3 +178,7 @@ Sub2API 对应桥接提交为 `fe2f80be1 feat: add studio bridge integration`。
   - Playwright mock 验收 `output/playwright/canvas-mobile-single-tool-check.mjs` 通过：`390x844` 默认仅显示一个“画布工具”按钮；不显示小地图/运行记录独立按钮；不显示移动端缩放百分比胶囊；工具抽屉包含小地图、运行记录、适配画布、上传和立即保存兜底；运行记录可从抽屉打开。
   - 截图证据：`output/playwright/canvas-mobile-single-tool-default.png`、`output/playwright/canvas-mobile-single-tool-drawer.png`、`output/playwright/canvas-mobile-single-tool-minimap.png`、`output/playwright/canvas-mobile-single-tool-history.png`。
   - 本地容器已更新并健康：`chatgpt2api` 运行镜像 `chatgpt2api:codex-20260615-161100`，`chatgpt2api:local-patched` 指向同一镜像，数据目录挂载为 `F:/java/chatgpt2api/data:/app/data`；`http://127.0.0.1:8081/health` 返回 `{"status":"ok","version":"local-canvas-mobile-tool-button"}`。
+- 2026-06-15 `/canvas` 桌面 More 菜单清理验证：
+  - `cd F:/java/chatgpt2api/web && npm.cmd run lint` 通过。
+  - `cd F:/java/chatgpt2api/web && npm.cmd run build` 通过。
+  - 本地容器已更新并健康：`chatgpt2api` 运行镜像 `chatgpt2api:codex-20260615-225700-more-menu-clean`，`chatgpt2api:local-patched` 指向同一镜像；`http://127.0.0.1:8081/health` 返回 `{"status":"ok","version":"local-canvas-more-menu-clean"}`。
