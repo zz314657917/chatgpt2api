@@ -2,7 +2,7 @@
 
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useLocation } from "react-router-dom";
-import { Globe2, History, ImagePlus, LoaderCircle, Plus, Trash2, X } from "lucide-react";
+import { Globe2, ImagePlus, LoaderCircle, Plus, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { ImageComposer } from "@/app/image/components/image-composer";
@@ -13,6 +13,7 @@ import {
   DEFAULT_IMAGE_CUSTOM_RATIO,
   DEFAULT_IMAGE_CUSTOM_WIDTH,
   IMAGE_ASPECT_RATIO_OPTIONS,
+  IMAGE_QUALITY_OPTIONS,
   IMAGE_RESOLUTION_OPTIONS,
   IMAGE_SIZE_MODE_OPTIONS,
   PIXEL_ICON_SIZE_OPTIONS,
@@ -23,21 +24,23 @@ import {
   getImageSizeRequirementLabel,
   isHighResolutionImageSize,
   isImageAspectRatio,
+  isImageQuality,
   isImageResolution,
   isImageSizeMode,
   isPixelIconSize,
   normalizeImageOutputCompression,
   parseImageRatio,
   type ImageAspectRatio,
+  type ImageQuality,
   type ImageResolution,
   type ImageSizeMode,
   type ImageSizeSelection,
 } from "@/lib/image-parameters";
 import { IMAGE_PROMPT_PRESETS, type ImagePromptPreset } from "@/app/image/image-presets";
-import type { BananaPrompt } from "@/app/image/banana-prompts";
 import { consumeSimilarImageIntent } from "@/app/image/similar-image-intent";
 import { ImageOutputControls } from "@/components/image-output-controls";
 import { ManagedImageAssetDock } from "@/components/managed-image-asset-dock";
+import { useMobileNav } from "@/components/mobile-nav-context";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -81,10 +84,14 @@ import {
   IMAGE_CREATION_MODEL_OPTIONS,
   IMAGE_MODEL_ROUTE_DETAILS,
   isChatModel,
+  isImageCreationModel,
   isImageModel,
+  isOfficialImageModel,
   modelIDLooksImageCapable,
   MANAGED_IMAGE_UNCLASSIFIED_COLLECTION_ID,
+  supportsImageOutputCompression,
   supportsImageOutputControls,
+  supportsImageQuality,
   supportsImageResolutionPresets,
   supportsStructuredImageParameters,
   type CanvasModelOption,
@@ -102,7 +109,6 @@ import {
 } from "@/lib/api";
 import {
   isImageOutputFormat,
-  supportsImageOutputCompression,
   type ImageOutputFormat,
 } from "@/lib/image-parameters";
 import { fetchAuthenticatedImageBlob } from "@/lib/authenticated-image";
@@ -142,9 +148,6 @@ import {
   type ImageTurnProgress,
 } from "@/store/image-turn-progress";
 
-const ImagePromptMarket = lazy(() =>
-  import("@/app/image/components/image-prompt-market").then((module) => ({ default: module.ImagePromptMarket })),
-);
 const ImageResults = lazy(() =>
   import("@/app/image/components/image-results").then((module) => ({ default: module.ImageResults })),
 );
@@ -166,14 +169,15 @@ const IMAGE_CUSTOM_WIDTH_STORAGE_KEY = "chatgpt2api:image_last_custom_width";
 const IMAGE_CUSTOM_HEIGHT_STORAGE_KEY = "chatgpt2api:image_last_custom_height";
 const IMAGE_OUTPUT_FORMAT_STORAGE_KEY = "chatgpt2api:image_last_output_format";
 const IMAGE_OUTPUT_COMPRESSION_STORAGE_KEY = "chatgpt2api:image_last_output_compression";
+const IMAGE_QUALITY_STORAGE_KEY = "chatgpt2api:image_last_quality";
 const QUOTA_REFRESH_EVENT = "chatgpt2api:quota-refresh";
 const DEFAULT_IMAGE_OUTPUT_FORMAT: ImageOutputFormat = "png";
+const DEFAULT_IMAGE_QUALITY: ImageQuality = "auto";
 const AI_BACKGROUND_REMOVAL_PROMPT = "AI 抠图：自动识别图片中的主要主体，移除背景并输出透明背景 PNG。保持主体形状、纹理、颜色和像素细节，避免新增或重绘无关内容。注意：这是 AI 编辑，可能会重绘图片内容。";
 const REFERENCE_IMAGE_MAX_SIDE = 2048;
 const REFERENCE_IMAGE_JPEG_QUALITY = 0.86;
 const IMAGE_ASSET_PAGE_SIZE = 50;
 const IMAGE_ASSET_SIDEBAR_STORAGE_PREFIX = "image-composer-asset-sidebar";
-const PROMPT_MARKET_REFERENCE_IMAGE_LIMIT = 4;
 const activeConversationQueueIds = new Set<string>();
 const EMPTY_IMAGE_ASPECT_RATIO_SELECT_VALUE = "__empty_aspect_ratio__";
 const MISSING_RECOVERABLE_TASK_ID_ERROR = "页面刷新或任务中断，未找到可恢复的任务 ID";
@@ -197,6 +201,7 @@ type EditingTurnDraft = {
   customHeight: string;
   outputFormat: ImageOutputFormat;
   outputCompression: string;
+  quality: ImageQuality;
   visibility: ImageVisibility;
   referenceImages: StoredReferenceImage[];
 };
@@ -247,10 +252,6 @@ function ImageOverlayLoading({ label }: { label: string }) {
       </div>
     </div>
   );
-}
-
-function isKnownChatOnlyModel(value: unknown) {
-  return typeof value === "string" && CHAT_MODEL_OPTIONS.some((option) => option.value === value) && !modelIDLooksImageCapable(value);
 }
 
 function buildConversationTitle(prompt: string) {
@@ -449,6 +450,7 @@ async function buildReferenceImageFromUrl(
     name: file.name,
     type: file.type || "image/png",
     dataUrl: await readFileAsDataUrl(file),
+    publicUrl: url,
     source: "upload",
     clientReferenceId: createId(),
     uploadStatus: "pending",
@@ -457,8 +459,8 @@ async function buildReferenceImageFromUrl(
   };
 }
 
-function reusableOutputCompressionValue(value: unknown, outputFormat: ImageOutputFormat) {
-  if (!supportsImageOutputCompression(outputFormat)) {
+function reusableOutputCompressionValue(value: unknown, outputFormat: ImageOutputFormat, model?: ImageModel) {
+  if (!supportsImageOutputCompression(model || "", outputFormat)) {
     return "";
   }
   const compression = Number(value);
@@ -626,7 +628,10 @@ function imageOutputCompressionForModel(model: ImageModel, format: ImageOutputFo
   if (!supportsImageOutputControls(model)) {
     return undefined;
   }
-  return imageOutputCompressionForFormat(format, value);
+  if (!supportsImageOutputCompression(model, format)) {
+    return undefined;
+  }
+  return normalizeOutputCompressionValue(value);
 }
 
 function managedImageReferenceUrl(item: ManagedImageSummary) {
@@ -660,6 +665,7 @@ async function buildReferenceImageFromManagedImage(item: ManagedImageSummary): P
     name: file.name,
     type: file.type || "image/png",
     dataUrl: await readFileAsDataUrl(file),
+    publicUrl: url,
     source: "upload",
     clientReferenceId: createId(),
     uploadStatus: "pending",
@@ -677,11 +683,15 @@ function normalizeOutputCompressionValue(value: unknown): number | undefined {
   return normalizeImageOutputCompression(value);
 }
 
-function imageOutputCompressionForFormat(format: ImageOutputFormat, value: unknown) {
-  if (!supportsImageOutputCompression(format)) {
+function imageOutputCompressionForFormat(format: ImageOutputFormat, value: unknown, model?: ImageModel) {
+  if (!supportsImageOutputCompression(model || "", format)) {
     return undefined;
   }
   return normalizeOutputCompressionValue(value);
+}
+
+function publicReferenceImageUrls(images: Array<{ publicUrl?: string }>) {
+  return Array.from(new Set(images.map((image) => image.publicUrl?.trim() || "").filter(Boolean)));
 }
 
 function formatHighResolutionHint(canInspectAccounts: boolean) {
@@ -957,7 +967,7 @@ function getStoredImageModel(): ImageModel {
     return DEFAULT_IMAGE_MODEL;
   }
   const storedModel = window.localStorage.getItem(IMAGE_MODEL_STORAGE_KEY);
-  return isImageModel(storedModel) && !isKnownChatOnlyModel(storedModel) && !HIDDEN_IMAGE_MODEL_VALUES.has(storedModel)
+  return isImageCreationModel(storedModel) && !HIDDEN_IMAGE_MODEL_VALUES.has(storedModel)
     ? storedModel
     : DEFAULT_IMAGE_MODEL;
 }
@@ -1017,6 +1027,18 @@ function getStoredImageOutputCompression(): string {
   }
   const normalized = normalizeOutputCompressionValue(window.localStorage.getItem(IMAGE_OUTPUT_COMPRESSION_STORAGE_KEY));
   return normalized === undefined ? "" : String(normalized);
+}
+
+function getStoredImageQuality(): ImageQuality {
+  if (typeof window === "undefined") {
+    return DEFAULT_IMAGE_QUALITY;
+  }
+  const storedQuality = window.localStorage.getItem(IMAGE_QUALITY_STORAGE_KEY);
+  return isImageQuality(storedQuality) ? storedQuality : DEFAULT_IMAGE_QUALITY;
+}
+
+function imageQualityForModel(model: ImageModel, quality: ImageQuality): ImageQuality | undefined {
+  return supportsImageQuality(model) ? quality : undefined;
 }
 
 function serializeImageSizeSelection(selection: ImageSizeSelection): StoredImageSizeSelection {
@@ -1108,11 +1130,11 @@ function hasEnoughBilling(session: NonNullable<ReturnType<typeof useAuthGuard>["
   return !billing || billing.unlimited || Math.max(0, Number(billing.available) || 0) >= estimated;
 }
 
-function imageBillingEstimate(model: ImageModel, count: number, sizeOrResolution: string) {
-  const estimatedPrice = estimateImageDisplayPriceUSD(model, count, sizeOrResolution, "auto");
+function imageBillingEstimate(model: ImageModel, count: number, sizeOrResolution: string, quality: ImageQuality = DEFAULT_IMAGE_QUALITY) {
+  const estimatedPrice = estimateImageDisplayPriceUSD(model, count, sizeOrResolution, quality);
   return {
     price: estimatedPrice,
-    units: estimateImageBillingUnits(model, count, sizeOrResolution, "auto"),
+    units: estimateImageBillingUnits(model, count, sizeOrResolution, quality),
   };
 }
 
@@ -1227,17 +1249,22 @@ function modelMatchesComposerMode(mode: ComposerMode, model: ImageModel) {
   if (mode === "chat") {
     return isChatModel(model) && !modelIDLooksImageCapable(model);
   }
-  return isImageModel(model) && !isKnownChatOnlyModel(model);
+  return isImageCreationModel(model);
 }
 
 function canvasModelsByCapability(models: CanvasModelOption[], capability: "chat" | "image") {
   return models
     .filter((model) => model.enabled !== false)
-    .filter((model) =>
-      canvasModelHasCapability(model, capability) ||
-      (capability === "chat" && (model.kind === "text" || model.kind === "both")) ||
-      (capability === "image" && (model.kind === "image" || model.kind === "both"))
-    )
+    .filter((model) => {
+      const hasRequestedCapability =
+        canvasModelHasCapability(model, capability) ||
+        (capability === "chat" && (model.kind === "text" || model.kind === "both")) ||
+        (capability === "image" && (model.kind === "image" || model.kind === "both"));
+      if (!hasRequestedCapability) {
+        return false;
+      }
+      return capability !== "image" || isImageCreationModel(model.id);
+    })
     .map(modelMenuOption);
 }
 
@@ -1481,6 +1508,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
   const promptApplyRequestIdRef = useRef(0);
   const similarIntentAppliedRef = useRef(false);
   const assetsLoadingRequestRef = useRef(false);
+  const { clearPanel, closeDrawer, setPanel } = useMobileNav();
 
   const [imagePrompt, setImagePrompt] = useState("");
   const [composerMode, setComposerMode] = useState<ComposerMode>(getStoredComposerMode);
@@ -1495,8 +1523,8 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
   const [imageCustomHeight, setImageCustomHeight] = useState(() => getStoredImageSizeSelection().customHeight);
   const [imageOutputFormat, setImageOutputFormat] = useState<ImageOutputFormat>(getStoredImageOutputFormat);
   const [imageOutputCompression, setImageOutputCompression] = useState(getStoredImageOutputCompression);
+  const [imageQuality, setImageQuality] = useState<ImageQuality>(getStoredImageQuality);
   const [defaultImageVisibility, setDefaultImageVisibility] = useState<ImageVisibility>("private");
-  const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [referenceImages, setReferenceImages] = useState<StoredReferenceImage[]>([]);
   const [conversations, setConversations] = useState<ImageConversation[]>([]);
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
@@ -1520,7 +1548,6 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     sharePromptParameters: false,
     shareReferenceImages: false,
   });
-  const [isPromptMarketOpen, setIsPromptMarketOpen] = useState(false);
   const [assets, setAssets] = useState<ManagedImageSummary[]>([]);
   const [assetNextCursor, setAssetNextCursor] = useState("");
   const [hasMoreAssets, setHasMoreAssets] = useState(false);
@@ -1648,7 +1675,9 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
       ? editingDraftCustomRatioInvalid
         ? "比例需要填写为宽:高"
         : isPixelIconSize(editingDraftEffectiveSizeSelection.aspectRatio)
-          ? `目标尺寸 ${formatImageSizeDisplay(editingDraftEffectiveSizeSelection.aspectRatio)}，像素图标快捷尺寸`
+          ? isOfficialImageModel(editingTurnDraft?.model)
+            ? `本地输出尺寸 ${formatImageSizeDisplay(editingDraftEffectiveSizeSelection.aspectRatio)}，官方图片通道按 1:1 提交后处理`
+            : `目标尺寸 ${formatImageSizeDisplay(editingDraftEffectiveSizeSelection.aspectRatio)}，像素图标快捷尺寸`
         : !editingDraftResolutionControlsVisible || editingDraftEffectiveSizeSelection.resolution === "auto"
           ? editingDraftImageSize
             ? `${editingDraftImageSize} 构图偏好，实际像素以上游返回为准`
@@ -1700,7 +1729,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
       (effectiveImageModel === "auto" || effectiveImageModel === "gpt-image-2"
         ? "1K"
         : imagePriceSizeFromRequest(estimateSizeRequest.size));
-    return imageBillingEstimate(composerModel, composerMode === "chat" ? 1 : parsedCount, estimateResolution);
+    return imageBillingEstimate(composerModel, composerMode === "chat" ? 1 : parsedCount, estimateResolution, imageQuality);
   }, [
     composerMode,
     composerModel,
@@ -1709,6 +1738,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     imageCustomHeight,
     imageCustomRatio,
     imageCustomWidth,
+    imageQuality,
     imageResolution,
     imageSizeMode,
     parsedCount,
@@ -1855,6 +1885,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         setImageCustomHeight(storedSelection.customHeight);
         setImageOutputFormat(getStoredImageOutputFormat());
         setImageOutputCompression(getStoredImageOutputCompression());
+        setImageQuality(getStoredImageQuality());
 
         const items = await listImageConversations();
         const normalizedItems = await recoverConversationHistory(items);
@@ -1903,12 +1934,16 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     const prompt = intent.prompt.trim() || "参考这张图，生成一张风格、主体和构图相近的新图片。";
     const sizeSelection = getImageSizeSelectionFromSize(intent.requestedSize || intent.resolutionPreset || "");
     const outputFormat = isImageOutputFormat(intent.outputFormat) ? intent.outputFormat : DEFAULT_IMAGE_OUTPUT_FORMAT;
+    const intentModel =
+      isImageModel(intent.model) && modelIDLooksImageCapable(intent.model)
+        ? intent.model
+        : imageCreationModelOptions[0]?.value || DEFAULT_IMAGE_MODEL;
 
     setSelectedConversationId(null);
     setComposerMode("image");
     setImagePrompt(prompt);
     setImageCount("1");
-    setImageModel(isImageModel(intent.model) && modelIDLooksImageCapable(intent.model) ? intent.model : imageCreationModelOptions[0]?.value || DEFAULT_IMAGE_MODEL);
+    setImageModel(intentModel);
     setImageSizeMode(sizeSelection.mode);
     setImageAspectRatio(sizeSelection.aspectRatio);
     setImageResolution(isImageResolution(intent.resolutionPreset) ? intent.resolutionPreset : sizeSelection.resolution);
@@ -1916,7 +1951,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     setImageCustomWidth(sizeSelection.customWidth);
     setImageCustomHeight(sizeSelection.customHeight);
     setImageOutputFormat(outputFormat);
-    setImageOutputCompression(reusableOutputCompressionValue(intent.outputCompression, outputFormat));
+    setImageOutputCompression(reusableOutputCompressionValue(intent.outputCompression, outputFormat, intentModel));
     setDefaultImageVisibility("private");
     setReferenceImages([]);
     if (fileInputRef.current) {
@@ -2070,12 +2105,19 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
 
     window.localStorage.setItem(IMAGE_OUTPUT_FORMAT_STORAGE_KEY, imageOutputFormat);
     const normalizedCompression = normalizeOutputCompressionValue(imageOutputCompression);
-    if (normalizedCompression === undefined || !supportsImageOutputCompression(imageOutputFormat)) {
+    if (normalizedCompression === undefined || !supportsImageOutputCompression(imageModel, imageOutputFormat)) {
       window.localStorage.removeItem(IMAGE_OUTPUT_COMPRESSION_STORAGE_KEY);
       return;
     }
     window.localStorage.setItem(IMAGE_OUTPUT_COMPRESSION_STORAGE_KEY, String(normalizedCompression));
-  }, [imageOutputCompression, imageOutputFormat]);
+  }, [imageModel, imageOutputCompression, imageOutputFormat]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    window.localStorage.setItem(IMAGE_QUALITY_STORAGE_KEY, imageQuality);
+  }, [imageQuality]);
 
   useEffect(() => {
     if (selectedConversationId && !conversations.some((conversation) => conversation.id === selectedConversationId)) {
@@ -2302,10 +2344,10 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     setImageModel((current) => pickMenuModel(imageCreationModelOptions, current, DEFAULT_IMAGE_MODEL));
   }, [imageCreationModelOptions]);
 
-  const handleCreateDraft = () => {
+  const handleCreateDraft = useCallback(() => {
     setSelectedConversationId(null);
     textareaRef.current?.focus();
-  };
+  }, []);
 
   const handleApplyPromptPreset = useCallback(async (preset: ImagePromptPreset) => {
     const requestId = promptApplyRequestIdRef.current + 1;
@@ -2347,63 +2389,6 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
       }
       toast.dismiss(toastId);
       toast.error("已套用提示词，但参考图读取失败");
-    }
-  }, [switchComposerToImageMode]);
-
-  const handleApplyMarketPrompt = useCallback(async (prompt: BananaPrompt) => {
-    const requestId = promptApplyRequestIdRef.current + 1;
-    promptApplyRequestIdRef.current = requestId;
-    setSelectedConversationId(null);
-    switchComposerToImageMode();
-    setImagePrompt(prompt.prompt);
-    setImageCount("1");
-    setImageOutputFormat(DEFAULT_IMAGE_OUTPUT_FORMAT);
-    setImageOutputCompression("");
-    setDefaultImageVisibility("private");
-    setReferenceImages([]);
-    setIsPromptMarketOpen(false);
-    if (fileInputRef.current) {
-      fileInputRef.current.value = "";
-    }
-    textareaRef.current?.focus();
-
-    const referenceUrls = Array.from(
-      new Set([prompt.preview, ...prompt.referenceImageUrls].map((url) => url.trim()).filter(Boolean)),
-    ).slice(0, PROMPT_MARKET_REFERENCE_IMAGE_LIMIT);
-    if (referenceUrls.length === 0) {
-      toast.success("已套用提示词");
-      return;
-    }
-
-    const toastId = toast.loading("正在读取市场参考图");
-    const referenceImages: StoredReferenceImage[] = [];
-    try {
-      for (let index = 0; index < referenceUrls.length; index += 1) {
-        try {
-          referenceImages.push(await buildReferenceImageFromUrl(referenceUrls[index], index, "market-reference"));
-        } catch {
-          // Keep applying the prompt even when a remote reference image blocks browser access.
-        }
-      }
-      if (promptApplyRequestIdRef.current !== requestId) {
-        toast.dismiss(toastId);
-        return;
-      }
-      if (referenceImages.length > 0) {
-        setReferenceImages(referenceImages);
-        toast.dismiss(toastId);
-        toast.success(`已套用提示词和 ${referenceImages.length} 张参考图`);
-        return;
-      }
-      toast.dismiss(toastId);
-      toast.success("已套用提示词，参考图读取失败");
-    } catch {
-      if (promptApplyRequestIdRef.current !== requestId) {
-        toast.dismiss(toastId);
-        return;
-      }
-      toast.dismiss(toastId);
-      toast.success("已套用提示词，参考图读取失败");
     }
   }, [switchComposerToImageMode]);
 
@@ -2753,15 +2738,58 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     }
   };
 
-  const openDeleteConversationConfirm = (id: string) => {
-    setIsHistoryOpen(false);
+  const openDeleteConversationConfirm = useCallback((id: string) => {
+    closeDrawer();
     setDeleteConfirm({ type: "one", id });
-  };
+  }, [closeDrawer]);
 
-  const openClearHistoryConfirm = () => {
-    setIsHistoryOpen(false);
+  const openClearHistoryConfirm = useCallback(() => {
+    closeDrawer();
     setDeleteConfirm({ type: "all" });
-  };
+  }, [closeDrawer]);
+
+  const mobileHistoryPanel = useMemo(
+    () => ({
+      title: "历史记录",
+      description: `${conversations.length} 个对话`,
+      content: (
+        <div className="h-[min(56dvh,520px)] min-h-[220px]">
+          <Suspense fallback={<ImageLazyLoading label="加载历史..." />}>
+            <ImageSidebar
+              conversations={conversations}
+              isLoadingHistory={isLoadingHistory}
+              selectedConversationId={selectedConversationId}
+              onCreateDraft={() => {
+                handleCreateDraft();
+                closeDrawer();
+              }}
+              onClearHistory={openClearHistoryConfirm}
+              onSelectConversation={(id) => {
+                setSelectedConversationId(id);
+                closeDrawer();
+              }}
+              onDeleteConversation={openDeleteConversationConfirm}
+              formatConversationTime={formatConversationTime}
+            />
+          </Suspense>
+        </div>
+      ),
+    }),
+    [
+    closeDrawer,
+    conversations,
+    handleCreateDraft,
+    isLoadingHistory,
+    openClearHistoryConfirm,
+    openDeleteConversationConfirm,
+    selectedConversationId,
+    ],
+  );
+
+  useEffect(() => {
+    setPanel(mobileHistoryPanel);
+    return () => clearPanel();
+  }, [clearPanel, mobileHistoryPanel, setPanel]);
 
   const handleConfirmDelete = async () => {
     const target = deleteConfirm;
@@ -3107,6 +3135,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         targetTurn.outputCompression === undefined || targetTurn.outputCompression === null
           ? ""
           : String(targetTurn.outputCompression),
+      quality: targetTurn.quality || DEFAULT_IMAGE_QUALITY,
       visibility: targetTurn.visibility || "private",
       referenceImages: targetTurn.mode === "chat" ? [] : targetTurn.referenceImages,
     });
@@ -3265,6 +3294,9 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         const referenceImageIds = usesReferenceImages(activeTurn.mode)
           ? await ensureReferenceUploads(conversationId, snapshot, activeTurn)
           : [];
+        const publicImageUrls = usesReferenceImages(activeTurn.mode)
+          ? publicReferenceImageUrls(activeTurn.referenceImages)
+          : [];
         const taskMessages = buildCreationTaskMessages(snapshot, activeTurn.id);
         const activeTurnSizeRequest =
           activeTurn.mode === "chat"
@@ -3319,7 +3351,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
               activeTurn.prompt,
               activeTurn.model,
               activeTurnSizeRequest.size,
-              undefined,
+              imageQualityForModel(activeTurn.model, activeTurn.quality || DEFAULT_IMAGE_QUALITY),
               group.count,
               taskMessages,
               activeTurn.visibility || "private",
@@ -3329,6 +3361,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
               activeTurn.background ? { background: activeTurn.background } : undefined,
               conversationId,
               fallbackReferenceImage,
+              publicImageUrls,
             );
           }
           return createImageGenerationTask(
@@ -3336,7 +3369,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
             activeTurn.prompt,
             activeTurn.model,
             activeTurnSizeRequest.size,
-            undefined,
+            imageQualityForModel(activeTurn.model, activeTurn.quality || DEFAULT_IMAGE_QUALITY),
             group.count,
             taskMessages,
             activeTurn.visibility || "private",
@@ -3527,7 +3560,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         count: 1,
         size: "",
         sizeSelection: undefined,
-        quality: undefined,
+        quality: imageQualityForModel(effectiveImageModel, DEFAULT_IMAGE_QUALITY),
         outputFormat: "png",
         outputCompression: undefined,
         background: "transparent",
@@ -3952,7 +3985,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
               count: imageCount,
               size: draftImageSize,
               sizeSelection: mode === "chat" ? undefined : draftStoredSizeSelection,
-              quality: undefined,
+              quality: imageQualityForModel(effectiveDraftModel, draft.quality),
               outputFormat: draftOutputFormat,
               outputCompression: draftOutputCompression,
               background: undefined,
@@ -4062,6 +4095,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
           ? undefined
           : imageOutputCompressionForModel(effectiveModel, effectiveOutputFormat, imageOutputCompression);
       const effectiveImageResolution = imageResolutionPresetForModel(effectiveModel, currentImageSizeRequest?.selection);
+      const effectiveImageQuality = imageQualityForModel(effectiveModel, imageQuality);
       const isHighResolutionRequest =
         effectiveImageMode !== "chat" &&
         isHighResolutionImageRequest(currentImageSize, effectiveImageResolution);
@@ -4083,7 +4117,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         count: requestedCount,
         size: effectiveImageMode === "chat" ? "" : currentImageSize,
         sizeSelection: effectiveImageMode === "chat" ? undefined : currentImageSizeSelection,
-        quality: undefined,
+        quality: effectiveImageQuality,
         outputFormat: effectiveOutputFormat,
         outputCompression: effectiveImageMode === "chat" ? undefined : effectiveOutputCompression,
         background: undefined,
@@ -4150,7 +4184,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     <>
       <section
         className={cn(
-          "relative grid h-full min-h-0 w-full grid-cols-1 gap-2 px-0 pb-[calc(env(safe-area-inset-bottom)+0.5rem)] sm:gap-3 sm:pb-3 lg:grid-cols-[280px_minmax(0,1fr)] xl:grid-cols-[300px_minmax(0,1fr)]",
+          "relative grid h-full min-h-0 w-full grid-cols-1 gap-2 px-0 pb-0 sm:gap-3 sm:pb-3 lg:grid-cols-[280px_minmax(0,1fr)] xl:grid-cols-[300px_minmax(0,1fr)]",
           isEmbeddedMode && "gap-1 pb-0 sm:gap-2 sm:pb-1 lg:grid-cols-[260px_minmax(0,1fr)] xl:grid-cols-[270px_minmax(0,1fr)]",
         )}
         style={
@@ -4173,38 +4207,6 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
             />
           </Suspense>
         </div>
-
-        <Dialog open={isHistoryOpen} onOpenChange={setIsHistoryOpen}>
-          <DialogContent className="flex h-[min(82dvh,760px)] w-[92vw] max-w-[460px] flex-col overflow-hidden rounded-[32px] border-white/80 bg-white p-0 shadow-[0_32px_110px_-38px_rgba(15,23,42,0.45)] sm:rounded-[36px]">
-            <DialogHeader className="px-6 pt-7 pb-4 sm:px-8">
-              <DialogTitle className="flex items-center gap-2 text-xl font-bold tracking-tight">
-                <History className="size-5" />
-                历史记录
-              </DialogTitle>
-            </DialogHeader>
-            <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-8 sm:px-8">
-              <Suspense fallback={<ImageLazyLoading label="加载历史..." />}>
-                <ImageSidebar
-                  conversations={conversations}
-                  isLoadingHistory={isLoadingHistory}
-                  selectedConversationId={selectedConversationId}
-                  onCreateDraft={() => {
-                    handleCreateDraft();
-                    setIsHistoryOpen(false);
-                  }}
-                  onClearHistory={openClearHistoryConfirm}
-                  onSelectConversation={(id) => {
-                    setSelectedConversationId(id);
-                    setIsHistoryOpen(false);
-                  }}
-                  onDeleteConversation={openDeleteConversationConfirm}
-                  formatConversationTime={formatConversationTime}
-                  hideActionButtons
-                />
-              </Suspense>
-            </div>
-          </DialogContent>
-        </Dialog>
 
         {editingTurnDraft ? (
           <Dialog open onOpenChange={(open) => (!open ? setEditingTurnDraft(null) : null)}>
@@ -4342,11 +4344,15 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                         <div className="rounded-2xl border border-sky-100 bg-sky-50 px-3 py-2 text-xs leading-5 text-sky-900 sm:col-span-2 lg:col-span-4">
                           {editingDraftStructuredParameters
                             ? "Codex 图片链路会下发目标尺寸；格式由后端保存结果时处理，压缩率仅适用于 JPEG。"
+                            : isOfficialImageModel(editingTurnDraft.model) && editingDraftPixelIconSizeSelected
+                              ? "官方图片通道会按 1:1 提交；固定像素为本地输出尺寸。"
+                            : isOfficialImageModel(editingTurnDraft.model)
+                              ? "官方图片通道会提交分辨率预设和画幅；固定像素为本地输出尺寸，实际像素以结果为准。"
                             : editingDraftPixelIconSizeSelected
                               ? "像素图标尺寸会作为目标尺寸提交，不叠加分辨率预设。"
                             : editingDraftResolutionControlsVisible
-                              ? "常规/官方图片线路会提交分辨率预设，画幅仍作为构图偏好；实际像素以上游返回为准。"
-                              : "当前图片线路只会把比例作为构图偏好，实际尺寸以上游返回为准；格式由后端保存结果时处理。"}
+                              ? "常规图片通道会提交分辨率预设，画幅仍作为构图偏好；实际像素以上游返回为准。"
+                              : "当前图片通道只会把比例作为构图偏好，实际尺寸以上游返回为准；格式由后端保存结果时处理。"}
                         </div>
                         <label className="flex flex-col gap-2 text-sm font-medium text-stone-700">
                           画幅
@@ -4506,6 +4512,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                         ) : null}
                         {editingDraftOutputControls ? (
                           <ImageOutputControls
+                            imageModel={editingTurnDraft.model}
                             outputFormat={editingTurnDraft.outputFormat}
                             outputCompression={editingTurnDraft.outputCompression}
                             onOutputFormatChange={(outputFormat) =>
@@ -4523,6 +4530,32 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                             inputClassName=""
                             compressionPlaceholderDisabled="仅 JPEG"
                           />
+                        ) : null}
+                        {supportsImageQuality(editingTurnDraft.model) ? (
+                          <label className="flex flex-col gap-2 text-sm font-medium text-stone-700">
+                            质量强度
+                            <Select
+                              value={editingTurnDraft.quality}
+                              onValueChange={(value) =>
+                                setEditingTurnDraft((current) =>
+                                  current && isImageQuality(value) ? { ...current, quality: value } : current,
+                                )
+                              }
+                            >
+                              <SelectTrigger>
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectGroup>
+                                  {IMAGE_QUALITY_OPTIONS.map((option) => (
+                                    <SelectItem key={option.value} value={option.value}>
+                                      {option.label}
+                                    </SelectItem>
+                                  ))}
+                                </SelectGroup>
+                              </SelectContent>
+                            </Select>
+                          </label>
                         ) : null}
                         {editingDraftEffectiveSizeSelection.mode !== "auto" ? (
                           <>
@@ -4579,34 +4612,6 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         ) : null}
 
         <div className={cn("relative flex min-h-0 min-w-0 flex-col gap-2 sm:gap-4", isEmbeddedMode && "sm:gap-2")}>
-          <div className={cn("flex items-center justify-between gap-2 px-1 sm:px-4", isEmbeddedMode && "sm:px-2")}>
-            <div className="flex min-w-0 flex-1 items-center gap-2 lg:hidden">
-              <Button
-                variant="outline"
-                className="h-10 min-w-0 flex-1 shrink rounded-full border-[#e5e7eb] bg-white text-[#45515e] shadow-sm"
-                onClick={() => setIsHistoryOpen(true)}
-              >
-                <History className="size-4" />
-                <span className="truncate">历史记录 ({conversations.length})</span>
-              </Button>
-              <Button
-                className="h-10 rounded-full shadow-sm"
-                onClick={handleCreateDraft}
-              >
-                <Plus className="size-4" />
-                新建
-              </Button>
-              <Button
-                variant="outline"
-                className="h-10 rounded-full border-[#e5e7eb] bg-white px-3 text-[#45515e] shadow-sm"
-                onClick={openClearHistoryConfirm}
-                disabled={conversations.length === 0}
-              >
-                <Trash2 className="size-4" />
-              </Button>
-            </div>
-          </div>
-
           <div
             ref={resultsViewportRef}
             className={cn(
@@ -4640,7 +4645,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
           <div
             ref={composerDockRef}
             className={cn(
-              "pointer-events-none absolute inset-x-0 bottom-0 z-30 px-1 pb-[calc(env(safe-area-inset-bottom)+0.5rem)] sm:px-4 sm:pb-2",
+              "pointer-events-none absolute inset-x-0 bottom-0 z-30 px-1 pb-[calc(env(safe-area-inset-bottom)+0.25rem)] sm:px-4 sm:pb-2",
               isEmbeddedMode && "sm:px-2 sm:pb-1",
             )}
             style={
@@ -4664,6 +4669,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                 imageCustomHeight={imageCustomHeight}
                 imageOutputFormat={imageOutputFormat}
                 imageOutputCompression={imageOutputCompression}
+                imageQuality={imageQuality}
                 highResolutionHint={highResolutionHint}
                 estimatedImagePriceLabel={estimatedImagePriceLabel}
                 billingBlocked={billingBlocked}
@@ -4683,7 +4689,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                 onImageCustomHeightChange={setImageCustomHeight}
                 onImageOutputFormatChange={setImageOutputFormat}
                 onImageOutputCompressionChange={setImageOutputCompression}
-                onOpenPromptMarket={() => setIsPromptMarketOpen(true)}
+                onImageQualityChange={setImageQuality}
                 onSubmit={handleSubmit}
                 onReferenceImageChange={handleReferenceImageChange}
                 onImageResultDrop={handleImageResultDrop}
@@ -4713,7 +4719,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
             sideOffsetClassName="bottom-[calc(var(--image-composer-dock-height,0px)+1.25rem)] right-0 top-5 rounded-l-2xl border-y border-l"
             collapsedClassName="w-[52px] translate-x-0 p-2"
             expandedClassName="w-[360px] translate-x-0 p-3"
-            wideClassName="w-[560px] translate-x-0 p-3"
+            wideClassName="w-[760px] translate-x-0 p-3"
             defaultExpanded
             onExpandedChange={handleAssetSidebarExpandedChange}
             title={assetLibraryTitle}
@@ -4739,16 +4745,6 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
             open={lightboxOpen}
             onOpenChange={setLightboxOpen}
             onIndexChange={setLightboxIndex}
-          />
-        </Suspense>
-      ) : null}
-
-      {isPromptMarketOpen ? (
-        <Suspense fallback={<ImageOverlayLoading label="加载提示词..." />}>
-          <ImagePromptMarket
-            open={isPromptMarketOpen}
-            onOpenChange={setIsPromptMarketOpen}
-            onApplyPrompt={handleApplyMarketPrompt}
           />
         </Suspense>
       ) : null}

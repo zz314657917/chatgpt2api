@@ -18,8 +18,15 @@ import {
   normalizeImageResolutionPreset,
   normalizePixelIconSizeAlias,
   isPixelIconSize,
-  supportsImageOutputCompression,
 } from "@/lib/image-parameters";
+import {
+  CHAT_MODEL_OPTIONS,
+  IMAGE_CREATION_MODEL_OPTIONS,
+  isChatModel,
+  isImageCreationModel,
+  modelIDLooksImageCapable,
+  supportsImageOutputCompression,
+} from "@/lib/api";
 
 import {
   SMART_CANVAS_KIND,
@@ -56,7 +63,7 @@ export function normalizeCanvasImageOutputFormat(value?: string) {
 }
 
 export function normalizeCanvasImageOutputCompression(format: string | undefined, value: unknown) {
-  return supportsImageOutputCompression(format || "") ? normalizeImageOutputCompression(value) : undefined;
+  return supportsImageOutputCompression("", format || "") ? normalizeImageOutputCompression(value) : undefined;
 }
 
 export function normalizeCanvasImageBackground(value?: string) {
@@ -413,6 +420,7 @@ export function managedImagesToRefs(items: Array<ManagedImageSummary | ManagedIm
   return dedupeCanvasImageRefs(items.map((item) => ({
     path: item.path,
     name: item.name,
+    public_url: item.path ? getManagedImageUrlFromPath(item.path) : item.preview_url || item.thumbnail_url,
     thumbnail_url: item.thumbnail_url,
     preview_url: item.preview_url,
     visibility: item.visibility,
@@ -567,10 +575,12 @@ export function canvasImageKey(ref: CanvasImageRef) {
     cleanImageText(ref.path) ||
     getManagedImagePathFromUrl(cleanImageText(ref.local_url)) ||
     getManagedImagePathFromUrl(cleanImageText(ref.url)) ||
+    getManagedImagePathFromUrl(cleanImageText(ref.public_url)) ||
     sourcePathFromThumbnailUrl(cleanImageText(ref.thumbnail_url)) ||
     sourcePathFromPreviewUrl(cleanImageText(ref.preview_url)) ||
     cleanImageText(ref.local_url) ||
     cleanImageText(ref.url) ||
+    cleanImageText(ref.public_url) ||
     cleanImageText(ref.thumbnail_url) ||
     cleanImageText(ref.preview_url) ||
     cleanImageText(ref.name)
@@ -587,9 +597,11 @@ export function dedupeCanvasImageRefs(refs: CanvasImageRef[]) {
       path: cleanImageText(ref.path) ||
         getManagedImagePathFromUrl(cleanImageText(ref.local_url)) ||
         getManagedImagePathFromUrl(cleanImageText(ref.url)) ||
+        getManagedImagePathFromUrl(cleanImageText(ref.public_url)) ||
         sourcePathFromThumbnailUrl(cleanImageText(ref.thumbnail_url)) ||
         sourcePathFromPreviewUrl(cleanImageText(ref.preview_url)),
       name: cleanImageText(ref.name),
+      public_url: cleanImageText(ref.public_url),
       thumbnail_url: cleanImageText(ref.thumbnail_url),
       preview_url: cleanImageText(ref.preview_url),
       role: ref.role === "mask" ? "mask" : ref.role === "image" ? "image" : undefined,
@@ -606,7 +618,7 @@ export function dedupeCanvasImageRefs(refs: CanvasImageRef[]) {
 }
 
 export function canvasImageSource(ref: CanvasImageRef) {
-  return cleanImageText(ref.local_url) || cleanImageText(ref.url) || (ref.path ? getManagedImageUrlFromPath(ref.path) : "");
+  return cleanImageText(ref.local_url) || cleanImageText(ref.url) || cleanImageText(ref.public_url) || (ref.path ? getManagedImageUrlFromPath(ref.path) : "");
 }
 
 export function canvasImagePreviewSource(ref: CanvasImageRef) {
@@ -767,8 +779,33 @@ export function imageFilesFromList(files: FileList | File[] | null | undefined) 
 
 export function normalizeModelCatalog(models: CanvasModelOption[]): SmartCanvasModelCatalog {
   const enabledModels = models.filter((model) => model.enabled !== false);
-  const text = enabledModels.filter((model) => modelHasCapability(model, "chat") || model.kind === "text" || model.kind === "both");
-  const image = enabledModels.filter((model) => modelHasCapability(model, "image") || model.kind === "image" || model.kind === "both");
+  const text = mergeCanvasModelOptions([
+    ...enabledModels.filter((model) =>
+      (modelHasCapability(model, "chat") || model.kind === "text" || model.kind === "both") &&
+      isChatModel(model.id) &&
+      !modelIDLooksImageCapable(model.id)
+    ),
+    ...CHAT_MODEL_OPTIONS.map((option) => ({
+      id: option.value,
+      name: option.label,
+      kind: "text" as const,
+      capabilities: ["chat" as const],
+      enabled: true,
+    })),
+  ]);
+  const image = mergeCanvasModelOptions([
+    ...enabledModels.filter((model) =>
+      (modelHasCapability(model, "image") || model.kind === "image" || model.kind === "both") &&
+      isImageCreationModel(model.id)
+    ),
+    ...IMAGE_CREATION_MODEL_OPTIONS.map((option) => ({
+      id: option.value,
+      name: option.label,
+      kind: "image" as const,
+      capabilities: ["image" as const],
+      enabled: true,
+    })),
+  ]);
   const video = models.filter((model) => modelHasCapability(model, "video") || model.kind === "video");
   const autoImageModel: CanvasModelOption = { id: "auto", name: "auto", kind: "image", capabilities: ["image"], enabled: true };
   const autoTextModel: CanvasModelOption = { id: "auto", name: "auto", kind: "text", capabilities: ["chat"], enabled: true };
@@ -779,6 +816,19 @@ export function normalizeModelCatalog(models: CanvasModelOption[]): SmartCanvasM
     ? text
     : [autoTextModel, ...text];
   return { all: models, text: textWithAuto, image: withAuto, video };
+}
+
+function mergeCanvasModelOptions(models: CanvasModelOption[]) {
+  const seen = new Set<string>();
+  const merged: CanvasModelOption[] = [];
+  for (const model of models) {
+    if (!model.id || seen.has(model.id)) {
+      continue;
+    }
+    seen.add(model.id);
+    merged.push(model);
+  }
+  return merged;
 }
 
 function modelHasCapability(model: CanvasModelOption, capability: "chat" | "image" | "video") {
@@ -994,6 +1044,7 @@ function taskDataToImageRef(item: CreationTaskData): CanvasImageRef[] {
   return [{
     url: item.url,
     local_url: item.local_url || item.url,
+    public_url: item.url,
   }];
 }
 

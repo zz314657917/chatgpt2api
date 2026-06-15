@@ -27,6 +27,7 @@ export type StoredReferenceImage = {
   name: string;
   type: string;
   dataUrl: string;
+  publicUrl?: string;
   source?: StoredReferenceImageSource;
   clientReferenceId?: string;
   uploadStatus?: StoredReferenceImageUploadStatus;
@@ -245,6 +246,7 @@ function normalizeReferenceImage(image: StoredReferenceImage & Record<string, un
     name: image.name || "reference.png",
     type: image.type || "image/png",
     dataUrl: image.dataUrl,
+    ...(typeof image.publicUrl === "string" && image.publicUrl ? { publicUrl: image.publicUrl } : {}),
     ...(source ? { source } : {}),
     ...(typeof image.clientReferenceId === "string" && image.clientReferenceId ? { clientReferenceId: image.clientReferenceId } : {}),
     ...(uploadStatus ? { uploadStatus: uploadStatus === "uploading" ? "pending" : uploadStatus } : {}),
@@ -406,7 +408,7 @@ function normalizeTurn(turn: ImageTurn & Record<string, unknown>): ImageTurn {
     quality: isImageQuality(turn.quality) ? turn.quality : undefined,
     outputFormat: isImageOutputFormat(turn.outputFormat) ? turn.outputFormat : undefined,
     outputCompression:
-      isImageOutputFormat(turn.outputFormat) && supportsImageOutputCompression(turn.outputFormat)
+      isImageOutputFormat(turn.outputFormat) && supportsImageOutputCompression(model, turn.outputFormat)
         ? normalizeOutputCompression(turn.outputCompression)
         : undefined,
     background: typeof turn.background === "string" && turn.background ? turn.background : undefined,

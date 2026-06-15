@@ -66,44 +66,47 @@ export function ImageSidebar({
             conversations.map((conversation) => {
               const active = conversation.id === selectedConversationId;
               const stats = getImageConversationStats(conversation);
+              const metaLabel = `${conversation.turns.length} 轮 · ${formatConversationTime(conversation.updatedAt)}`;
               return (
                 <div
                   key={conversation.id}
                   className={cn(
-                    "group relative w-full rounded-[16px] border text-left transition",
-                    hideActionButtons ? "px-4 py-3.5" : "px-3 py-2 sm:py-3",
+                    "group relative w-full rounded-lg border text-left transition",
+                    hideActionButtons ? "px-3 py-2" : "px-2.5 py-1.5",
                     active
-                      ? "border-[#f2f3f5] bg-white text-[#18181b] shadow-[0_4px_6px_rgba(0,0,0,0.08)]"
-                      : "border-transparent text-[#45515e] hover:border-[#f2f3f5] hover:bg-white",
+                      ? "border-transparent bg-[#e9ebef] text-[#18181b]"
+                      : "border-transparent text-[#45515e] hover:bg-black/[0.04]",
                   )}
                 >
                   <button
                     type="button"
                     onClick={() => onSelectConversation(conversation.id)}
-                    className={cn("block w-full text-left", hideActionButtons ? "pr-0" : "pr-8")}
+                    className={cn(
+                      "flex min-h-7 w-full min-w-0 items-center gap-2 text-left",
+                      hideActionButtons ? "pr-0" : "pr-8",
+                    )}
+                    title={`${conversation.title} · ${metaLabel}`}
+                    aria-label={`${conversation.title}，${metaLabel}`}
                   >
-                    <div className={cn("truncate font-semibold", hideActionButtons ? "text-base" : "text-sm")}>
-                      <span className="truncate">{conversation.title}</span>
-                    </div>
-                    <div className={cn("mt-1 text-xs", active ? "text-[#45515e]" : "text-[#8e8e93]")}>
-                      {conversation.turns.length} 轮 · {formatConversationTime(conversation.updatedAt)}
-                    </div>
                     {stats.running > 0 || stats.queued > 0 ? (
-                      <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px]">
+                      <span className="flex shrink-0 items-center gap-1 text-[10px]">
                         {stats.running > 0 ? (
-                          <span className="rounded-full bg-blue-50 px-2 py-1 text-blue-600">处理中 {stats.running}</span>
+                          <span className="rounded-full bg-blue-50 px-1.5 py-0.5 text-blue-600">运行 {stats.running}</span>
                         ) : null}
                         {stats.queued > 0 ? (
-                          <span className="rounded-full bg-amber-50 px-2 py-1 text-amber-700">排队 {stats.queued}</span>
+                          <span className="rounded-full bg-amber-50 px-1.5 py-0.5 text-amber-700">排队 {stats.queued}</span>
                         ) : null}
-                      </div>
+                      </span>
                     ) : null}
+                    <span className={cn("min-w-0 flex-1 truncate font-medium", hideActionButtons ? "text-sm" : "text-sm")}>
+                      {conversation.title}
+                    </span>
                   </button>
                   {!hideActionButtons ? (
                     <button
                       type="button"
                       onClick={() => void onDeleteConversation(conversation.id)}
-                      className="absolute top-3 right-2 inline-flex size-7 items-center justify-center rounded-md text-stone-400 opacity-0 transition hover:bg-stone-100 hover:text-rose-500 group-hover:opacity-100"
+                      className="absolute top-1/2 right-1 inline-flex size-7 -translate-y-1/2 items-center justify-center rounded-md text-stone-400 opacity-0 transition hover:bg-stone-100 hover:text-rose-500 group-hover:opacity-100 focus-visible:opacity-100"
                       aria-label="删除会话"
                     >
                       <Trash2 className="size-4" />

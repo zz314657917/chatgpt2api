@@ -42,7 +42,7 @@ async function visibleText(page) {
     await page.screenshot({ path: path.join(outDir, "image-authenticated.png"), fullPage: true });
     const imageText = await visibleText(page);
     record(results, "launch token returns to /image", page.url().startsWith(`${baseURL}/image`), page.url());
-    record(results, "top nav balance visible", /余额|¥123\.45|123\.45/.test(imageText), imageText.slice(0, 600));
+    record(results, "top nav balance visible", /余额|✪123\.45|123\.45/.test(imageText), imageText.slice(0, 600));
     record(results, "recharge entry visible", imageText.includes("充值"), imageText.slice(0, 600));
     record(results, "ordinary image page hides forbidden API text", !/(API Key|Token|OpenAI-compatible|OpenAI compatible|API 选择)/.test(imageText), imageText.match(/API Key|Token|OpenAI-compatible|OpenAI compatible|API 选择/)?.[0] || "");
 

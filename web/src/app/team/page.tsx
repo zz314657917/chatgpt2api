@@ -47,6 +47,7 @@ import {
   removeTeamMember,
   revokeTeamInvite,
   updateTeamMemberDailyLimit,
+  updateTeamMemberRemark,
   updateTeamMemberRole,
   type TeamAuditLog,
   type TeamInvite,
@@ -144,7 +145,7 @@ function usageModeLabel(mode?: string) {
 }
 
 function formatCnyMilliAmount(value: number) {
-  return `¥${(value / 1000).toFixed(3).replace(/(\.\d{2})0$/, "$1")}`;
+  return `✪${(value / 1000).toFixed(3).replace(/(\.\d{2})0$/, "$1")}`;
 }
 
 function formatBillingAmount(value?: number) {
@@ -177,7 +178,7 @@ function formatDurationSeconds(value?: number) {
 function formatLimitAmount(value?: number) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric) || numeric < 0) {
-    return "¥0.00";
+    return "✪0.00";
   }
   return formatCnyMilliAmount(numeric);
 }
@@ -480,12 +481,58 @@ function DailyLimitControl({
   );
 }
 
+function RemarkControl({
+  member,
+  disabled,
+  pending,
+  onSave,
+}: {
+  member: TeamMember;
+  disabled: boolean;
+  pending: boolean;
+  onSave: (member: TeamMember, value: string) => void;
+}) {
+  const [value, setValue] = useState(() => member.remark || "");
+  useEffect(() => {
+    setValue(member.remark || "");
+  }, [member.remark]);
+  return (
+    <div className="flex items-center gap-2">
+      <Input
+        value={value}
+        onChange={(event) => setValue(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            onSave(member, value);
+          }
+        }}
+        maxLength={80}
+        placeholder="备注"
+        className="h-9 w-36 rounded-lg"
+        disabled={disabled}
+      />
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        className="h-9 rounded-lg"
+        disabled={disabled}
+        onClick={() => onSave(member, value)}
+      >
+        {pending ? <LoaderCircle className="size-4 animate-spin" /> : null}
+        保存
+      </Button>
+    </div>
+  );
+}
+
 function MembersTable({
   team,
   currentUserID,
   pending,
   onRoleChange,
   onDailyLimitChange,
+  onRemarkChange,
   onRemove,
 }: {
   team: TeamSummary | null;
@@ -493,6 +540,7 @@ function MembersTable({
   pending: PendingAction | null;
   onRoleChange: (member: TeamMember, role: "manager" | "member") => void;
   onDailyLimitChange: (member: TeamMember, value: string) => void;
+  onRemarkChange: (member: TeamMember, value: string) => void;
   onRemove: (member: TeamMember) => void;
 }) {
   const members = team?.members || [];
@@ -505,6 +553,7 @@ function MembersTable({
         <TableHeader className={stickyTableHeaderClassName}>
           <TableRow>
             <TableHead>成员信息</TableHead>
+            <TableHead>备注</TableHead>
             <TableHead>身份</TableHead>
             <TableHead>每日额度</TableHead>
             <TableHead>加入时间</TableHead>
@@ -514,7 +563,7 @@ function MembersTable({
         <TableBody>
           {members.length === 0 ? (
             <TableRow>
-              <TableCell colSpan={5} className="h-28 text-center text-muted-foreground">暂无团队成员</TableCell>
+              <TableCell colSpan={6} className="h-28 text-center text-muted-foreground">暂无团队成员</TableCell>
             </TableRow>
           ) : members.map((member) => {
             const owner = member.role === "owner";
@@ -528,6 +577,18 @@ function MembersTable({
                 <TableCell>
                   <div className="font-medium text-foreground">{displayName}</div>
                   {detailText ? <div className="text-xs text-muted-foreground">{detailText}</div> : null}
+                </TableCell>
+                <TableCell>
+                  {!canEditMember ? (
+                    <span className="text-muted-foreground">{member.remark || "--"}</span>
+                  ) : (
+                    <RemarkControl
+                      member={member}
+                      disabled={pending?.type === "remark" && pending.id === member.user_id}
+                      pending={pending?.type === "remark" && pending.id === member.user_id}
+                      onSave={onRemarkChange}
+                    />
+                  )}
                 </TableCell>
                 <TableCell>
                   {!canEditMember ? (
@@ -1027,6 +1088,22 @@ export default function TeamPage() {
     }
   };
 
+  const handleRemarkChange = async (member: TeamMember, value: string) => {
+    if (!activeTeam) {
+      return;
+    }
+    setPending({ type: "remark", id: member.user_id });
+    try {
+      const result = await updateTeamMemberRemark(activeTeam.id, member.user_id, value);
+      await refreshAfterMutation(result.teams);
+      toast.success(value.trim() ? "成员备注已更新" : "成员备注已清空");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "更新成员备注失败");
+    } finally {
+      setPending(null);
+    }
+  };
+
   const handleRemove = async (member: TeamMember) => {
     if (!activeTeam) {
       return;
@@ -1162,6 +1239,7 @@ export default function TeamPage() {
                   pending={pending}
                   onRoleChange={handleRoleChange}
                   onDailyLimitChange={handleDailyLimitChange}
+                  onRemarkChange={handleRemarkChange}
                   onRemove={handleRemove}
                 />
               ) : (

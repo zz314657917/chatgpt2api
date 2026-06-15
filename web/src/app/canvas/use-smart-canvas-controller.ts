@@ -28,8 +28,10 @@ import {
   fetchManagedImages,
   fetchTeamWorkspace,
   MANAGED_IMAGE_UNCLASSIFIED_COLLECTION_ID,
-  saveCanvas,
+  supportsImageOutputCompression,
   supportsImageOutputControls,
+  supportsImageQuality,
+  saveCanvas,
   uploadManagedImages,
   type CanvasDocument,
   type CanvasImageRef,
@@ -42,10 +44,11 @@ import {
 } from "@/lib/api";
 import { fetchAuthenticatedImageBlob } from "@/lib/authenticated-image";
 import {
+  isImageQuality,
   isPixelIconSize,
   normalizeImageOutputCompression,
   normalizeImageOutputFormat,
-  supportsImageOutputCompression,
+  type ImageQuality,
 } from "@/lib/image-parameters";
 import { getCachedAuthSession } from "@/lib/session";
 import { useAuthGuard } from "@/lib/use-auth-guard";
@@ -176,6 +179,14 @@ function splitMaskImageRefs(refs: CanvasImageRef[]) {
     }
   }
   return { images: dedupeCanvasImageRefs(images), masks: dedupeCanvasImageRefs(masks) };
+}
+
+function publicCanvasImageUrls(refs: CanvasImageRef[]) {
+  return Array.from(new Set(refs.map((ref) => (ref.public_url || ref.url || "").trim()).filter(Boolean)));
+}
+
+function publicCanvasImageUrl(ref?: CanvasImageRef) {
+  return (ref?.public_url || ref?.url || "").trim();
 }
 
 function userPresetScope() {
@@ -500,7 +511,14 @@ function generatorOutputFormat(generator: SmartCanvasItem) {
 
 function generatorOutputCompression(generator: SmartCanvasItem) {
   const format = generatorOutputFormat(generator);
-  return format && supportsImageOutputCompression(format) ? normalizeImageOutputCompression(generator.data?.output_compression) : undefined;
+  return format && supportsImageOutputCompression(generatorImageModel(generator), format) ? normalizeImageOutputCompression(generator.data?.output_compression) : undefined;
+}
+
+function generatorImageQuality(generator: SmartCanvasItem): ImageQuality | undefined {
+  if (!supportsImageQuality(generatorImageModel(generator))) {
+    return undefined;
+  }
+  return isImageQuality(generator.data?.quality) ? generator.data.quality : "auto";
 }
 
 function generatorImageCount(generator: SmartCanvasItem) {
@@ -2966,6 +2984,7 @@ export function useSmartCanvasController() {
       if (files.length === 0) {
         throw new Error("没有可读取的输入图片");
       }
+      const publicImageUrls = publicCanvasImageUrls([selected.image]);
       const clientTaskId = uniqueTaskId(`smart-canvas-${type}`);
       const taskOptions = type === "background_removal" ? { background: "transparent" } : undefined;
       const taskOutputFormat = type === "background_removal" ? "png" : undefined;
@@ -2984,6 +3003,9 @@ export function useSmartCanvasController() {
         taskOutputFormat,
         undefined,
         taskOptions,
+        undefined,
+        undefined,
+        publicImageUrls,
       );
       const outputId = createImageToolResultNode(selected.item, selected.image, type, prompt, task, parameters);
       void pollTaskIntoToolResult(task.id, outputId, imageToolLabel(type));
@@ -3538,14 +3560,17 @@ export function useSmartCanvasController() {
             if (files.length === 0) {
               throw new Error("没有可读取的输入图片");
             }
-            const inputImageMask = maskIterationImages[0] ? await imageRefToDataUrl(maskIterationImages[0]) : "";
+            const inputImageMask = maskIterationImages[0]
+              ? publicCanvasImageUrl(maskIterationImages[0]) || await imageRefToDataUrl(maskIterationImages[0])
+              : "";
+            const publicImageUrls = publicCanvasImageUrls(editIterationImages);
             task = await createImageEditTask(
               uniqueTaskId("smart-canvas-loop"),
               files,
               submittedPrompt,
               generator.data?.model || "auto",
               generatorImageSize(generator, true),
-              undefined,
+              generatorImageQuality(generator),
               taskCount,
               undefined,
               generatorImageVisibility(generator),
@@ -3553,6 +3578,9 @@ export function useSmartCanvasController() {
               generatorOutputFormat(generator),
               generatorOutputCompression(generator),
               inputImageMask ? { inputImageMask } : undefined,
+              undefined,
+              undefined,
+              publicImageUrls,
             );
           } else if (maskIterationImages.length > 0) {
             throw new Error("蒙版需要和原图一起作为输入");
@@ -3562,7 +3590,7 @@ export function useSmartCanvasController() {
               submittedPrompt,
               generator.data?.model || "auto",
               generatorImageSize(generator),
-              undefined,
+              generatorImageQuality(generator),
               taskCount,
               undefined,
               generatorImageVisibility(generator),
@@ -3783,14 +3811,17 @@ export function useSmartCanvasController() {
         if (files.length === 0) {
           throw new Error("没有可读取的输入图片");
         }
-        const inputImageMask = maskInputRefs[0] ? await imageRefToDataUrl(maskInputRefs[0]) : "";
+        const inputImageMask = maskInputRefs[0]
+          ? publicCanvasImageUrl(maskInputRefs[0]) || await imageRefToDataUrl(maskInputRefs[0])
+          : "";
+        const publicImageUrls = publicCanvasImageUrls(editInputRefs);
         task = await createImageEditTask(
           clientTaskId,
           files,
           submittedPrompt,
           generatorImageModel(generator),
           generatorImageSize(generator, true),
-          undefined,
+          generatorImageQuality(generator),
           generatorImageCount(generator),
           undefined,
           generatorImageVisibility(generator),
@@ -3798,6 +3829,9 @@ export function useSmartCanvasController() {
           generatorOutputFormat(generator),
           generatorOutputCompression(generator),
           inputImageMask ? { inputImageMask } : undefined,
+          undefined,
+          undefined,
+          publicImageUrls,
         );
       } else if (maskInputRefs.length > 0) {
         throw new Error("蒙版需要和原图一起作为输入");
@@ -3807,7 +3841,7 @@ export function useSmartCanvasController() {
           submittedPrompt,
           generatorImageModel(generator),
           generatorImageSize(generator),
-          undefined,
+          generatorImageQuality(generator),
           generatorImageCount(generator),
           undefined,
           generatorImageVisibility(generator),

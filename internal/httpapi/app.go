@@ -57,6 +57,7 @@ type App struct {
 	images       *service.ImageService
 	textAssets   *service.TextAssetService
 	tasks        *service.ImageTaskService
+	analytics    *service.AnalyticsService
 	canvases     *service.CanvasService
 	social       *service.SocialProjectService
 	announce     *service.AnnouncementService
@@ -117,9 +118,12 @@ func NewApp() (*App, error) {
 		}
 		return binding.UserEmail
 	})
+	teams.SetUserNameLookup(func(ownerID string) string {
+		return auth.DisplayNameForUser(ownerID)
+	})
 	images := service.NewImageService(cfg, storageBackend)
 	images.SetLogger(logger)
-	app := &App{config: cfg, auth: auth, accounts: accounts, billing: billing, logs: logs, logger: logger, proxy: proxy, engine: engine, images: images, textAssets: service.NewTextAssetService(storageBackend), canvases: service.NewCanvasService(storageBackend), social: service.NewSocialProjectService(storageBackend), announce: service.NewAnnouncementService(storageBackend), prompts: service.NewPromptFavoriteService(storageBackend), cpa: service.NewCPAConfig(storageBackend), sub2: service.NewSub2APIConfig(storageBackend), sub2Bindings: sub2Bindings, teams: teams, update: newUpdateService(cfg), cancel: cancel}
+	app := &App{config: cfg, auth: auth, accounts: accounts, billing: billing, logs: logs, logger: logger, proxy: proxy, engine: engine, images: images, textAssets: service.NewTextAssetService(storageBackend), analytics: service.NewAnalyticsService(storageBackend), canvases: service.NewCanvasService(storageBackend), social: service.NewSocialProjectService(storageBackend), announce: service.NewAnnouncementService(storageBackend), prompts: service.NewPromptFavoriteService(storageBackend), cpa: service.NewCPAConfig(storageBackend), sub2: service.NewSub2APIConfig(storageBackend), sub2Bindings: sub2Bindings, teams: teams, update: newUpdateService(cfg), cancel: cancel}
 	app.cpaImport = service.NewCPAImportService(app.cpa, accounts, proxy)
 	app.sub2Import = service.NewSub2APIService(app.sub2, accounts)
 	app.sub2Launch = service.NewSub2APILaunchService(auth, sub2Bindings, cfg)
@@ -2020,6 +2024,8 @@ func isPermissionCheckSkipped(path string) bool {
 		return true
 	case "/api/profile/prompt-favorites":
 		return true
+	case "/api/analytics/events":
+		return true
 	case "/api/sub2api/binding":
 		return true
 	case "/api/sub2api/api-keys":
@@ -2157,6 +2163,16 @@ func (a *App) jsonImageEditUploads(ctx context.Context, body map[string]any, ide
 	if err != nil {
 		return nil, err
 	}
+	publicURLs := publicJSONImageURLs(urls)
+	if len(publicURLs) > 0 {
+		body["official_public_image_urls"] = publicURLs
+	}
+	if sub2APIImageModel(body["model"]) == util.ImageModelGPTOfficial && len(publicURLs) > 0 {
+		for range publicURLs {
+			images = append(images, protocol.UploadedImage{})
+		}
+		return images, nil
+	}
 	for _, rawURL := range urls {
 		image, err := uploadedImageFromJSONImageURL(ctx, rawURL)
 		if err != nil {
@@ -2165,6 +2181,23 @@ func (a *App) jsonImageEditUploads(ctx context.Context, body map[string]any, ide
 		images = append(images, image)
 	}
 	return images, nil
+}
+
+func publicJSONImageURLs(urls []string) []string {
+	out := make([]string, 0, len(urls))
+	for _, rawURL := range urls {
+		parsed, err := url.Parse(strings.TrimSpace(rawURL))
+		if err != nil {
+			continue
+		}
+		switch strings.ToLower(parsed.Scheme) {
+		case "http", "https":
+			if parsed.Host != "" {
+				out = append(out, rawURL)
+			}
+		}
+	}
+	return dedupe(out)
 }
 
 func jsonImageURLReferences(body map[string]any) ([]string, error) {
@@ -2180,6 +2213,11 @@ func jsonImageURLReferences(body map[string]any) ([]string, error) {
 		return nil
 	}
 	if value, ok := body["image_url"]; ok {
+		if err := appendRef(value); err != nil {
+			return nil, err
+		}
+	}
+	for _, value := range util.AsStringSlice(body["image_urls"]) {
 		if err := appendRef(value); err != nil {
 			return nil, err
 		}
@@ -2454,6 +2492,7 @@ func readMultipartImageBody(r *http.Request) (map[string]any, []protocol.Uploade
 		"partial_images":           firstForm(r.MultipartForm, "partial_images"),
 		"official_fallback":        firstForm(r.MultipartForm, "official_fallback"),
 		"input_image_mask":         firstForm(r.MultipartForm, "input_image_mask"),
+		"image_urls":               r.MultipartForm.Value["image_urls"],
 		"output_format":            firstForm(r.MultipartForm, "output_format"),
 		"output_compression":       firstForm(r.MultipartForm, "output_compression"),
 		"share_prompt_parameters":  firstForm(r.MultipartForm, "share_prompt_parameters"),
@@ -3448,6 +3487,15 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func firstNonNil(values ...any) any {
+	for _, value := range values {
+		if value != nil {
+			return value
+		}
+	}
+	return nil
 }
 
 func (a *App) serveWeb(w http.ResponseWriter, r *http.Request) {

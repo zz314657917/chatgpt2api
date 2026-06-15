@@ -165,15 +165,43 @@ func TestSub2APIBindingFromRedeemBodyRequiresEmail(t *testing.T) {
 	}
 }
 
-func TestSub2APIChargePayloadConvertsCNYMilliToYuan(t *testing.T) {
+func TestSub2APIChargePayloadUsesRawAmount(t *testing.T) {
 	svc := &Sub2APILaunchService{}
 
-	payload := svc.chargePayload("sub2api:42", "sub2api:99", "team-1", "task-1", "generate", "gpt-image-2", "charge-1", 50)
+	payload := svc.chargePayload("sub2api:42", "sub2api:99", "team-1", "task-1", "generate", "gpt-image-2", "charge-1", 0.05, "apimart_cost")
 
 	if got := payload["amount"]; got != 0.05 {
 		t.Fatalf("payload amount = %#v, want 0.05", got)
 	}
+	if got := payload["amount_unit"]; got != "apimart_cost" {
+		t.Fatalf("payload amount_unit = %#v, want apimart_cost", got)
+	}
 	if payload["task_id"] != "task-1" || payload["mode"] != "generate" || payload["model"] != "gpt-image-2" || payload["actor_user_id"] != "sub2api:99" || payload["team_id"] != "team-1" {
 		t.Fatalf("payload missing structured metadata: %#v", payload)
+	}
+
+	payload = svc.chargePayload("sub2api:42", "", "", "task-2", "generate", "dall-e-3", "charge-2", 0.5, "")
+	if _, ok := payload["amount_unit"]; ok {
+		t.Fatalf("payload should omit empty amount_unit: %#v", payload)
+	}
+}
+
+func TestNormalizeSub2APIUsageItemsAddsAmountFromActualCost(t *testing.T) {
+	items := []map[string]any{
+		{"request_id": "usage-1", "model": "gpt-image-2", "actual_cost": 0.123},
+		{"request_id": "usage-2", "model": "gpt-5", "amount": 0.5, "actual_cost": 0.7},
+		{"request_id": "usage-3", "model": "gpt-5.4", "cost": "0.25"},
+	}
+
+	normalizeSub2APIUsageItems(items)
+
+	if got := items[0]["amount"]; got != 0.123 {
+		t.Fatalf("amount from actual_cost = %#v, want 0.123", got)
+	}
+	if got := items[1]["amount"]; got != 0.5 {
+		t.Fatalf("existing amount = %#v, want 0.5", got)
+	}
+	if got := items[2]["amount"]; got != "0.25" {
+		t.Fatalf("amount from cost = %#v, want 0.25", got)
 	}
 }

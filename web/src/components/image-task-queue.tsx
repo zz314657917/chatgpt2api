@@ -10,7 +10,7 @@ import { SMART_CANVAS_QUEUE_CHANGED_EVENT, type SmartCanvasQueueChangedDetail } 
 import { normalizeSmartCanvas, smartCanvasRuns } from "@/app/canvas/canvas-utils";
 import type { SmartCanvasDocument, SmartCanvasRunRecord } from "@/app/canvas/types";
 import { fetchCanvases, IMAGE_MODEL_ROUTE_DETAILS, type CanvasDocument, type CreationTask } from "@/lib/api";
-import { formatImageSizeDisplay, getImageSizeRequirementLabel, isHighResolutionImageSize } from "@/lib/image-parameters";
+import { formatImageSizeDisplay, getImageSizeRequirementLabel, imageQualityLabel, isHighResolutionImageSize } from "@/lib/image-parameters";
 import { cn } from "@/lib/utils";
 import {
   ACTIVE_IMAGE_CONVERSATION_STORAGE_KEY,
@@ -469,7 +469,7 @@ function ImageQueueItem({
     item.turn.model,
     routeDetail?.routeLabel || "",
     sizeLabel,
-    item.turn.quality ? `Quality ${item.turn.quality}` : "",
+    item.turn.quality ? `质量强度 ${imageQualityLabel(item.turn.quality)}` : "",
   ].filter(Boolean);
   const progressMessage =
     progress?.message ||

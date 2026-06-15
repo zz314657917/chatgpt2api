@@ -20,6 +20,7 @@ import {
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
+import { useMobileNav } from "@/components/mobile-nav-context";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import {
@@ -56,6 +57,7 @@ import {
   fetchTeamWorkspace,
   generateSocialProjectCards,
   generateSocialProjectCopy,
+  isImageCreationModel,
   saveSocialProject,
   uploadManagedImages,
   createManagedTextAsset,
@@ -169,11 +171,16 @@ function socialModelOption(model: CanvasModelOption): SocialModelMenuOption {
 function socialModelsByCapability(models: CanvasModelOption[], capability: "chat" | "image") {
   return models
     .filter((model) => model.enabled !== false)
-    .filter((model) =>
-      canvasModelHasCapability(model, capability) ||
-      (capability === "chat" && (model.kind === "text" || model.kind === "both")) ||
-      (capability === "image" && (model.kind === "image" || model.kind === "both"))
-    )
+    .filter((model) => {
+      const hasRequestedCapability =
+        canvasModelHasCapability(model, capability) ||
+        (capability === "chat" && (model.kind === "text" || model.kind === "both")) ||
+        (capability === "image" && (model.kind === "image" || model.kind === "both"));
+      if (!hasRequestedCapability) {
+        return false;
+      }
+      return capability !== "image" || isImageCreationModel(model.id);
+    })
     .map(socialModelOption);
 }
 
@@ -182,6 +189,7 @@ function mergeSocialModelOptions(
   localOptions: readonly SocialModelMenuOption[],
   selectedModel: ImageModel,
   preferRemoteOnly = false,
+  canKeepSelectedModelValue: (model: ImageModel) => boolean = () => true,
 ) {
   const seen = new Set<string>();
   const merged: SocialModelMenuOption[] = [];
@@ -194,7 +202,7 @@ function mergeSocialModelOptions(
     merged.push(option);
   }
   const canKeepSelectedModel = !(preferRemoteOnly && remoteOptions.length > 0);
-  if (canKeepSelectedModel && selectedModel && !seen.has(selectedModel)) {
+  if (canKeepSelectedModel && selectedModel && !seen.has(selectedModel) && canKeepSelectedModelValue(selectedModel)) {
     merged.unshift({ value: selectedModel, label: selectedModel });
   }
   return merged;
@@ -448,6 +456,7 @@ function projectTitle(project: SocialProject) {
 export default function SocialPage() {
   const { isCheckingAuth } = useAuthGuard(undefined, "/social");
   const appMeta = useAppMeta();
+  const { clearPanel, closeDrawer, setPanel } = useMobileNav();
   const [projects, setProjects] = useState<SocialProject[]>([]);
   const [selectedId, setSelectedId] = useState("");
   const [draft, setDraft] = useState<ProjectDraft>(() => emptyDraft());
@@ -496,7 +505,7 @@ export default function SocialPage() {
     [appMeta.luoye_independent_mode, chatModel, remoteCanvasModels],
   );
   const imageModelOptions = useMemo(
-    () => mergeSocialModelOptions(socialModelsByCapability(remoteCanvasModels, "image"), IMAGE_CREATION_MODEL_OPTIONS, imageModel),
+    () => mergeSocialModelOptions(socialModelsByCapability(remoteCanvasModels, "image"), IMAGE_CREATION_MODEL_OPTIONS, imageModel, false, isImageCreationModel),
     [imageModel, remoteCanvasModels],
   );
   const pendingTaskIds = useMemo(() => {
@@ -671,7 +680,7 @@ export default function SocialPage() {
     };
   }, [applyProject, pendingTaskIds, selectedProject]);
 
-  const createProject = async () => {
+  const createProject = useCallback(async () => {
     try {
       const project = await createSocialProject({
         platform: "xhs",
@@ -685,7 +694,7 @@ export default function SocialPage() {
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "创建失败");
     }
-  };
+  }, [applyProject]);
 
   const persist = async (nextDraft = draft) => {
     if (!selectedProject || saving) return null;
@@ -703,7 +712,7 @@ export default function SocialPage() {
     }
   };
 
-  const removeProject = async (project: SocialProject) => {
+  const removeProject = useCallback(async (project: SocialProject) => {
     if (!window.confirm(`删除「${projectTitle(project)}」？`)) return;
     try {
       await deleteSocialProject(project.id);
@@ -716,7 +725,7 @@ export default function SocialPage() {
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "删除失败");
     }
-  };
+  }, [projects]);
 
   const handleSourceImageUpload = async (files: FileList | null) => {
     const imageFiles = Array.from(files || []).filter((file) => file.type.startsWith("image/"));
@@ -1088,6 +1097,98 @@ export default function SocialPage() {
     }
   };
 
+  const mobileProjectPanel = useMemo(
+    () => ({
+      title: "社媒项目",
+      description: `${projects.length} 个项目`,
+      content: (
+        <div className="flex h-[min(56dvh,520px)] min-h-[220px] flex-col gap-3">
+          <div className="grid grid-cols-2 gap-2">
+            <Button
+              className="h-10 rounded-xl"
+              onClick={() => {
+                void createProject();
+                closeDrawer();
+              }}
+            >
+              <Plus className="size-4" />
+              新建
+            </Button>
+            <Button variant="outline" className="h-10 rounded-xl" onClick={() => void reload()} disabled={loading}>
+              {loading ? <LoaderCircle className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
+              刷新
+            </Button>
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+            {projects.length === 0 ? (
+              <div className="rounded-2xl border border-dashed border-border p-5 text-center text-sm text-muted-foreground">
+                暂无项目
+              </div>
+            ) : (
+              <div className="grid gap-2">
+                {projects.map((project) => (
+                  <div
+                    key={project.id}
+                    role="button"
+                    tabIndex={0}
+                    className={cn(
+                      "rounded-2xl border p-3 text-left transition",
+                      project.id === selectedId
+                        ? "border-[#1456f0]/40 bg-[#edf4ff] text-[#123a8c] dark:bg-sky-950/30 dark:text-sky-200"
+                        : "border-border bg-background hover:bg-accent",
+                    )}
+                    onClick={() => {
+                      setSelectedId(project.id);
+                      setDraft(draftFromProject(project));
+                      setSelectedCardIndex(0);
+                      closeDrawer();
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        setSelectedId(project.id);
+                        setDraft(draftFromProject(project));
+                        setSelectedCardIndex(0);
+                        closeDrawer();
+                      }
+                    }}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="min-w-0 flex-1 truncate text-sm font-semibold">{projectTitle(project)}</span>
+                      <Badge variant={statusVariant(project.status)}>{statusLabel(project.status)}</Badge>
+                    </div>
+                    <div className="mt-2 line-clamp-2 text-xs leading-5 text-muted-foreground">{project.source_text || project.caption || "还没有素材内容"}</div>
+                    <div className="mt-2 flex items-center justify-between gap-2">
+                      <span className="min-w-0 truncate text-[11px] text-muted-foreground">{formatDateTime(project.updated_at)}</span>
+                      <button
+                        type="button"
+                        className="flex size-7 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition hover:bg-rose-500/10 hover:text-rose-600"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          void removeProject(project);
+                        }}
+                        title="删除项目"
+                        aria-label="删除项目"
+                      >
+                        <Trash2 className="size-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      ),
+    }),
+    [closeDrawer, createProject, loading, projects, reload, removeProject, selectedId],
+  );
+
+  useEffect(() => {
+    setPanel(mobileProjectPanel);
+    return () => clearPanel();
+  }, [clearPanel, mobileProjectPanel, setPanel]);
+
   if (isCheckingAuth) {
     return null;
   }
@@ -1095,7 +1196,7 @@ export default function SocialPage() {
   return (
     <>
     <section className="flex h-full min-h-0 w-full overflow-hidden rounded-[24px] border border-border bg-card text-card-foreground shadow-[0_16px_42px_rgba(24,40,72,0.08)]">
-      <aside className="flex h-full min-h-0 w-[300px] shrink-0 flex-col border-r border-border bg-muted/30">
+      <aside className="hidden h-full min-h-0 w-[300px] shrink-0 flex-col border-r border-border bg-muted/30 lg:flex">
         <div className="flex items-center justify-between gap-3 border-b border-border p-4">
           <div>
             <h1 className="font-display text-lg font-semibold text-foreground">社媒运营</h1>
@@ -1147,8 +1248,8 @@ export default function SocialPage() {
         </div>
       </aside>
 
-      <main className="grid h-full min-h-0 min-w-0 flex-1 grid-cols-[minmax(360px,0.78fr)_minmax(420px,1fr)] overflow-hidden">
-        <section className="h-full min-h-0 overflow-y-auto border-r border-border p-4">
+      <main className="grid h-full min-h-0 min-w-0 flex-1 grid-cols-1 overflow-hidden xl:grid-cols-[minmax(360px,0.78fr)_minmax(420px,1fr)]">
+        <section className="h-full min-h-0 overflow-y-auto border-r border-border p-4 max-xl:border-r-0">
           {!selectedProject ? (
             <EmptyState onCreate={() => void createProject()} />
           ) : (

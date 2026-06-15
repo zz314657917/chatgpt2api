@@ -4,12 +4,13 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   IMAGE_OUTPUT_FORMAT_OPTIONS,
-  supportsImageOutputCompression,
   type ImageOutputFormat,
 } from "@/lib/image-parameters";
+import { supportsImageOutputCompression, type ImageModel } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 type ImageOutputControlsProps = {
+  imageModel?: ImageModel | string;
   outputFormat: ImageOutputFormat;
   outputCompression: string | number | undefined;
   onOutputFormatChange: (value: ImageOutputFormat) => void;
@@ -32,6 +33,7 @@ type ImageOutputControlsProps = {
 };
 
 export function ImageOutputControls({
+  imageModel,
   outputFormat,
   outputCompression,
   onOutputFormatChange,
@@ -52,7 +54,8 @@ export function ImageOutputControls({
   selectContentSideOffset = 4,
   selectContentCollisionPadding = 8,
 }: ImageOutputControlsProps) {
-  const compressionDisabled = !supportsImageOutputCompression(outputFormat);
+  const compressionSupported = supportsImageOutputCompression(imageModel || "", outputFormat);
+  const compressionDisabled = !compressionSupported;
   const normalizedCompression = outputCompression ?? "";
 
   return (
@@ -64,7 +67,7 @@ export function ImageOutputControls({
           onValueChange={(value) => {
             const nextFormat = value as ImageOutputFormat;
             onOutputFormatChange(nextFormat);
-            if (!supportsImageOutputCompression(nextFormat)) {
+            if (!supportsImageOutputCompression(imageModel || "", nextFormat)) {
               onOutputCompressionChange("");
             }
           }}
@@ -95,7 +98,7 @@ export function ImageOutputControls({
       </div>
       <label
         className={cn(fieldClassName, compressionFieldClassName, compressionDisabled && "opacity-55")}
-        title={compressionDisabled ? "只有 JPEG 支持压缩率参数" : "JPEG 压缩率，0-100"}
+        title={compressionDisabled ? "当前格式不接收压缩率参数" : "压缩率，0-100"}
       >
         <span className={cn("shrink-0", labelClassName)}>{compressionLabel}</span>
         <Input
@@ -114,8 +117,8 @@ export function ImageOutputControls({
       {includeHelper ? (
         <p className={cn(helperGridClassName, helperClassName)}>
           {compressionDisabled
-            ? "PNG 和 WebP 不接收压缩率。结果卡会显示实际保存后的格式、像素和文件大小。"
-            : "JPEG 压缩率由后端保存结果时应用；实际上游返回格式不受此项控制。"}
+            ? "当前格式不接收压缩率。结果卡会显示实际保存后的格式、像素和文件大小。"
+            : "压缩率会随任务参数提交；实际上游返回格式以任务结果为准。"}
         </p>
       ) : null}
     </>

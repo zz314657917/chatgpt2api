@@ -1,13 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Check, CircleStop, Clock3, Download, Eye, Globe2, LoaderCircle, Lock, PencilLine, Plus, RotateCcw, Sparkles } from "lucide-react";
+import { ArrowUpRight, Check, CircleStop, Clock3, Download, Eye, Globe2, LoaderCircle, Lock, PencilLine, Plus, RotateCcw, Sparkles } from "lucide-react";
 
 import { AuthenticatedImage } from "@/components/authenticated-image";
 import { Button } from "@/components/ui/button";
 import { IMAGE_RESULT_DRAG_MIME, type ImageResultDragPayload } from "@/app/image/image-result-drag";
 import type { ImagePromptPreset } from "@/app/image/image-presets";
-import { fetchManagedImageDetail, IMAGE_MODEL_ROUTE_DETAILS } from "@/lib/api";
+import { fetchManagedImageDetail, IMAGE_MODEL_ROUTE_DETAILS, supportsImageOutputCompression } from "@/lib/api";
 import type { ImageVisibility } from "@/lib/api";
 import {
   fetchAuthenticatedImageBlob,
@@ -20,7 +20,7 @@ import {
   type DownloadableImage as DownloadableImageFile,
 } from "@/lib/image-download";
 import { getManagedImagePathFromUrl, getManagedImageThumbnailUrlFromPath, getManagedImageUrlFromPath } from "@/lib/image-path";
-import { formatImageSizeDisplay, getImageSizeRequirementLabel, isHighResolutionImageSize, supportsImageOutputCompression } from "@/lib/image-parameters";
+import { formatImageSizeDisplay, getImageSizeRequirementLabel, imageQualityLabel, isHighResolutionImageSize } from "@/lib/image-parameters";
 import { formatBase64ImageFileSize, formatImageFileSize } from "@/lib/image-size";
 import { cn } from "@/lib/utils";
 import {
@@ -392,55 +392,64 @@ export function ImageResults({
       setDownloadingKey(null);
     }
   };
+  const promptSuggestions = promptPresets.slice(0, 4);
 
   if (!selectedConversation) {
     return (
       <div className="flex h-full min-h-[300px] items-center justify-center px-0 py-3 text-center sm:min-h-[420px] sm:py-6">
-        <div className="mx-auto flex w-full max-w-[1180px] flex-col gap-5">
-          <div className="mx-auto flex max-w-[640px] flex-col items-center">
-            <div className="mb-3 inline-flex items-center gap-2 rounded-full bg-[#f0f0f0] px-3 py-1 text-xs font-medium text-[#45515e]">
+        <div className="mx-auto flex w-full max-w-[680px] flex-col items-center gap-5">
+          <div className="flex max-w-[560px] flex-col items-center">
+            <div className="mb-3 inline-flex items-center gap-2 rounded-full bg-[#f0f0f0] px-3 py-1 text-xs font-medium text-[#45515e] dark:bg-muted/70 dark:text-muted-foreground">
               <Sparkles className="size-4 text-[#1456f0]" />
-              生图预设
+              建议提示
             </div>
-            <h1 className="font-display text-3xl leading-[1.08] font-medium text-[#222222] sm:text-5xl">
-              Turn ideas into images
+            <h1 className="font-display text-3xl leading-[1.12] font-medium text-[#222222] dark:text-foreground sm:text-5xl">
+              今天想生成什么？
             </h1>
-            <p className="mx-auto mt-3 max-w-[460px] text-sm leading-6 text-[#45515e] sm:text-[15px]">
-              选择一组真实案例预设快速开始，也可以直接在下方输入自己的画面描述。
+            <p className="mx-auto mt-3 max-w-[440px] text-sm leading-6 text-[#686b73] dark:text-muted-foreground sm:text-[15px]">
+              直接输入一句画面描述，或点一条建议填入后再细调。
             </p>
           </div>
-          <div className="hide-scrollbar flex gap-3 overflow-x-auto px-1 pb-1 text-left sm:grid sm:grid-cols-2 sm:overflow-visible lg:grid-cols-4">
-            {promptPresets.map((preset) => (
-              <button
-                key={preset.id}
-                type="button"
-                className="group w-[250px] shrink-0 overflow-hidden rounded-[22px] border border-[#f2f3f5] bg-white transition hover:-translate-y-0.5 hover:shadow-[0_12px_16px_-4px_rgba(36,36,36,0.08)] sm:w-auto"
-                onClick={() => void onApplyPromptPreset(preset)}
-                aria-label={`套用预设：${preset.title}`}
+          <div className="flex flex-wrap justify-center gap-2 text-xs text-[#45515e] dark:text-muted-foreground">
+            {["海报", "图鉴", "主视觉", "产品图"].map((item) => (
+              <span
+                key={item}
+                className="rounded-full border border-[#e5e7eb] bg-white/70 px-3 py-1.5 dark:border-border dark:bg-background/70"
               >
-                <div className="relative aspect-[16/9] overflow-hidden bg-[#f0f0f0]">
-                  <img
-                    src={preset.imageSrc}
-                    alt={preset.title}
-                    loading="lazy"
-                    className="h-full w-full object-cover transition duration-300 group-hover:scale-[1.03]"
-                  />
-                  <div className="absolute inset-x-0 bottom-0 flex items-center justify-between gap-2 bg-gradient-to-t from-black/70 via-black/25 to-transparent px-3 pt-8 pb-2">
-                    <span className="rounded-full bg-white/92 px-2 py-0.5 text-[11px] font-medium text-[#18181b] shadow-sm">
-                      {preset.size || "Auto"}
-                    </span>
-                    <span className="rounded-full bg-white/18 px-2 py-0.5 text-[11px] font-medium text-white shadow-sm backdrop-blur">
-                      {preset.count} 张
-                    </span>
-                  </div>
-                </div>
-                <div className="flex flex-col gap-2 px-4 py-3.5">
-                  <div className="font-display text-sm font-semibold text-[#222222]">{preset.title}</div>
-                  <div className="line-clamp-2 text-sm leading-6 text-[#45515e]">{preset.hint}</div>
-                  <div className="border-t border-[#f2f3f5] pt-2 text-xs font-medium text-[#1456f0]">套用这个预设</div>
-                </div>
-              </button>
+                {item}
+              </span>
             ))}
+          </div>
+          <div className="w-full max-w-[520px] text-left">
+            <div className="mb-2 flex items-center gap-3 px-1 text-xs text-[#a2a5ad] dark:text-muted-foreground">
+              <span className="shrink-0">灵感建议</span>
+              <span className="h-px flex-1 bg-[#e5e7eb] dark:bg-border" />
+              <span>{String(promptSuggestions.length).padStart(2, "0")}</span>
+            </div>
+            <div className="divide-y divide-[#e5e7eb] dark:divide-border">
+              {promptSuggestions.map((preset, index) => (
+                <button
+                  key={preset.id}
+                  type="button"
+                  className="group flex w-full items-center gap-3 px-1 py-3 text-left transition hover:bg-black/[0.03] dark:hover:bg-accent/40"
+                  onClick={() => void onApplyPromptPreset(preset)}
+                  aria-label={`使用建议：${preset.title}`}
+                >
+                  <span className="w-7 shrink-0 font-mono text-xs text-[#b4b6bd]">
+                    {String(index + 1).padStart(2, "0")}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-medium text-[#222222] dark:text-foreground">
+                      {preset.title}
+                    </span>
+                    <span className="mt-0.5 line-clamp-1 text-xs leading-5 text-[#8e8e93] dark:text-muted-foreground">
+                      {preset.hint}
+                    </span>
+                  </span>
+                  <ArrowUpRight className="size-4 shrink-0 text-[#b4b6bd] transition group-hover:text-[#1456f0]" />
+                </button>
+              ))}
+            </div>
           </div>
         </div>
       </div>
@@ -737,12 +746,12 @@ export function ImageResults({
                       ) : null}
                       {resultSizeLabel ? <span className="rounded-full bg-[#f0f0f0] px-3 py-1">{resultSizeLabel}</span> : null}
                       {turn.quality ? (
-                        <span className="rounded-full bg-[#f0f0f0] px-3 py-1">Quality {turn.quality}</span>
+                        <span className="rounded-full bg-[#f0f0f0] px-3 py-1">质量强度 {imageQualityLabel(turn.quality)}</span>
                       ) : null}
                       {turn.outputFormat ? (
                         <span className="rounded-full bg-[#f0f0f0] px-3 py-1">{turn.outputFormat.toUpperCase()}</span>
                       ) : null}
-                      {turn.outputCompression != null && turn.outputFormat && supportsImageOutputCompression(turn.outputFormat) ? (
+                      {turn.outputCompression != null && turn.outputFormat && supportsImageOutputCompression(turn.model, turn.outputFormat) ? (
                         <span className="rounded-full bg-[#f0f0f0] px-3 py-1">压缩 {turn.outputCompression}</span>
                       ) : null}
                       {turn.background ? (

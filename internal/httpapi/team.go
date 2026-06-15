@@ -106,6 +106,8 @@ func (a *App) handleTeams(w http.ResponseWriter, r *http.Request) {
 			var team map[string]any
 			if _, ok := body["daily_limit_amount"]; ok {
 				team, err = a.teams.UpdateMemberDailyLimit(identity, parts[2], parts[4], util.ToInt(body["daily_limit_amount"], 0))
+			} else if _, ok := body["remark"]; ok {
+				team, err = a.teams.UpdateMemberRemark(identity, parts[2], parts[4], util.Clean(body["remark"]))
 			} else {
 				team, err = a.teams.UpdateMemberRole(identity, parts[2], parts[4], util.Clean(body["role"]))
 			}

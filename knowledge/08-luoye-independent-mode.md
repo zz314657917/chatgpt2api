@@ -2,7 +2,7 @@
 title: Luoye Independent Mode
 type: architecture
 repo: chatgpt2api
-last_verified: 2026-06-12
+last_verified: 2026-06-14
 ---
 
 # 落叶创艺独立用户版
@@ -12,6 +12,7 @@ last_verified: 2026-06-12
 - `chatgpt2api` 当前默认产品面是“落叶创艺独立用户版”，不是通用 ChatGPT Web 包装层，也不只是一个被 Sub2API 启动的图片页。
 - Sub2API 是注册、登录、充值、余额、默认分组、管理配置和扣费真源。
 - `chatgpt2api` 负责本地创作站会话、`/image` 与 `/canvas` 创作体验、团队空间 UI，以及与 Sub2API bridge 的最小必要映射。
+- 2026-06-12 之后，这个“独立用户版”已经不再只对应 `/image` 与 `/canvas`；`/image-manager`、`/social`、`/ecommerce-suite`、text assets 和 team usage 也开始共用同一套创作底座。
 
 ## 默认用户链路
 
@@ -27,6 +28,7 @@ last_verified: 2026-06-12
 - 普通用户 UI 不应暴露本地管理员、API 绑定、限制 API、API Key、Token、OpenAI-compatible 或 API 选择入口。
 - 顶部余额和充值入口优先读取 Sub2API 钱包摘要。
 - 团队模式 v1 的稳定语义是 `team_id`、`payer_user_id`、`actor_user_id` 这组真实扣费上下文，而不是“调用队长 API”。
+- `ecommerce-suite` 不是独立业务后端；它复用现有登录态、素材能力、creation-task 和权限边界，属于独立用户版主线继续扩展出来的新工作台。
 
 ## 登录态与 session-probe
 
@@ -68,6 +70,13 @@ last_verified: 2026-06-12
 - 公共图库只读；团队素材集修改仍受 owner / manager 权限约束。
 - 当前稳定语义是一张图只能属于一个素材集。
 
+## 多工作台共用创作底座
+
+- `/image`、`/canvas`、`/image-manager`、`/social`、`/ecommerce-suite` 当前应被理解为同一产品面的不同入口，而不是几套彼此独立的子系统。
+- `gpt-image-2` 结果序列化、素材引用、session-probe 登录态恢复和钱包扣费语义，是这些工作台共享的稳定后端/前端边界。
+- 2026-06-12 的 Output 动作栈与 `ecommerce-suite` 落地说明：后续如果某个工作台的结果回填、下载、素材入库或 usage 展示异常，不要只在单页排查；默认应把 creation-task 输出、素材库和团队 usage 一起看。
+- text assets 已进入这套创作底座，说明“独立用户版”默认心智已经扩展到“图片工作台 + 素材管理 + 轻量文本资产 + 电商套图编排”的组合面。
+
 ## 最小验证清单
 
 - 命令：
@@ -85,6 +94,7 @@ last_verified: 2026-06-12
   - `/auth/session` 和余额在切号后不会继续沿用旧用户
   - 下载个人 / 团队 / 公共图片时返回短期签名 URL
   - `/image-manager`、`/image`、`/canvas` 能按全部 / 未归类 / 素材集筛选
+  - `ecommerce-suite` 进入后仍复用现有登录态和资产/输出链路，不出现独立鉴权或独立结果语义
 
 ## 现在优先排查什么
 
@@ -93,6 +103,7 @@ last_verified: 2026-06-12
 - 下载链路异常：先区分站内 `/images/...` 展示、`/api/images/download-url` 鉴权、对象存储 presign、CDN TypeA 签名四层。
 - 素材库异常：先看 `collection_id`、未归类筛选、团队 owner/manager 权限和公共图库只读边界。
 - 团队扣费争议：先看 `team_id`、`payer_user_id`、`actor_user_id` 和 Sub2API 对应 commit 记录。
+- 新工作台结果或 team usage 展示异常：先看 creation-task 输出序列化、Output 动作栈、素材链路和团队 usage 页面是否仍共用同一套会话/计费语义。
 
 ## 仍未验证的边界
 

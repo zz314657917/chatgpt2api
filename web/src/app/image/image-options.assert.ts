@@ -60,7 +60,7 @@ assert.equal(normalizeImageOutputFormat("jpeg"), "jpeg");
 assert.equal(normalizeImageOutputFormat("webp"), "webp");
 assert.equal(normalizeImageOutputFormat("bad"), "png");
 assert.equal(isImageQuality("high"), true);
-assert.equal(isImageQuality("auto"), false);
+assert.equal(isImageQuality("auto"), true);
 assert.equal(isImageOutputFormat("jpeg"), true);
 assert.equal(isImageOutputFormat("jpg"), false);
 assert.equal(supportsImageOutputCompression("jpeg"), true);

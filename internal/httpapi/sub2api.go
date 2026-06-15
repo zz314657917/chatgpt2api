@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"mime"
 	"mime/multipart"
 	"net/http"
@@ -15,6 +16,7 @@ import (
 	"net/url"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -188,8 +190,12 @@ func (a *App) runLoggedSub2APIChatTask(ctx context.Context, identity service.Ide
 	payload["owner_id"] = identityScope(identity)
 	payload["owner_name"] = identityDisplayName(identity)
 	payload["stream"] = false
-	model := sub2APIChatModel(payload["model"])
-	result, err := a.callSub2APIChatCompletions(ctx, payload, binding)
+	body := sub2APIChatPayload(payload)
+	if binding.SystemDefault {
+		body["model"] = a.sub2APIChatModelForBinding(ctx, binding, body["model"])
+	}
+	model := util.Clean(body["model"])
+	result, err := a.callSub2APIChatCompletionsWithBody(ctx, body, binding)
 	if err != nil {
 		a.logCall(ctx, identity, "文本生成", http.MethodPost, "/api/creation-tasks/chat-completions", model, start, "failed", protocolErrorHTTPStatus(err), err.Error(), nil, requestCapture)
 		return result, err
@@ -201,7 +207,7 @@ func (a *App) runLoggedSub2APIChatTask(ctx context.Context, identity service.Ide
 		return result, err
 	}
 	a.logCall(ctx, identity, "文本生成", http.MethodPost, "/api/creation-tasks/chat-completions", model, start, "success", http.StatusOK, "", nil, requestCapture)
-	return sub2APIChatTaskResult(result, text), nil
+	return sub2APIChatTaskResult(result, text, model), nil
 }
 
 func (a *App) callSub2APIChatCompletions(ctx context.Context, payload map[string]any, binding service.Sub2APIBinding) (map[string]any, error) {
@@ -209,18 +215,35 @@ func (a *App) callSub2APIChatCompletions(ctx context.Context, payload map[string
 	if binding.SystemDefault {
 		body["model"] = a.sub2APIChatModelForBinding(ctx, binding, body["model"])
 	}
+	return a.callSub2APIChatCompletionsWithBody(ctx, body, binding)
+}
+
+func (a *App) callSub2APIChatCompletionsWithBody(ctx context.Context, body map[string]any, binding service.Sub2APIBinding) (map[string]any, error) {
 	return a.postSub2APIJSON(ctx, binding, "chat/completions", body)
 }
 
 func (a *App) callSub2APIImageGenerations(ctx context.Context, identity service.Identity, payload map[string]any, binding service.Sub2APIBinding) (map[string]any, error) {
 	return a.callSub2APIImageBatchesWithBinding(ctx, identity, payload, binding, func(ctx context.Context, batchPayload map[string]any) (map[string]any, error) {
-		body := sub2APIImageJSONPayload(batchPayload)
+		body, err := sub2APIImageGatewayJSONPayload(batchPayload)
+		if err != nil {
+			return nil, err
+		}
 		body["response_format"] = "b64_json"
 		return a.postSub2APIJSON(ctx, binding, "images/generations", body)
 	})
 }
 
 func (a *App) callSub2APIImageEdits(ctx context.Context, identity service.Identity, payload map[string]any, binding service.Sub2APIBinding) (map[string]any, error) {
+	if sub2APIUsesOfficialImageGateway(payload) {
+		return a.callSub2APIImageBatchesWithBinding(ctx, identity, payload, binding, func(ctx context.Context, batchPayload map[string]any) (map[string]any, error) {
+			body, err := sub2APIImageGatewayJSONPayload(batchPayload)
+			if err != nil {
+				return nil, err
+			}
+			body["response_format"] = "b64_json"
+			return a.postSub2APIJSON(ctx, binding, "images/generations", body)
+		})
+	}
 	images := uploadedImagesFromPayload(payload["images"])
 	if len(images) == 0 {
 		return nil, protocol.HTTPError{Status: http.StatusBadRequest, Message: "image file is required"}
@@ -266,6 +289,7 @@ func (a *App) callSub2APIImageBatchesWithBinding(ctx context.Context, identity s
 	batchSize := sub2APIImageBatchSize(payload)
 	progress := sub2APIImageProgressCallback(payload)
 	acquire := sub2APIImageOutputSlotAcquirer(payload)
+	model := sub2APIImageModel(payload["model"])
 	created := time.Now().Unix()
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -276,7 +300,7 @@ func (a *App) callSub2APIImageBatchesWithBinding(ctx context.Context, identity s
 		results = append(results, result)
 		if result.err != nil {
 			cancel()
-			return sub2APIImageBatchResult(created, sub2APIIndexedImageData(results, true, requested)), result.err
+			return sub2APIImageBatchResult(created, sub2APIIndexedImageData(results, true, requested), model), result.err
 		}
 		if result.created != 0 && (created == 0 || result.created < created) {
 			created = result.created
@@ -288,7 +312,7 @@ func (a *App) callSub2APIImageBatchesWithBinding(ctx context.Context, identity s
 			}
 		}
 	}
-	return sub2APIImageBatchResult(created, sub2APIIndexedImageData(results, false, requested)), nil
+	return sub2APIImageBatchResult(created, sub2APIIndexedImageData(results, false, requested), model), nil
 }
 
 type sub2APIImageBatchRequest struct {
@@ -402,11 +426,11 @@ func sub2APICloneImageData(items []map[string]any) []map[string]any {
 	return out
 }
 
-func sub2APIImageBatchResult(created int64, data []map[string]any) map[string]any {
+func sub2APIImageBatchResult(created int64, data []map[string]any, model string) map[string]any {
 	if data == nil {
 		data = []map[string]any{}
 	}
-	return map[string]any{"created": created, "data": data}
+	return map[string]any{"created": created, "data": data, "model": model}
 }
 
 func sub2APIImageRequestedCount(payload map[string]any) int {
@@ -489,6 +513,17 @@ func sub2APIAcquireBatchSlots(ctx context.Context, acquire protocol.ImageOutputS
 	}, nil
 }
 
+func sub2APIImageGatewayJSONPayload(payload map[string]any) (map[string]any, error) {
+	if sub2APIUsesOfficialImageGateway(payload) {
+		return sub2APIOfficialImageGatewayPayload(payload)
+	}
+	return sub2APIImageJSONPayload(payload), nil
+}
+
+func sub2APIUsesOfficialImageGateway(payload map[string]any) bool {
+	return sub2APIImageModel(payload["model"]) == util.ImageModelGPTOfficial
+}
+
 func sub2APIImageJSONPayload(payload map[string]any) map[string]any {
 	out := map[string]any{
 		"model":   sub2APIImageModel(payload["model"]),
@@ -525,6 +560,69 @@ func sub2APIImageJSONPayload(payload map[string]any) map[string]any {
 	return out
 }
 
+func sub2APIOfficialImageGatewayPayload(payload map[string]any) (map[string]any, error) {
+	out := map[string]any{
+		"model":  sub2APIImageModel(payload["model"]),
+		"prompt": util.Clean(payload["prompt"]),
+		"n":      sub2APIOfficialImagePayloadCount(payload),
+		"size":   sub2APIOfficialImageSize(payload),
+	}
+	if resolution := sub2APIImageResolution(payload); resolution != "" {
+		out["resolution"] = resolution
+	}
+	if quality := util.Clean(payload["quality"]); quality != "" {
+		out["quality"] = quality
+	}
+	if _, ok := payload["official_fallback"]; ok {
+		out["official_fallback"] = util.ToBool(payload["official_fallback"])
+	}
+	for _, key := range []string{"background", "moderation", "style", "partial_images"} {
+		if value := payload[key]; value != nil && util.Clean(value) != "" {
+			out[key] = value
+		}
+	}
+	if _, ok := payload["output_format"]; ok {
+		outputFormat := service.NormalizeImageOutputFormat(util.Clean(payload["output_format"]))
+		out["output_format"] = outputFormat
+		if sub2APIOfficialImageOutputCompressionSupported(outputFormat) {
+			if compression, ok := service.NormalizeImageOutputCompressionValue(firstNonNil(payload["output_compression"], payload["raw_output_compression"])); ok {
+				out["output_compression"] = compression
+			}
+		}
+	}
+	imageURLs := sub2APIOfficialPublicImageURLs(payload)
+	if sub2APIOfficialPayloadNeedsImageURLs(payload) {
+		if len(imageURLs) == 0 {
+			return nil, sub2APIOfficialPublicReferenceError()
+		}
+		out["image_urls"] = imageURLs
+	}
+	if sub2APIOfficialPayloadNeedsMaskURL(payload) {
+		maskURL := sub2APIOfficialPublicMaskURL(payload)
+		if maskURL == "" {
+			return nil, sub2APIOfficialPublicReferenceError()
+		}
+		out["mask_url"] = maskURL
+	}
+	for key, value := range out {
+		if value == "" {
+			delete(out, key)
+		}
+	}
+	return out, nil
+}
+
+func sub2APIOfficialImagePayloadCount(payload map[string]any) int {
+	count := util.ToInt(payload["n"], 1)
+	if count < 1 {
+		return 1
+	}
+	if count > sub2APIOfficialImageBatchLimit {
+		return sub2APIOfficialImageBatchLimit
+	}
+	return count
+}
+
 func sub2APIImageSize(payload map[string]any) string {
 	size := firstNonEmpty(util.Clean(payload["size"]), util.Clean(payload["requested_size"]), util.Clean(payload["image_resolution"]))
 	size = protocol.NormalizeImageGenerationSize(size)
@@ -542,6 +640,53 @@ func sub2APIImageSize(payload map[string]any) string {
 	}
 }
 
+var sub2APIOfficialImageSizes = map[string]struct{}{
+	"auto": {},
+	"1:1":  {},
+	"3:2":  {},
+	"2:3":  {},
+	"4:3":  {},
+	"3:4":  {},
+	"5:4":  {},
+	"4:5":  {},
+	"16:9": {},
+	"9:16": {},
+	"2:1":  {},
+	"1:2":  {},
+	"3:1":  {},
+	"1:3":  {},
+	"21:9": {},
+	"9:21": {},
+}
+
+func sub2APIOfficialImageSize(payload map[string]any) string {
+	size := firstNonEmpty(util.Clean(payload["size"]), util.Clean(payload["requested_size"]))
+	size = protocol.NormalizeImageGenerationSize(size)
+	normalized := strings.ToLower(strings.TrimSpace(size))
+	switch normalized {
+	case "8x8", "16x16", "32x32", "64x64", "128x128":
+		return "1:1"
+	case "":
+		return "auto"
+	default:
+		if _, ok := sub2APIOfficialImageSizes[normalized]; ok {
+			return normalized
+		}
+		if sub2APIImageRatioSize(normalized) {
+			return normalized
+		}
+		return "auto"
+	}
+}
+
+func sub2APIImageRatioSize(size string) bool {
+	match := regexp.MustCompile(`^(\d+):(\d+)$`).FindStringSubmatch(strings.ToLower(strings.TrimSpace(size)))
+	if len(match) != 3 {
+		return false
+	}
+	return util.ToInt(match[1], 0) > 0 && util.ToInt(match[2], 0) > 0
+}
+
 func sub2APIImageResolution(payload map[string]any) string {
 	resolution := service.NormalizeImageResolutionPreset(firstNonEmpty(util.Clean(payload["resolution"]), util.Clean(payload["image_resolution"])))
 	switch resolution {
@@ -552,6 +697,114 @@ func sub2APIImageResolution(payload map[string]any) string {
 	default:
 		return ""
 	}
+}
+
+func sub2APIOfficialImageOutputCompressionSupported(format string) bool {
+	switch service.NormalizeImageOutputFormat(format) {
+	case "jpeg", "webp":
+		return true
+	default:
+		return false
+	}
+}
+
+func sub2APIOfficialPayloadNeedsImageURLs(payload map[string]any) bool {
+	return len(uploadedImagesFromPayload(payload["images"])) > 0 ||
+		len(util.AsStringSlice(payload["reference_image_ids"])) > 0 ||
+		len(util.AsStringSlice(payload["official_public_image_urls"])) > 0 ||
+		len(util.AsStringSlice(payload["image_urls"])) > 0 ||
+		util.Clean(payload["image_url"]) != "" ||
+		payload["image"] != nil
+}
+
+func sub2APIOfficialPayloadNeedsMaskURL(payload map[string]any) bool {
+	return util.Clean(payload["input_image_mask"]) != "" || util.Clean(payload["mask_url"]) != ""
+}
+
+func sub2APIOfficialPublicImageURLs(payload map[string]any) []string {
+	urls := make([]string, 0, 4)
+	appendURL := func(value string) {
+		if url := sub2APIOfficialPublicURL(value); url != "" {
+			urls = append(urls, url)
+		}
+	}
+	for _, url := range util.AsStringSlice(payload["official_public_image_urls"]) {
+		appendURL(url)
+	}
+	for _, url := range util.AsStringSlice(payload["image_urls"]) {
+		appendURL(url)
+	}
+	appendURL(util.Clean(payload["image_url"]))
+	for _, key := range []string{"image", "images"} {
+		appendOfficialPublicURLsFromValue(&urls, payload[key])
+	}
+	return dedupe(urls)
+}
+
+func appendOfficialPublicURLsFromValue(urls *[]string, value any) {
+	switch typed := value.(type) {
+	case []any:
+		for _, item := range typed {
+			appendOfficialPublicURLsFromValue(urls, item)
+		}
+	case []map[string]any:
+		for _, item := range typed {
+			appendOfficialPublicURLsFromValue(urls, item)
+		}
+	case []string:
+		for _, item := range typed {
+			if url := sub2APIOfficialPublicURL(item); url != "" {
+				*urls = append(*urls, url)
+			}
+		}
+	case string:
+		if url := sub2APIOfficialPublicURL(typed); url != "" {
+			*urls = append(*urls, url)
+		}
+	case map[string]any:
+		for _, key := range []string{"url", "image_url", "public_url"} {
+			if url := sub2APIOfficialPublicURL(util.Clean(typed[key])); url != "" {
+				*urls = append(*urls, url)
+			}
+			nested := util.StringMap(typed[key])
+			for _, nestedKey := range []string{"url", "image_url", "public_url"} {
+				if url := sub2APIOfficialPublicURL(util.Clean(nested[nestedKey])); url != "" {
+					*urls = append(*urls, url)
+				}
+			}
+		}
+	}
+}
+
+func sub2APIOfficialPublicMaskURL(payload map[string]any) string {
+	for _, value := range []string{util.Clean(payload["mask_url"]), util.Clean(payload["input_image_mask"])} {
+		if url := sub2APIOfficialPublicURL(value); url != "" {
+			return url
+		}
+	}
+	return ""
+}
+
+func sub2APIOfficialPublicURL(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	parsed, err := url.Parse(value)
+	if err != nil {
+		return ""
+	}
+	switch strings.ToLower(parsed.Scheme) {
+	case "http", "https":
+		if parsed.Host != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func sub2APIOfficialPublicReferenceError() error {
+	return protocol.HTTPError{Status: http.StatusBadRequest, Message: "官方图生图需要可公开访问的参考图链接，请配置公开图片访问后重试"}
 }
 
 func writeSub2APIImagePart(writer *multipart.Writer, image protocol.UploadedImage) error {
@@ -638,14 +891,16 @@ func (a *App) sub2APIChatModelForBinding(ctx context.Context, binding service.Su
 	return chatModels[0].ID
 }
 
-func sub2APIChatTaskResult(result map[string]any, text string) map[string]any {
+func sub2APIChatTaskResult(result map[string]any, text string, model string) map[string]any {
 	if result == nil {
 		result = map[string]any{}
 	}
 	created := int64(util.ToInt(result["created"], int(time.Now().Unix())))
+	model = firstNonEmpty(util.Clean(result["model"]), model)
 	return map[string]any{
 		"created":     created,
 		"output_type": "text",
+		"model":       model,
 		"data":        []map[string]any{{"text_response": text}},
 	}
 }
@@ -721,25 +976,29 @@ func (a *App) doSub2APIRequest(ctx context.Context, binding service.Sub2APIBindi
 	return result, nil
 }
 
-func (a *App) ReserveTask(ctx context.Context, identity service.Identity, task map[string]any, amount int, ref service.BillingReference) error {
+func (a *App) ReserveTask(ctx context.Context, identity service.Identity, task map[string]any, amount float64, ref service.BillingReference) error {
 	if a == nil || a.sub2Launch == nil || amount <= 0 {
 		return nil
 	}
-	return a.sub2Launch.Reserve(ctx, taskPayerUserID(task, identity), taskActorUserID(task, identity), util.Clean(task["team_id"]), util.Clean(task["id"]), util.Clean(task["mode"]), util.Clean(task["model"]), ref.ChargeKey, amount)
+	return a.sub2Launch.Reserve(ctx, taskPayerUserID(task, identity), taskActorUserID(task, identity), util.Clean(task["team_id"]), util.Clean(task["id"]), util.Clean(task["mode"]), taskBillingModel(task, ref), ref.ChargeKey, amount, ref.AmountUnit)
 }
 
-func (a *App) CommitTask(ctx context.Context, identity service.Identity, task map[string]any, consumed int, ref service.BillingReference) error {
+func (a *App) CommitTask(ctx context.Context, identity service.Identity, task map[string]any, consumed float64, ref service.BillingReference) error {
 	if a == nil || a.sub2Launch == nil || consumed <= 0 {
 		return nil
 	}
-	return a.sub2Launch.Commit(ctx, taskPayerUserID(task, identity), taskActorUserID(task, identity), util.Clean(task["team_id"]), util.Clean(task["id"]), util.Clean(task["mode"]), util.Clean(task["model"]), ref.ChargeKey, consumed)
+	return a.sub2Launch.Commit(ctx, taskPayerUserID(task, identity), taskActorUserID(task, identity), util.Clean(task["team_id"]), util.Clean(task["id"]), util.Clean(task["mode"]), taskBillingModel(task, ref), ref.ChargeKey, consumed, ref.AmountUnit)
 }
 
-func (a *App) RefundTask(ctx context.Context, identity service.Identity, task map[string]any, amount int, ref service.BillingReference) error {
+func (a *App) RefundTask(ctx context.Context, identity service.Identity, task map[string]any, amount float64, ref service.BillingReference) error {
 	if a == nil || a.sub2Launch == nil || amount <= 0 {
 		return nil
 	}
-	return a.sub2Launch.Refund(ctx, taskPayerUserID(task, identity), taskActorUserID(task, identity), util.Clean(task["team_id"]), util.Clean(task["id"]), util.Clean(task["mode"]), util.Clean(task["model"]), ref.ChargeKey, ref.RefundForKey, amount)
+	return a.sub2Launch.Refund(ctx, taskPayerUserID(task, identity), taskActorUserID(task, identity), util.Clean(task["team_id"]), util.Clean(task["id"]), util.Clean(task["mode"]), taskBillingModel(task, ref), ref.ChargeKey, ref.RefundForKey, amount, ref.AmountUnit)
+}
+
+func taskBillingModel(task map[string]any, ref service.BillingReference) string {
+	return firstNonEmpty(util.Clean(ref.Model), util.Clean(task["model"]))
 }
 
 func taskPayerUserID(task map[string]any, identity service.Identity) string {
@@ -818,6 +1077,9 @@ func (a *App) formatSub2APIImageResult(ctx context.Context, result map[string]an
 		}
 		result["task_id"] = taskID
 	}
+	if cost, ok := sub2APITaskCost(result); ok && cost > 0 {
+		result["external_billing_consumed_amount"] = cost
+	}
 	items := util.AsMapSlice(result["data"])
 	if len(items) == 0 {
 		items = sub2APIImageTaskResultItems(result)
@@ -853,7 +1115,49 @@ func (a *App) formatSub2APIImageResult(ctx context.Context, result map[string]an
 	}
 	outputOptions := protocol.ImageOutputOptionsFromPayload(payload)
 	outputOptions.TrustUpstreamFormat = true
-	return a.engine.FormatImageResultWithOptions(normalized, util.Clean(payload["prompt"]), "url", util.Clean(payload["base_url"]), identityScope(identity), identityDisplayName(identity), created, "", outputOptions), nil
+	formatted := a.engine.FormatImageResultWithOptions(normalized, util.Clean(payload["prompt"]), "url", util.Clean(payload["base_url"]), identityScope(identity), identityDisplayName(identity), created, "", outputOptions)
+	if cost, ok := sub2APITaskCost(result); ok && cost > 0 {
+		formatted["external_billing_consumed_amount"] = cost
+	}
+	return formatted, nil
+}
+
+func sub2APITaskCost(result map[string]any) (float64, bool) {
+	for _, container := range []map[string]any{
+		result,
+		util.StringMap(result["data"]),
+		util.StringMap(result["result"]),
+	} {
+		if cost, ok := sub2APINumber(container["cost"]); ok && cost > 0 {
+			return cost, true
+		}
+		if creditsCost, ok := sub2APINumber(container["credits_cost"]); ok && creditsCost > 0 {
+			return creditsCost / 10, true
+		}
+	}
+	return 0, false
+}
+
+func sub2APINumber(value any) (float64, bool) {
+	switch v := value.(type) {
+	case float64:
+		return v, !math.IsNaN(v) && !math.IsInf(v, 0)
+	case float32:
+		out := float64(v)
+		return out, !math.IsNaN(out) && !math.IsInf(out, 0)
+	case int:
+		return float64(v), true
+	case int64:
+		return float64(v), true
+	case json.Number:
+		out, err := v.Float64()
+		return out, err == nil
+	case string:
+		out, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
+		return out, err == nil
+	default:
+		return 0, false
+	}
 }
 
 func sub2APIImageTaskID(result map[string]any) string {

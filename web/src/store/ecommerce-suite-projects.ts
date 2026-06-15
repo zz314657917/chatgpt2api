@@ -1,6 +1,7 @@
 import localforage from "localforage";
 
 import { DEFAULT_CHAT_MODEL, DEFAULT_IMAGE_MODEL, type CreationTask, type ImageModel } from "@/lib/api";
+import { isImageQuality, type ImageQuality } from "@/lib/image-parameters";
 import { getManagedImagePathFromUrl, getManagedImageUrlFromPath } from "@/lib/image-path";
 import { getStoredAuthSession, type StoredAuthSession } from "@/store/auth";
 import {
@@ -17,6 +18,7 @@ export type CommerceSuiteReferenceImage = {
   type: string;
   size: number;
   dataUrl: string;
+  publicUrl?: string;
   serverReferenceId?: string;
   uploadStatus?: "pending" | "uploading" | "uploaded" | "error";
   uploadError?: string;
@@ -53,6 +55,7 @@ export type CommerceSuiteProject = {
   imageModel: ImageModel;
   size: string;
   imageResolution: string;
+  imageQuality: ImageQuality;
   outputFormat: "png";
   analysisTaskId?: string;
   analysisStatus?: CreationTask["status"] | "idle";
@@ -151,6 +154,7 @@ function normalizeReferenceImage(image: Partial<CommerceSuiteReferenceImage> & R
     type: String(image.type || "image/png").trim(),
     size: Number.isFinite(size) && size > 0 ? size : 0,
     dataUrl,
+    publicUrl: String(image.publicUrl || "").trim() || undefined,
     serverReferenceId: String(image.serverReferenceId || "").trim() || undefined,
     uploadStatus: status,
     uploadError: String(image.uploadError || "").trim() || undefined,
@@ -208,6 +212,7 @@ export function createCommerceSuiteProject(): CommerceSuiteProject {
     imageModel: DEFAULT_IMAGE_MODEL,
     size: "1:1",
     imageResolution: "1K",
+    imageQuality: "auto",
     outputFormat: "png",
     analysisStatus: "idle",
     results: [],
@@ -260,6 +265,7 @@ export function normalizeCommerceSuiteProject(value: Partial<CommerceSuiteProjec
     imageModel: String(value.imageModel || DEFAULT_IMAGE_MODEL).trim(),
     size: String(value.size || "1:1").trim(),
     imageResolution: String(value.imageResolution || "1K").trim(),
+    imageQuality: isImageQuality(value.imageQuality) ? value.imageQuality : "auto",
     outputFormat: "png",
     analysisTaskId: String(value.analysisTaskId || "").trim() || undefined,
     analysisStatus,

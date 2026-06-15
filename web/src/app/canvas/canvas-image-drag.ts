@@ -20,6 +20,7 @@ function isCanvasImageRef(value: unknown): value is CanvasImageRef {
   return Boolean(
     cleanText(item.url) ||
     cleanText(item.local_url) ||
+    cleanText(item.public_url) ||
     cleanText(item.path) ||
     cleanText(item.thumbnail_url) ||
     cleanText(item.preview_url),
@@ -31,7 +32,7 @@ function imageDragLabel(refs: CanvasImageRef[]) {
     return `${refs.length} 张图片`;
   }
   const ref = refs[0];
-  return cleanText(ref?.name) || cleanText(ref?.path) || cleanText(ref?.local_url) || cleanText(ref?.url) || "图片";
+  return cleanText(ref?.name) || cleanText(ref?.path) || cleanText(ref?.local_url) || cleanText(ref?.url) || cleanText(ref?.public_url) || "图片";
 }
 
 export function hasCanvasImageDragPayload(dataTransfer: DataTransfer) {

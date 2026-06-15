@@ -168,6 +168,9 @@ export function canAccessPath(session: StoredAuthSession | null | undefined, pat
   if (path === "/team") {
     return session.role === "user";
   }
+  if (path === "/usage-overview") {
+    return session.role === "admin";
+  }
   if (session.role === "admin") {
     return true;
   }

@@ -5,10 +5,12 @@ import {
   Check,
   ChevronDown,
   Eraser,
+  FolderOpen,
   Image as ImageIcon,
   ImagePlus,
   LoaderCircle,
   MessageCircle,
+  MoreHorizontal,
   Plus,
   SlidersHorizontal,
   Sparkles,
@@ -22,6 +24,7 @@ import {
   useRef,
   Suspense,
   useState,
+  type CSSProperties,
   type ClipboardEvent,
   type DragEvent,
   type KeyboardEvent,
@@ -39,6 +42,7 @@ import { hasManagedImageDragPayload, parseManagedImageDragPayload } from "@/comp
 import {
   CUSTOM_IMAGE_ASPECT_RATIO,
   IMAGE_ASPECT_RATIO_OPTIONS,
+  IMAGE_QUALITY_OPTIONS,
   PIXEL_ICON_SIZE_OPTIONS,
   IMAGE_RESOLUTION_OPTIONS,
   IMAGE_SIZE_MODE_OPTIONS,
@@ -51,11 +55,14 @@ import {
   parseImageRatio,
   type ImageOutputFormat,
   type ImageAspectRatio,
+  type ImageQuality,
   type ImageResolution,
   type ImageSizeMode,
 } from "@/lib/image-parameters";
 import {
   IMAGE_MODEL_ROUTE_DETAILS,
+  isOfficialImageModel,
+  supportsImageQuality,
   supportsImageOutputControls,
   supportsImageResolutionPresets,
   supportsStructuredImageParameters,
@@ -82,6 +89,7 @@ type ImageComposerProps = {
   imageCustomHeight: string;
   imageOutputFormat: ImageOutputFormat;
   imageOutputCompression: string;
+  imageQuality: ImageQuality;
   highResolutionHint?: ReactNode;
   estimatedImagePriceLabel?: string;
   billingBlocked: boolean;
@@ -101,7 +109,7 @@ type ImageComposerProps = {
   onImageCustomHeightChange: (value: string) => void;
   onImageOutputFormatChange: (value: ImageOutputFormat) => void;
   onImageOutputCompressionChange: (value: string) => void;
-  onOpenPromptMarket: () => void;
+  onImageQualityChange: (value: ImageQuality) => void;
   onSubmit: () => void | Promise<void>;
   onReferenceImageChange: (files: File[]) => void | Promise<void>;
   onImageResultDrop: (imageIds: string[]) => void | Promise<void>;
@@ -114,6 +122,8 @@ const PROMPT_AREA_MIN_HEIGHT = 74;
 const PROMPT_AREA_DEFAULT_HEIGHT = 104;
 const PROMPT_AREA_MAX_HEIGHT = 320;
 const PROMPT_AREA_KEYBOARD_STEP = 16;
+const MOBILE_PROMPT_AREA_MIN_HEIGHT = 48;
+const MOBILE_PROMPT_AREA_MAX_ROWS = 10;
 const IMAGE_FILE_EXTENSION_PATTERN = /\.(avif|bmp|gif|heic|heif|jpeg|jpg|png|svg|webp)$/i;
 
 function getPromptAreaMaxHeight() {
@@ -196,6 +206,8 @@ const IMAGE_ASPECT_RATIO_SETTINGS_OPTIONS = [
     section: "自定义",
   },
 ] satisfies ReadonlyArray<ImageSettingsMenuOption<ImageAspectRatio>>;
+
+const IMAGE_QUALITY_SETTINGS_OPTIONS = IMAGE_QUALITY_OPTIONS satisfies ReadonlyArray<ImageSettingsMenuOption<ImageQuality>>;
 
 function ImageSettingsPopoverMenu<Value extends string>({
   label,
@@ -343,6 +355,7 @@ export function ImageComposer({
   imageCustomHeight,
   imageOutputFormat,
   imageOutputCompression,
+  imageQuality,
   highResolutionHint,
   estimatedImagePriceLabel,
   billingBlocked,
@@ -362,7 +375,7 @@ export function ImageComposer({
   onImageCustomHeightChange,
   onImageOutputFormatChange,
   onImageOutputCompressionChange,
-  onOpenPromptMarket,
+  onImageQualityChange,
   onSubmit,
   onReferenceImageChange,
   onImageResultDrop,
@@ -375,9 +388,17 @@ export function ImageComposer({
   const [isModelMenuOpen, setIsModelMenuOpen] = useState(false);
   const [isAspectRatioMenuOpen, setIsAspectRatioMenuOpen] = useState(false);
   const [isResolutionMenuOpen, setIsResolutionMenuOpen] = useState(false);
+  const [isQualityMenuOpen, setIsQualityMenuOpen] = useState(false);
   const [isImageSettingsOpen, setIsImageSettingsOpen] = useState(false);
   const [isAssetMentionOpen, setIsAssetMentionOpen] = useState(false);
   const [promptAreaHeight, setPromptAreaHeight] = useState(PROMPT_AREA_DEFAULT_HEIGHT);
+  const [isMobilePromptLayout, setIsMobilePromptLayout] = useState(() =>
+    typeof window === "undefined" ? false : window.matchMedia("(max-width: 639px)").matches,
+  );
+  const [mobilePromptAreaStyle, setMobilePromptAreaStyle] = useState<{
+    height: number;
+    overflowY: CSSProperties["overflowY"];
+  }>({ height: MOBILE_PROMPT_AREA_MIN_HEIGHT, overflowY: "hidden" });
   const [isPromptAreaResizing, setIsPromptAreaResizing] = useState(false);
   const [isReferenceImageDragActive, setIsReferenceImageDragActive] = useState(false);
   const composerPanelRef = useRef<HTMLDivElement>(null);
@@ -398,8 +419,11 @@ export function ImageComposer({
   const imageResolutionLabel =
     IMAGE_RESOLUTION_OPTIONS.find((option) => option.value === imageResolution)?.label || "Auto";
   const structuredImageParameters = supportsStructuredImageParameters(imageModel);
+  const officialImageGateway = isOfficialImageModel(imageModel);
   const resolutionPresetsSupported = supportsImageResolutionPresets(imageModel);
   const outputControlsSupported = supportsImageOutputControls(imageModel);
+  const imageQualitySupported = supportsImageQuality(imageModel);
+  const imageQualityLabel = IMAGE_QUALITY_OPTIONS.find((option) => option.value === imageQuality)?.label || "自动";
   const availableImageSizeModeOptions = structuredImageParameters
     ? IMAGE_SIZE_MODE_OPTIONS
     : IMAGE_SIZE_MODE_OPTIONS.filter((option) => option.value !== "custom");
@@ -465,6 +489,61 @@ export function ImageComposer({
           : "宽高需要填写正整数"
         : "不指定画幅或尺寸";
   const mentionAssetItems = useMemo(() => mentionAssets.slice(0, 18), [mentionAssets]);
+  const promptTextareaStyle: CSSProperties = isMobilePromptLayout
+    ? {
+        height: mobilePromptAreaStyle.height,
+        overflowY: mobilePromptAreaStyle.overflowY,
+      }
+    : {
+        height: promptAreaHeight,
+        overflowY: "hidden",
+      };
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia("(max-width: 639px)");
+    const syncPromptLayout = () => {
+      setIsMobilePromptLayout(mediaQuery.matches);
+    };
+
+    syncPromptLayout();
+    mediaQuery.addEventListener("change", syncPromptLayout);
+    return () => {
+      mediaQuery.removeEventListener("change", syncPromptLayout);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isMobilePromptLayout) {
+      return;
+    }
+
+    const textarea = textareaRef.current;
+    if (!textarea) {
+      return;
+    }
+
+    const styles = window.getComputedStyle(textarea);
+    const lineHeight = Number.parseFloat(styles.lineHeight) || 24;
+    const paddingTop = Number.parseFloat(styles.paddingTop) || 0;
+    const paddingBottom = Number.parseFloat(styles.paddingBottom) || 0;
+    const borderTop = Number.parseFloat(styles.borderTopWidth) || 0;
+    const borderBottom = Number.parseFloat(styles.borderBottomWidth) || 0;
+    const singleLineHeight = Math.ceil(lineHeight + paddingTop + paddingBottom + borderTop + borderBottom);
+    const maxHeight = Math.ceil(lineHeight * MOBILE_PROMPT_AREA_MAX_ROWS + paddingTop + paddingBottom + borderTop + borderBottom);
+
+    textarea.style.height = "auto";
+    const measuredHeight = textarea.scrollHeight;
+    const nextHeight = Math.min(Math.max(measuredHeight, singleLineHeight, MOBILE_PROMPT_AREA_MIN_HEIGHT), maxHeight);
+    const nextOverflowY = measuredHeight > maxHeight + 1 ? "auto" : "hidden";
+
+    textarea.style.height = `${nextHeight}px`;
+    textarea.style.overflowY = nextOverflowY;
+    setMobilePromptAreaStyle((current) =>
+      current.height === nextHeight && current.overflowY === nextOverflowY
+        ? current
+        : { height: nextHeight, overflowY: nextOverflowY },
+    );
+  }, [composerMode, isMobilePromptLayout, prompt, referenceImages.length, textareaRef]);
 
   useEffect(() => {
     if (composerMode === "chat") {
@@ -795,6 +874,7 @@ export function ImageComposer({
           ) : null}
           <Textarea
             ref={textareaRef}
+            rows={1}
             value={prompt}
             onChange={(event) => onPromptChange(event.target.value)}
             onPaste={handleTextareaPaste}
@@ -811,8 +891,8 @@ export function ImageComposer({
                 void onSubmit();
               }
             }}
-            className="min-h-[96px] resize-none rounded-none border-0 bg-transparent px-6 pt-6 pb-2 text-[17px] leading-7 text-[#222222] shadow-none placeholder:text-[#8e8e93] focus-visible:ring-0 dark:text-foreground dark:placeholder:text-muted-foreground sm:min-h-0 sm:px-5 sm:py-4 sm:text-[15px] sm:leading-6"
-            style={{ height: promptAreaHeight }}
+            className="min-h-[48px] resize-none rounded-none border-0 bg-transparent px-5 pt-4 pb-1 text-[16px] leading-6 text-[#222222] shadow-none placeholder:text-[#8e8e93] focus-visible:ring-0 dark:text-foreground dark:placeholder:text-muted-foreground sm:min-h-0 sm:px-5 sm:py-4 sm:text-[15px] sm:leading-6"
+            style={promptTextareaStyle}
           />
 
           <div
@@ -913,12 +993,13 @@ export function ImageComposer({
                     <button
                       type="button"
                       className={cn(
-                        "inline-flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-full px-3 text-xs font-medium text-[#686b73] transition hover:bg-black/[0.05] dark:text-muted-foreground dark:hover:bg-accent/60 dark:hover:text-foreground sm:h-8",
+                        "inline-flex size-9 shrink-0 items-center justify-center gap-1.5 rounded-full text-[#686b73] transition hover:bg-black/[0.05] dark:text-muted-foreground dark:hover:bg-accent/60 dark:hover:text-foreground sm:hidden",
                         isAssetMentionOpen && "bg-[#eef4ff] text-[#1456f0] dark:bg-sky-950/30 dark:text-sky-300",
                       )}
+                      aria-label="从素材库加入参考图"
                       title="从素材库加入参考图"
                     >
-                      @素材
+                      <FolderOpen className="size-5" />
                     </button>
                   </PopoverTrigger>
                   <PopoverContent align="start" side="top" sideOffset={8} className="z-[80] w-[min(calc(100vw-2rem),20rem)] p-2">
@@ -960,24 +1041,6 @@ export function ImageComposer({
                   </PopoverContent>
                 </Popover>
                 {composerMode === "image" ? (
-                  <button
-                    type="button"
-                    className="inline-flex size-9 shrink-0 items-center justify-center gap-1.5 rounded-full text-[#686b73] transition hover:bg-black/[0.05] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1456f0]/30 dark:text-muted-foreground dark:hover:bg-accent/60 dark:hover:text-foreground sm:h-8 sm:w-auto sm:border sm:border-[#e5e7eb] sm:bg-white sm:px-3 sm:text-xs sm:font-medium sm:text-[#45515e] sm:dark:border-border sm:dark:bg-background/70 sm:dark:text-muted-foreground"
-                    onClick={() => {
-                      setIsModelMenuOpen(false);
-                      setIsImageSettingsOpen(false);
-                      setIsAspectRatioMenuOpen(false);
-                      setIsResolutionMenuOpen(false);
-                      onOpenPromptMarket();
-                    }}
-                    aria-label="打开提示词市场"
-                    title="提示词市场"
-                  >
-                    <Sparkles className="size-5 sm:size-3.5" />
-                    <span className="hidden sm:inline">市场</span>
-                  </button>
-                ) : null}
-                {composerMode === "image" ? (
                   <Popover open={isImageSettingsOpen} onOpenChange={handleImageSettingsOpenChange}>
                     <PopoverTrigger asChild>
                       <button
@@ -990,7 +1053,8 @@ export function ImageComposer({
                         aria-expanded={isImageSettingsOpen}
                         title={isImageSettingsOpen ? "收起参数" : "更多参数"}
                       >
-                        <SlidersHorizontal className="size-5 sm:size-3.5" />
+                        <MoreHorizontal className="size-5 sm:hidden" />
+                        <SlidersHorizontal className="hidden size-5 sm:size-3.5 sm:block" />
                         <span className="hidden sm:inline">参数</span>
                       </button>
                     </PopoverTrigger>
@@ -1107,6 +1171,7 @@ export function ImageComposer({
                                   setIsModelMenuOpen(false);
                                   if (open) {
                                     setIsResolutionMenuOpen(false);
+                                    setIsQualityMenuOpen(false);
                                   }
                                 }}
                                 onValueChange={(value) => {
@@ -1127,12 +1192,13 @@ export function ImageComposer({
                                   options={IMAGE_RESOLUTION_OPTIONS}
                                   open={isResolutionMenuOpen}
                                   onOpenChange={(open) => {
-                                    setIsResolutionMenuOpen(open);
-                                    setIsModelMenuOpen(false);
-                                    if (open) {
-                                      setIsAspectRatioMenuOpen(false);
-                                    }
-                                  }}
+                                  setIsResolutionMenuOpen(open);
+                                  setIsModelMenuOpen(false);
+                                  if (open) {
+                                    setIsAspectRatioMenuOpen(false);
+                                    setIsQualityMenuOpen(false);
+                                  }
+                                }}
                                   onValueChange={onImageResolutionChange}
                                   align="start"
                                   contentClassName="w-[min(24rem,calc(100vw-2rem))]"
@@ -1187,15 +1253,20 @@ export function ImageComposer({
                           <p className="col-span-2 rounded-xl border border-sky-100 bg-sky-50 px-3 py-1.5 text-[11px] leading-5 text-sky-900 dark:border-sky-900/60 dark:bg-sky-950/30 dark:text-sky-100 sm:col-span-3">
                             {structuredImageParameters
                               ? "Codex 图片链路会下发目标尺寸；格式由后端保存结果时处理，压缩率仅适用于 JPEG。"
+                              : officialImageGateway && pixelIconSizeSelected
+                                ? "官方图片通道会按 1:1 提交；固定像素为本地输出尺寸。"
+                              : officialImageGateway
+                                ? "官方图片通道会提交分辨率预设和画幅；固定像素为本地输出尺寸，实际像素以结果为准。"
                               : pixelIconSizeSelected
                                 ? "像素图标尺寸会作为目标尺寸提交，不叠加分辨率预设。"
                               : resolutionControlsVisible
-                                ? "常规/官方图片线路会提交分辨率预设，画幅仍作为构图偏好；实际像素以上游返回为准。"
-                                : "当前图片线路只会把比例作为构图偏好，实际像素以上游返回为准；格式由后端保存结果时处理。"}
+                                ? "常规图片通道会提交分辨率预设，画幅仍作为构图偏好；实际像素以上游返回为准。"
+                                : "当前图片通道只会把比例作为构图偏好，实际像素以上游返回为准；格式由后端保存结果时处理。"}
                           </p>
                         ) : null}
                         {outputControlsSupported ? (
                           <ImageOutputControls
+                            imageModel={imageModel}
                             outputFormat={imageOutputFormat}
                             outputCompression={imageOutputCompression}
                             onOutputFormatChange={onImageOutputFormatChange}
@@ -1212,6 +1283,30 @@ export function ImageComposer({
                             helperClassName="px-1 text-[11px] leading-5 text-[#8e8e93] dark:text-muted-foreground"
                             includeHelper
                           />
+                        ) : null}
+                        {imageQualitySupported ? (
+                          <div className={imageSettingsFieldClass}>
+                            <span className="shrink-0 font-medium text-[#45515e] dark:text-muted-foreground">质量强度</span>
+                            <ImageSettingsPopoverMenu
+                              label="质量强度"
+                              value={imageQuality}
+                              valueLabel={imageQualityLabel}
+                              options={IMAGE_QUALITY_SETTINGS_OPTIONS}
+                              open={isQualityMenuOpen}
+                              onOpenChange={(open) => {
+                                setIsQualityMenuOpen(open);
+                                setIsModelMenuOpen(false);
+                                if (open) {
+                                  setIsAspectRatioMenuOpen(false);
+                                  setIsResolutionMenuOpen(false);
+                                }
+                              }}
+                              onValueChange={onImageQualityChange}
+                              align="start"
+                              contentClassName="w-[min(22rem,calc(100vw-2rem))]"
+                              triggerTitle="选择官方图片通道的生成质量强度"
+                            />
+                          </div>
                         ) : null}
                       </div>
                     </PopoverContent>
