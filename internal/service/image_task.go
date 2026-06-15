@@ -834,7 +834,11 @@ func (s *ImageTaskService) submit(ctx context.Context, identity Identity, client
 	if isMediaTaskMode(mode) {
 		task["output_statuses"] = initialImageOutputStatuses(count)
 	}
-	if SupportsImageOutputCompression(outputFormat) {
+	compressionSupported := SupportsImageOutputCompression(outputFormat)
+	if IsProStudioRequest(payload) {
+		compressionSupported = SupportsOfficialImageOutputCompression(outputFormat)
+	}
+	if compressionSupported {
 		if compression, ok := NormalizeImageOutputCompressionValue(payload["output_compression"]); ok {
 			task["output_compression"] = compression
 		}
@@ -1740,7 +1744,11 @@ func publicTask(task map[string]any) map[string]any {
 	if format := NormalizeImageOutputFormat(util.Clean(task["output_format"])); format != "" {
 		item["output_format"] = format
 	}
-	if SupportsImageOutputCompression(util.Clean(item["output_format"])) {
+	compressionSupported := SupportsImageOutputCompression(util.Clean(item["output_format"]))
+	if IsProStudioRequest(task) {
+		compressionSupported = SupportsOfficialImageOutputCompression(util.Clean(item["output_format"]))
+	}
+	if compressionSupported {
 		if compression, ok := NormalizeImageOutputCompressionValue(task["output_compression"]); ok {
 			item["output_compression"] = compression
 		}
@@ -2320,7 +2328,11 @@ func mergeImageTaskMetadata(payload map[string]any, metadata map[string]any) {
 	if len(metadata) == 0 {
 		return
 	}
-	if preset := NormalizeImageResolutionPreset(util.Clean(metadata["image_resolution"])); preset != "" {
+	preset := NormalizeImageResolutionPreset(util.Clean(metadata["image_resolution"]))
+	if util.ToBool(metadata["professional_mode"]) {
+		preset = normalizeProStudioResolution(util.Clean(metadata["image_resolution"]))
+	}
+	if preset != "" {
 		payload["image_resolution"] = preset
 	}
 	if requestedSize := strings.TrimSpace(util.Clean(metadata["requested_size"])); requestedSize != "" {
@@ -2340,6 +2352,15 @@ func mergeImageTaskMetadata(payload map[string]any, metadata map[string]any) {
 	}
 	if publicImageURLs := util.AsStringSlice(metadata["official_public_image_urls"]); len(publicImageURLs) > 0 {
 		payload["official_public_image_urls"] = publicImageURLs
+	}
+	if util.ToBool(metadata["professional_mode"]) {
+		payload["professional_mode"] = true
+	}
+	if meta := util.StringMap(metadata["pro_studio"]); len(meta) > 0 {
+		payload["pro_studio"] = meta
+	}
+	if settings := util.StringMap(metadata["official_settings"]); len(settings) > 0 {
+		payload["official_settings"] = settings
 	}
 	if compression, ok := NormalizeImageOutputCompressionValue(metadata["raw_output_compression"]); ok {
 		payload["raw_output_compression"] = compression
@@ -2371,7 +2392,11 @@ func mergeImageOutputOptions(payload map[string]any, options ImageOutputOptions)
 		return
 	}
 	payload["output_format"] = format
-	if !SupportsImageOutputCompression(format) || options.Compression == nil {
+	compressionSupported := SupportsImageOutputCompression(format)
+	if IsProStudioRequest(payload) {
+		compressionSupported = SupportsOfficialImageOutputCompression(format)
+	}
+	if !compressionSupported || options.Compression == nil {
 		delete(payload, "output_compression")
 		return
 	}
@@ -2411,6 +2436,15 @@ func mergePublicImageToolTaskFields(target, source map[string]any) {
 		if value := util.Clean(source[key]); value != "" {
 			target[key] = value
 		}
+	}
+	if util.ToBool(source["professional_mode"]) {
+		target["professional_mode"] = true
+	}
+	if meta := util.StringMap(source["pro_studio"]); len(meta) > 0 {
+		target["pro_studio"] = meta
+	}
+	if settings := util.StringMap(source["official_settings"]); len(settings) > 0 {
+		target["official_settings"] = settings
 	}
 	if value := util.ToInt(source["partial_images"], 0); value > 0 {
 		target["partial_images"] = value

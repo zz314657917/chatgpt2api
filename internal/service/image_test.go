@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"chatgpt2api/internal/imagestore"
+	"chatgpt2api/internal/util"
 )
 
 type testImageConfig struct {
@@ -744,6 +745,77 @@ func TestImageServiceListImagesReturnsGenerationReuseMetadata(t *testing.T) {
 	}
 	if _, err := os.Stat(access.Path); !os.IsNotExist(err) {
 		t.Fatalf("reference path still exists or stat failed unexpectedly: %v", err)
+	}
+}
+
+func TestImageServiceImageDetailReturnsProStudioMetadata(t *testing.T) {
+	root := t.TempDir()
+	config := testImageConfig{root: root}
+	rel := "2026/06/16/pro-studio.png"
+	path := filepath.Join(config.ImagesDir(), filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := writeTestPNG(path); err != nil {
+		t.Fatalf("writeTestPNG() error = %v", err)
+	}
+
+	outputCompression := 72
+	service := NewImageService(config)
+	service.RecordGeneratedImages([]string{rel}, "linuxdo:123", "alice", ImageVisibilityPublic, GeneratedImageMetadata{
+		Prompt:            "draw a pro image",
+		Model:             OfficialImageModel,
+		Quality:           "high",
+		ResolutionPreset:  "1k",
+		RequestedSize:     "1:1",
+		OutputFormat:      "webp",
+		OutputCompression: &outputCompression,
+		Background:        "opaque",
+		Moderation:        "low",
+		ProfessionalMode:  true,
+		ProStudio: map[string]any{
+			"enabled":      true,
+			"mode":         "preset",
+			"intent":       "product_main",
+			"quality_tier": "production",
+		},
+		OfficialSettings: map[string]any{
+			"model":              OfficialImageModel,
+			"size":               "1:1",
+			"resolution":         "1k",
+			"quality":            "high",
+			"output_format":      "webp",
+			"output_compression": 72,
+			"background":         "opaque",
+			"moderation":         "low",
+			"n":                  1,
+		},
+		SharePromptParams: true,
+	})
+
+	list := service.ListImages("http://127.0.0.1:8000", "", "", ImageAccessScope{Public: true})
+	items := list["items"].([]map[string]any)
+	if len(items) != 1 || items[0]["professional_mode"] != nil || items[0]["official_settings"] != nil {
+		t.Fatalf("list item should stay lightweight = %#v", list)
+	}
+	detail, err := service.ImageDetail("http://127.0.0.1:8000", rel, ImageAccessScope{Public: true})
+	if err != nil {
+		t.Fatalf("ImageDetail() error = %v", err)
+	}
+	if detail["professional_mode"] != true ||
+		detail["model"] != OfficialImageModel ||
+		detail["resolution_preset"] != "1k" ||
+		detail["output_format"] != "webp" ||
+		detail["output_compression"] != 72 {
+		t.Fatalf("pro studio detail = %#v", detail)
+	}
+	proStudio := util.StringMap(detail["pro_studio"])
+	if proStudio["intent"] != "product_main" || proStudio["quality_tier"] != "production" {
+		t.Fatalf("pro_studio = %#v", proStudio)
+	}
+	settings := util.StringMap(detail["official_settings"])
+	if settings["resolution"] != "1k" || settings["output_format"] != "webp" || util.ToInt(settings["output_compression"], 0) != 72 {
+		t.Fatalf("official_settings = %#v", settings)
 	}
 }
 

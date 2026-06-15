@@ -133,6 +133,9 @@ type imageMetadata struct {
 	PartialImages     *int
 	InputImageMask    string
 	ReferenceImages   []imageReferenceMetadata
+	ProfessionalMode  bool
+	ProStudio         map[string]any
+	OfficialSettings  map[string]any
 	SharePromptParams bool
 	ShareReferences   bool
 }
@@ -151,6 +154,9 @@ type GeneratedImageMetadata struct {
 	PartialImages     *int
 	InputImageMask    string
 	ReferenceImages   []GeneratedImageReference
+	ProfessionalMode  bool
+	ProStudio         map[string]any
+	OfficialSettings  map[string]any
 	SharePromptParams bool
 	ShareReferences   bool
 }
@@ -2341,6 +2347,11 @@ func normalizeImageMetadata(raw map[string]any) imageMetadata {
 		libraryScope = ImageLibraryScopePersonal
 		teamID = ""
 	}
+	professionalMode := boolMetadataValue(raw["professional_mode"])
+	resolutionPreset := NormalizeImageResolutionPreset(toString(raw["resolution_preset"]))
+	if professionalMode {
+		resolutionPreset = normalizeProStudioResolution(toString(raw["resolution_preset"]))
+	}
 	return imageMetadata{
 		OwnerID:           strings.TrimSpace(toString(raw["owner_id"])),
 		OwnerName:         strings.TrimSpace(toString(raw["owner_name"])),
@@ -2360,7 +2371,7 @@ func normalizeImageMetadata(raw map[string]any) imageMetadata {
 		Prompt:            strings.TrimSpace(toString(raw["prompt"])),
 		Model:             strings.TrimSpace(toString(raw["model"])),
 		Quality:           strings.TrimSpace(toString(raw["quality"])),
-		ResolutionPreset:  NormalizeImageResolutionPreset(toString(raw["resolution_preset"])),
+		ResolutionPreset:  resolutionPreset,
 		RequestedSize:     strings.TrimSpace(toString(raw["requested_size"])),
 		OutputFormat:      NormalizeImageOutputFormat(strings.TrimSpace(toString(raw["output_format"]))),
 		OutputCompression: imageOutputCompressionMetadata(raw["output_compression"]),
@@ -2370,6 +2381,9 @@ func normalizeImageMetadata(raw map[string]any) imageMetadata {
 		PartialImages:     positiveImageMetadataInt(raw["partial_images"]),
 		InputImageMask:    strings.TrimSpace(toString(raw["input_image_mask"])),
 		ReferenceImages:   normalizeImageReferenceMetadata(raw["reference_images"]),
+		ProfessionalMode:  professionalMode,
+		ProStudio:         cleanMetadataMap(raw["pro_studio"]),
+		OfficialSettings:  cleanMetadataMap(raw["official_settings"]),
 		SharePromptParams: boolMetadataValue(raw["share_prompt_parameters"]),
 		ShareReferences:   boolMetadataValue(raw["share_reference_images"]),
 	}
@@ -2408,7 +2422,11 @@ func (s *ImageService) writeImageMetadataForRef(ref imageFileRef, ownerID, owner
 		if quality := strings.TrimSpace(metadata.Quality); quality != "" {
 			meta.Quality = quality
 		}
-		if preset := NormalizeImageResolutionPreset(metadata.ResolutionPreset); preset != "" {
+		preset := NormalizeImageResolutionPreset(metadata.ResolutionPreset)
+		if metadata.ProfessionalMode {
+			preset = normalizeProStudioResolution(metadata.ResolutionPreset)
+		}
+		if preset != "" {
 			meta.ResolutionPreset = preset
 		}
 		if requestedSize := strings.TrimSpace(metadata.RequestedSize); requestedSize != "" {
@@ -2444,6 +2462,13 @@ func (s *ImageService) writeImageMetadataForRef(ref imageFileRef, ownerID, owner
 		}
 		if len(metadata.ReferenceImages) > 0 {
 			meta.ReferenceImages = s.writeImageReferencesForRef(ref, metadata.ReferenceImages)
+		}
+		meta.ProfessionalMode = metadata.ProfessionalMode
+		if len(metadata.ProStudio) > 0 {
+			meta.ProStudio = util.CopyMap(metadata.ProStudio)
+		}
+		if len(metadata.OfficialSettings) > 0 {
+			meta.OfficialSettings = util.CopyMap(metadata.OfficialSettings)
 		}
 		meta.SharePromptParams = metadata.SharePromptParams
 		meta.ShareReferences = metadata.ShareReferences
@@ -3127,6 +3152,15 @@ func (s *ImageService) writeImageMetadata(rel string, meta imageMetadata) error 
 		if len(refs) > 0 {
 			value["reference_images"] = refs
 		}
+	}
+	if meta.ProfessionalMode {
+		value["professional_mode"] = true
+	}
+	if len(meta.ProStudio) > 0 {
+		value["pro_studio"] = util.CopyMap(meta.ProStudio)
+	}
+	if len(meta.OfficialSettings) > 0 {
+		value["official_settings"] = util.CopyMap(meta.OfficialSettings)
 	}
 	if s.store != nil {
 		return s.store.SaveJSONDocument(imageOwnerDocumentName(rel), value)
@@ -3877,6 +3911,15 @@ func addImageMetadataFields(item map[string]any, meta imageMetadata, optionsValu
 		if meta.InputImageMask != "" {
 			item["input_image_mask"] = meta.InputImageMask
 		}
+		if meta.ProfessionalMode {
+			item["professional_mode"] = true
+		}
+		if len(meta.ProStudio) > 0 {
+			item["pro_studio"] = util.CopyMap(meta.ProStudio)
+		}
+		if len(meta.OfficialSettings) > 0 {
+			item["official_settings"] = util.CopyMap(meta.OfficialSettings)
+		}
 	}
 	if options.IncludeReferenceImages && len(meta.ReferenceImages) > 0 {
 		baseURL := strings.TrimSpace(options.BaseURL)
@@ -3956,6 +3999,25 @@ func NormalizeImageTags(value any) []string {
 		if len(out) >= 20 {
 			break
 		}
+	}
+	return out
+}
+
+func cleanMetadataMap(value any) map[string]any {
+	raw := util.StringMap(value)
+	if len(raw) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(raw))
+	for key, item := range raw {
+		key = strings.TrimSpace(key)
+		if key == "" || item == nil {
+			continue
+		}
+		out[key] = item
+	}
+	if len(out) == 0 {
+		return nil
 	}
 	return out
 }

@@ -1,7 +1,9 @@
 import localforage from "localforage";
 
 import { DEFAULT_CHAT_MODEL, DEFAULT_IMAGE_MODEL, type CreationTask, type ImageModel } from "@/lib/api";
+import type { ProStudioOfficialSettingsPayload, ProStudioPayloadMeta } from "@/lib/pro-studio";
 import { isImageQuality, type ImageQuality } from "@/lib/image-parameters";
+import { createDefaultProStudioState, normalizeProStudioState, type ProStudioState } from "@/lib/pro-studio";
 import { getManagedImagePathFromUrl, getManagedImageUrlFromPath } from "@/lib/image-path";
 import { getStoredAuthSession, type StoredAuthSession } from "@/store/auth";
 import {
@@ -13,7 +15,7 @@ import {
 
 export type CommerceSuiteReferenceImage = {
   id: string;
-  role?: "primary" | "secondary";
+  role?: "product" | "reference" | "primary" | "secondary";
   name: string;
   type: string;
   size: number;
@@ -39,6 +41,9 @@ export type CommerceSuiteResult = {
   path?: string;
   revisedPrompt?: string;
   error?: string;
+  proStudio?: ProStudioPayloadMeta;
+  officialSettings?: ProStudioOfficialSettingsPayload;
+  startedAt?: string;
   updatedAt?: string;
 };
 
@@ -57,6 +62,9 @@ export type CommerceSuiteProject = {
   imageResolution: string;
   imageQuality: ImageQuality;
   outputFormat: "png";
+  professionalMode?: boolean;
+  proStudioState?: ProStudioState;
+  skuCount?: number;
   analysisTaskId?: string;
   analysisStatus?: CreationTask["status"] | "idle";
   analysisError?: string;
@@ -133,6 +141,16 @@ function normalizeStringList(value: unknown): string[] {
   return out;
 }
 
+function normalizeReferenceImageRole(role?: CommerceSuiteReferenceImage["role"]) {
+  if (role === "product" || role === "primary") {
+    return "product" as const;
+  }
+  if (role === "reference" || role === "secondary") {
+    return "reference" as const;
+  }
+  return undefined;
+}
+
 function normalizeReferenceImage(image: Partial<CommerceSuiteReferenceImage> & Record<string, unknown>, fallbackRole?: CommerceSuiteReferenceImage["role"]): CommerceSuiteReferenceImage | null {
   const dataUrl = String(image.dataUrl || "").trim();
   if (!dataUrl) {
@@ -146,7 +164,7 @@ function normalizeReferenceImage(image: Partial<CommerceSuiteReferenceImage> & R
     image.uploadStatus === "error"
       ? image.uploadStatus
       : undefined;
-  const role = image.role === "primary" || image.role === "secondary" ? image.role : fallbackRole;
+  const role = normalizeReferenceImageRole(image.role) || normalizeReferenceImageRole(fallbackRole);
   return {
     id: String(image.id || createID("ref")).trim(),
     role,
@@ -189,6 +207,9 @@ function normalizeResult(result: Partial<CommerceSuiteResult> & Record<string, u
     path: path || undefined,
     revisedPrompt: String(result.revisedPrompt || "").trim() || undefined,
     error: String(result.error || "").trim() || undefined,
+    proStudio: result.proStudio && typeof result.proStudio === "object" ? result.proStudio as ProStudioPayloadMeta : undefined,
+    officialSettings: result.officialSettings && typeof result.officialSettings === "object" ? result.officialSettings as ProStudioOfficialSettingsPayload : undefined,
+    startedAt: String(result.startedAt || "").trim() || undefined,
     updatedAt: String(result.updatedAt || "").trim() || undefined,
   };
 }
@@ -214,6 +235,9 @@ export function createCommerceSuiteProject(): CommerceSuiteProject {
     imageResolution: "1K",
     imageQuality: "auto",
     outputFormat: "png",
+    professionalMode: false,
+    proStudioState: createDefaultProStudioState("product_main"),
+    skuCount: 8,
     analysisStatus: "idle",
     results: [],
   };
@@ -237,14 +261,13 @@ export function normalizeCommerceSuiteProject(value: Partial<CommerceSuiteProjec
     ? value.referenceImages.flatMap((image, index) => {
         const normalized = normalizeReferenceImage(
           image as Partial<CommerceSuiteReferenceImage> & Record<string, unknown>,
-          index === 0 ? "primary" : "secondary",
+          index === 0 ? "product" : "reference",
         );
         return normalized ? [normalized] : [];
-      }).slice(0, 2)
+      }).slice(0, 16)
     : [];
-  const orderedReferenceImages = (["primary", "secondary"] as const).flatMap((role) => {
-    const image = referenceImages.find((item) => item.role === role);
-    return image ? [image] : [];
+  const orderedReferenceImages = (["product", "reference"] as const).flatMap((role) => {
+    return referenceImages.filter((item) => item.role === role);
   });
   return {
     id: String(value.id || createID("suite")).trim(),
@@ -267,6 +290,9 @@ export function normalizeCommerceSuiteProject(value: Partial<CommerceSuiteProjec
     imageResolution: String(value.imageResolution || "1K").trim(),
     imageQuality: isImageQuality(value.imageQuality) ? value.imageQuality : "auto",
     outputFormat: "png",
+    professionalMode: Boolean(value.professionalMode),
+    proStudioState: normalizeProStudioState(value.proStudioState as Partial<ProStudioState> | undefined, "product_main"),
+    skuCount: Math.max(1, Math.min(24, Math.round(Number(value.skuCount || 8) || 8))),
     analysisTaskId: String(value.analysisTaskId || "").trim() || undefined,
     analysisStatus,
     analysisError: String(value.analysisError || "").trim() || undefined,

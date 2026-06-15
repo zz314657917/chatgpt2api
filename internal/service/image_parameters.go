@@ -36,6 +36,15 @@ func SupportsImageOutputCompression(format string) bool {
 	return NormalizeImageOutputFormat(format) == "jpeg"
 }
 
+func SupportsOfficialImageOutputCompression(format string) bool {
+	switch NormalizeImageOutputFormat(format) {
+	case "jpeg", "webp":
+		return true
+	default:
+		return false
+	}
+}
+
 func NormalizeImageOutputCompressionValue(value any) (int, bool) {
 	if value == nil || strings.TrimSpace(util.Clean(value)) == "" {
 		return 0, false

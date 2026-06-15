@@ -8,6 +8,7 @@ import {
   ChevronLeft,
   ChevronRight,
   CheckCircle2,
+  Clock3,
   Layers3,
   Download,
   ImagePlus,
@@ -35,6 +36,9 @@ import {
   commerceSuiteOptionLabel,
 } from "@/app/ecommerce-suite/ecommerce-suite-options";
 import { AuthenticatedImage } from "@/components/authenticated-image";
+import { BatchJobPreview } from "@/components/pro-studio/batch-job-preview";
+import { ProStudioBadge } from "@/components/pro-studio/pro-studio-badge";
+import { ProStudioPanel } from "@/components/pro-studio/pro-studio-panel";
 import { useMobileNav } from "@/components/mobile-nav-context";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -76,7 +80,15 @@ import {
 import { fetchAuthenticatedImageBlob } from "@/lib/authenticated-image";
 import { imageExtension, downloadImageFile } from "@/lib/image-download";
 import { getManagedImagePreviewUrlFromPath, getManagedImageUrlFromPath } from "@/lib/image-path";
-import { IMAGE_QUALITY_OPTIONS, isImageQuality } from "@/lib/image-parameters";
+import { IMAGE_QUALITY_OPTIONS, isImageOutputFormat, isImageQuality } from "@/lib/image-parameters";
+import {
+  OFFICIAL_IMAGE_MODEL,
+  buildProStudioImagePayload,
+  normalizeProStudioState,
+  splitOfficialBatch,
+  type ProStudioIntent,
+  type ProStudioState,
+} from "@/lib/pro-studio";
 import { useAuthGuard } from "@/lib/use-auth-guard";
 import { cn } from "@/lib/utils";
 import {
@@ -95,16 +107,24 @@ import exampleModuleImage from "./example-module.webp";
 import exampleSummaryImage from "./example-summary.webp";
 
 const POLL_INTERVAL_MS = 1800;
-const MAX_REFERENCE_IMAGES = 2;
+const MAX_REFERENCE_IMAGES = 16;
 const SUMMARY_TILE_SIZE = 720;
 const SUMMARY_GAP = 28;
 const SUMMARY_HEADER_HEIGHT = 112;
 const LEFT_RAIL_COLLAPSED_STORAGE_KEY = "ecommerce-suite-left-rail-collapsed";
 const REFERENCE_LIBRARY_PAGE_SIZE = 24;
 const REFERENCE_IMAGE_SLOTS = [
-  { role: "primary", title: "主参考", description: "锁定商品主体和主要外观" },
-  { role: "secondary", title: "副参考", description: "补充角度、细节或包装信息" },
+  { role: "product", title: "产品图", description: "上传商品主体、包装、不同角度，可多张" },
+  { role: "reference", title: "参考图", description: "补充场景、风格、竞品或详情参考，可多张" },
 ] as const;
+
+const PRO_STUDIO_OUTPUTS: Array<{ id: ProStudioIntent; label: string; count: (project: CommerceSuiteProject) => number }> = [
+  { id: "product_main", label: "商品主图", count: () => 1 },
+  { id: "product_banner", label: "电商横幅", count: () => 1 },
+  { id: "detail_page", label: "详情页竖图", count: () => 1 },
+  { id: "lifestyle_scene", label: "场景图", count: () => 2 },
+  { id: "sku_variants", label: "SKU 批量图", count: (project) => Math.max(1, Math.min(24, Math.round(Number(project.skuCount || 8) || 8))) },
+];
 
 type ReferenceImageRole = typeof REFERENCE_IMAGE_SLOTS[number]["role"];
 type ReferenceLibraryScope = "mine" | "team";
@@ -112,9 +132,9 @@ type ReferenceLibraryScope = "mine" | "team";
 const FEATURE_ACTIONS = [
   {
     id: "analysis",
-    title: "商品分析",
-    description: "识别商品类目、卖点、人群、场景和视觉方向。",
-    detail: "先从参考图里提炼卖点，后面生成图片会更稳。",
+    title: "文案策划",
+    description: "生成标题、卖点、参数说明和详情页文案。",
+    detail: "先从产品图和参考图里提炼文案，后面生成图片会更稳。",
     templateIds: ["main-white", "main-selling-focus"],
     icon: ScanSearch,
   },
@@ -168,6 +188,17 @@ function formatDateTime(value?: string) {
     hour: "2-digit",
     minute: "2-digit",
   }).format(date);
+}
+
+function formatElapsedClock(totalSeconds: number) {
+  const safeSeconds = Math.max(0, totalSeconds);
+  const hours = Math.floor(safeSeconds / 3600);
+  const minutes = Math.floor((safeSeconds % 3600) / 60);
+  const seconds = safeSeconds % 60;
+  if (hours > 0) {
+    return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+  }
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
 }
 
 function formatFileSize(size: number) {
@@ -244,6 +275,14 @@ function templateById(id: string) {
   return COMMERCE_SUITE_TEMPLATES.find((template) => template.id === id);
 }
 
+function referenceRoleLabel(role: ReferenceImageRole) {
+  return role === "product" ? "产品图" : "参考图";
+}
+
+function hasProductImages(project: CommerceSuiteProject) {
+  return project.referenceImages.some((image) => image.role === "product" || image.role === "primary");
+}
+
 function extractTaskText(task: CreationTask) {
   return (task.data || []).map((item) => item.text_response || "").join("\n").trim();
 }
@@ -258,8 +297,24 @@ function resultFromTask(templateId: string, task: CreationTask): CommerceSuiteRe
     url: image?.url || (image?.b64_json ? `data:image/png;base64,${image.b64_json}` : undefined),
     revisedPrompt: image?.revised_prompt,
     error: task.error,
+    proStudio: task.pro_studio,
+    officialSettings: task.official_settings,
+    startedAt: task.created_at,
     updatedAt: task.updated_at,
   };
+}
+
+function commerceResultChanged(a: CommerceSuiteResult, b: CommerceSuiteResult) {
+  return (
+    a.taskId !== b.taskId ||
+    a.status !== b.status ||
+    a.localUrl !== b.localUrl ||
+    a.url !== b.url ||
+    a.path !== b.path ||
+    a.revisedPrompt !== b.revisedPrompt ||
+    a.error !== b.error ||
+    a.updatedAt !== b.updatedAt
+  );
 }
 
 function projectStatus(project: CommerceSuiteProject) {
@@ -279,19 +334,29 @@ function buildAnalysisPrompt(project: CommerceSuiteProject) {
   const platform = commerceSuiteOptionLabel(COMMERCE_SUITE_PLATFORMS, project.targeting.platform);
   const market = commerceSuiteOptionLabel(COMMERCE_SUITE_MARKETS, project.targeting.market);
   const language = commerceSuiteOptionLabel(COMMERCE_SUITE_LANGUAGES, project.targeting.language);
+  const productImageCount = project.referenceImages.filter((image) => image.role === "product" || image.role === "primary").length;
+  const referenceImageCount = project.referenceImages.filter((image) => image.role === "reference" || image.role === "secondary").length;
   return [
-    "你是一名资深电商商品视觉策划，请基于参考图和用户输入，输出一份可直接用于电商套图生成的运营摘要。",
+    "你是一名资深电商商品策划和详情页文案编辑。请基于产品图、参考图和用户输入，输出一份可直接用于电商套图生成和详情页编辑的结构化文案。",
     `目标平台：${platform}`,
     `目标市场：${market}`,
     `输出语言：${language}`,
     `商品标题或备注：${project.title}`,
-    "请严格使用以下字段，内容具体、克制、可执行：",
-    "产品名称：",
+    `产品图数量：${productImageCount} 张；参考图数量：${referenceImageCount} 张`,
+    "要求：只基于图片和输入中能合理判断的信息；不编造认证、医学功效、夸张承诺、价格、品牌授权或具体检测数据；不确定的参数请写“待确认”。",
+    "请严格使用以下字段，内容具体、克制、可直接复制：",
+    "商品标题：",
+    "一句话卖点：",
     "产品类目：",
-    "核心卖点：",
+    "核心卖点（3-5条）：",
+    "参数说明：",
     "目标人群：",
     "使用场景：",
+    "详情页首屏文案：",
+    "详情页模块文案：",
+    "规格/尺寸说明：",
     "视觉风格方向：",
+    "图片生成注意事项：",
   ].join("\n");
 }
 
@@ -301,14 +366,33 @@ function buildGenerationPrompt(project: CommerceSuiteProject, templateId: string
   const market = commerceSuiteOptionLabel(COMMERCE_SUITE_MARKETS, project.targeting.market);
   const language = commerceSuiteOptionLabel(COMMERCE_SUITE_LANGUAGES, project.targeting.language);
   return [
-    "你是一名电商详情页视觉设计师。请基于参考图保持商品主体一致，生成一张可直接用于电商详情页的成品图。",
+    "你是一名电商详情页视觉设计师。请基于产品图保持商品主体一致，并参考辅助图片的场景、风格或细节，生成一张可直接用于电商详情页的成品图。",
     `图片类型：${template?.title || templateId}`,
     `目标平台：${platform}`,
     `目标市场：${market}`,
     `画面语言：${language}`,
-    `商品运营摘要：\n${project.analysisText || "请根据参考图自行提炼商品卖点和适用场景。"}`,
+    `商品运营摘要：\n${project.analysisText || "请根据产品图和参考图自行提炼商品标题、卖点、参数和适用场景。"}`,
     `图片要求：${template?.prompt || ""}`,
-    "输出要求：单张成品图，主体清晰，适合 1:1 电商套图；不添加虚假的认证、价格、品牌 Logo 或未经确认的夸张承诺；如果需要文字，只使用目标语言并保持简短可读。",
+    "输出要求：单张成品图，主体清晰，适合电商套图；如画面需要文字，优先使用商品运营摘要里的标题、卖点、参数或详情页文案，并保持短句可读；不添加虚假的认证、价格、品牌 Logo 或未经确认的夸张承诺。",
+  ].filter(Boolean).join("\n\n");
+}
+
+function proStudioTemplateIds(project: CommerceSuiteProject) {
+  const selected = new Set(project.selectedTemplates);
+  const ids = PRO_STUDIO_OUTPUTS.map((item) => item.id);
+  const matched = ids.filter((id) => selected.has(id));
+  return matched.length > 0 ? matched : ids.slice(0, 4);
+}
+
+function buildProStudioGenerationPrompt(project: CommerceSuiteProject, intent: ProStudioIntent, batchIndex = 0) {
+  const output = PRO_STUDIO_OUTPUTS.find((item) => item.id === intent);
+  return [
+    "你是一名电商生产素材视觉设计师。请基于产品图保持商品主体一致，并参考辅助图片的场景、风格或细节，生成可直接用于投放或详情页的成品图。",
+    `素材类型：${output?.label || intent}`,
+    `商品标题：${project.title}`,
+    `商品运营摘要：\n${project.analysisText || "请根据产品图和参考图自行提炼商品标题、卖点、参数和适用场景。"}`,
+    intent === "sku_variants" ? `SKU 批次：${batchIndex + 1}，保持光线、角度和构图一致，变化体现在颜色、材质或款式细节。` : "",
+    "输出要求：主体清晰、构图稳定、商业可用；如画面需要文字，优先使用商品运营摘要里的标题、卖点、参数或详情页文案，并保持短句可读；不添加虚假认证、价格、品牌 Logo 或未经确认的夸张承诺。",
   ].filter(Boolean).join("\n\n");
 }
 
@@ -491,7 +575,7 @@ export default function EcommerceSuitePage() {
   const { clearPanel, closeDrawer, setPanel } = useMobileNav();
   const [projects, setProjects] = useState<CommerceSuiteProject[]>([]);
   const [selectedId, setSelectedId] = useState("");
-  const [loading, setLoading] = useState(true);
+  const [, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
   const [generating, setGenerating] = useState(false);
@@ -500,7 +584,7 @@ export default function EcommerceSuitePage() {
   const [renamingProjectId, setRenamingProjectId] = useState("");
   const [renamingTitle, setRenamingTitle] = useState("");
   const [referenceLibraryOpen, setReferenceLibraryOpen] = useState(false);
-  const [referenceLibraryRole, setReferenceLibraryRole] = useState<ReferenceImageRole>("primary");
+  const [referenceLibraryRole, setReferenceLibraryRole] = useState<ReferenceImageRole>("product");
   const [referenceLibraryScope, setReferenceLibraryScope] = useState<ReferenceLibraryScope>("mine");
   const [referenceLibrarySearch, setReferenceLibrarySearch] = useState("");
   const [referenceLibraryImages, setReferenceLibraryImages] = useState<ManagedImageSummary[]>([]);
@@ -510,6 +594,7 @@ export default function EcommerceSuitePage() {
   const [referenceLibraryLoadingMore, setReferenceLibraryLoadingMore] = useState(false);
   const [referenceLibraryApplyingPath, setReferenceLibraryApplyingPath] = useState("");
   const [activeTeam, setActiveTeam] = useState<TeamSummary | null>(null);
+  const [now, setNow] = useState(() => Date.now());
   const [leftRailCollapsed, setLeftRailCollapsed] = useState(() => {
     if (typeof window === "undefined") {
       return false;
@@ -547,6 +632,14 @@ export default function EcommerceSuitePage() {
   useEffect(() => {
     selectedProjectRef.current = selectedProject;
   }, [selectedProject]);
+
+  useEffect(() => {
+    if (!selectedProject?.results.some((result) => isActiveTask(result.status))) {
+      return;
+    }
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [selectedProject?.results]);
 
   useEffect(() => {
     window.localStorage.setItem(LEFT_RAIL_COLLAPSED_STORAGE_KEY, leftRailCollapsed ? "1" : "0");
@@ -643,7 +736,7 @@ export default function EcommerceSuitePage() {
       selectedTemplates: [...templateIds],
     };
     await persistProject(project);
-    toast.success("已创建项目，可上传参考图继续");
+    toast.success("已创建项目，可上传产品图和参考图继续");
   }, [persistProject]);
 
   const applyFeatureToProject = async (templateIds: readonly string[]) => {
@@ -721,7 +814,7 @@ export default function EcommerceSuitePage() {
       description: `${projects.length} 个项目`,
       content: (
         <div className="flex h-[min(56dvh,520px)] min-h-[220px] flex-col gap-3">
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid gap-2">
             <Button
               className="h-10 rounded-xl"
               onClick={() => {
@@ -731,10 +824,6 @@ export default function EcommerceSuitePage() {
             >
               <Plus className="size-4" />
               新建
-            </Button>
-            <Button variant="outline" className="h-10 rounded-xl" onClick={() => void reload()} disabled={loading}>
-              {loading ? <LoaderCircle className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
-              刷新
             </Button>
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto pr-1">
@@ -818,7 +907,7 @@ export default function EcommerceSuitePage() {
                         </Badge>
                       </div>
                       <div className="mt-2 line-clamp-2 text-xs leading-5 text-muted-foreground">
-                        {project.analysisText || `${project.referenceImages.length} 张参考图 · ${project.selectedTemplates.length} 个设计`}
+                        {project.analysisText || `${project.referenceImages.length} 张产品/参考图 · ${project.selectedTemplates.length} 个设计`}
                       </div>
                       <div className="mt-2 flex items-center justify-between gap-2">
                         <span className="min-w-0 truncate text-[11px] text-muted-foreground">{formatDateTime(project.updatedAt)}</span>
@@ -863,14 +952,12 @@ export default function EcommerceSuitePage() {
       beginRenameProject,
       cancelRenameProject,
       commitRenameProject,
-      createProject,
-      createProjectFromFeature,
-      loading,
-      projects,
-      reload,
-      removeProject,
-      renamingProjectId,
-      renamingTitle,
+        createProject,
+        createProjectFromFeature,
+        projects,
+        removeProject,
+        renamingProjectId,
+        renamingTitle,
       selectedProject?.id,
     ],
   );
@@ -952,23 +1039,20 @@ export default function EcommerceSuitePage() {
   const applyReferenceLibraryImage = async (item: ManagedImageSummary) => {
     const project = selectedProjectRef.current;
     if (!project || referenceLibraryApplyingPath) return;
+    if (project.referenceImages.length >= MAX_REFERENCE_IMAGES) {
+      toast.error(`最多添加 ${MAX_REFERENCE_IMAGES} 张产品图和参考图`);
+      return;
+    }
     setReferenceLibraryApplyingPath(item.path);
     const role = referenceLibraryRole;
     try {
       const ref = await managedImageToReferenceImage(item, role);
-      const nextImages = REFERENCE_IMAGE_SLOTS.flatMap((slot) => {
-        if (slot.role === role) {
-          return [ref];
-        }
-        const existing = project.referenceImages.find((image) => image.role === slot.role);
-        return existing ? [existing] : [];
-      });
       await persistProject({
         ...project,
-        referenceImages: nextImages,
+        referenceImages: [...project.referenceImages, ref].slice(0, MAX_REFERENCE_IMAGES),
       });
       setReferenceLibraryOpen(false);
-      toast.success(`已从素材库更新${role === "primary" ? "主参考" : "副参考"}`);
+      toast.success(`已从素材库添加${referenceRoleLabel(role)}`);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "读取素材库图片失败");
     } finally {
@@ -983,21 +1067,22 @@ export default function EcommerceSuitePage() {
       toast.error("请选择图片文件");
       return;
     }
+    const availableSlots = Math.max(0, MAX_REFERENCE_IMAGES - selectedProject.referenceImages.length);
+    if (availableSlots <= 0) {
+      toast.error(`最多添加 ${MAX_REFERENCE_IMAGES} 张产品图和参考图`);
+      return;
+    }
     setUploading(true);
     try {
-      const ref = await fileToReferenceImage(imageFiles[0], role);
-      const nextImages = REFERENCE_IMAGE_SLOTS.flatMap((slot) => {
-        if (slot.role === role) {
-          return [ref];
-        }
-        const existing = selectedProject.referenceImages.find((image) => image.role === slot.role);
-        return existing ? [existing] : [];
-      });
+      const refs = await Promise.all(imageFiles.slice(0, availableSlots).map((file) => fileToReferenceImage(file, role)));
       await persistProject({
         ...selectedProject,
-        referenceImages: nextImages,
+        referenceImages: [...selectedProject.referenceImages, ...refs],
       });
-      toast.success(`已更新${role === "primary" ? "主参考" : "副参考"}`);
+      toast.success(`已添加 ${refs.length} 张${referenceRoleLabel(role)}`);
+      if (imageFiles.length > refs.length) {
+        toast.warning(`最多添加 ${MAX_REFERENCE_IMAGES} 张，已忽略多余图片`);
+      }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "读取参考图失败");
     } finally {
@@ -1051,8 +1136,8 @@ export default function EcommerceSuitePage() {
   const analyzeProduct = async () => {
     const project = selectedProjectRef.current;
     if (!project || analyzing) return;
-    if (project.referenceImages.length === 0) {
-      toast.error("请先上传商品参考图");
+    if (!hasProductImages(project)) {
+      toast.error("请先上传产品图");
       return;
     }
     setAnalyzing(true);
@@ -1069,7 +1154,7 @@ export default function EcommerceSuitePage() {
         taskId,
         prompt,
         pendingProject.chatModel,
-        [{ role: "system", content: "你是电商商品分析和视觉策划助手，只输出可执行的商品运营摘要。" }],
+        [{ role: "system", content: "你是电商商品策划和详情页文案助手，只输出可执行、可复制的结构化商品文案。" }],
         pendingProject.referenceImages.map((image) => ({ name: image.name, dataUrl: image.dataUrl })),
       );
       await persistProject({
@@ -1078,7 +1163,7 @@ export default function EcommerceSuitePage() {
         analysisStatus: task.status,
         analysisError: task.error,
       });
-      toast.success("已提交商品分析任务");
+      toast.success("已提交商品文案任务");
     } catch (error) {
       const latest = selectedProjectRef.current || project;
       await persistProject({
@@ -1095,8 +1180,8 @@ export default function EcommerceSuitePage() {
   const submitGenerationTasks = async (templateIds: string[]) => {
     const project = selectedProjectRef.current;
     if (!project || generating) return;
-    if (project.referenceImages.length === 0) {
-      toast.error("请先上传商品参考图");
+    if (!hasProductImages(project)) {
+      toast.error("请先上传产品图");
       return;
     }
     if (templateIds.length === 0) {
@@ -1108,12 +1193,34 @@ export default function EcommerceSuitePage() {
       const referenceIds = await ensureReferenceUploads(project);
       const latest = selectedProjectRef.current || project;
       const publicImageUrls = commercePublicReferenceImageUrls(latest.referenceImages);
-      const nextResults = latest.results.filter((result) => !templateIds.includes(result.templateId));
-      const placeholders = templateIds.map((templateId) => ({
+      const proStudioEnabled = latest.professionalMode === true;
+      const plannedTemplateIds = proStudioEnabled ? proStudioTemplateIds(latest) : templateIds;
+      const nextResults = latest.results.filter((result) => !plannedTemplateIds.includes(result.templateId));
+      const submittedAt = new Date().toISOString();
+      const placeholders = proStudioEnabled
+        ? plannedTemplateIds.flatMap((templateId) => {
+            const output = PRO_STUDIO_OUTPUTS.find((item) => item.id === templateId);
+            const total = output?.count(latest) || 1;
+            return splitOfficialBatch(total).map((n, index) => ({
+              templateId: templateId === "sku_variants" ? `${templateId}-${index + 1}` : templateId,
+              intent: templateId as ProStudioIntent,
+              taskId: createID(`commerce-${templateId}`),
+              status: "queued" as const,
+              n,
+              batchIndex: index,
+              startedAt: submittedAt,
+              updatedAt: submittedAt,
+            }));
+          })
+        : plannedTemplateIds.map((templateId) => ({
         templateId,
+        intent: templateId as ProStudioIntent,
         taskId: createID(`commerce-${templateId}`),
         status: "queued" as const,
-        updatedAt: new Date().toISOString(),
+        n: 1,
+        batchIndex: 0,
+        startedAt: submittedAt,
+        updatedAt: submittedAt,
       }));
       const pendingProject = await persistProject({
         ...latest,
@@ -1121,8 +1228,48 @@ export default function EcommerceSuitePage() {
         summaryImage: undefined,
       });
       const submitted = await Promise.allSettled(
-        placeholders.map((placeholder) =>
-          createImageEditTaskFromReferenceIds(
+        placeholders.map((placeholder) => {
+          if (proStudioEnabled) {
+            const state = normalizeProStudioState({
+              ...pendingProject.proStudioState,
+              enabled: true,
+              intent: placeholder.intent,
+              settings: {
+                ...normalizeProStudioState(pendingProject.proStudioState, placeholder.intent).settings,
+                n: placeholder.n,
+              },
+            } as Partial<ProStudioState>, placeholder.intent);
+            const payload = buildProStudioImagePayload({
+              prompt: buildProStudioGenerationPrompt(pendingProject, placeholder.intent, placeholder.batchIndex),
+              state,
+              referenceImageUrls: publicImageUrls,
+            });
+            return createImageEditTaskFromReferenceIds(
+              placeholder.taskId,
+              referenceIds,
+              payload.prompt,
+              OFFICIAL_IMAGE_MODEL,
+              payload.size,
+              isImageQuality(payload.quality) ? payload.quality : "auto",
+              payload.n,
+              [{ role: "system", content: "你是电商生产素材视觉设计师，输出适合商业使用的单张成品图。" }],
+              "private",
+              payload.image_resolution,
+              isImageOutputFormat(payload.output_format) ? payload.output_format : "png",
+              payload.output_compression,
+              { background: payload.background, moderation: payload.moderation, inputImageMask: payload.input_image_mask },
+              pendingProject.id,
+              undefined,
+              publicImageUrls,
+              {
+                professional_mode: true,
+                pro_studio: payload.pro_studio,
+                official_settings: payload.official_settings,
+                resolution: payload.resolution,
+              },
+            );
+          }
+          return createImageEditTaskFromReferenceIds(
             placeholder.taskId,
             referenceIds,
             buildGenerationPrompt(pendingProject, placeholder.templateId),
@@ -1141,8 +1288,8 @@ export default function EcommerceSuitePage() {
             pendingProject.id,
             undefined,
             publicImageUrls,
-          ),
-        ),
+          );
+        }),
       );
       const submittedResults = placeholders.map((placeholder, index) => {
         const submittedItem = submitted[index];
@@ -1200,22 +1347,37 @@ export default function EcommerceSuitePage() {
         let nextProject = latest;
         for (const task of items) {
           if (task.id === nextProject.analysisTaskId) {
-            changed = true;
             if (task.status === "success") {
+              const nextText = extractTaskText(task) || nextProject.analysisText;
+              const nextChanged = nextProject.analysisStatus !== "success" || nextProject.analysisText !== nextText || Boolean(nextProject.analysisError);
+              if (!nextChanged) {
+                continue;
+              }
+              changed = true;
               nextProject = {
                 ...nextProject,
                 analysisStatus: "success",
-                analysisText: extractTaskText(task) || nextProject.analysisText,
+                analysisText: nextText,
                 analysisError: undefined,
               };
             } else if (task.status === "error" || task.status === "cancelled") {
+              const nextError = task.error || "商品分析失败";
+              const nextChanged = nextProject.analysisStatus !== task.status || nextProject.analysisError !== nextError;
+              if (!nextChanged) {
+                continue;
+              }
+              changed = true;
               nextProject = {
                 ...nextProject,
                 analysisStatus: task.status,
-                analysisError: task.error || "商品分析失败",
+                analysisError: nextError,
               };
               toast.error(nextProject.analysisError);
             } else {
+              if (nextProject.analysisStatus === task.status) {
+                continue;
+              }
+              changed = true;
               nextProject = { ...nextProject, analysisStatus: task.status };
             }
             continue;
@@ -1224,11 +1386,15 @@ export default function EcommerceSuitePage() {
           if (!matchedResult) {
             continue;
           }
+          const nextResult = resultFromTask(matchedResult.templateId, task);
+          if (!commerceResultChanged(matchedResult, nextResult)) {
+            continue;
+          }
           changed = true;
           nextProject = {
             ...nextProject,
             results: nextProject.results.map((result) =>
-              result.taskId === task.id ? resultFromTask(result.templateId, task) : result,
+              result.taskId === task.id ? nextResult : result,
             ),
           };
           if (task.status === "error") {
@@ -1318,6 +1484,19 @@ export default function EcommerceSuitePage() {
   }
 
   const leftRailExpanded = !leftRailCollapsed || leftRailHoverExpanded;
+  const activeResults = selectedProject?.results.filter((result) => isActiveTask(result.status)) || [];
+  const failedResults = selectedProject?.results.filter((result) => result.status === "error") || [];
+  const completedResults = selectedProject?.results.filter((result) => result.status === "success") || [];
+  const generationStartAt = activeResults
+    .map((result) => new Date(result.startedAt || result.updatedAt || selectedProject?.updatedAt || "").getTime())
+    .filter(Number.isFinite)
+    .sort((a, b) => a - b)[0];
+  const generationElapsed = generationStartAt ? formatElapsedClock(Math.floor((now - generationStartAt) / 1000)) : "";
+  const generationTotal = selectedProject?.results.length || 0;
+  const generationSettled = completedResults.length + failedResults.length + (selectedProject?.results.filter((result) => result.status === "cancelled").length || 0);
+  const generationProgressPercent = generationTotal > 0
+    ? Math.max(activeResults.length > 0 ? 8 : 0, Math.min(100, Math.round((generationSettled / generationTotal) * 100)))
+    : 0;
 
   return (
     <>
@@ -1359,7 +1538,7 @@ export default function EcommerceSuitePage() {
           </button>
           <div className={cn("min-w-0 flex-1 transition-all duration-300", leftRailExpanded ? "block opacity-100" : "hidden opacity-0")}>
             <h1 className="font-display text-lg font-semibold text-foreground">电商套图</h1>
-            <p className="text-xs text-muted-foreground">商品分析与详情设计</p>
+            <p className="text-xs text-muted-foreground">商品文案与详情设计</p>
           </div>
           <Button
             variant="ghost"
@@ -1375,12 +1554,6 @@ export default function EcommerceSuitePage() {
           </Button>
           <Button size="icon" className={cn("size-9 shrink-0 rounded-xl transition-all duration-300", leftRailExpanded ? "flex opacity-100" : "hidden opacity-0")} onClick={() => void createProject()} title="新建项目">
             <Plus className="size-4" />
-          </Button>
-        </div>
-        <div className={cn("flex items-center gap-2 border-b border-border p-3 transition-all duration-300", leftRailExpanded ? "opacity-100" : "pointer-events-none h-0 border-b-0 p-0 opacity-0")}>
-          <Button variant="outline" className="h-9 flex-1 rounded-xl text-xs" onClick={() => void reload()} disabled={loading}>
-            {loading ? <LoaderCircle className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
-            刷新
           </Button>
         </div>
         <div className={cn("hide-scrollbar min-h-0 flex-1 overflow-y-auto p-3 transition-all duration-300", leftRailExpanded ? "opacity-100" : "pointer-events-none opacity-0")}>
@@ -1459,7 +1632,7 @@ export default function EcommerceSuitePage() {
                       </Badge>
                     </div>
                     <div className="mt-2 line-clamp-2 text-xs leading-5 text-muted-foreground">
-                      {project.analysisText || `${project.referenceImages.length} 张参考图 · ${project.selectedTemplates.length} 个设计`}
+                      {project.analysisText || `${project.referenceImages.length} 张产品/参考图 · ${project.selectedTemplates.length} 个设计`}
                     </div>
                     <div className="mt-2 flex items-center justify-between gap-2">
                       <span className="min-w-0 truncate text-[11px] text-muted-foreground">{formatDateTime(project.updatedAt)}</span>
@@ -1535,9 +1708,9 @@ export default function EcommerceSuitePage() {
                       <PackageSearch className="size-3.5" />
                       电商商品视觉工作台
                     </div>
-                    <h2 className="mt-4 font-display text-2xl font-semibold text-foreground">从参考图开始，生成主图和详情套图</h2>
+                    <h2 className="mt-4 font-display text-2xl font-semibold text-foreground">从产品图开始，生成主图和详情套图</h2>
                     <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
-                      这里会帮你把参考图变成可用的电商图片。先选择要做的内容，创建项目后上传图片，再继续分析或生成。
+                      这里会帮你把产品图和参考图变成可用的电商图片。先选择要做的内容，创建项目后上传图片，再继续生成文案或图片。
                     </p>
                   </div>
                   <Button className="h-10 rounded-xl" onClick={() => void createProject()}>
@@ -1597,14 +1770,14 @@ export default function EcommerceSuitePage() {
               <Card className="gap-4 rounded-2xl p-4">
                 <div className="flex items-center justify-between gap-3">
                   <div>
-                    <div className="text-sm font-semibold text-foreground">参考图</div>
-                    <div className="text-xs text-muted-foreground">主参考锁定商品主体，副参考补充角度或细节</div>
+                    <div className="text-sm font-semibold text-foreground">产品图与参考图</div>
+                    <div className="text-xs text-muted-foreground">产品图锁定主体，参考图补充风格、场景、细节和竞品方向</div>
                   </div>
                   <Badge variant="info">{selectedProject.referenceImages.length}/{MAX_REFERENCE_IMAGES}</Badge>
                 </div>
                 <div className="grid grid-cols-2 gap-2 max-sm:grid-cols-1">
                   {REFERENCE_IMAGE_SLOTS.map((slot) => {
-                    const image = selectedProject.referenceImages.find((item) => item.role === slot.role);
+                    const images = selectedProject.referenceImages.filter((item) => item.role === slot.role);
                     const inputId = `commerce-reference-${slot.role}`;
                     return (
                       <div key={slot.role} className="grid gap-1.5 rounded-xl border border-border bg-background p-2">
@@ -1627,7 +1800,7 @@ export default function EcommerceSuitePage() {
                             <Button asChild variant="outline" size="sm" className="h-7 rounded-lg px-2 text-xs">
                               <label htmlFor={inputId} className="cursor-pointer">
                                 {uploading ? <LoaderCircle className="size-3 animate-spin" /> : <ImagePlus className="size-3" />}
-                                {image ? "替换" : "上传"}
+                                上传
                               </label>
                             </Button>
                           </div>
@@ -1635,6 +1808,7 @@ export default function EcommerceSuitePage() {
                             id={inputId}
                             type="file"
                             accept="image/*"
+                            multiple
                             className="sr-only"
                             disabled={uploading}
                             onChange={(event) => {
@@ -1643,31 +1817,35 @@ export default function EcommerceSuitePage() {
                             }}
                           />
                         </div>
-                        {image ? (
-                          <div className="group relative h-20 overflow-hidden rounded-lg border border-border bg-muted">
-                            <img src={image.dataUrl} alt={image.name} className="h-full w-full object-cover" />
-                            <div className="absolute left-2 top-2 rounded-full bg-background/90 px-2 py-0.5 text-[11px] font-semibold text-foreground shadow-sm">
-                              {slot.title}
-                            </div>
-                            <div className="absolute inset-x-0 bottom-0 bg-background/92 px-2 py-1.5 text-[11px]">
-                              <div className="truncate font-medium">{image.name}</div>
-                              <div className="text-muted-foreground">{formatFileSize(image.size) || taskStatusLabel(image.uploadStatus === "uploaded" ? "success" : "idle")}</div>
-                            </div>
-                            <button
-                              type="button"
-                              className="absolute right-1.5 top-1.5 inline-flex size-6 items-center justify-center rounded-lg bg-background/90 text-muted-foreground opacity-0 shadow-sm transition hover:text-rose-600 group-hover:opacity-100"
-                              onClick={() => void removeReferenceImage(image.id)}
-                              title={`移除${slot.title}`}
-                            >
-                              <Trash2 className="size-3.5" />
-                            </button>
+                        {images.length > 0 ? (
+                          <div className="grid grid-cols-3 gap-1.5">
+                            {images.map((image, index) => (
+                              <div key={image.id} className="group relative aspect-square overflow-hidden rounded-lg border border-border bg-muted">
+                                <img src={image.dataUrl} alt={image.name} className="h-full w-full object-cover" />
+                                <div className="absolute left-1.5 top-1.5 rounded-full bg-background/90 px-1.5 py-0.5 text-[10px] font-semibold text-foreground shadow-sm">
+                                  {index + 1}
+                                </div>
+                                <div className="absolute inset-x-0 bottom-0 bg-background/92 px-1.5 py-1 text-[10px]">
+                                  <div className="truncate font-medium">{image.name}</div>
+                                  <div className="truncate text-muted-foreground">{formatFileSize(image.size) || taskStatusLabel(image.uploadStatus === "uploaded" ? "success" : "idle")}</div>
+                                </div>
+                                <button
+                                  type="button"
+                                  className="absolute right-1 top-1 inline-flex size-6 items-center justify-center rounded-lg bg-background/90 text-muted-foreground opacity-0 shadow-sm transition hover:text-rose-600 group-hover:opacity-100"
+                                  onClick={() => void removeReferenceImage(image.id)}
+                                  title={`移除${slot.title}`}
+                                >
+                                  <Trash2 className="size-3.5" />
+                                </button>
+                              </div>
+                            ))}
                           </div>
                         ) : (
                           <label
                             htmlFor={inputId}
                             className="flex h-20 cursor-pointer items-center justify-center rounded-lg border border-dashed border-border bg-muted/30 text-center text-xs text-muted-foreground transition hover:bg-accent"
                           >
-                            上传{slot.title}
+                            上传{slot.title}，可多选
                           </label>
                         )}
                       </div>
@@ -1740,18 +1918,20 @@ export default function EcommerceSuitePage() {
                   </label>
                   <label className="grid gap-1.5">
                     <span className="text-xs font-medium text-muted-foreground">图片模型</span>
-                    <Select value={selectedProject.imageModel} onValueChange={(value) => updateSelectedProject({ imageModel: value })}>
+                    <Select value={selectedProject.professionalMode ? OFFICIAL_IMAGE_MODEL : selectedProject.imageModel} onValueChange={(value) => updateSelectedProject({ imageModel: value })} disabled={selectedProject.professionalMode}>
                       <SelectTrigger className="h-10 rounded-xl">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        {imageModelOptions.map((option) => (
-                          <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
-                        ))}
+                        {selectedProject.professionalMode
+                          ? <SelectItem value={OFFICIAL_IMAGE_MODEL}>{OFFICIAL_IMAGE_MODEL}</SelectItem>
+                          : imageModelOptions.map((option) => (
+                              <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+                            ))}
                       </SelectContent>
                     </Select>
                   </label>
-                  {isOfficialImageModel(selectedProject.imageModel) ? (
+                  {!selectedProject.professionalMode && isOfficialImageModel(selectedProject.imageModel) ? (
                     <label className="grid gap-1.5">
                       <span className="text-xs font-medium text-muted-foreground">质量强度</span>
                       <Select
@@ -1772,21 +1952,37 @@ export default function EcommerceSuitePage() {
                     </label>
                   ) : null}
                 </div>
+                <div className="mt-3">
+                  <ProStudioPanel
+                    scope="ecommerce"
+                    state={{ ...selectedProject.proStudioState, enabled: selectedProject.professionalMode }}
+                    onChange={(next) => updateSelectedProject({
+                      professionalMode: next.enabled,
+                      proStudioState: next,
+                      imageModel: next.enabled ? OFFICIAL_IMAGE_MODEL : selectedProject.imageModel,
+                      imageQuality: next.enabled && isImageQuality(next.settings.quality) ? next.settings.quality : selectedProject.imageQuality,
+                    })}
+                    fieldClassName="flex h-10 min-w-0 items-center justify-between gap-2 rounded-xl border border-input bg-background px-3 text-xs"
+                    selectTriggerClassName="h-8 min-w-0 flex-1 justify-end gap-1 border-0 bg-transparent px-0 py-0 text-right text-xs font-bold shadow-none focus-visible:ring-0 [&_svg]:size-4 [&_svg]:opacity-60 [&>span]:flex-none"
+                    inputClassName="h-8 min-w-0 border-0 bg-transparent px-0 text-right text-xs font-bold shadow-none focus-visible:ring-0 disabled:cursor-not-allowed"
+                    labelClassName="text-[11px] font-bold text-muted-foreground"
+                  />
+                </div>
               </Card>
 
               <Card className="gap-4 rounded-2xl p-4">
                 <div className="flex items-center justify-between gap-3">
                   <div>
-                    <div className="text-sm font-semibold text-foreground">商品分析</div>
-                    <div className="text-xs text-muted-foreground">自动生成后可手动改写</div>
+                    <div className="text-sm font-semibold text-foreground">商品文案策划</div>
+                    <div className="text-xs text-muted-foreground">自动生成标题、卖点、参数说明和详情页文案，可手动改写</div>
                   </div>
                   <Badge variant={taskStatusVariant(selectedProject.analysisStatus)}>{taskStatusLabel(selectedProject.analysisStatus)}</Badge>
                 </div>
                 <Textarea
                   value={selectedProject.analysisText}
                   onChange={(event) => updateSelectedProject({ analysisText: event.target.value })}
-                  className="min-h-48 rounded-xl"
-                  placeholder="点击分析商品后，会自动填入产品名称、类目、卖点、人群、场景和视觉风格方向。"
+                  className="h-56 resize-none rounded-xl"
+                  placeholder="点击分析商品后，会自动填入商品标题、一句话卖点、核心卖点、参数说明、详情页首屏文案、详情页模块文案和视觉风格方向。"
                 />
                 {selectedProject.analysisError ? (
                   <div className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700 dark:border-rose-800 dark:bg-rose-950/30 dark:text-rose-300">
@@ -1796,7 +1992,7 @@ export default function EcommerceSuitePage() {
                 <div className="flex flex-wrap gap-2">
                   <Button className="h-10 rounded-xl" onClick={() => void analyzeProduct()} disabled={analyzing || isActiveTask(selectedProject.analysisStatus)}>
                     {analyzing || isActiveTask(selectedProject.analysisStatus) ? <LoaderCircle className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
-                    分析商品
+                    生成文案
                   </Button>
                   <Button variant="outline" className="h-10 rounded-xl" onClick={() => void saveCurrentProject()} disabled={saving}>
                     {saving ? <LoaderCircle className="size-4 animate-spin" /> : <Archive className="size-4" />}
@@ -1853,7 +2049,57 @@ export default function EcommerceSuitePage() {
                   <Badge variant="secondary">已选 {selectedProject.selectedTemplates.length}/{COMMERCE_SUITE_TEMPLATES.length}</Badge>
                 </div>
                 <div className="grid gap-2.5">
-                  {TEMPLATE_GROUPS.map((group) => (
+                  {selectedProject.professionalMode ? (
+                    <div className="grid gap-2">
+                      <div className="grid grid-cols-2 gap-2 max-sm:grid-cols-1">
+                        {PRO_STUDIO_OUTPUTS.map((output) => {
+                          const checked = selectedProject.selectedTemplates.includes(output.id);
+                          const count = output.count(selectedProject);
+                          return (
+                            <button
+                              key={output.id}
+                              type="button"
+                              className={cn(
+                                "flex min-h-[52px] items-start gap-2.5 rounded-xl border px-3 py-2 text-left transition",
+                                checked ? "border-[#1456f0]/40 bg-[#edf4ff] dark:bg-sky-950/30" : "border-border bg-background hover:bg-accent",
+                              )}
+                              onClick={() => setTemplateSelected(output.id)}
+                              aria-pressed={checked}
+                            >
+                              <span
+                                aria-hidden="true"
+                                className={cn(
+                                  "mt-0.5 flex size-4 shrink-0 items-center justify-center rounded border transition",
+                                  checked ? "border-[#1456f0] bg-[#1456f0] text-white" : "border-input bg-background",
+                                )}
+                              >
+                                {checked ? <Check className="size-3" /> : null}
+                              </span>
+                              <span className="min-w-0">
+                                <span className="block text-sm font-semibold leading-5">{output.label}</span>
+                                <span className="line-clamp-1 block text-xs leading-4 text-muted-foreground">{count} 张 · official 生产素材</span>
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                      <label className="grid gap-1.5">
+                        <span className="text-xs font-medium text-muted-foreground">SKU 批量张数</span>
+                        <Input
+                          type="number"
+                          min={1}
+                          max={24}
+                          value={selectedProject.skuCount || 8}
+                          onChange={(event) => updateSelectedProject({ skuCount: Math.max(1, Math.min(24, Math.round(Number(event.target.value) || 1))) })}
+                          className="h-10 rounded-xl"
+                        />
+                      </label>
+                      <BatchJobPreview total={proStudioTemplateIds(selectedProject).reduce((sum, id) => {
+                        const output = PRO_STUDIO_OUTPUTS.find((item) => item.id === id);
+                        return sum + (output?.count(selectedProject) || 1);
+                      }, 0)} />
+                    </div>
+                  ) : TEMPLATE_GROUPS.map((group) => (
                     <div key={group.id} className="grid gap-1.5">
                       <div className="flex h-6 items-center justify-between gap-3">
                         <div className="min-w-0">
@@ -1901,7 +2147,7 @@ export default function EcommerceSuitePage() {
                 </div>
                 <Button className="h-10 rounded-xl" onClick={() => void submitGenerationTasks(selectedProject.selectedTemplates)} disabled={generating || selectedProject.selectedTemplates.length === 0}>
                   {generating ? <LoaderCircle className="size-4 animate-spin" /> : <WandSparkles className="size-4" />}
-                  生成选中的图片
+                  {selectedProject.professionalMode ? "生成生产素材" : "生成选中的图片"}
                 </Button>
               </Card>
             </div>
@@ -1918,8 +2164,8 @@ export default function EcommerceSuitePage() {
                 </div>
                 <div className="grid gap-3">
                   {[
-                    ["1", "上传商品参考图", "主参考放商品主体，副参考补充细节或角度。"],
-                    ["2", "分析商品", "自动得到卖点、人群、场景和视觉方向。"],
+                    ["1", "上传产品图和参考图", "产品图放主体、包装和角度，参考图补充风格、场景或细节。"],
+                    ["2", "生成文案", "自动得到标题、卖点、参数说明和详情页文案。"],
                     ["3", "选择生成目标", "主图、详情设计或套图设计。"],
                     ["4", "下载单图或整套预览", "每张图可以单独重试，也可以拼成一张总览图。"],
                   ].map(([step, title, body]) => (
@@ -1937,10 +2183,10 @@ export default function EcommerceSuitePage() {
               <Card className="gap-4 rounded-2xl p-4">
                 <div>
                   <div className="text-sm font-semibold text-foreground">可以做什么</div>
-                  <div className="text-xs text-muted-foreground">从商品分析到成图都在这里完成</div>
+                  <div className="text-xs text-muted-foreground">从商品文案到成图都在这里完成</div>
                 </div>
                 <div className="grid grid-cols-2 gap-2">
-                  {["商品分析", "主图快生成", "详情设计", "套图设计", "单图下载", "整套预览下载"].map((item) => (
+                  {["商品文案", "主图快生成", "详情设计", "套图设计", "单图下载", "整套预览下载"].map((item) => (
                     <div key={item} className="rounded-xl border border-border bg-background px-3 py-2 text-sm font-medium">
                       {item}
                     </div>
@@ -1966,6 +2212,37 @@ export default function EcommerceSuitePage() {
                     下载总览图
                   </Button>
                 </div>
+                {activeResults.length > 0 ? (
+                  <div className="rounded-2xl border border-sky-200 bg-sky-50/80 p-3 text-sky-950 dark:border-sky-900/60 dark:bg-sky-950/25 dark:text-sky-100">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div className="flex min-w-0 gap-3">
+                        <span className="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-full bg-white text-[#1456f0] ring-1 ring-sky-100 dark:bg-sky-950/60 dark:ring-sky-800">
+                          <LoaderCircle className="size-4 animate-spin" />
+                        </span>
+                        <div className="min-w-0">
+                          <div className="text-sm font-semibold">正在生成套图</div>
+                          <div className="mt-1 text-xs leading-5 text-sky-800 dark:text-sky-200">
+                            已提交 {generationTotal} 张，{activeResults.length} 张处理中，完成 {completedResults.length} 张
+                            {failedResults.length > 0 ? `，失败 ${failedResults.length} 张` : ""}
+                          </div>
+                        </div>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-2 rounded-full bg-white px-2.5 py-1 text-xs font-medium text-sky-800 ring-1 ring-sky-100 dark:bg-sky-950/60 dark:text-sky-100 dark:ring-sky-800">
+                        <Clock3 className="size-3.5" />
+                        <span className="font-mono tabular-nums">{generationElapsed || "00:00"}</span>
+                      </div>
+                    </div>
+                    <div className="mt-3">
+                      <div className="mb-1.5 flex items-center justify-between gap-2 text-[11px] text-sky-800 dark:text-sky-200">
+                        <span>任务会自动刷新，完成后图片会出现在下方</span>
+                        <span className="font-mono tabular-nums">{generationProgressPercent}%</span>
+                      </div>
+                      <div className="h-1.5 overflow-hidden rounded-full bg-white/85 dark:bg-sky-950/70">
+                        <div className="h-full rounded-full bg-[#1456f0] transition-[width] duration-300" style={{ width: `${generationProgressPercent}%` }} />
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
                 {selectedProject.results.length === 0 ? (
                   <div className="overflow-hidden rounded-2xl border border-dashed border-border bg-muted/25">
                     <div className="relative aspect-[4/3] bg-muted">
@@ -2007,6 +2284,7 @@ export default function EcommerceSuitePage() {
                               </div>
                               {result.status === "success" ? <CheckCircle2 className="size-4 shrink-0 text-emerald-600" /> : null}
                             </div>
+                            <ProStudioBadge proStudio={result.proStudio} officialSettings={result.officialSettings} compact />
                             {result.error ? (
                               <div className="line-clamp-2 text-xs text-rose-600">{result.error}</div>
                             ) : null}
@@ -2077,7 +2355,7 @@ export default function EcommerceSuitePage() {
       <Dialog open={referenceLibraryOpen} onOpenChange={setReferenceLibraryOpen}>
         <DialogContent className="flex h-[min(84dvh,720px)] w-[min(94vw,900px)] max-w-none flex-col overflow-hidden rounded-3xl p-0">
           <DialogHeader className="border-b border-border px-5 pt-5 pr-12 pb-4">
-            <DialogTitle>选择{referenceLibraryRole === "primary" ? "主参考" : "副参考"}</DialogTitle>
+            <DialogTitle>选择{referenceRoleLabel(referenceLibraryRole)}</DialogTitle>
             <DialogDescription>从素材库选择一张图片，选中后会替换当前参考位。</DialogDescription>
           </DialogHeader>
           <div className="grid gap-3 border-b border-border px-5 py-3">

@@ -7,3 +7,8 @@
 260609 21:46 | task-005-object-storage-primary | accepted | codex | docs/workflow/tasks/task-005-object-storage-primary.md
 260612 05:54 | task-006-ecommerce-suite-workbench | contract-approved | user/codex | docs/workflow/tasks/task-006-ecommerce-suite-workbench.md
 260612 17:18 | task-007-asset-library-smoke | qa-pass | codex | docs/workflow/qa-reports/task-007-asset-library-smoke-qa.md
+260616 00:10 | task-008-pro-studio-v1 | contract-draft | codex | docs/workflow/tasks/task-008-pro-studio-v1.md
+260616 00:24 | task-008-pro-studio-v1 | contract-approved | codex | docs/workflow/task-008-contract-review.md
+260616 01:31 | task-008-pro-studio-v1 | build-complete | codex | docs/workflow/worker-results/task-008-pro-studio-v1-result.md
+260616 01:31 | task-008-pro-studio-v1 | qa-pass | codex | docs/workflow/qa-reports/task-008-pro-studio-v1-qa.md
+260616 01:51 | task-008-pro-studio-v1 | local-container-updated | codex | chatgpt2api:codex-20260616-014314-pro-studio, version local-pro-studio-v1

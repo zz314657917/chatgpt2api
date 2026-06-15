@@ -54,6 +54,12 @@ import { getCachedAuthSession } from "@/lib/session";
 import { useAuthGuard } from "@/lib/use-auth-guard";
 
 import {
+  buildProStudioImagePayload,
+  normalizeProStudioState,
+  type ProStudioImagePayload,
+  type ProStudioState,
+} from "@/lib/pro-studio";
+import {
   SMART_CANVAS_ONBOARDING_STORAGE_KEY,
   canvasFlowTemplateById,
   type SmartCanvasFlowTemplateId,
@@ -477,6 +483,9 @@ function mergeLoopSlotStatuses(
 }
 
 function generatorImageResolution(generator: SmartCanvasItem, hasInputImages = false) {
+  if (generatorProStudioEnabled(generator)) {
+    return generatorProStudioState(generator).settings.resolution;
+  }
   if (isPixelIconSize(normalizeCanvasImageSize(generator.data?.size))) {
     return undefined;
   }
@@ -487,6 +496,9 @@ function generatorImageResolution(generator: SmartCanvasItem, hasInputImages = f
 }
 
 function generatorImageSize(generator: SmartCanvasItem, hasInputImages = false) {
+  if (generatorProStudioEnabled(generator)) {
+    return generatorProStudioState(generator).settings.size;
+  }
   if (hasInputImages) {
     if (generator.data?.size_user_modified !== true) {
       return undefined;
@@ -499,10 +511,16 @@ function generatorImageSize(generator: SmartCanvasItem, hasInputImages = false) 
 }
 
 function generatorImageModel(generator: SmartCanvasItem): ImageModel {
+  if (generatorProStudioEnabled(generator)) {
+    return "gpt-image-2-official";
+  }
   return generator.data?.model || "auto";
 }
 
 function generatorOutputFormat(generator: SmartCanvasItem) {
+  if (generatorProStudioEnabled(generator)) {
+    return generatorProStudioState(generator).settings.outputFormat;
+  }
   if (!supportsImageOutputControls(generatorImageModel(generator))) {
     return undefined;
   }
@@ -510,11 +528,17 @@ function generatorOutputFormat(generator: SmartCanvasItem) {
 }
 
 function generatorOutputCompression(generator: SmartCanvasItem) {
+  if (generatorProStudioEnabled(generator)) {
+    return generatorProStudioState(generator).settings.outputCompression;
+  }
   const format = generatorOutputFormat(generator);
   return format && supportsImageOutputCompression(generatorImageModel(generator), format) ? normalizeImageOutputCompression(generator.data?.output_compression) : undefined;
 }
 
 function generatorImageQuality(generator: SmartCanvasItem): ImageQuality | undefined {
+  if (generatorProStudioEnabled(generator)) {
+    return generatorProStudioState(generator).settings.quality;
+  }
   if (!supportsImageQuality(generatorImageModel(generator))) {
     return undefined;
   }
@@ -522,11 +546,47 @@ function generatorImageQuality(generator: SmartCanvasItem): ImageQuality | undef
 }
 
 function generatorImageCount(generator: SmartCanvasItem) {
+  if (generatorProStudioEnabled(generator)) {
+    return generatorProStudioState(generator).settings.n;
+  }
   return Math.max(1, Math.min(10, Number(generator.data?.n || 1)));
 }
 
 function generatorImageVisibility(generator: SmartCanvasItem): ImageVisibility {
   return generator.type === "image_generation" ? "private" : generator.data?.visibility === "public" ? "public" : "private";
+}
+
+function generatorProStudioState(generator: SmartCanvasItem): ProStudioState {
+  return normalizeProStudioState(generator.data?.pro_studio_state as Partial<ProStudioState> | undefined, "free_canvas");
+}
+
+function generatorProStudioEnabled(generator: SmartCanvasItem) {
+  return generator.data?.professional_mode === true || Boolean(generatorProStudioState(generator).enabled);
+}
+
+function generatorProStudioPayload(generator: SmartCanvasItem, prompt: string, referenceImageUrls?: string[], maskUrl?: string): ProStudioImagePayload | undefined {
+  if (!generatorProStudioEnabled(generator)) {
+    return undefined;
+  }
+  return buildProStudioImagePayload({
+    prompt,
+    state: generatorProStudioState(generator),
+    referenceImageUrls,
+    maskUrl,
+  });
+}
+
+function proStudioExtraBody(payload?: ProStudioImagePayload): Record<string, unknown> {
+  if (!payload) {
+    return {};
+  }
+  return {
+    professional_mode: true,
+    pro_studio: payload.pro_studio,
+    official_settings: payload.official_settings,
+    ...(payload.resolution ? { resolution: payload.resolution } : {}),
+    ...(payload.mask_url ? { mask_url: payload.mask_url } : {}),
+  };
 }
 
 function llmInputText(canvas: SmartCanvasDocument, node: SmartCanvasItem) {
@@ -3564,10 +3624,11 @@ export function useSmartCanvasController() {
               ? publicCanvasImageUrl(maskIterationImages[0]) || await imageRefToDataUrl(maskIterationImages[0])
               : "";
             const publicImageUrls = publicCanvasImageUrls(editIterationImages);
+            const proPayload = generatorProStudioPayload(generator, submittedPrompt, publicImageUrls, inputImageMask);
             task = await createImageEditTask(
               uniqueTaskId("smart-canvas-loop"),
               files,
-              submittedPrompt,
+              proPayload?.prompt || submittedPrompt,
               generator.data?.model || "auto",
               generatorImageSize(generator, true),
               generatorImageQuality(generator),
@@ -3581,13 +3642,15 @@ export function useSmartCanvasController() {
               undefined,
               undefined,
               publicImageUrls,
+              proStudioExtraBody(proPayload),
             );
           } else if (maskIterationImages.length > 0) {
             throw new Error("蒙版需要和原图一起作为输入");
           } else {
+            const proPayload = generatorProStudioPayload(generator, submittedPrompt);
             task = await createImageGenerationTask(
               uniqueTaskId("smart-canvas-loop"),
-              submittedPrompt,
+              proPayload?.prompt || submittedPrompt,
               generator.data?.model || "auto",
               generatorImageSize(generator),
               generatorImageQuality(generator),
@@ -3598,6 +3661,9 @@ export function useSmartCanvasController() {
               generatorOutputFormat(generator),
               generatorOutputCompression(generator),
               undefined,
+              undefined,
+              undefined,
+              proStudioExtraBody(proPayload),
             );
           }
           taskIds.push(task.id);
@@ -3815,10 +3881,11 @@ export function useSmartCanvasController() {
           ? publicCanvasImageUrl(maskInputRefs[0]) || await imageRefToDataUrl(maskInputRefs[0])
           : "";
         const publicImageUrls = publicCanvasImageUrls(editInputRefs);
+        const proPayload = generatorProStudioPayload(generator, submittedPrompt, publicImageUrls, inputImageMask);
         task = await createImageEditTask(
           clientTaskId,
           files,
-          submittedPrompt,
+          proPayload?.prompt || submittedPrompt,
           generatorImageModel(generator),
           generatorImageSize(generator, true),
           generatorImageQuality(generator),
@@ -3832,13 +3899,15 @@ export function useSmartCanvasController() {
           undefined,
           undefined,
           publicImageUrls,
+          proStudioExtraBody(proPayload),
         );
       } else if (maskInputRefs.length > 0) {
         throw new Error("蒙版需要和原图一起作为输入");
       } else {
+        const proPayload = generatorProStudioPayload(generator, submittedPrompt);
         task = await createImageGenerationTask(
           clientTaskId,
-          submittedPrompt,
+          proPayload?.prompt || submittedPrompt,
           generatorImageModel(generator),
           generatorImageSize(generator),
           generatorImageQuality(generator),
@@ -3849,6 +3918,9 @@ export function useSmartCanvasController() {
           generatorOutputFormat(generator),
           generatorOutputCompression(generator),
           undefined,
+          undefined,
+          undefined,
+          proStudioExtraBody(proPayload),
         );
       }
       const output = creationTaskToOutput(task);
@@ -3864,6 +3936,9 @@ export function useSmartCanvasController() {
             error: task.error,
             last_run_error_detail: canvasRunErrorDetail(task.status, task.error),
             task_id: task.id,
+            professional_mode: task.professional_mode,
+            pro_studio: task.pro_studio,
+            official_settings: task.official_settings,
             started_at: item.id === generator.id ? item.data?.started_at || startedAt || task.created_at : startedAt,
             updated_at: task.updated_at,
           },
@@ -3891,6 +3966,9 @@ export function useSmartCanvasController() {
             error: task.error,
             last_run_error_detail: canvasRunErrorDetail(task.status, task.error),
             task_id: task.id,
+            professional_mode: task.professional_mode,
+            pro_studio: task.pro_studio,
+            official_settings: task.official_settings,
             started_at: startedAt,
             updated_at: task.updated_at,
           },

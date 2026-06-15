@@ -13,6 +13,7 @@ import { DateRangeFilter } from "@/components/date-range-filter";
 import { ImageLightbox } from "@/components/image-lightbox";
 import { MobileBottomDrawer } from "@/components/mobile-bottom-drawer";
 import { useMobileNav } from "@/components/mobile-nav-context";
+import { ProStudioBadge } from "@/components/pro-studio/pro-studio-badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -2822,6 +2823,12 @@ function ImageManagerContent({
                   <span className="text-muted-foreground">模型</span>
                   <span className="min-w-0 truncate font-medium text-foreground">{focusedDetail?.model || "未公开"}</span>
                 </div>
+                {focusedDetail?.professional_mode || focusedDetail?.pro_studio?.enabled ? (
+                  <div className="flex items-start justify-between gap-3">
+                    <span className="text-muted-foreground">生产模式</span>
+                    <ProStudioBadge proStudio={focusedDetail.pro_studio} officialSettings={focusedDetail.official_settings} compact />
+                  </div>
+                ) : null}
               </div>
               {focusedDetail?.prompt ? (
                 <div className="max-h-28 overflow-y-auto rounded-xl border border-border bg-muted/40 p-3 text-xs leading-5 text-muted-foreground">

@@ -9,7 +9,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { SMART_CANVAS_QUEUE_CHANGED_EVENT, type SmartCanvasQueueChangedDetail } from "@/app/canvas/canvas-events";
 import { normalizeSmartCanvas, smartCanvasRuns } from "@/app/canvas/canvas-utils";
 import type { SmartCanvasDocument, SmartCanvasRunRecord } from "@/app/canvas/types";
-import { fetchCanvases, IMAGE_MODEL_ROUTE_DETAILS, type CanvasDocument, type CreationTask } from "@/lib/api";
+import { fetchCanvases, fetchCreationTasks, IMAGE_MODEL_ROUTE_DETAILS, type CanvasDocument, type CreationTask } from "@/lib/api";
 import { formatImageSizeDisplay, getImageSizeRequirementLabel, imageQualityLabel, isHighResolutionImageSize } from "@/lib/image-parameters";
 import { cn } from "@/lib/utils";
 import {
@@ -31,6 +31,13 @@ import {
   imageTurnProgressKey,
   subscribeImageTurnProgress,
 } from "@/store/image-turn-progress";
+import {
+  COMMERCE_SUITE_PROJECTS_CHANGED_EVENT,
+  listCommerceSuiteProjects,
+  saveCommerceSuiteProject,
+  type CommerceSuiteProject,
+  type CommerceSuiteResult,
+} from "@/store/ecommerce-suite-projects";
 
 type TaskQueueItem = {
   source: "image";
@@ -56,7 +63,22 @@ type CanvasQueueItem = {
   cancelledCount: number;
 };
 
-type QueueItemModel = TaskQueueItem | CanvasQueueItem;
+type CommerceQueueItem = {
+  source: "commerce";
+  projectId: string;
+  projectTitle: string;
+  results: CommerceSuiteResult[];
+  totalCount: number;
+  runningCount: number;
+  queuedCount: number;
+  completedCount: number;
+  failedCount: number;
+  cancelledCount: number;
+  startedAt: string;
+  updatedAt: string;
+};
+
+type QueueItemModel = TaskQueueItem | CanvasQueueItem | CommerceQueueItem;
 
 type RecentQueueCompletion = QueueItemModel & {
   key: string;
@@ -81,6 +103,14 @@ function isCanvasRunBusy(run: SmartCanvasRunRecord) {
 }
 
 function isTerminalCanvasRunStatus(status?: CreationTask["status"]) {
+  return status === "success" || status === "error" || status === "cancelled";
+}
+
+function isCommerceResultBusy(result: CommerceSuiteResult) {
+  return result.status === "queued" || result.status === "running";
+}
+
+function isTerminalCommerceResultStatus(status?: CreationTask["status"] | "idle") {
   return status === "success" || status === "error" || status === "cancelled";
 }
 
@@ -159,6 +189,16 @@ function getCanvasStatusLabel(status?: CreationTask["status"]) {
   return "处理中";
 }
 
+function getCommerceStatusLabel(item: CommerceQueueItem) {
+  if (item.runningCount > 0) {
+    return "生成中";
+  }
+  if (item.queuedCount > 0) {
+    return "排队中";
+  }
+  return "处理中";
+}
+
 function getStatusClass(status: ImageTurnStatus) {
   if (status === "queued") {
     return "bg-amber-50 text-amber-700 ring-amber-100 dark:bg-amber-950/30 dark:text-amber-300 dark:ring-amber-800";
@@ -177,6 +217,13 @@ function getCanvasStatusClass(status?: CreationTask["status"]) {
     return "bg-sky-50 text-[#1456f0] ring-sky-100 dark:bg-sky-950/30 dark:text-sky-300 dark:ring-sky-800";
   }
   return "bg-muted text-muted-foreground ring-border";
+}
+
+function getCommerceStatusClass(item: CommerceQueueItem) {
+  if (item.queuedCount > 0 && item.runningCount === 0) {
+    return "bg-amber-50 text-amber-700 ring-amber-100 dark:bg-amber-950/30 dark:text-amber-300 dark:ring-amber-800";
+  }
+  return "bg-sky-50 text-[#1456f0] ring-sky-100 dark:bg-sky-950/30 dark:text-sky-300 dark:ring-sky-800";
 }
 
 function getQueueSizeLabel(turn: ImageTurn) {
@@ -250,27 +297,59 @@ function getCompletionTone(status: RecentQueueCompletion["finalStatus"]) {
 }
 
 function getQueueItemKey(item: QueueItemModel) {
-  return item.source === "image"
-    ? `image:${item.conversationId}:${item.turn.id}`
-    : `canvas:${item.canvasId}:${item.run.id}:${item.run.taskId || ""}`;
+  if (item.source === "image") {
+    return `image:${item.conversationId}:${item.turn.id}`;
+  }
+  if (item.source === "canvas") {
+    return `canvas:${item.canvasId}:${item.run.id}:${item.run.taskId || ""}`;
+  }
+  return `commerce:${item.projectId}`;
 }
 
 function getQueueItemCreatedAt(item: QueueItemModel) {
-  return item.source === "image" ? item.turn.createdAt : item.run.startedAt || item.run.createdAt;
+  if (item.source === "image") {
+    return item.turn.createdAt;
+  }
+  if (item.source === "canvas") {
+    return item.run.startedAt || item.run.createdAt;
+  }
+  return item.startedAt;
 }
 
 function isQueueItemBusy(item: QueueItemModel) {
-  return item.source === "image" ? isTurnBusy(item.turn) : isCanvasRunBusy(item.run);
+  if (item.source === "image") {
+    return isTurnBusy(item.turn);
+  }
+  if (item.source === "canvas") {
+    return isCanvasRunBusy(item.run);
+  }
+  return item.results.some(isCommerceResultBusy);
 }
 
 function isQueueItemTerminal(item: QueueItemModel) {
-  return item.source === "image"
-    ? isTerminalTurnStatus(item.turn.status)
-    : isTerminalCanvasRunStatus(item.run.status);
+  if (item.source === "image") {
+    return isTerminalTurnStatus(item.turn.status);
+  }
+  if (item.source === "canvas") {
+    return isTerminalCanvasRunStatus(item.run.status);
+  }
+  return item.results.length > 0 && item.results.every((result) => isTerminalCommerceResultStatus(result.status));
 }
 
 function getQueueItemFinalStatus(item: QueueItemModel): RecentQueueCompletion["finalStatus"] {
-  return item.source === "image" ? item.turn.status : item.run.status;
+  if (item.source === "image") {
+    return item.turn.status;
+  }
+  if (item.source === "canvas") {
+    return item.run.status;
+  }
+  if (item.failedCount > 0) {
+    return "error";
+  }
+  if (item.cancelledCount > 0) {
+    return "cancelled";
+  }
+  return "success";
 }
 
 function getQueueItem(conversation: ImageConversation, turn: ImageTurn): TaskQueueItem {
@@ -307,6 +386,61 @@ function getCanvasQueueItem(canvas: SmartCanvasDocument, run: SmartCanvasRunReco
   };
 }
 
+function getCommerceQueueItem(project: CommerceSuiteProject): CommerceQueueItem | null {
+  const activeResults = project.results.filter(isCommerceResultBusy);
+  if (activeResults.length === 0) {
+    return null;
+  }
+  const startedTimes = activeResults
+    .map((result) => result.startedAt || result.updatedAt || project.updatedAt)
+    .filter(Boolean)
+    .sort();
+  return {
+    source: "commerce",
+    projectId: project.id,
+    projectTitle: project.title,
+    results: project.results,
+    totalCount: Math.max(1, project.results.length),
+    runningCount: project.results.filter((result) => result.status === "running").length,
+    queuedCount: project.results.filter((result) => result.status === "queued").length,
+    completedCount: project.results.filter((result) => result.status === "success").length,
+    failedCount: project.results.filter((result) => result.status === "error").length,
+    cancelledCount: project.results.filter((result) => result.status === "cancelled").length,
+    startedAt: startedTimes[0] || project.updatedAt,
+    updatedAt: project.updatedAt,
+  };
+}
+
+function commerceResultFromTask(result: CommerceSuiteResult, task: CreationTask): CommerceSuiteResult {
+  const image = (task.data || []).find((item) => item.local_url || item.url || item.b64_json);
+  return {
+    ...result,
+    taskId: task.id,
+    status: task.status,
+    localUrl: image?.local_url,
+    url: image?.url || (image?.b64_json ? `data:image/png;base64,${image.b64_json}` : undefined),
+    revisedPrompt: image?.revised_prompt,
+    error: task.error,
+    proStudio: task.pro_studio,
+    officialSettings: task.official_settings,
+    startedAt: result.startedAt || task.created_at,
+    updatedAt: task.updated_at,
+  };
+}
+
+function commerceResultChanged(a: CommerceSuiteResult, b: CommerceSuiteResult) {
+  return (
+    a.taskId !== b.taskId ||
+    a.status !== b.status ||
+    a.localUrl !== b.localUrl ||
+    a.url !== b.url ||
+    a.path !== b.path ||
+    a.revisedPrompt !== b.revisedPrompt ||
+    a.error !== b.error ||
+    a.updatedAt !== b.updatedAt
+  );
+}
+
 function getTaskQueueItems(conversations: ImageConversation[]) {
   const items = conversations.flatMap((conversation) =>
     conversation.turns.flatMap((turn) => {
@@ -335,6 +469,13 @@ function getCanvasTaskQueueItems(canvases: SmartCanvasDocument[]) {
   return items.sort((a, b) => (a.run.startedAt || a.run.createdAt).localeCompare(b.run.startedAt || b.run.createdAt));
 }
 
+function getCommerceTaskQueueItems(projects: CommerceSuiteProject[]) {
+  return projects.flatMap((project) => {
+    const item = getCommerceQueueItem(project);
+    return item ? [item] : [];
+  }).sort((a, b) => a.startedAt.localeCompare(b.startedAt));
+}
+
 function findQueueItem(conversations: ImageConversation[], conversationId: string, turnId: string) {
   const conversation = conversations.find((item) => item.id === conversationId);
   const turn = conversation?.turns.find((item) => item.id === turnId);
@@ -348,6 +489,11 @@ function findCanvasQueueItem(canvases: SmartCanvasDocument[], canvasId: string, 
   }
   const run = smartCanvasRuns(canvas).find((item) => item.id === runId && (!taskId || item.taskId === taskId));
   return run ? getCanvasQueueItem(canvas, run) : null;
+}
+
+function findCommerceQueueItem(projects: CommerceSuiteProject[], projectId: string) {
+  const project = projects.find((item) => item.id === projectId);
+  return project ? getCommerceQueueItem(project) : null;
 }
 
 function useImageConversationsForQueue() {
@@ -438,6 +584,103 @@ function useCanvasesForQueue() {
   }, []);
 
   return canvases;
+}
+
+function useCommerceProjectsForQueue() {
+  const [projects, setProjects] = useState<CommerceSuiteProject[]>([]);
+
+  useEffect(() => {
+    let active = true;
+
+    const loadProjects = async () => {
+      try {
+        const items = await listCommerceSuiteProjects();
+        if (active) {
+          setProjects(items);
+        }
+      } catch {
+        if (active) {
+          setProjects([]);
+        }
+      }
+    };
+
+    const handleRefresh = () => {
+      void loadProjects();
+    };
+
+    void loadProjects();
+    window.addEventListener("focus", handleRefresh);
+    window.addEventListener(COMMERCE_SUITE_PROJECTS_CHANGED_EVENT, handleRefresh);
+    return () => {
+      active = false;
+      window.removeEventListener("focus", handleRefresh);
+      window.removeEventListener(COMMERCE_SUITE_PROJECTS_CHANGED_EVENT, handleRefresh);
+    };
+  }, []);
+
+  return projects;
+}
+
+function useSyncCommerceTasks(projects: CommerceSuiteProject[]) {
+  const activeTaskIds = useMemo(
+    () => projects.flatMap((project) =>
+      project.results
+        .filter((result) => isCommerceResultBusy(result) && result.taskId)
+        .map((result) => result.taskId || ""),
+    ),
+    [projects],
+  );
+
+  useEffect(() => {
+    if (activeTaskIds.length === 0) {
+      return;
+    }
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const { items } = await fetchCreationTasks(activeTaskIds);
+        if (cancelled || items.length === 0) {
+          return;
+        }
+        const taskMap = new Map(items.map((item) => [item.id, item]));
+        await Promise.all(projects.map(async (project) => {
+          let changed = false;
+          const nextResults = project.results.map((result) => {
+            if (!result.taskId) {
+              return result;
+            }
+            const task = taskMap.get(result.taskId);
+            if (!task) {
+              return result;
+            }
+            const nextResult = commerceResultFromTask(result, task);
+            if (!commerceResultChanged(result, nextResult)) {
+              return result;
+            }
+            changed = true;
+            return nextResult;
+          });
+          if (!changed) {
+            return;
+          }
+          await saveCommerceSuiteProject({
+            ...project,
+            results: nextResults,
+            updatedAt: new Date().toISOString(),
+          });
+        }));
+      } catch {
+        // Queue polling should stay quiet; the project page surfaces detailed task errors.
+      }
+    };
+    void tick();
+    const timer = window.setInterval(tick, 2200);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [activeTaskIds, projects]);
 }
 
 function ImageQueueItem({
@@ -650,25 +893,121 @@ function CanvasQueueItemCard({
   );
 }
 
+function CommerceQueueItemCard({
+  item,
+  now,
+  onOpenCommerce,
+}: {
+  item: CommerceQueueItem;
+  now: number;
+  onOpenCommerce: (projectId: string) => void;
+}) {
+  const settledCount = item.completedCount + item.failedCount + item.cancelledCount;
+  const progressPercent = Math.max(8, Math.min(100, Math.round((settledCount / item.totalCount) * 100)));
+  const elapsedSeconds = item.startedAt
+    ? Math.max(0, Math.floor((now - new Date(item.startedAt).getTime()) / 1000))
+    : 0;
+  const elapsed = formatElapsedClock(elapsedSeconds);
+  const progressMessage = item.runningCount > 0 ? "电商套图生成中" : "等待创作并发额度";
+  const progressDetail = `${item.totalCount} 张已提交，完成 ${item.completedCount} 张${item.failedCount > 0 ? `，失败 ${item.failedCount} 张` : ""}`;
+
+  return (
+    <button
+      type="button"
+      className="w-full rounded-2xl border border-[#f2f3f5] bg-white p-3 text-left shadow-[0_4px_6px_rgba(0,0,0,0.05)] transition hover:border-[#dbe7ff] hover:bg-[#f8fbff] dark:border-border dark:bg-card dark:hover:bg-accent/40"
+      onClick={() => onOpenCommerce(item.projectId)}
+    >
+      <div className="flex items-start gap-3">
+        <span
+          className={cn(
+            "mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-full ring-1",
+            item.runningCount > 0
+              ? "bg-sky-50 text-[#1456f0] ring-sky-100"
+              : "bg-amber-50 text-amber-700 ring-amber-100",
+          )}
+        >
+          {item.runningCount > 0 ? <LoaderCircle className="size-4 animate-spin" /> : <Clock3 className="size-4" />}
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 items-center justify-between gap-2">
+            <p className="truncate text-sm font-semibold text-[#222222] dark:text-foreground">
+              {item.projectTitle || "未命名商品套图"}
+            </p>
+            <span className={cn("shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium ring-1", getCommerceStatusClass(item))}>
+              {getCommerceStatusLabel(item)}
+            </span>
+          </div>
+          <p className="mt-1 line-clamp-2 text-xs leading-5 text-[#45515e] dark:text-muted-foreground">
+            电商套图任务正在项目内生成，完成后会同步到生成结果区。
+          </p>
+
+          <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px] text-[#45515e] dark:text-muted-foreground">
+            <span className="rounded-full bg-[#f0f0f0] px-2 py-0.5 dark:bg-muted">电商套图</span>
+            <span className="rounded-full bg-[#f0f0f0] px-2 py-0.5 font-mono tabular-nums dark:bg-muted">
+              {settledCount}/{item.totalCount}
+            </span>
+            {item.queuedCount > 0 ? (
+              <span className="rounded-full bg-amber-50 px-2 py-0.5 font-mono tabular-nums text-amber-700 dark:bg-amber-950/30 dark:text-amber-300">
+                排队 {item.queuedCount}
+              </span>
+            ) : null}
+            {item.runningCount > 0 ? (
+              <span className="rounded-full bg-sky-50 px-2 py-0.5 font-mono tabular-nums text-sky-700 dark:bg-sky-950/30 dark:text-sky-300">
+                处理中 {item.runningCount}
+              </span>
+            ) : null}
+          </div>
+
+          <div className="mt-3">
+            <div className="mb-1.5 flex items-center justify-between gap-2 text-[11px] text-[#45515e] dark:text-muted-foreground">
+              <span className="truncate font-medium text-[#222222] dark:text-foreground">{progressMessage}</span>
+              <span className="shrink-0 font-mono tabular-nums">{progressPercent}%</span>
+            </div>
+            <div className="h-1.5 overflow-hidden rounded-full bg-[#edf2f7] dark:bg-muted">
+              <div className="h-full rounded-full bg-[#1456f0] transition-[width] duration-300" style={{ width: `${progressPercent}%` }} />
+            </div>
+            <div className="mt-1.5 flex items-center justify-between gap-2 text-[11px] text-[#8e8e93] dark:text-muted-foreground">
+              <span className="truncate">{progressDetail || formatQueueTime(item.startedAt)}</span>
+              <span className="shrink-0 font-mono tabular-nums">已运行 {elapsed}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </button>
+  );
+}
+
 function CompletionItem({
   item,
   onOpenConversation,
   onOpenCanvas,
+  onOpenCommerce,
 }: {
   item: RecentQueueCompletion;
   onOpenConversation: (conversationId: string) => void;
   onOpenCanvas: (canvasId: string) => void;
+  onOpenCommerce: (projectId: string) => void;
 }) {
   const tone = getCompletionTone(item.finalStatus);
   const settledCount = item.completedCount + item.failedCount + item.cancelledCount;
   const title = item.source === "image"
     ? item.conversationTitle || item.turn.prompt || "未命名任务"
-    : item.canvasTitle || item.run.prompt || "未命名画布任务";
-  const prompt = item.source === "image" ? item.turn.prompt : item.run.prompt;
-  const error = item.source === "image" ? item.turn.error : item.run.error;
+    : item.source === "canvas"
+      ? item.canvasTitle || item.run.prompt || "未命名画布任务"
+      : item.projectTitle || "未命名商品套图";
+  const prompt = item.source === "image"
+    ? item.turn.prompt
+    : item.source === "canvas"
+      ? item.run.prompt
+      : "电商套图任务已结束";
+  const error = item.source === "image" ? item.turn.error : item.source === "canvas" ? item.run.error : undefined;
   const statusLabel = item.source === "image"
     ? getStatusLabel(item.finalStatus as ImageTurnStatus)
-    : getCanvasStatusLabel(item.finalStatus as CreationTask["status"]);
+    : item.source === "canvas"
+      ? getCanvasStatusLabel(item.finalStatus as CreationTask["status"])
+      : item.finalStatus === "success"
+        ? "已完成"
+        : getCanvasStatusLabel(item.finalStatus as CreationTask["status"]);
   const resultText =
     item.finalStatus === "success" || item.finalStatus === "message"
       ? `${settledCount}/${item.totalCount} 已完成`
@@ -678,7 +1017,7 @@ function CompletionItem({
     <button
       type="button"
       className="animate-in fade-in slide-in-from-top-1 zoom-in-95 w-full rounded-2xl border border-emerald-100 bg-white p-3 text-left shadow-[0_12px_24px_-18px_rgba(16,185,129,0.55)] duration-300 hover:border-emerald-200 hover:bg-emerald-50/45 dark:border-emerald-900/50 dark:bg-card dark:hover:bg-emerald-950/20"
-      onClick={() => item.source === "image" ? onOpenConversation(item.conversationId) : onOpenCanvas(item.canvasId)}
+      onClick={() => item.source === "image" ? onOpenConversation(item.conversationId) : item.source === "canvas" ? onOpenCanvas(item.canvasId) : onOpenCommerce(item.projectId)}
     >
       <div className="flex items-start gap-3">
         <span className={cn("relative mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-full ring-1", tone.iconClass)}>
@@ -716,6 +1055,8 @@ export function ImageTaskQueue({ className }: { className?: string }) {
   const navigate = useNavigate();
   const conversations = useImageConversationsForQueue();
   const canvases = useCanvasesForQueue();
+  const commerceProjects = useCommerceProjectsForQueue();
+  useSyncCommerceTasks(commerceProjects);
   const progressByTurnKey = useSyncExternalStore(
     subscribeImageTurnProgress,
     getImageTurnProgressSnapshot,
@@ -723,9 +1064,10 @@ export function ImageTaskQueue({ className }: { className?: string }) {
   );
   const imageQueueItems = useMemo(() => getTaskQueueItems(conversations), [conversations]);
   const canvasQueueItems = useMemo(() => getCanvasTaskQueueItems(canvases), [canvases]);
+  const commerceQueueItems = useMemo(() => getCommerceTaskQueueItems(commerceProjects), [commerceProjects]);
   const queueItems = useMemo(
-    () => [...imageQueueItems, ...canvasQueueItems].sort((a, b) => getQueueItemCreatedAt(a).localeCompare(getQueueItemCreatedAt(b))),
-    [canvasQueueItems, imageQueueItems],
+    () => [...imageQueueItems, ...canvasQueueItems, ...commerceQueueItems].sort((a, b) => getQueueItemCreatedAt(a).localeCompare(getQueueItemCreatedAt(b))),
+    [canvasQueueItems, commerceQueueItems, imageQueueItems],
   );
   const activeCount = queueItems.length;
   const [recentCompletions, setRecentCompletions] = useState<RecentQueueCompletion[]>([]);
@@ -745,7 +1087,9 @@ export function ImageTaskQueue({ className }: { className?: string }) {
 
       const completedItem = previousItem.source === "image"
         ? findQueueItem(conversations, previousItem.conversationId, previousItem.turn.id)
-        : findCanvasQueueItem(canvases, previousItem.canvasId, previousItem.run.id, previousItem.run.taskId);
+        : previousItem.source === "canvas"
+          ? findCanvasQueueItem(canvases, previousItem.canvasId, previousItem.run.id, previousItem.run.taskId)
+          : findCommerceQueueItem(commerceProjects, previousItem.projectId);
       if (!completedItem || isQueueItemBusy(completedItem) || !isQueueItemTerminal(completedItem)) {
         return;
       }
@@ -762,7 +1106,7 @@ export function ImageTaskQueue({ className }: { className?: string }) {
     if (completedItems.length > 0) {
       setRecentCompletions((current) => [...completedItems, ...current].slice(0, 3));
     }
-  }, [canvases, conversations, queueItems]);
+  }, [canvases, commerceProjects, conversations, queueItems]);
 
   useEffect(() => {
     if (recentCompletions.length === 0) {
@@ -807,6 +1151,10 @@ export function ImageTaskQueue({ className }: { className?: string }) {
     setOpen(false);
     navigate("/canvas");
   };
+  const handleOpenCommerce = (_projectId: string) => {
+    setOpen(false);
+    navigate("/ecommerce-suite");
+  };
   const renderQueueItem = (item: QueueItemModel) => {
     if (item.source === "image") {
       return (
@@ -818,12 +1166,22 @@ export function ImageTaskQueue({ className }: { className?: string }) {
         />
       );
     }
-    return (
+    if (item.source === "canvas") {
+      return (
       <CanvasQueueItemCard
         key={getQueueItemKey(item)}
         item={item}
         now={now}
         onOpenCanvas={handleOpenCanvas}
+      />
+      );
+    }
+    return (
+      <CommerceQueueItemCard
+        key={getQueueItemKey(item)}
+        item={item}
+        now={now}
+        onOpenCommerce={handleOpenCommerce}
       />
     );
   };
@@ -874,7 +1232,7 @@ export function ImageTaskQueue({ className }: { className?: string }) {
               <div className="text-sm font-semibold text-[#222222] dark:text-foreground">任务处理队列</div>
               <div className="text-xs text-[#8e8e93] dark:text-muted-foreground">
                 {activeCount > 0
-                  ? `${activeCount} 个创作台/画布任务正在排队或处理`
+                  ? `${activeCount} 个创作台/画布/电商套图任务正在排队或处理`
                   : hasRecentCompletion
                     ? "最近完成的任务"
                     : "暂无处理中任务"}
@@ -892,6 +1250,7 @@ export function ImageTaskQueue({ className }: { className?: string }) {
                   item={item}
                   onOpenConversation={handleOpenConversation}
                   onOpenCanvas={handleOpenCanvas}
+                  onOpenCommerce={handleOpenCommerce}
                 />
               ))}
               {queueItems.map(renderQueueItem)}
@@ -904,7 +1263,7 @@ export function ImageTaskQueue({ className }: { className?: string }) {
             </span>
             <div className="mt-3 text-sm font-semibold text-[#222222] dark:text-foreground">队列为空</div>
             <div className="mt-1 max-w-[260px] text-xs leading-5 text-[#8e8e93] dark:text-muted-foreground">
-              在创作台或画布提交图片任务后，这里会显示对应的处理详情和进度。
+              在创作台、画布或电商套图提交图片任务后，这里会显示对应的处理详情和进度。
             </div>
             <Button
               type="button"
