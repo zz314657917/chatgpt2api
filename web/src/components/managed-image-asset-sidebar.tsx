@@ -69,7 +69,7 @@ export function ManagedImageAssetSidebar({
   sideOffsetClassName = "bottom-5 right-0 top-24 rounded-l-2xl border-y border-l",
   collapsedClassName = "w-[56px] translate-x-0 p-2",
   expandedClassName = "w-[420px] translate-x-0 p-3",
-  wideClassName = "w-[680px] translate-x-0 p-3",
+  wideClassName = "w-[760px] translate-x-0 p-3",
   defaultPinned = false,
   defaultExpanded = false,
   title = "素材库",
@@ -120,7 +120,7 @@ export function ManagedImageAssetSidebar({
   const assetGridComponents = useMemo(
     () => ({
       List: forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivElement>>(function ManagedImageAssetGridList(props, ref) {
-        return <div {...props} ref={ref} className={cn(props.className, "grid gap-3", wide ? "grid-cols-3" : "grid-cols-2")} />;
+        return <div {...props} ref={ref} className={cn(props.className, "grid gap-3", wide ? "grid-cols-5" : "grid-cols-2")} />;
       }),
       Footer: () =>
         hasMoreAssets || loadingMoreAssets ? (

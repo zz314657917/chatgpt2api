@@ -432,38 +432,64 @@ func (s *Sub2APILaunchService) Usage(ctx context.Context, identity Identity, lim
 	if err != nil {
 		return nil, err
 	}
+	items := util.AsMapSlice(summary["usage"])
+	items = normalizeSub2APIUsageItems(items)
+	if len(items) > limit {
+		items = items[:limit]
+	}
 	return map[string]any{
-		"items":            util.AsMapSlice(summary["usage"]),
+		"items":            items,
 		"recent_recharges": util.AsMapSlice(summary["recent_recharges"]),
 		"recharge_url":     summary["recharge_url"],
 		"limit":            limit,
 	}, nil
 }
 
-func (s *Sub2APILaunchService) Reserve(ctx context.Context, payerUserID, actorUserID, teamID, taskID, mode, model, chargeKey string, amount int) error {
+func normalizeSub2APIUsageItems(items []map[string]any) []map[string]any {
+	for _, item := range items {
+		if item == nil || item["amount"] != nil {
+			continue
+		}
+		if amount, ok := sub2APIUsageAmount(item); ok {
+			item["amount"] = amount
+		}
+	}
+	return items
+}
+
+func sub2APIUsageAmount(item map[string]any) (any, bool) {
+	for _, key := range []string{"actual_cost", "cost", "total_actual_cost", "total_cost", "charged_amount", "consumed_amount", "fee"} {
+		if value, ok := item[key]; ok && util.Clean(value) != "" {
+			return value, true
+		}
+	}
+	return nil, false
+}
+
+func (s *Sub2APILaunchService) Reserve(ctx context.Context, payerUserID, actorUserID, teamID, taskID, mode, model, chargeKey string, amount float64, amountUnit string) error {
 	if amount <= 0 {
 		return nil
 	}
-	_, err := s.postSub2APIInternal(ctx, "charges/reserve", s.chargePayload(payerUserID, actorUserID, teamID, taskID, mode, model, chargeKey, amount))
+	_, err := s.postSub2APIInternal(ctx, "charges/reserve", s.chargePayload(payerUserID, actorUserID, teamID, taskID, mode, model, chargeKey, amount, amountUnit))
 	return err
 }
 
-func (s *Sub2APILaunchService) Commit(ctx context.Context, payerUserID, actorUserID, teamID, taskID, mode, model, chargeKey string, amount int) error {
+func (s *Sub2APILaunchService) Commit(ctx context.Context, payerUserID, actorUserID, teamID, taskID, mode, model, chargeKey string, amount float64, amountUnit string) error {
 	if amount <= 0 {
 		return nil
 	}
-	_, err := s.postSub2APIInternal(ctx, "charges/commit", s.chargePayload(payerUserID, actorUserID, teamID, taskID, mode, model, chargeKey, amount))
+	_, err := s.postSub2APIInternal(ctx, "charges/commit", s.chargePayload(payerUserID, actorUserID, teamID, taskID, mode, model, chargeKey, amount, amountUnit))
 	return err
 }
 
-func (s *Sub2APILaunchService) Refund(ctx context.Context, payerUserID, actorUserID, teamID, taskID, mode, model, chargeKey, refundForKey string, amount int) error {
+func (s *Sub2APILaunchService) Refund(ctx context.Context, payerUserID, actorUserID, teamID, taskID, mode, model, chargeKey, refundForKey string, amount float64, amountUnit string) error {
 	if amount <= 0 {
 		return nil
 	}
 	if chargeKey == "" {
 		chargeKey = refundForKey
 	}
-	payload := s.chargePayload(payerUserID, actorUserID, teamID, taskID, mode, model, chargeKey, amount)
+	payload := s.chargePayload(payerUserID, actorUserID, teamID, taskID, mode, model, chargeKey, amount, amountUnit)
 	if refundForKey = util.Clean(refundForKey); refundForKey != "" {
 		payload["refund_for_charge_key"] = refundForKey
 	}
@@ -528,11 +554,12 @@ func (s *Sub2APILaunchService) userSummary(ctx context.Context, binding Sub2APIB
 	})
 }
 
-func (s *Sub2APILaunchService) chargePayload(payerUserID, actorUserID, teamID, taskID, mode, model, chargeKey string, amount int) map[string]any {
+func (s *Sub2APILaunchService) chargePayload(payerUserID, actorUserID, teamID, taskID, mode, model, chargeKey string, amount float64, amountUnit string) map[string]any {
 	userID, _ := strconv.ParseInt(strings.TrimPrefix(strings.TrimSpace(payerUserID), "sub2api:"), 10, 64)
 	taskID = util.Clean(taskID)
 	mode = util.Clean(mode)
 	model = util.Clean(model)
+	amountUnit = util.Clean(amountUnit)
 	actorUserID = util.Clean(actorUserID)
 	teamID = util.Clean(teamID)
 	reasonParts := []string{
@@ -546,11 +573,11 @@ func (s *Sub2APILaunchService) chargePayload(payerUserID, actorUserID, teamID, t
 	if teamID != "" {
 		reasonParts = append(reasonParts, "team="+teamID)
 	}
-	return map[string]any{
+	payload := map[string]any{
 		"app_id":        sub2APIStudioBridgeAppID,
 		"user_id":       userID,
 		"charge_key":    chargeKey,
-		"amount":        sub2APIChargeAmountCNY(amount),
+		"amount":        amount,
 		"reason":        strings.Join(reasonParts, " "),
 		"task_id":       taskID,
 		"mode":          mode,
@@ -558,10 +585,10 @@ func (s *Sub2APILaunchService) chargePayload(payerUserID, actorUserID, teamID, t
 		"actor_user_id": actorUserID,
 		"team_id":       teamID,
 	}
-}
-
-func sub2APIChargeAmountCNY(amountCNYMilli int) float64 {
-	return float64(amountCNYMilli) / 1000
+	if amountUnit != "" {
+		payload["amount_unit"] = amountUnit
+	}
+	return payload
 }
 
 func (s *Sub2APILaunchService) postSub2APIInternal(ctx context.Context, endpoint string, payload map[string]any) (map[string]any, error) {

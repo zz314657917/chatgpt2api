@@ -236,6 +236,8 @@ func isNoisySuccessfulAuditRequest(r *http.Request) bool {
 	}
 	path := r.URL.Path
 	switch r.Method {
+	case http.MethodPost:
+		return path == "/api/analytics/events"
 	case http.MethodGet, http.MethodHead:
 		switch {
 		case path == "/api/logs",

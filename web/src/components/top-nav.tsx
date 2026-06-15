@@ -1,7 +1,27 @@
 "use client";
 
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
-import { ChevronDown, ChevronUp, Clock3, LogOut, MoonStar, Sun, UserCircle2, UserPlus, WalletCards } from "lucide-react";
+import {
+  BarChart3,
+  Brush,
+  ChevronDown,
+  ChevronUp,
+  Clock3,
+  FolderOpen,
+  Grid2X2,
+  Image as ImageIcon,
+  LayoutPanelLeft,
+  LogOut,
+  Menu,
+  MoonStar,
+  PackageSearch,
+  Sun,
+  UserCircle2,
+  UserPlus,
+  WalletCards,
+  X,
+  type LucideIcon,
+} from "lucide-react";
 import { motion, useReducedMotion, type Transition } from "motion/react";
 import { Link, NavLink, useLocation, useNavigate } from "react-router-dom";
 
@@ -18,6 +38,8 @@ import {
   type StoredAuthSession,
 } from "@/store/auth";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
+import { useMobileNav } from "@/components/mobile-nav-context";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { fetchAuthProviders, fetchSub2APIWalletSummary, logout, type BillingState } from "@/lib/api";
 import { accountDisplayLabel, accountDisplayName } from "@/lib/session-display";
@@ -30,14 +52,15 @@ import {
 } from "@/lib/theme";
 
 const navItems = [
-  { href: "/image", label: "创作台" },
-  { href: "/canvas", label: "无限画布" },
-  { href: "/ecommerce-suite", label: "电商套图" },
-  { href: "/social", label: "社媒运营" },
-  { href: "/image-manager", label: "素材库" },
+  { href: "/image", label: "创作台", icon: Brush },
+  { href: "/canvas", label: "无限画布", icon: Grid2X2 },
+  { href: "/ecommerce-suite", label: "电商套图", icon: PackageSearch },
+  { href: "/social", label: "社媒运营", icon: ImageIcon },
+  { href: "/image-manager", label: "素材库", icon: FolderOpen },
 ];
 const profileNavItem = { href: "/profile", label: "个人中心" };
 const teamNavItem = { href: "/team", label: "团队空间" };
+const usageOverviewNavItem = { href: "/usage-overview", label: "使用分析" };
 const PRIMARY_NAV_ID = "primary-navigation";
 const NAV_ACTIVE_LAYOUT_ID = "top-nav-active-pill";
 const QUOTA_REFRESH_EVENT = "chatgpt2api:quota-refresh";
@@ -84,7 +107,7 @@ function formatBillingQuota(billing?: BillingState | null) {
     return "无限";
   }
   if (billing.unit === "cny_milli") {
-    return `¥${(Math.max(0, Number(billing.available) || 0) / 1000).toFixed(2)}`;
+    return `✪${(Math.max(0, Number(billing.available) || 0) / 1000).toFixed(2)}`;
   }
   return String(Math.max(0, Number(billing.available) || 0));
 }
@@ -183,6 +206,7 @@ function ThemeToggleButton({
 type NavItem = {
   href: string;
   label: string;
+  icon?: LucideIcon;
 };
 
 function buildNavTarget(href: string, search: string) {
@@ -190,7 +214,10 @@ function buildNavTarget(href: string, search: string) {
   if (params.get("ui_mode") !== "embedded") {
     return href;
   }
-  return `${href}?ui_mode=embedded`;
+  const [path, query = ""] = href.split("?");
+  const targetParams = new URLSearchParams(query);
+  targetParams.set("ui_mode", "embedded");
+  return `${path}?${targetParams.toString()}`;
 }
 
 function isActivePath(pathname: string, href: string) {
@@ -231,6 +258,251 @@ function NavPill({ item, pathname, search }: { item: NavItem; pathname: string; 
   );
 }
 
+function MobileNavDrawer({
+  open,
+  onOpenChange,
+  navItems,
+  currentNavItem,
+  pathname,
+  search,
+  roleLabel,
+  quotaLabel,
+  panel,
+  theme,
+  onThemeToggle,
+  session,
+  rechargeURL,
+  onLogout,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  navItems: NavItem[];
+  currentNavItem?: NavItem;
+  pathname: string;
+  search: string;
+  roleLabel: string;
+  quotaLabel: string;
+  panel: ReturnType<typeof useMobileNav>["panel"];
+  theme: ColorTheme;
+  onThemeToggle: (button: HTMLButtonElement) => void;
+  session: StoredAuthSession;
+  rechargeURL: string;
+  onLogout: () => Promise<void>;
+}) {
+  const displayName = accountDisplayName(session, roleLabel === "管理员" ? roleLabel : "落叶创艺用户");
+  const initial = (displayName.trim() || "U").slice(0, 1).toUpperCase();
+  const showTeamEntry = session.role === "user";
+  const showUsageOverviewEntry = session.role === "admin";
+  const [accountOpen, setAccountOpen] = useState(false);
+  const openRecharge = () => {
+    if (rechargeURL) {
+      window.open(rechargeURL, "_blank", "noopener,noreferrer");
+      return;
+    }
+    window.open("https://ai.3zapi.top", "_blank", "noopener,noreferrer");
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent
+        showCloseButton={false}
+        className="fixed inset-y-0 left-0 top-0 z-50 flex h-dvh w-[min(72vw,300px)] translate-x-0 translate-y-0 grid-cols-none flex-col gap-0 rounded-none border-y-0 border-l-0 border-r border-border bg-background p-0 shadow-[24px_0_80px_-38px_rgba(15,23,42,0.72)] duration-250 data-[state=closed]:animate-out data-[state=closed]:slide-out-to-left data-[state=open]:animate-in data-[state=open]:slide-in-from-left sm:w-[300px] lg:hidden"
+      >
+        <div className="flex h-full min-h-0 flex-col">
+          <div className="flex shrink-0 items-center justify-between gap-3 px-4 pt-4 pb-3">
+            <DialogTitle className="flex min-w-0 items-center gap-2 text-base font-semibold">
+              <img
+                src="/logo.webp"
+                alt=""
+                aria-hidden="true"
+                className="size-8 shrink-0 rounded-[10px] shadow-[0_4px_10px_rgba(184,90,127,0.16)]"
+              />
+              <span className="truncate">落叶创艺</span>
+            </DialogTitle>
+            <button
+              type="button"
+              className="inline-flex size-8 shrink-0 items-center justify-center rounded-full text-muted-foreground transition hover:bg-muted hover:text-foreground"
+              onClick={() => onOpenChange(false)}
+              aria-label="关闭功能列表"
+              title="关闭"
+            >
+              <X className="size-4" />
+            </button>
+          </div>
+
+          <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-3">
+            <div className="grid gap-1">
+              {navItems.map((item) => {
+                const active = isActivePath(pathname, item.href);
+                const Icon = item.icon || LayoutPanelLeft;
+                return (
+                  <Link
+                    key={item.href}
+                    to={buildNavTarget(item.href, search)}
+                    className={cn(
+                      "flex h-10 min-w-0 items-center gap-3 rounded-xl px-3 text-sm font-medium transition",
+                      active
+                        ? "bg-muted text-foreground"
+                        : "text-[#45515e] hover:bg-muted hover:text-foreground dark:text-muted-foreground",
+                    )}
+                    onClick={() => onOpenChange(false)}
+                  >
+                    <Icon className="size-4 shrink-0" />
+                    <span className="min-w-0 truncate">{item.label}</span>
+                  </Link>
+                );
+              })}
+            </div>
+
+            <div className="mt-5">
+              <div className="mb-2 flex items-center gap-2 px-1">
+                <DialogDescription className="text-xs font-semibold text-foreground">
+                  {panel?.title || currentNavItem?.label || "当前功能"}
+                </DialogDescription>
+                {panel?.description ? (
+                  <span className="min-w-0 truncate text-[11px] text-muted-foreground">{panel.description}</span>
+                ) : null}
+              </div>
+              <div className="min-h-[180px] rounded-2xl border border-border bg-muted/25 p-2">
+                {panel?.content ? (
+                  panel.content
+                ) : (
+                  <div className="flex min-h-[160px] items-center justify-center px-3 text-center text-xs leading-5 text-muted-foreground">
+                    当前页面暂无可切换列表
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+
+          <div className="shrink-0 border-t border-border px-3 py-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)]">
+            <Popover open={accountOpen} onOpenChange={setAccountOpen}>
+              <PopoverTrigger asChild>
+                <button
+                  type="button"
+                  className="flex h-11 w-full min-w-0 items-center gap-2 rounded-xl px-2 text-left transition hover:bg-muted"
+                  aria-label="打开账号菜单"
+                >
+                  <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">
+                    {initial}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground">{displayName}</span>
+                  <ChevronDown className={cn("size-4 shrink-0 text-muted-foreground transition", accountOpen && "rotate-180")} />
+                </button>
+              </PopoverTrigger>
+              <PopoverContent
+                align="start"
+                side="top"
+                sideOffset={8}
+                className="z-[80] w-[min(calc(72vw-1.5rem),276px)] border-border bg-card p-2 text-card-foreground shadow-[0_20px_70px_-32px_rgba(15,23,42,0.55)]"
+              >
+                <div className="rounded-xl bg-muted/45 p-3">
+                  <div className="flex min-w-0 items-center gap-2.5">
+                    <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary text-sm font-semibold text-primary-foreground">
+                      {initial}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-sm font-semibold text-foreground">{displayName}</div>
+                      <div className="truncate text-xs text-muted-foreground">{accountDisplayLabel(session)}</div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mt-2 grid gap-1">
+                  <div className="grid grid-cols-[3.5rem_minmax(0,1fr)] items-center gap-2 rounded-lg px-2 py-1.5 text-xs">
+                    <span className="text-muted-foreground">角色</span>
+                    <span className="truncate text-right font-medium text-foreground">{roleLabel}</span>
+                  </div>
+                  <div className="grid grid-cols-[3.5rem_minmax(0,1fr)] items-center gap-2 rounded-lg px-2 py-1.5 text-xs">
+                    <span className="text-muted-foreground">余额</span>
+                    <span className="truncate text-right font-medium text-foreground">{quotaLabel}</span>
+                  </div>
+                  <div className="grid grid-cols-[3.5rem_minmax(0,1fr)] items-center gap-2 rounded-lg px-2 py-1.5 text-xs">
+                    <span className="text-muted-foreground">版本</span>
+                    <span className="truncate text-right font-medium text-foreground">v{webConfig.appVersion}</span>
+                  </div>
+                </div>
+
+                <div className="my-2 h-px bg-border" />
+                <div className="grid gap-1">
+                  <button
+                    type="button"
+                    className="flex h-9 items-center gap-2 rounded-lg px-2.5 text-sm font-medium text-foreground transition hover:bg-accent hover:text-accent-foreground"
+                    onClick={() => {
+                      setAccountOpen(false);
+                      openRecharge();
+                    }}
+                  >
+                    <WalletCards className="size-4" />
+                    充值
+                  </button>
+                  <button
+                    type="button"
+                    className="flex h-9 items-center gap-2 rounded-lg px-2.5 text-sm font-medium text-foreground transition hover:bg-accent hover:text-accent-foreground"
+                    onClick={(event) => onThemeToggle(event.currentTarget)}
+                  >
+                    {theme === "dark" ? <Sun className="size-4" /> : <MoonStar className="size-4" />}
+                    {theme === "dark" ? "浅色模式" : "深色模式"}
+                  </button>
+                <Link
+                  to={buildNavTarget(`${profileNavItem.href}?tab=profile`, search)}
+                    className="flex h-9 items-center gap-2 rounded-lg px-2.5 text-sm font-medium text-foreground transition hover:bg-accent hover:text-accent-foreground"
+                    onClick={() => {
+                      setAccountOpen(false);
+                      onOpenChange(false);
+                    }}
+                >
+                    <UserCircle2 className="size-4" />
+                  个人中心
+                </Link>
+                {showUsageOverviewEntry ? (
+                  <Link
+                    to={buildNavTarget(usageOverviewNavItem.href, search)}
+                    className="flex h-9 items-center gap-2 rounded-lg px-2.5 text-sm font-medium text-foreground transition hover:bg-accent hover:text-accent-foreground"
+                    onClick={() => {
+                      setAccountOpen(false);
+                      onOpenChange(false);
+                    }}
+                  >
+                    <BarChart3 className="size-4" />
+                    使用分析
+                  </Link>
+                ) : null}
+                {showTeamEntry ? (
+                  <Link
+                    to={buildNavTarget(teamNavItem.href, search)}
+                      className="flex h-9 items-center gap-2 rounded-lg px-2.5 text-sm font-medium text-foreground transition hover:bg-accent hover:text-accent-foreground"
+                      onClick={() => {
+                        setAccountOpen(false);
+                        onOpenChange(false);
+                      }}
+                  >
+                      <UserPlus className="size-4" />
+                      团队空间
+                  </Link>
+                ) : null}
+                <button
+                  type="button"
+                    className="flex h-9 items-center gap-2 rounded-lg px-2.5 text-sm font-medium text-rose-600 transition hover:bg-rose-50 hover:text-rose-700 dark:hover:bg-rose-950/30"
+                  onClick={() => {
+                      setAccountOpen(false);
+                    onOpenChange(false);
+                    void onLogout();
+                  }}
+                >
+                    <LogOut className="size-4" />
+                    退出登录
+                </button>
+              </div>
+              </PopoverContent>
+            </Popover>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function AccountMenu({
   session,
   roleLabel,
@@ -257,7 +529,9 @@ function AccountMenu({
   const usageActive = pathname === "/profile" && new URLSearchParams(window.location.search).get("tab") === "usage";
   const profileActive = isActivePath(pathname, profileNavItem.href) && !usageActive;
   const teamActive = pathname === "/team";
+  const usageOverviewActive = pathname === "/usage-overview";
   const showTeamEntry = session.role === "user";
+  const showUsageOverviewEntry = session.role === "admin";
 
   const openRecharge = () => {
     if (rechargeURL) {
@@ -273,7 +547,7 @@ function AccountMenu({
         <Link
           to={teamNavItem.href}
           className={cn(
-            "inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full border border-border px-2.5 text-sm font-medium shadow-none transition hover:bg-accent hover:text-accent-foreground",
+            "hidden h-9 shrink-0 items-center gap-1.5 rounded-full border border-border px-2.5 text-sm font-medium shadow-none transition hover:bg-accent hover:text-accent-foreground lg:inline-flex",
             teamActive ? "border-emerald-500/30 bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300" : "text-foreground",
           )}
         >
@@ -376,6 +650,19 @@ function AccountMenu({
               <Clock3 className="size-4" />
               使用记录
             </Link>
+            {showUsageOverviewEntry ? (
+              <Link
+                to={usageOverviewNavItem.href}
+                className={cn(
+                  "flex items-center justify-center gap-2 rounded-xl px-3 py-2 text-sm font-medium transition hover:bg-accent hover:text-accent-foreground",
+                  usageOverviewActive ? "bg-[#edf4ff] text-[#1456f0] dark:bg-sky-950/30 dark:text-sky-300" : "text-foreground",
+                )}
+                onClick={() => setOpen(false)}
+              >
+                <BarChart3 className="size-4" />
+                使用分析
+              </Link>
+            ) : null}
             {showTeamEntry ? (
               <Link
                 to={teamNavItem.href}
@@ -537,9 +824,9 @@ export function TopNav({ alignToShellTop = false }: { alignToShellTop?: boolean 
   const location = useLocation();
   const navigate = useNavigate();
   const pathname = location.pathname.replace(/\/+$/, "") || "/";
+  const mobileNav = useMobileNav();
   const [session, setSession] = useState<StoredAuthSession | null | undefined>(() => getCachedAuthSession());
   const [theme, setTheme] = useState<ColorTheme>(() => getPreferredColorTheme());
-  const [navCollapsed, setNavCollapsed] = useState(false);
   const [rechargeURL, setRechargeURL] = useState("");
   const [walletQuota, setWalletQuota] = useState("");
   const [sub2APIOrigin, setSub2APIOrigin] = useState("");
@@ -767,10 +1054,11 @@ export function TopNav({ alignToShellTop = false }: { alignToShellTop?: boolean 
   }
 
   const visibleNavItems = navItems.filter((item) => canAccessPath(session, item.href));
+  const currentNavItem = [...visibleNavItems, profileNavItem, teamNavItem, usageOverviewNavItem].find((item) => isActivePath(pathname, item.href));
   const roleLabel = session.role === "admin" ? "管理员" : session.roleName || (session.provider === "linuxdo" ? "Linuxdo 用户" : "普通用户");
   const canAccessImageTasks = canAccessPath(session, "/image");
-  const navToggleLabel = navCollapsed ? "展开导航栏" : "收起导航栏";
   const availableQuota = session.role === "user" ? sessionQuotaLabel(session) : "--";
+  const quotaLabel = walletQuota || availableQuota;
 
   return (
     <>
@@ -780,21 +1068,39 @@ export function TopNav({ alignToShellTop = false }: { alignToShellTop?: boolean 
         onConfirmed={handleSub2APISessionConfirmed}
         onMismatch={handleSub2APISessionMismatch}
       />
-      <header className={cn("sticky z-40 rounded-[24px] border border-border bg-card/90 shadow-[0_0_22.576px_rgba(44,74,116,0.09)] backdrop-blur dark:border-border dark:bg-card/92", alignToShellTop ? "top-0" : "top-2")}>
-      <div className="flex min-h-14 flex-col gap-2 px-3 py-2 lg:flex-row lg:items-center lg:justify-between lg:gap-4 lg:px-4">
+      <MobileNavDrawer
+        open={mobileNav.open}
+        onOpenChange={mobileNav.setOpen}
+        navItems={visibleNavItems}
+        currentNavItem={currentNavItem}
+        pathname={pathname}
+        search={location.search}
+        roleLabel={roleLabel}
+        quotaLabel={quotaLabel}
+        panel={mobileNav.panel}
+        theme={theme}
+        onThemeToggle={handleThemeToggle}
+        session={session}
+        rechargeURL={rechargeURL}
+        onLogout={handleLogout}
+      />
+      <header className={cn("sticky z-40 rounded-[20px] border border-border bg-card/90 shadow-[0_0_22.576px_rgba(44,74,116,0.09)] backdrop-blur dark:border-border dark:bg-card/92 sm:rounded-[24px]", alignToShellTop ? "top-0" : "top-2")}>
+      <div className="flex min-h-12 flex-col gap-1.5 px-2 py-1.5 sm:min-h-14 sm:gap-2 sm:px-3 sm:py-2 lg:flex-row lg:items-center lg:justify-between lg:gap-4 lg:px-4">
         <div className="flex min-w-0 items-center justify-between gap-2 lg:justify-start">
           <Button
             type="button"
             variant="ghost"
-            className={cn(
-              "font-display h-9 max-w-[190px] justify-start rounded-full px-1.5 pr-2 text-[15px] font-semibold text-[#18181b] shadow-none hover:bg-black/[0.04] hover:text-[#1456f0] sm:max-w-none dark:text-foreground dark:hover:text-sky-300",
-              navCollapsed ? "bg-black/[0.04] text-[#1456f0] dark:bg-accent dark:text-sky-300" : "",
-            )}
-            aria-controls={PRIMARY_NAV_ID}
-            aria-expanded={!navCollapsed}
-            aria-label={navToggleLabel}
-            title={navToggleLabel}
-            onClick={() => setNavCollapsed((collapsed) => !collapsed)}
+            size="icon"
+            className="size-9 shrink-0 rounded-full text-[#45515e] shadow-none hover:bg-black/[0.04] hover:text-[#1456f0] dark:text-muted-foreground dark:hover:text-sky-300 lg:hidden"
+            aria-label="打开功能列表"
+            title="功能列表"
+            onClick={mobileNav.openDrawer}
+          >
+            <Menu className="size-5" />
+          </Button>
+          <Link
+            to={buildNavTarget("/image", location.search)}
+            className="font-display hidden h-9 items-center gap-2 rounded-full px-1.5 pr-2 text-[15px] font-semibold text-[#18181b] transition hover:bg-black/[0.04] hover:text-[#1456f0] dark:text-foreground dark:hover:text-sky-300 lg:inline-flex"
           >
             <img
               src="/logo.webp"
@@ -803,15 +1109,11 @@ export function TopNav({ alignToShellTop = false }: { alignToShellTop?: boolean 
               className="size-7 rounded-[10px] shadow-[0_4px_10px_rgba(184,90,127,0.16)]"
             />
             <span className="truncate">落叶创艺</span>
-            {navCollapsed ? <ChevronDown aria-hidden="true" /> : <ChevronUp aria-hidden="true" />}
-          </Button>
+          </Link>
+          <div className="min-w-0 flex-1 text-center lg:hidden">
+            <div className="truncate text-sm font-semibold text-foreground">{currentNavItem?.label || "当前页面"}</div>
+          </div>
           <div className="ml-auto flex shrink-0 items-center gap-1 lg:hidden">
-            <ThemeToggleButton theme={theme} onToggle={handleThemeToggle} />
-            {canAccessImageTasks ? (
-              <Suspense fallback={<ImageTaskQueueLoading className="size-8 px-0" />}>
-                <ImageTaskQueue className="size-8 px-0" />
-              </Suspense>
-            ) : null}
             <AccountMenu
               session={session}
               roleLabel={roleLabel}
@@ -827,10 +1129,7 @@ export function TopNav({ alignToShellTop = false }: { alignToShellTop?: boolean 
         <nav
           id={PRIMARY_NAV_ID}
           aria-label="主导航"
-          className={cn(
-            "hide-scrollbar -mx-1 min-w-0 gap-1 overflow-x-auto overscroll-x-contain px-1 pb-0.5 scroll-px-1 touch-pan-x [-webkit-overflow-scrolling:touch] lg:mx-0 lg:flex-1 lg:justify-center lg:gap-1.5 lg:px-0 lg:pb-0",
-            navCollapsed ? "hidden" : "flex",
-          )}
+          className="hidden min-w-0 gap-1 overflow-x-auto overscroll-x-contain px-1 pb-0.5 scroll-px-1 touch-pan-x [-webkit-overflow-scrolling:touch] lg:mx-0 lg:flex lg:flex-1 lg:justify-center lg:gap-1.5 lg:px-0 lg:pb-0"
         >
           {visibleNavItems.map((item) => (
             <NavPill key={item.href} item={item} pathname={pathname} search={location.search} />

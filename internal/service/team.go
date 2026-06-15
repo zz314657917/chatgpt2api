@@ -37,6 +37,7 @@ type TeamService struct {
 	invites     map[string]map[string]any
 	auditLogs   []map[string]any
 	emailLookup func(ownerID string) string
+	nameLookup  func(ownerID string) string
 }
 
 type TeamTaskContext struct {
@@ -65,6 +66,12 @@ func (s *TeamService) SetUserEmailLookup(lookup func(ownerID string) string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.emailLookup = lookup
+}
+
+func (s *TeamService) SetUserNameLookup(lookup func(ownerID string) string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.nameLookup = lookup
 }
 
 func (s *TeamService) ListForIdentity(identity Identity) map[string]any {
@@ -483,6 +490,59 @@ func (s *TeamService) UpdateMemberDailyLimit(identity Identity, teamID, memberUs
 	return s.publicTeamForActorLocked(team, actor), nil
 }
 
+func (s *TeamService) UpdateMemberRemark(identity Identity, teamID, memberUserID, remark string) (map[string]any, error) {
+	actor := teamActorID(identity)
+	teamID = util.Clean(teamID)
+	memberUserID = util.Clean(memberUserID)
+	remark = normalizeTeamMemberRemark(remark)
+	if memberUserID == "" {
+		return nil, fmt.Errorf("member user id is required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	team, err := s.requireTeamManagerLocked(teamID, actor)
+	if err != nil {
+		return nil, err
+	}
+	if memberUserID == util.Clean(team["owner_user_id"]) {
+		return nil, fmt.Errorf("team owner remark cannot be changed")
+	}
+	actorMember := teamMember(team, actor)
+	if memberUserID == actor {
+		return nil, fmt.Errorf("team managers cannot change their own remark")
+	}
+	if normalizeTeamMemberRole(util.Clean(actorMember["role"])) != TeamRoleOwner {
+		targetMember := teamMember(team, memberUserID)
+		if targetMember != nil && normalizeTeamMemberRole(util.Clean(targetMember["role"])) != TeamRoleMember {
+			return nil, fmt.Errorf("team managers can only change member remarks")
+		}
+	}
+	members := util.AsMapSlice(team["members"])
+	updated := false
+	for _, member := range members {
+		if util.Clean(member["user_id"]) != memberUserID {
+			continue
+		}
+		if remark == "" {
+			delete(member, "remark")
+		} else {
+			member["remark"] = remark
+		}
+		updated = true
+	}
+	if !updated {
+		return nil, fmt.Errorf("team member not found")
+	}
+	now := util.NowISO()
+	team["members"] = members
+	team["updated_at"] = now
+	s.appendAuditLocked(team, identity, "member.remark_updated", "调整成员备注", map[string]any{"target_user_id": memberUserID})
+	if err := s.saveLocked(); err != nil {
+		return nil, err
+	}
+	return s.publicTeamForActorLocked(team, actor), nil
+}
+
 func (s *TeamService) ListAuditLogs(identity Identity, teamID string, limit int) ([]map[string]any, error) {
 	actor := teamActorID(identity)
 	teamID = util.Clean(teamID)
@@ -495,7 +555,7 @@ func (s *TeamService) ListAuditLogs(identity Identity, teamID string, limit int)
 	if limit <= 0 || limit > 200 {
 		limit = 100
 	}
-	names := teamMemberNameMap(team)
+	names := s.teamMemberNameMapLocked(team)
 	items := make([]map[string]any, 0)
 	for _, item := range s.auditLogs {
 		if util.Clean(item["team_id"]) != teamID {
@@ -542,7 +602,7 @@ func (s *TeamService) MemberNameMap(identity Identity, teamID string) (map[strin
 	if team == nil || teamMember(team, actor) == nil {
 		return nil, fmt.Errorf("team not found")
 	}
-	return teamMemberNameMap(team), nil
+	return s.teamMemberNameMapLocked(team), nil
 }
 
 func (s *TeamService) MemberDailyLimitAmount(teamID, memberUserID string) int {
@@ -611,7 +671,7 @@ func (s *TeamService) TaskContext(identity Identity, teamID string) (TeamTaskCon
 	if owner == "" {
 		return TeamTaskContext{}, fmt.Errorf("team owner is missing")
 	}
-	return TeamTaskContext{TeamID: teamID, PayerUserID: owner, ActorUserID: actor, ActorName: firstNonEmpty(util.Clean(member["name"]), teamIdentityName(identity))}, nil
+	return TeamTaskContext{TeamID: teamID, PayerUserID: owner, ActorUserID: actor, ActorName: firstNonEmpty(s.memberDisplayNameLocked(member), teamIdentityName(identity))}, nil
 }
 
 func (s *TeamService) requireTeamRoleLocked(teamID, actor string, roles ...string) (map[string]any, error) {
@@ -787,9 +847,13 @@ func normalizeTeamMembers(raw any) []map[string]any {
 			"user_id":   userID,
 			"name":      firstNonEmpty(util.Clean(member["name"]), userID),
 			"email":     normalizeTeamEmail(util.Clean(member["email"])),
+			"remark":    normalizeTeamMemberRemark(util.Clean(member["remark"])),
 			"role":      normalizeTeamMemberRole(util.Clean(member["role"])),
 			"joined_at": util.Clean(member["joined_at"]),
 		})
+		if util.Clean(out[len(out)-1]["remark"]) == "" {
+			delete(out[len(out)-1], "remark")
+		}
 		if limit := normalizeTeamDailyLimitAmount(util.ToInt(member["daily_limit_amount"], 0)); limit > 0 {
 			out[len(out)-1]["daily_limit_amount"] = limit
 		}
@@ -809,16 +873,34 @@ func teamMember(team map[string]any, userID string) map[string]any {
 	return nil
 }
 
-func teamMemberNameMap(team map[string]any) map[string]string {
+func (s *TeamService) teamMemberNameMapLocked(team map[string]any) map[string]string {
 	names := map[string]string{}
 	for _, member := range util.AsMapSlice(team["members"]) {
 		userID := util.Clean(member["user_id"])
 		if userID == "" {
 			continue
 		}
-		names[userID] = firstNonEmpty(util.Clean(member["name"]), userID)
+		names[userID] = firstNonEmpty(s.memberDisplayNameLocked(member), userID)
 	}
 	return names
+}
+
+func (s *TeamService) memberDisplayNameLocked(member map[string]any) string {
+	userID := util.Clean(member["user_id"])
+	if s != nil && s.nameLookup != nil && userID != "" {
+		if name := util.Clean(s.nameLookup(userID)); name != "" {
+			return name
+		}
+	}
+	return firstNonEmpty(util.Clean(member["name"]), userID)
+}
+
+func normalizeTeamMemberRemark(remark string) string {
+	remark = strings.TrimSpace(remark)
+	if len([]rune(remark)) <= 80 {
+		return remark
+	}
+	return string([]rune(remark)[:80])
 }
 
 func teamMemberDailyLimitAmount(member map[string]any) int {
@@ -900,6 +982,12 @@ func publicTeamForActor(team map[string]any, actor string) map[string]any {
 
 func (s *TeamService) publicTeamForActorLocked(team map[string]any, actor string) map[string]any {
 	out := publicTeamForActor(team, actor)
+	if members := util.AsMapSlice(out["members"]); len(members) > 0 {
+		for _, member := range members {
+			member["name"] = firstNonEmpty(s.memberDisplayNameLocked(member), util.Clean(member["user_id"]))
+		}
+		out["members"] = members
+	}
 	if normalizeTeamMemberRole(util.Clean(out["member_role"])) != TeamRoleOwner {
 		return out
 	}

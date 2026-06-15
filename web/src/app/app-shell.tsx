@@ -1,5 +1,7 @@
 import { AnimatedRoutes } from "@/app/animated-routes";
 import { TopNav } from "@/components/top-nav";
+import { MobileNavProvider } from "@/components/mobile-nav-provider";
+import { UsageAnalyticsTracker } from "@/components/usage-analytics-tracker";
 import { cn } from "@/lib/utils";
 import { useLocation } from "react-router-dom";
 
@@ -14,25 +16,28 @@ export function AppShell() {
     : "px-3 pt-2 pb-3 sm:px-5 lg:px-6";
 
   return (
-    <main className={cn("bg-background text-foreground", isViewportWorkspacePage ? "h-dvh overflow-hidden" : "min-h-screen")}>
-      <div
-        className={cn(
-          "flex w-full flex-col",
-          shellPadding,
-          isCanvasPage ? "gap-3" : "gap-2",
-          isViewportWorkspacePage ? "h-full min-h-0 max-w-none overflow-hidden" : "min-h-screen",
-        )}
-      >
-        <TopNav alignToShellTop={isViewportWorkspacePage} />
+    <MobileNavProvider>
+      <UsageAnalyticsTracker />
+      <main className={cn("bg-background text-foreground", isViewportWorkspacePage ? "h-dvh overflow-hidden" : "min-h-screen")}>
         <div
           className={cn(
-            "flex w-full min-w-0 flex-col",
-            isViewportWorkspacePage ? "min-h-0 flex-1 overflow-hidden" : "mx-auto max-w-[1440px]",
+            "flex w-full flex-col",
+            shellPadding,
+            isCanvasPage ? "gap-3" : "gap-2",
+            isViewportWorkspacePage ? "h-full min-h-0 max-w-none overflow-hidden" : "min-h-screen",
           )}
         >
-          <AnimatedRoutes />
+          <TopNav alignToShellTop={isViewportWorkspacePage} />
+          <div
+            className={cn(
+              "flex w-full min-w-0 flex-col",
+              isViewportWorkspacePage ? "min-h-0 flex-1 overflow-hidden" : "mx-auto max-w-[1440px]",
+            )}
+          >
+            <AnimatedRoutes />
+          </div>
         </div>
-      </div>
-    </main>
+      </main>
+    </MobileNavProvider>
   );
 }

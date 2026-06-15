@@ -39,6 +39,7 @@ import {
   Type,
   Trash2,
   WandSparkles,
+  Wrench,
   X,
   Zap,
   ZoomIn,
@@ -55,7 +56,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import type { CanvasImageRef, CanvasModelOption, CanvasVideoRef, CreationTask, ImageVisibility, ManagedTextAsset, ManagedTextAssetListScope, TeamSummary } from "@/lib/api";
-import { createManagedTextAsset, fetchManagedTextAssets, supportsImageOutputControls } from "@/lib/api";
+import { createManagedTextAsset, fetchManagedTextAssets, supportsImageOutputControls, supportsImageQuality } from "@/lib/api";
 import {
   buildTimestampedImageDownloadName,
   downloadImageFile,
@@ -64,8 +65,10 @@ import {
 import { getManagedImagePathFromUrl } from "@/lib/image-path";
 import {
   IMAGE_ASPECT_RATIO_OPTIONS,
+  IMAGE_QUALITY_OPTIONS,
   IMAGE_RESOLUTION_OPTIONS,
   PIXEL_ICON_SIZE_OPTIONS,
+  isImageQuality,
   isPixelIconSize,
   normalizeImageOutputFormat,
   type ImageAspectRatio,
@@ -377,6 +380,7 @@ export function SmartCanvasLeftRail({
   onRefresh,
   onDeleteCanvas,
   onRenameCanvas,
+  variant = "rail",
 }: {
   canvases: SmartCanvasDocument[];
   currentCanvasId: string;
@@ -388,6 +392,7 @@ export function SmartCanvasLeftRail({
   onRefresh: () => void;
   onDeleteCanvas: (id: string) => void;
   onRenameCanvas: (id: string, name: string) => void;
+  variant?: "rail" | "drawer";
 }) {
   const [editingCanvasId, setEditingCanvasId] = useState("");
   const [editingName, setEditingName] = useState("");
@@ -429,6 +434,113 @@ export function SmartCanvasLeftRail({
     cancelRename();
     setConfirmDeleteCanvasId(item.id);
   }, [cancelRename, confirmDeleteCanvasId, expanded, onDeleteCanvas]);
+
+  if (variant === "drawer") {
+    return (
+      <div className="flex h-full min-h-0 flex-col gap-3">
+        <div className="grid grid-cols-2 gap-2">
+          <button type="button" className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-primary text-sm font-bold text-primary-foreground transition hover:bg-primary/90" onClick={onCreateCanvas}>
+            <ImagePlus className="size-4" />
+            新建
+          </button>
+          <button type="button" className={cn("inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-border text-sm font-bold transition", canvasIconButtonClass)} onClick={onRefresh} disabled={loading}>
+            <RefreshCw className={cn("size-4", loading && "animate-spin")} />
+            刷新
+          </button>
+        </div>
+        <div className="min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
+          {canvases.length > 0 ? canvases.map((item) => {
+            const active = item.id === currentCanvasId;
+            const editing = item.id === editingCanvasId;
+            const confirmingDelete = item.id === confirmDeleteCanvasId;
+            return (
+              <div
+                key={item.id || `${item.name}-${item.updated_at || item.created_at || "new"}`}
+                role="button"
+                tabIndex={0}
+                className={cn(
+                  "group relative rounded-2xl border p-3 text-left transition",
+                  active
+                    ? "border-border bg-accent text-foreground dark:border-zinc-800 dark:bg-[#181818] dark:text-zinc-100"
+                    : "border-border/70 text-muted-foreground hover:bg-accent/70 hover:text-foreground dark:text-zinc-400 dark:hover:bg-[#141414] dark:hover:text-zinc-100",
+                )}
+                onClick={() => {
+                  if (!editing && !confirmingDelete && item.id) {
+                    onSelectCanvas(item.id);
+                  }
+                }}
+                onKeyDown={(event) => {
+                  if (!editing && (event.key === "Enter" || event.key === " ") && item.id) {
+                    event.preventDefault();
+                    onSelectCanvas(item.id);
+                  }
+                }}
+              >
+                <div className="flex items-start gap-2">
+                  <div className="min-w-0 flex-1">
+                    {editing ? (
+                      <Input
+                        value={editingName}
+                        autoFocus
+                        className={cn("h-8 rounded-xl text-xs font-black", canvasFieldClass)}
+                        onChange={(event) => setEditingName(event.target.value)}
+                        onClick={(event) => event.stopPropagation()}
+                        onBlur={commitRename}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") {
+                            event.preventDefault();
+                            commitRename();
+                          }
+                          if (event.key === "Escape") {
+                            event.preventDefault();
+                            cancelRename();
+                          }
+                        }}
+                      />
+                    ) : (
+                      <div className={cn("truncate text-sm font-black", active ? "text-foreground dark:text-zinc-100" : "text-current")}>{item.name || "未命名画布"}</div>
+                    )}
+                    <div className="mt-1 truncate text-xs font-semibold text-muted-foreground">
+                      {item.nodes.length} 节点 · {item.edges.length} 连线 · {item.updated_at ? item.updated_at.slice(5, 16) : "未保存"}
+                    </div>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-1">
+                    <button
+                      type="button"
+                      className={cn("flex size-8 items-center justify-center rounded-lg", canvasIconButtonClass)}
+                      title="编辑名称"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        setConfirmDeleteCanvasId("");
+                        setEditingCanvasId(item.id || "");
+                        setEditingName(item.name || "未命名画布");
+                      }}
+                    >
+                      <Pencil className="size-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      className={cn("flex h-8 items-center justify-center rounded-lg text-xs font-black", confirmingDelete ? "bg-rose-500 px-2 text-white" : "w-8 text-muted-foreground hover:bg-rose-500/10 hover:text-rose-600")}
+                      title={confirmingDelete ? "确认删除这个画布" : "删除这个画布"}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        requestDelete(item);
+                      }}
+                    >
+                      <Trash2 className="size-3.5" />
+                      {confirmingDelete ? <span className="ml-1">确认</span> : null}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            );
+          }) : (
+            <div className={cn("rounded-2xl border p-4 text-center text-xs font-semibold", canvasDashedClass)}>暂无画布，点击新建开始创作</div>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <aside
@@ -629,6 +741,7 @@ type SmartCanvasTopBarProps = {
   onRunHistoryToggle: () => void;
   onOperationHistoryToggle: () => void;
   onUndo: () => void;
+  onCanvasListToggle?: () => void;
   onFocusNode: (id: string) => void;
   onMoveNodeToScreenPoint: (id: string, point: { x: number; y: number }) => void;
 };
@@ -651,26 +764,28 @@ export function SmartCanvasTopBar({
   onRunHistoryToggle,
   onOperationHistoryToggle,
   onUndo,
+  onCanvasListToggle,
   onFocusNode,
   onMoveNodeToScreenPoint,
 }: SmartCanvasTopBarProps) {
   return (
-    <div className="pointer-events-none absolute left-6 right-6 top-5 z-40 flex items-center justify-between gap-4">
-      <div className="min-w-0 max-w-[360px] px-1 py-2">
+    <div className="pointer-events-none absolute left-3 right-3 top-3 z-40 flex items-start justify-between gap-2 lg:left-6 lg:right-6 lg:top-5 lg:items-center lg:gap-4">
+      <div className="min-w-0 max-w-[360px] rounded-full border border-border bg-background/78 px-3 py-2 backdrop-blur dark:border-slate-700 dark:bg-slate-950/45 lg:border-0 lg:bg-transparent lg:px-1">
         <div className="truncate text-sm font-black text-slate-900 drop-shadow-none dark:text-zinc-100 dark:drop-shadow-[0_1px_2px_rgba(0,0,0,0.55)]">{canvasName || "未命名画布"}</div>
-        <div className="mt-0.5 text-[11px] font-semibold text-slate-500 drop-shadow-none dark:text-zinc-400/90 dark:drop-shadow-[0_1px_2px_rgba(0,0,0,0.45)]">当前画布</div>
+        <div className="mt-0.5 hidden text-[11px] font-semibold text-slate-500 drop-shadow-none dark:text-zinc-400/90 dark:drop-shadow-[0_1px_2px_rgba(0,0,0,0.45)] lg:block">当前画布</div>
       </div>
-      <div className="pointer-events-auto flex min-w-0 flex-wrap items-center justify-end gap-2">
-        <div className={cn("flex min-w-0 flex-wrap items-center justify-end gap-2 rounded-full border p-1.5", canvasPanelClass)}>
+      <div className="pointer-events-auto hidden min-w-0 flex-wrap items-center justify-end gap-2 lg:flex">
+        <div className={cn("flex min-w-0 items-center justify-end gap-1 rounded-full border p-1.5 lg:flex-wrap lg:gap-2", canvasPanelClass)}>
+          {onCanvasListToggle ? <ToolbarIconButton className="lg:hidden" icon={<Grid2X2 className="size-4" />} label="画布列表" onClick={onCanvasListToggle} /> : null}
           <ToolbarButton icon={<ImagePlus className="size-4" />} label="上传" onClick={onUploadClick} />
-          <ToolbarButton icon={<FileText className="size-4" />} label="提示词" onClick={() => onAddNode("prompt")} />
-          <ToolbarButton icon={<Sparkles className="size-4" />} label="AI提示词" onClick={() => onAddNode("llm")} />
-          <ToolbarButton icon={<Repeat2 className="size-4" />} label="循环" onClick={() => onAddNode("loop")} />
-          <ToolbarButton icon={<Layers3 className="size-4" />} label="组" onClick={() => onAddNode("group")} />
-          <ToolbarButton icon={<WandSparkles className="size-4" />} label="图片生成" onClick={() => onAddNode("image_generation")} />
-          <ToolbarButton icon={<Clapperboard className="size-4" />} label="视频" onClick={() => onAddNode("video_generation")} />
-          <ToolbarButton icon={<CircleDot className="size-4" />} label="Output" onClick={() => onAddNode("result")} />
-          <ToolbarButton icon={<CircleHelp className="size-4" />} label="帮助" onClick={onHelpClick} />
+          <ToolbarButton className="max-lg:hidden" icon={<FileText className="size-4" />} label="提示词" onClick={() => onAddNode("prompt")} />
+          <ToolbarButton className="max-lg:hidden" icon={<Sparkles className="size-4" />} label="AI提示词" onClick={() => onAddNode("llm")} />
+          <ToolbarButton className="max-lg:hidden" icon={<Repeat2 className="size-4" />} label="循环" onClick={() => onAddNode("loop")} />
+          <ToolbarButton className="max-lg:hidden" icon={<Layers3 className="size-4" />} label="组" onClick={() => onAddNode("group")} />
+          <ToolbarButton className="max-lg:hidden" icon={<WandSparkles className="size-4" />} label="图片生成" onClick={() => onAddNode("image_generation")} />
+          <ToolbarButton className="max-lg:hidden" icon={<Clapperboard className="size-4" />} label="视频" onClick={() => onAddNode("video_generation")} />
+          <ToolbarButton className="max-lg:hidden" icon={<CircleDot className="size-4" />} label="Output" onClick={() => onAddNode("result")} />
+          <ToolbarButton className="max-lg:hidden" icon={<CircleHelp className="size-4" />} label="帮助" onClick={onHelpClick} />
           <Popover>
             <PopoverTrigger asChild>
               <button
@@ -681,18 +796,29 @@ export function SmartCanvasTopBar({
                 )}
               >
                 <MoreHorizontal className="size-4" />
-                更多
+                <span className="max-lg:hidden">更多</span>
               </button>
             </PopoverTrigger>
             <PopoverContent align="end" sideOffset={8} className={cn("w-44 rounded-2xl border p-2", canvasPanelClass)}>
               <div className="space-y-1">
                 <ToolbarMenuButton icon={<Clock3 className="size-4" />} label={`最近操作${operationCount ? ` ${operationCount}` : ""}`} onClick={onOperationHistoryToggle} />
+                <ToolbarMenuButton icon={<Sparkles className="size-4" />} label="AI提示词" onClick={() => onAddNode("llm")} />
+                <ToolbarMenuButton icon={<WandSparkles className="size-4" />} label="图片生成" onClick={() => onAddNode("image_generation")} />
+                <ToolbarMenuButton icon={<FileText className="size-4" />} label="提示词" onClick={() => onAddNode("prompt")} />
+                <ToolbarMenuButton icon={<Repeat2 className="size-4" />} label="循环" onClick={() => onAddNode("loop")} />
+                <ToolbarMenuButton icon={<Layers3 className="size-4" />} label="组" onClick={() => onAddNode("group")} />
+                <ToolbarMenuButton icon={<Clapperboard className="size-4" />} label="视频" onClick={() => onAddNode("video_generation")} />
+                <ToolbarMenuButton icon={<CircleDot className="size-4" />} label="Output" onClick={() => onAddNode("result")} />
+                <ToolbarMenuButton icon={<CircleHelp className="size-4" />} label="帮助" onClick={onHelpClick} />
                 <ToolbarMenuButton icon={<Eraser className="size-4" />} label={`清理空白节点${blankNodeCount ? ` ${blankNodeCount}` : ""}`} onClick={onCleanupBlankNodes} disabled={blankNodeCount === 0} />
               </div>
             </PopoverContent>
           </Popover>
+          <ToolbarIconButton className="lg:hidden" icon={<History className="size-4" />} label="生成记录" count={runCount} onClick={onRunHistoryToggle} />
+          <ToolbarIconButton className="lg:hidden" icon={saving ? <LoaderCircle className="size-4 animate-spin" /> : <Save className="size-4" />} label={saveStateLabel(saveState)} onClick={onSave} />
+          {running ? <span className="lg:hidden rounded-full bg-sky-500/15 px-2 py-1 text-[11px] font-bold text-sky-700 dark:text-sky-200">运行中</span> : null}
         </div>
-        <div className={cn("flex shrink-0 items-center gap-2 rounded-full border p-1.5", canvasPanelClass)}>
+        <div className={cn("hidden shrink-0 items-center gap-2 rounded-full border p-1.5 lg:flex", canvasPanelClass)}>
           <NodeListPopover
             canvas={canvas}
             onFocusNode={onFocusNode}
@@ -714,12 +840,14 @@ function ToolbarButton({
   onClick,
   disabled,
   danger,
+  className,
 }: {
   icon: ReactNode;
   label: string;
   onClick?: () => void;
   disabled?: boolean;
   danger?: boolean;
+  className?: string;
 }) {
   return (
     <button
@@ -730,12 +858,13 @@ function ToolbarButton({
           ? "border-rose-500/35 text-rose-600 hover:bg-rose-500/10 dark:text-rose-200 dark:hover:bg-rose-500/15"
           : "border-border bg-background/70 text-foreground hover:bg-accent dark:border-slate-700 dark:bg-slate-950/35 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white",
         disabled ? "cursor-not-allowed opacity-45" : "",
+        className,
       )}
       onClick={onClick}
       disabled={disabled}
     >
       {icon}
-      {label}
+      <span className="max-lg:hidden">{label}</span>
     </button>
   );
 }
@@ -859,11 +988,13 @@ function ToolbarIconButton({
   label,
   count,
   onClick,
+  className,
 }: {
   icon: ReactNode;
   label: string;
   count?: number;
   onClick?: () => void;
+  className?: string;
 }) {
   return (
     <button
@@ -871,6 +1002,7 @@ function ToolbarIconButton({
       className={cn(
         "relative inline-flex size-9 items-center justify-center rounded-full border transition",
         "border-border bg-background/70 text-foreground hover:bg-accent dark:border-slate-700 dark:bg-slate-950/35 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white",
+        className,
       )}
       onClick={onClick}
       title={label}
@@ -1395,6 +1527,9 @@ type SmartCanvasBoardProps = {
   onCreateNodeFromPort: (nodeId: string, type: SmartCanvasItem["type"], point?: { x: number; y: number }, direction?: "upstream" | "downstream") => void;
   onCreateNodeHelpTemplate: (nodeId: string) => void;
   onUploadAt: (point: { x: number; y: number }) => void;
+  runCount: number;
+  mobileMiniMapOpen: boolean;
+  onMobileToolsOpen: () => void;
 };
 
 export function SmartCanvasBoard({
@@ -1451,6 +1586,9 @@ export function SmartCanvasBoard({
   onCreateNodeFromPort,
   onCreateNodeHelpTemplate,
   onUploadAt,
+  runCount,
+  mobileMiniMapOpen,
+  onMobileToolsOpen,
 }: SmartCanvasBoardProps) {
   const [nodeSizes, setNodeSizes] = useState<SmartCanvasNodeSizeMap>({});
   const [contextMenu, setContextMenu] = useState<SmartCanvasNodeMenuState | null>(null);
@@ -1789,17 +1927,55 @@ export function SmartCanvasBoard({
         nodeSizes={nodeSizes}
         boardRef={boardRef}
         onViewportChange={onViewportChange}
+        className="hidden lg:block"
       />
-      <div className="absolute bottom-4 left-[246px] z-30 flex flex-col gap-2 opacity-45 transition-opacity duration-200 hover:opacity-100 focus-within:opacity-100">
+      <div className="absolute bottom-4 left-[246px] z-30 hidden flex-col gap-2 opacity-45 transition-opacity duration-200 hover:opacity-100 focus-within:opacity-100 lg:flex">
         <IconToolButton title="放大" onClick={onZoomIn}><ZoomIn className="size-4" /></IconToolButton>
         <IconToolButton title="缩小" onClick={onZoomOut}><ZoomOut className="size-4" /></IconToolButton>
         <IconToolButton title="适配内容" onClick={onFit}><BoxSelect className="size-4" /></IconToolButton>
       </div>
-      <div className="absolute bottom-3 left-1/2 z-30 -translate-x-1/2 rounded-full bg-card/85 px-4 py-1 text-[11px] font-semibold text-muted-foreground shadow-sm backdrop-blur dark:bg-slate-950/70 dark:text-slate-500">
+      <div className="absolute bottom-3 left-1/2 z-30 hidden -translate-x-1/2 rounded-full bg-card/85 px-4 py-1 text-[11px] font-semibold text-muted-foreground shadow-sm backdrop-blur dark:bg-slate-950/70 dark:text-slate-500 lg:block">
         右键添加节点，Ctrl/⌘ 点击多选，拖动任一已选节点可一起移动，Delete 删除所选
       </div>
+      {mobileMiniMapOpen ? (
+        <SmartCanvasMiniMap
+          canvas={canvas}
+          viewport={viewport}
+          nodeSizes={nodeSizes}
+          boardRef={boardRef}
+          onViewportChange={onViewportChange}
+          className="bottom-[calc(env(safe-area-inset-bottom)_+_5rem)] left-3 opacity-100 lg:hidden"
+        />
+      ) : null}
+      <div
+        className={cn(
+          "absolute inset-x-0 z-30 flex justify-center px-3 lg:hidden",
+          "bottom-[calc(env(safe-area-inset-bottom)_+_0.75rem)]",
+        )}
+        onPointerDown={stopNodeInteraction}
+      >
+        <button
+          type="button"
+          className={cn(
+            "relative flex h-12 min-w-[9.5rem] items-center justify-center gap-2 rounded-full border px-5 text-sm font-black shadow-lg shadow-slate-950/10 backdrop-blur transition active:scale-[0.98]",
+            "border-border bg-card/92 text-foreground hover:bg-accent dark:border-slate-800 dark:bg-slate-950/85 dark:text-slate-100 dark:hover:bg-slate-900",
+            mobileMiniMapOpen && "border-sky-400/45 bg-sky-500/12 text-sky-700 dark:border-sky-300/35 dark:bg-sky-400/15 dark:text-sky-100",
+          )}
+          onClick={onMobileToolsOpen}
+          title="画布工具"
+          aria-label={`打开画布工具${runCount ? `，${runCount} 条运行记录` : ""}`}
+        >
+          <Wrench className="size-4" />
+          <span>画布工具</span>
+          {runCount ? (
+            <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-sky-500 px-1.5 text-[10px] font-black leading-none text-white">
+              {runCount > 99 ? "99+" : runCount}
+            </span>
+          ) : null}
+        </button>
+      </div>
       {showZoomBadge ? (
-        <div className="pointer-events-none absolute bottom-12 left-1/2 z-40 -translate-x-1/2 rounded-full border border-border bg-card/95 px-3 py-1 text-xs font-bold text-muted-foreground shadow-sm backdrop-blur dark:border-slate-700 dark:bg-slate-950/90 dark:text-slate-400">
+        <div className="pointer-events-none absolute bottom-12 left-1/2 z-40 hidden -translate-x-1/2 rounded-full border border-border bg-card/95 px-3 py-1 text-xs font-bold text-muted-foreground shadow-sm backdrop-blur dark:border-slate-700 dark:bg-slate-950/90 dark:text-slate-400 lg:block">
           {Math.round(viewport.zoom * 100)}%
         </div>
       ) : null}
@@ -2108,12 +2284,14 @@ function SmartCanvasMiniMap({
   nodeSizes,
   boardRef,
   onViewportChange,
+  className,
 }: {
   canvas: SmartCanvasDocument | null;
   viewport: SmartCanvasViewport;
   nodeSizes: SmartCanvasNodeSizeMap;
   boardRef: React.RefObject<HTMLDivElement | null>;
   onViewportChange: (viewport: SmartCanvasViewport, commit?: boolean, label?: string) => void;
+  className?: string;
 }) {
   const mapWidth = 188;
   const mapHeight = 116;
@@ -2193,6 +2371,7 @@ function SmartCanvasMiniMap({
       className={cn(
         "absolute bottom-4 left-6 z-30 transition-opacity duration-200 hover:opacity-100",
         dragging ? "opacity-100" : "opacity-45",
+        className,
       )}
     >
       <div
@@ -2633,7 +2812,6 @@ export const SmartCanvasNode = memo(function SmartCanvasNode({
         item={item}
         onOpenHelp={() => onOpenNodeHelp(item.type)}
         onDelete={() => onDeleteItem(item.id)}
-        onOpenTextAssets={item.type === "prompt" ? () => setTextAssetPickerOpen(true) : undefined}
       />
       {item.type === "image" ? (
         <>
@@ -2655,6 +2833,7 @@ export const SmartCanvasNode = memo(function SmartCanvasNode({
           mentionItems={mentionItems}
           onUpdateData={(patch) => onUpdateItemData(item.id, patch)}
           onMentionToggle={onMentionToggle}
+          onOpenTextAssets={() => setTextAssetPickerOpen(true)}
           onAddMention={(image) => onAddMentionToPrompt(item.id, image)}
         />
       ) : item.type === "group" ? (
@@ -2901,12 +3080,10 @@ function NodeHeader({
   item,
   onOpenHelp,
   onDelete,
-  onOpenTextAssets,
 }: {
   item: SmartCanvasItem;
   onOpenHelp: () => void;
   onDelete: () => void;
-  onOpenTextAssets?: () => void;
 }) {
   const title = `${nodeUsageHint(item)} 点击查看完整用法。`;
   return (
@@ -2917,22 +3094,6 @@ function NodeHeader({
       </div>
       <div className="flex items-center gap-1">
         {item.data?.status ? <StatusBadge status={item.data.status} /> : null}
-        {onOpenTextAssets ? (
-          <button
-            type="button"
-            className="flex size-6 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground dark:text-slate-500 dark:hover:bg-slate-800 dark:hover:text-white"
-            data-node-interactive="true"
-            title="打开文本素材库"
-            aria-label="打开文本素材库"
-            onPointerDown={stopNodeInteraction}
-            onClick={(event) => {
-              event.stopPropagation();
-              onOpenTextAssets();
-            }}
-          >
-            <Files className="size-3.5" />
-          </button>
-        ) : null}
         <button
           type="button"
           className="flex size-6 items-center justify-center rounded-md bg-sky-500/10 text-[13px] font-black leading-none text-sky-700 hover:bg-sky-500/18 hover:text-sky-800 dark:bg-sky-400/10 dark:text-sky-200 dark:hover:bg-sky-400/18 dark:hover:text-sky-100"
@@ -3133,6 +3294,7 @@ function PromptNodeBody({
   mentionItems,
   onUpdateData,
   onMentionToggle,
+  onOpenTextAssets,
   onAddMention,
 }: {
   item: SmartCanvasItem;
@@ -3141,6 +3303,7 @@ function PromptNodeBody({
   mentionItems: CanvasImageRef[];
   onUpdateData: (patch: Partial<SmartCanvasItem["data"]>) => void;
   onMentionToggle: () => void;
+  onOpenTextAssets: () => void;
   onAddMention: (image: CanvasImageRef) => void;
 }) {
   const inputImages = item.data?.input_images || [];
@@ -3153,9 +3316,23 @@ function PromptNodeBody({
         placeholder="输入提示词..."
       />
       <div className="mt-2 flex items-center justify-between gap-2">
-        <Button type="button" size="sm" variant="outline" className={cn("h-7 rounded-lg px-2 text-xs", canvasGhostButtonClass)} onClick={onMentionToggle}>
-          @图片
-        </Button>
+        <div className="flex min-w-0 items-center gap-1.5">
+          <Button type="button" size="sm" variant="outline" className={cn("h-7 rounded-lg px-2 text-xs", canvasGhostButtonClass)} onClick={onMentionToggle}>
+            @图片
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className={cn("h-7 rounded-lg px-2 text-xs", canvasGhostButtonClass)}
+            onClick={onOpenTextAssets}
+            title="打开文本素材库"
+            aria-label="打开文本素材库"
+          >
+            <Files className="size-3.5" />
+            素材
+          </Button>
+        </div>
         <span className={cn("text-[11px] font-semibold", canvasAccentTextClass)}>{(item.data?.prompt || "").length} / 20,000</span>
       </div>
       {inputImages.length > 0 ? <CanvasImageStrip images={inputImages} limit={4} className="mt-2 grid-cols-4" lightweight={lightweight} /> : null}
@@ -3956,8 +4133,10 @@ function GeneratorNodeBody({
     ? canvasImageResolutionOptions.map((option) => option.value === "unspecified" ? { ...option, label: "保持原图清晰度" } : option)
     : canvasImageResolutionOptions;
   const outputControlsSupported = supportsImageOutputControls(imageModel);
+  const imageQualitySupported = supportsImageQuality(imageModel);
   const outputFormat = normalizeImageOutputFormat(item.data?.output_format);
   const outputCompression = typeof item.data?.output_compression === "number" ? item.data.output_compression : undefined;
+  const imageQuality = isImageQuality(item.data?.quality) ? item.data.quality : "auto";
   const setImageCount = (next: number) => onUpdateData({ n: Math.max(1, Math.min(10, Math.round(next) || 1)) });
   const setOutputCompression = (value: string) => {
     if (!value.trim()) {
@@ -4092,6 +4271,7 @@ function GeneratorNodeBody({
         </Select>
         {outputControlsSupported ? (
           <ImageOutputControls
+            imageModel={imageModel}
             outputFormat={outputFormat}
             outputCompression={outputCompression}
             onOutputFormatChange={(output_format) => onUpdateData({ output_format })}
@@ -4102,6 +4282,18 @@ function GeneratorNodeBody({
             inputClassName="h-8 min-w-0 border-0 bg-transparent px-0 text-right text-xs font-bold shadow-none focus-visible:ring-0 disabled:cursor-not-allowed"
             compressionLabel="压缩"
           />
+        ) : null}
+        {imageQualitySupported ? (
+          <Select value={imageQuality} onValueChange={(quality) => isImageQuality(quality) && onUpdateData({ quality })}>
+            <SelectTrigger className={canvasSelectClass}>
+              <SelectValue placeholder="质量强度" />
+            </SelectTrigger>
+            <SelectContent>
+              {IMAGE_QUALITY_OPTIONS.map((option) => (
+                <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         ) : null}
         <div className={cn("grid h-9 grid-cols-[28px_1fr_28px] overflow-hidden rounded-xl border", canvasFieldClass)}>
           <button
@@ -5278,15 +5470,28 @@ export function SmartCanvasRunHistoryPanel({
             <X className="size-4" />
           </button>
         </div>
-        <div className="max-h-[420px] space-y-2 overflow-auto pr-1">
-          {runs.length > 0 ? runs.map((run) => (
-            <RunRecordCard key={run.id} run={run} />
-          )) : (
-            <div className={cn("rounded-xl border p-3 text-center text-xs", canvasDashedClass)}>暂无运行记录</div>
-          )}
-        </div>
+        <SmartCanvasRunHistoryList canvas={canvas} className="max-h-[420px]" />
       </div>
     </aside>
+  );
+}
+
+export function SmartCanvasRunHistoryList({
+  canvas,
+  className,
+}: {
+  canvas: SmartCanvasDocument | null;
+  className?: string;
+}) {
+  const runs = smartCanvasRuns(canvas).slice(0, 30);
+  return (
+    <div className={cn("space-y-2 overflow-auto pr-1", className)}>
+      {runs.length > 0 ? runs.map((run) => (
+        <RunRecordCard key={run.id} run={run} />
+      )) : (
+        <div className={cn("rounded-xl border p-3 text-center text-xs", canvasDashedClass)}>暂无运行记录</div>
+      )}
+    </div>
   );
 }
 
@@ -5330,54 +5535,87 @@ export function SmartCanvasOperationHistoryPanel({
             <X className="size-4" />
           </button>
         </div>
-        <div className="mb-3 grid grid-cols-2 gap-2">
-          <Button
-            type="button"
-            size="sm"
-            variant="ghost"
-            className={cn("h-8 rounded-lg text-xs font-black", canvasIconButtonClass)}
-            disabled={!canUndo}
-            onClick={onUndo}
-          >
-            <RotateCcw className="mr-1.5 size-3.5" />
-            撤销
-          </Button>
-          <Button
-            type="button"
-            size="sm"
-            variant="ghost"
-            className={cn("h-8 rounded-lg text-xs font-black", canvasIconButtonClass)}
-            disabled={!canRedo}
-            onClick={onRedo}
-          >
-            <RotateCw className="mr-1.5 size-3.5" />
-            重做
-          </Button>
-        </div>
-        <div className="max-h-[420px] space-y-2 overflow-auto pr-1">
-          {visibleEntries.length > 0 ? visibleEntries.map((entry) => (
-            <div key={entry.id} className="rounded-xl border border-border bg-background/70 p-2 dark:border-slate-800 dark:bg-slate-950/55">
-              <div className="flex items-center justify-between gap-2">
-                <div className="min-w-0">
-                  <div className="truncate text-xs font-semibold text-foreground dark:text-slate-200">{entry.label}</div>
-                  <div className={cn("mt-0.5 text-[11px]", canvasSubtleTextClass)}>{entry.createdAt.slice(5, 16)}</div>
-                </div>
-                <button
-                  type="button"
-                  className={cn("h-7 shrink-0 rounded-md px-2 text-[11px] font-black", canvasIconButtonClass)}
-                  onClick={() => onRestore(entry)}
-                  title="回到这次操作后的状态"
-                >
-                  回到
-                </button>
-              </div>
-            </div>
-          )) : (
-            <div className={cn("rounded-xl border p-3 text-center text-xs", canvasDashedClass)}>暂无操作记录</div>
-          )}
-        </div>
+        <SmartCanvasOperationHistoryList
+          entries={entries}
+          canUndo={canUndo}
+          canRedo={canRedo}
+          onUndo={onUndo}
+          onRedo={onRedo}
+          onRestore={onRestore}
+          className="max-h-[420px]"
+        />
       </div>
     </aside>
+  );
+}
+
+export function SmartCanvasOperationHistoryList({
+  entries,
+  canUndo,
+  canRedo,
+  onUndo,
+  onRedo,
+  onRestore,
+  className,
+}: {
+  entries: SmartCanvasHistoryEntry[];
+  canUndo: boolean;
+  canRedo: boolean;
+  onUndo: () => void;
+  onRedo: () => void;
+  onRestore: (entry: SmartCanvasHistoryEntry) => void;
+  className?: string;
+}) {
+  const visibleEntries = entries.slice(0, 30);
+  return (
+    <div>
+      <div className="mb-3 grid grid-cols-2 gap-2">
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          className={cn("h-8 rounded-lg text-xs font-black", canvasIconButtonClass)}
+          disabled={!canUndo}
+          onClick={onUndo}
+        >
+          <RotateCcw className="mr-1.5 size-3.5" />
+          撤销
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          className={cn("h-8 rounded-lg text-xs font-black", canvasIconButtonClass)}
+          disabled={!canRedo}
+          onClick={onRedo}
+        >
+          <RotateCw className="mr-1.5 size-3.5" />
+          重做
+        </Button>
+      </div>
+      <div className={cn("space-y-2 overflow-auto pr-1", className)}>
+        {visibleEntries.length > 0 ? visibleEntries.map((entry) => (
+          <div key={entry.id} className="rounded-xl border border-border bg-background/70 p-2 dark:border-slate-800 dark:bg-slate-950/55">
+            <div className="flex items-center justify-between gap-2">
+              <div className="min-w-0">
+                <div className="truncate text-xs font-semibold text-foreground dark:text-slate-200">{entry.label}</div>
+                <div className={cn("mt-0.5 text-[11px]", canvasSubtleTextClass)}>{entry.createdAt.slice(5, 16)}</div>
+              </div>
+              <button
+                type="button"
+                className={cn("h-7 shrink-0 rounded-md px-2 text-[11px] font-black", canvasIconButtonClass)}
+                onClick={() => onRestore(entry)}
+                title="回到这次操作后的状态"
+              >
+                回到
+              </button>
+            </div>
+          </div>
+        )) : (
+          <div className={cn("rounded-xl border p-3 text-center text-xs", canvasDashedClass)}>暂无操作记录</div>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -5485,9 +5723,9 @@ function ItemTypeIcon({ type }: { type: SmartCanvasItem["type"] }) {
   return <CircleDot className="size-4 text-sky-700 dark:text-sky-200" />;
 }
 
-function IconToolButton({ title, onClick, children }: { title: string; onClick: () => void; children: ReactNode }) {
+function IconToolButton({ title, onClick, children, className }: { title: string; onClick: () => void; children: ReactNode; className?: string }) {
   return (
-    <button type="button" className={cn("flex size-9 items-center justify-center transition", canvasIconButtonClass)} onPointerDown={stopNodeInteraction} onClick={onClick} title={title} aria-label={title}>
+    <button type="button" className={cn("flex size-9 items-center justify-center transition", canvasIconButtonClass, className)} onPointerDown={stopNodeInteraction} onClick={onClick} title={title} aria-label={title}>
       {children}
     </button>
   );

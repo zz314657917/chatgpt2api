@@ -65,10 +65,50 @@ func TestSub2APIChatPayloadRoutesAutoToDefaultChatModel(t *testing.T) {
 	}
 }
 
+func TestSub2APIChatTaskResultIncludesResolvedModel(t *testing.T) {
+	result := sub2APIChatTaskResult(map[string]any{"created": 123}, "hello", util.DefaultChatModel)
+	if got := util.Clean(result["model"]); got != util.DefaultChatModel {
+		t.Fatalf("model = %q, want %q", got, util.DefaultChatModel)
+	}
+
+	result = sub2APIChatTaskResult(map[string]any{"model": util.ImageModelGPT5}, "hello", util.DefaultChatModel)
+	if got := util.Clean(result["model"]); got != util.ImageModelGPT5 {
+		t.Fatalf("model = %q, want upstream response model", got)
+	}
+}
+
+func TestSub2APIImageBatchResultIncludesResolvedModel(t *testing.T) {
+	result := sub2APIImageBatchResult(123, []map[string]any{{"url": "https://example.test/image.png"}}, util.ImageModelGPT)
+	if got := util.Clean(result["model"]); got != util.ImageModelGPT {
+		t.Fatalf("model = %q, want %q", got, util.ImageModelGPT)
+	}
+}
+
 func TestSub2APIImagePayloadNormalizesDecimalRatio(t *testing.T) {
 	payload := sub2APIImageJSONPayload(map[string]any{"prompt": "draw", "model": util.ImageModelGPT, "size": "1:1.4"})
 	if payload["size"] != "5:7" {
 		t.Fatalf("size = %#v, want 5:7", payload["size"])
+	}
+
+	officialPayload, err := sub2APIImageGatewayJSONPayload(map[string]any{"prompt": "draw", "model": util.ImageModelGPTOfficial, "size": "1:1.4"})
+	if err != nil {
+		t.Fatalf("sub2APIImageGatewayJSONPayload() error = %v", err)
+	}
+	if officialPayload["size"] != "5:7" {
+		t.Fatalf("official size = %#v, want 5:7", officialPayload["size"])
+	}
+}
+
+func TestTaskBillingModelPrefersReferenceModel(t *testing.T) {
+	task := map[string]any{"model": util.ImageModelAuto}
+	ref := service.BillingReference{Model: util.ImageModelGPT}
+
+	if got := taskBillingModel(task, ref); got != util.ImageModelGPT {
+		t.Fatalf("taskBillingModel() = %q, want reference model", got)
+	}
+
+	if got := taskBillingModel(task, service.BillingReference{}); got != util.ImageModelAuto {
+		t.Fatalf("taskBillingModel(fallback) = %q, want task model", got)
 	}
 }
 

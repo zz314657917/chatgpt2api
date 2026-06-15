@@ -85,6 +85,7 @@ export const IMAGE_SIZE_PRESET_DETAILS = [
 ] as const;
 
 export const IMAGE_QUALITY_OPTIONS = [
+  { value: "auto", label: "自动", description: "由官方图片通道按当前任务自动选择" },
   { value: "low", label: "速度优先", description: "优先速度和成本，适合草稿测试" },
   { value: "medium", label: "标准", description: "兼顾速度与细节，适合日常生成" },
   { value: "high", label: "高品质", description: "优先细节效果，适合最终出图" },
@@ -126,6 +127,13 @@ export function normalizeImageOutputFormat(value: unknown): ImageOutputFormat {
 
 export function isImageQuality(value: unknown): value is ImageQuality {
   return typeof value === "string" && IMAGE_QUALITY_VALUES.has(value);
+}
+
+export function imageQualityLabel(value?: string) {
+  if (!value) {
+    return "";
+  }
+  return IMAGE_QUALITY_OPTIONS.find((option) => option.value === value)?.label || value;
 }
 
 export function isImageOutputFormat(value: unknown): value is ImageOutputFormat {

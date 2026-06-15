@@ -269,6 +269,70 @@ func TestAdminSystemCheckUpdates(t *testing.T) {
 	}
 }
 
+func TestAnalyticsEventsAndAdminUsageOverviewAuth(t *testing.T) {
+	app := newTestApp(t)
+	defer app.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/analytics/events", strings.NewReader(`{"events":[{"type":"page_view","path":"/image"}]}`))
+	res := httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusUnauthorized {
+		t.Fatalf("anonymous analytics status = %d body = %s", res.Code, res.Body.String())
+	}
+
+	_, rawKey, err := app.auth.CreateAPIKey(service.AuthRoleUser, "usage-user", service.AuthOwner{})
+	if err != nil {
+		t.Fatalf("CreateAPIKey() error = %v", err)
+	}
+	req = httptest.NewRequest(http.MethodPost, "/api/analytics/events", strings.NewReader(`{"events":[{"type":"page_view","path":"/image"},{"type":"page_click","path":"/image","count":2},{"type":"page_stay","path":"/image","duration_ms":30000},{"type":"bad","path":"/image"}]}`))
+	req.Header.Set("Authorization", "Bearer "+rawKey)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("user analytics status = %d body = %s", res.Code, res.Body.String())
+	}
+	var recordBody map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &recordBody); err != nil {
+		t.Fatalf("record analytics json: %v", err)
+	}
+	if util.ToInt(recordBody["recorded"], 0) != 3 || util.ToInt(recordBody["ignored"], 0) != 1 {
+		t.Fatalf("record analytics body = %#v", recordBody)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/admin/usage-overview?days=7", nil)
+	req.Header.Set("Authorization", "Bearer "+rawKey)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusForbidden {
+		t.Fatalf("user usage overview status = %d body = %s", res.Code, res.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/admin/usage-overview?days=7", nil)
+	req.Header.Set("Authorization", adminAuthHeader(t, app))
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("admin usage overview status = %d body = %s", res.Code, res.Body.String())
+	}
+	var overview map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &overview); err != nil {
+		t.Fatalf("usage overview json: %v", err)
+	}
+	today := util.StringMap(overview["today"])
+	if util.ToInt(today["page_views"], 0) != 1 || util.ToInt(today["page_clicks"], 0) != 2 || util.ToInt(today["active_seconds"], 0) != 30 {
+		t.Fatalf("usage overview today = %#v", today)
+	}
+	if _, ok := today["local_consumed_amount"]; !ok {
+		t.Fatalf("usage overview missing local_consumed_amount: %#v", today)
+	}
+	if len(util.AsMapSlice(overview["last_7_days"])) != 7 {
+		t.Fatalf("last_7_days = %#v", overview["last_7_days"])
+	}
+	if len(util.AsMapSlice(overview["pages"])) != 1 {
+		t.Fatalf("pages = %#v", overview["pages"])
+	}
+}
+
 func TestPasswordAccountLoginAndRegistrationToggle(t *testing.T) {
 	t.Setenv("CHATGPT2API_USER_DEFAULT_CONCURRENT_LIMIT", "2")
 
@@ -964,6 +1028,143 @@ func TestSub2APIImagePayloadNormalizesOutputOptions(t *testing.T) {
 	})
 	if invalidPayload["output_format"] != "png" || invalidPayload["output_compression"] != nil {
 		t.Fatalf("invalid output options = %#v", invalidPayload)
+	}
+}
+
+func TestSub2APIOfficialImagePayloadUsesOfficialGatewayFields(t *testing.T) {
+	payload, err := sub2APIImageGatewayJSONPayload(map[string]any{
+		"prompt":           "draw",
+		"model":            util.ImageModelGPTOfficial,
+		"size":             "16:9",
+		"image_resolution": "2k",
+	})
+	if err != nil {
+		t.Fatalf("sub2APIImageGatewayJSONPayload() error = %v", err)
+	}
+	if payload["model"] != util.ImageModelGPTOfficial || payload["size"] != "16:9" || payload["resolution"] != "2k" {
+		t.Fatalf("official payload = %#v", payload)
+	}
+}
+
+func TestSub2APIOfficialImagePayloadMapsPixelIconSizeToSquare(t *testing.T) {
+	payload, err := sub2APIImageGatewayJSONPayload(map[string]any{
+		"prompt": "draw icon",
+		"model":  util.ImageModelGPTOfficial,
+		"size":   "128x128",
+	})
+	if err != nil {
+		t.Fatalf("sub2APIImageGatewayJSONPayload() error = %v", err)
+	}
+	if payload["size"] != "1:1" {
+		t.Fatalf("official pixel icon size = %#v, want 1:1", payload["size"])
+	}
+}
+
+func TestSub2APIOfficialImagePayloadNormalizesOutputOptions(t *testing.T) {
+	pngPayload, err := sub2APIImageGatewayJSONPayload(map[string]any{
+		"prompt":             "draw",
+		"model":              util.ImageModelGPTOfficial,
+		"output_format":      "png",
+		"output_compression": 80,
+	})
+	if err != nil {
+		t.Fatalf("png official payload error = %v", err)
+	}
+	if pngPayload["output_format"] != "png" || pngPayload["output_compression"] != nil {
+		t.Fatalf("png official output options = %#v", pngPayload)
+	}
+
+	jpegPayload, err := sub2APIImageGatewayJSONPayload(map[string]any{
+		"prompt":             "draw",
+		"model":              util.ImageModelGPTOfficial,
+		"output_format":      "jpeg",
+		"output_compression": 120,
+	})
+	if err != nil {
+		t.Fatalf("jpeg official payload error = %v", err)
+	}
+	if jpegPayload["output_format"] != "jpeg" || jpegPayload["output_compression"] != 100 {
+		t.Fatalf("jpeg official output options = %#v", jpegPayload)
+	}
+
+	webpPayload, err := sub2APIImageGatewayJSONPayload(map[string]any{
+		"prompt":             "draw",
+		"model":              util.ImageModelGPTOfficial,
+		"output_format":      "webp",
+		"output_compression": 42,
+	})
+	if err != nil {
+		t.Fatalf("webp official payload error = %v", err)
+	}
+	if webpPayload["output_format"] != "webp" || webpPayload["output_compression"] != 42 {
+		t.Fatalf("webp official output options = %#v", webpPayload)
+	}
+}
+
+func TestSub2APIOfficialImagePayloadClampsBatchCount(t *testing.T) {
+	payload, err := sub2APIImageGatewayJSONPayload(map[string]any{
+		"prompt": "draw",
+		"model":  util.ImageModelGPTOfficial,
+		"n":      10,
+	})
+	if err != nil {
+		t.Fatalf("official payload error = %v", err)
+	}
+	if payload["n"] != 4 {
+		t.Fatalf("official n = %#v, want 4", payload["n"])
+	}
+}
+
+func TestSub2APIOfficialImageEditPayloadUsesPublicReferences(t *testing.T) {
+	payload, err := sub2APIImageGatewayJSONPayload(map[string]any{
+		"prompt":                     "edit",
+		"model":                      util.ImageModelGPTOfficial,
+		"official_public_image_urls": []string{"https://cdn.example/source.png"},
+		"images":                     []protocol.UploadedImage{{ContentType: "image/png", Data: []byte("private")}},
+	})
+	if err != nil {
+		t.Fatalf("official edit payload error = %v", err)
+	}
+	urls := util.AsStringSlice(payload["image_urls"])
+	if len(urls) != 1 || urls[0] != "https://cdn.example/source.png" {
+		t.Fatalf("official image_urls = %#v", payload["image_urls"])
+	}
+}
+
+func TestSub2APIOfficialInpaintPayloadUsesMaskURL(t *testing.T) {
+	payload, err := sub2APIImageGatewayJSONPayload(map[string]any{
+		"prompt":                     "inpaint",
+		"model":                      util.ImageModelGPTOfficial,
+		"official_public_image_urls": []string{"https://cdn.example/source.png"},
+		"input_image_mask":           "https://cdn.example/mask.png",
+		"images":                     []protocol.UploadedImage{{ContentType: "image/png", Data: []byte("private")}},
+	})
+	if err != nil {
+		t.Fatalf("official inpaint payload error = %v", err)
+	}
+	if payload["mask_url"] != "https://cdn.example/mask.png" {
+		t.Fatalf("official mask_url = %#v", payload["mask_url"])
+	}
+	urls := util.AsStringSlice(payload["image_urls"])
+	if len(urls) != 1 || urls[0] != "https://cdn.example/source.png" {
+		t.Fatalf("official image_urls = %#v", payload["image_urls"])
+	}
+}
+
+func TestSub2APIOfficialImageEditPayloadRejectsPrivateReferences(t *testing.T) {
+	_, err := sub2APIImageGatewayJSONPayload(map[string]any{
+		"prompt": "edit",
+		"model":  util.ImageModelGPTOfficial,
+		"images": []protocol.UploadedImage{{ContentType: "image/png", Data: []byte("private")}},
+	})
+	if err == nil {
+		t.Fatal("expected private reference error")
+	}
+	if !strings.Contains(err.Error(), "官方图生图需要可公开访问的参考图链接") {
+		t.Fatalf("error = %q", err.Error())
+	}
+	if strings.Contains(strings.ToLower(err.Error()), "apimart") {
+		t.Fatalf("error should not expose upstream brand: %q", err.Error())
 	}
 }
 
@@ -2915,6 +3116,209 @@ func TestSub2APIImageCreationTaskUsesOfficialFallbackAndPollsTask(t *testing.T) 
 	data := util.AsMapSlice(items[0]["data"])
 	if len(data) != 1 || util.Clean(data[0]["url"]) == "" {
 		t.Fatalf("sub2api image task data = %#v", items[0])
+	}
+}
+
+func TestSub2APITaskStatusCreditsCostBecomesExternalBillingCost(t *testing.T) {
+	result := map[string]any{
+		"status":       "completed",
+		"credits_cost": 1.1055,
+	}
+
+	cost, ok := sub2APITaskCost(result)
+
+	if !ok || cost != 0.11055 {
+		t.Fatalf("sub2APITaskCost() = %.12f ok=%v, want 0.11055 true", cost, ok)
+	}
+}
+
+func TestSub2APIOfficialImageEditTaskUsesJSONGatewayPayload(t *testing.T) {
+	app := newTestApp(t)
+	defer app.Close()
+
+	var received map[string]any
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/images/generations" {
+			t.Fatalf("gateway request = %s %s", r.Method, r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer sub2-key" {
+			t.Fatalf("gateway Authorization = %q", got)
+		}
+		if !strings.Contains(r.Header.Get("Content-Type"), "application/json") {
+			t.Fatalf("gateway Content-Type = %q, want JSON", r.Header.Get("Content-Type"))
+		}
+		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
+			t.Fatalf("gateway json: %v", err)
+		}
+		util.WriteJSON(w, http.StatusOK, map[string]any{
+			"created": 123,
+			"data": []map[string]any{{
+				"b64_json": sub2APITestPNGBase64,
+			}},
+		})
+	}))
+	defer gateway.Close()
+
+	owner := service.AuthOwner{ID: "sub2api:official-edit-user", Name: "official-edit", Provider: service.AuthProviderSub2API}
+	_, sessionKey, err := app.auth.UpsertSub2APISession(owner)
+	if err != nil {
+		t.Fatalf("UpsertSub2APISession() error = %v", err)
+	}
+	if err := app.sub2Bindings.Save(service.Sub2APIBinding{
+		OwnerID:        owner.ID,
+		Sub2APIUserID:  "official-edit-user",
+		SessionToken:   "session-official-edit-user",
+		APIKey:         "sub2-key",
+		GatewayBaseURL: gateway.URL,
+	}); err != nil {
+		t.Fatalf("Save(Sub2APIBinding) error = %v", err)
+	}
+
+	body := jsonString(map[string]any{
+		"client_task_id":     "sub2-official-edit-task",
+		"prompt":             "edit image",
+		"model":              util.ImageModelGPTOfficial,
+		"image_url":          "https://cdn.example/source.png",
+		"input_image_mask":   "https://cdn.example/mask.png",
+		"size":               "16:9",
+		"image_resolution":   "2k",
+		"output_format":      "webp",
+		"output_compression": 101,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/creation-tasks/image-edits", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+sessionKey)
+	req.Header.Set("Content-Type", "application/json")
+	res := httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("submit official edit task status = %d body = %s", res.Code, res.Body.String())
+	}
+
+	var listed map[string]any
+	waitForHTTPTestCondition(t, func() bool {
+		req = httptest.NewRequest(http.MethodGet, "/api/creation-tasks?ids=sub2-official-edit-task", nil)
+		req.Header.Set("Authorization", "Bearer "+sessionKey)
+		res = httptest.NewRecorder()
+		app.Handler().ServeHTTP(res, req)
+		if res.Code != http.StatusOK {
+			t.Fatalf("list official edit task status = %d body = %s", res.Code, res.Body.String())
+		}
+		if err := json.Unmarshal(res.Body.Bytes(), &listed); err != nil {
+			t.Fatalf("list official edit task json: %v", err)
+		}
+		items := util.AsMapSlice(listed["items"])
+		return len(items) == 1 && items[0]["status"] == service.TaskStatusSuccess
+	})
+
+	if received["model"] != util.ImageModelGPTOfficial || received["size"] != "16:9" || received["resolution"] != "2k" {
+		t.Fatalf("official edit gateway body = %#v", received)
+	}
+	urls := util.AsStringSlice(received["image_urls"])
+	if len(urls) != 1 || urls[0] != "https://cdn.example/source.png" {
+		t.Fatalf("official edit image_urls = %#v", received["image_urls"])
+	}
+	if received["mask_url"] != "https://cdn.example/mask.png" {
+		t.Fatalf("official edit mask_url = %#v", received["mask_url"])
+	}
+	if received["output_format"] != "webp" || received["output_compression"] != float64(100) {
+		t.Fatalf("official edit output options = %#v", received)
+	}
+}
+
+func TestSub2APIOfficialImageEditTaskRejectsTempReferenceIDs(t *testing.T) {
+	app := newTestApp(t)
+	defer app.Close()
+
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("gateway should not be called for private official references: %s %s", r.Method, r.URL.Path)
+	}))
+	defer gateway.Close()
+
+	owner := service.AuthOwner{ID: "sub2api:official-private-user", Name: "official-private", Provider: service.AuthProviderSub2API}
+	_, sessionKey, err := app.auth.UpsertSub2APISession(owner)
+	if err != nil {
+		t.Fatalf("UpsertSub2APISession() error = %v", err)
+	}
+	if err := app.sub2Bindings.Save(service.Sub2APIBinding{
+		OwnerID:        owner.ID,
+		Sub2APIUserID:  "official-private-user",
+		SessionToken:   "session-official-private-user",
+		APIKey:         "sub2-key",
+		GatewayBaseURL: gateway.URL,
+	}); err != nil {
+		t.Fatalf("Save(Sub2APIBinding) error = %v", err)
+	}
+
+	var png bytes.Buffer
+	if err := encodeHTTPTestPNG(&png); err != nil {
+		t.Fatalf("encode reference png: %v", err)
+	}
+	uploadReq := httptest.NewRequest(http.MethodPost, "/api/creation-tasks/reference-images", nil)
+	var uploadBody bytes.Buffer
+	writer := multipart.NewWriter(&uploadBody)
+	_ = writer.WriteField("client_reference_id", "private-reference")
+	part, err := writer.CreateFormFile("image", "reference.png")
+	if err != nil {
+		t.Fatalf("CreateFormFile() error = %v", err)
+	}
+	_, _ = part.Write(png.Bytes())
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close multipart writer: %v", err)
+	}
+	uploadReq.Body = io.NopCloser(&uploadBody)
+	uploadReq.Header.Set("Authorization", "Bearer "+sessionKey)
+	uploadReq.Header.Set("Content-Type", writer.FormDataContentType())
+	uploadRes := httptest.NewRecorder()
+	app.Handler().ServeHTTP(uploadRes, uploadReq)
+	if uploadRes.Code != http.StatusOK {
+		t.Fatalf("upload reference status = %d body = %s", uploadRes.Code, uploadRes.Body.String())
+	}
+	var uploadPayload map[string]any
+	if err := json.Unmarshal(uploadRes.Body.Bytes(), &uploadPayload); err != nil {
+		t.Fatalf("upload reference json: %v", err)
+	}
+	refID := util.Clean(util.StringMap(uploadPayload["item"])["id"])
+	if refID == "" {
+		t.Fatalf("reference upload missing id: %#v", uploadPayload)
+	}
+
+	body := jsonString(map[string]any{
+		"client_task_id":      "sub2-official-private-reference",
+		"prompt":              "edit image",
+		"model":               util.ImageModelGPTOfficial,
+		"reference_image_ids": []string{refID},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/creation-tasks/image-edits", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+sessionKey)
+	req.Header.Set("Content-Type", "application/json")
+	res := httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("submit private official edit task status = %d body = %s", res.Code, res.Body.String())
+	}
+
+	var listed map[string]any
+	waitForHTTPTestCondition(t, func() bool {
+		req = httptest.NewRequest(http.MethodGet, "/api/creation-tasks?ids=sub2-official-private-reference", nil)
+		req.Header.Set("Authorization", "Bearer "+sessionKey)
+		res = httptest.NewRecorder()
+		app.Handler().ServeHTTP(res, req)
+		if res.Code != http.StatusOK {
+			t.Fatalf("list private official edit task status = %d body = %s", res.Code, res.Body.String())
+		}
+		if err := json.Unmarshal(res.Body.Bytes(), &listed); err != nil {
+			t.Fatalf("list private official edit task json: %v", err)
+		}
+		items := util.AsMapSlice(listed["items"])
+		return len(items) == 1 && items[0]["status"] == service.TaskStatusError
+	})
+	items := util.AsMapSlice(listed["items"])
+	message := util.Clean(items[0]["error"])
+	if !strings.Contains(message, "官方图生图需要可公开访问的参考图链接") {
+		t.Fatalf("task error = %q", message)
+	}
+	if strings.Contains(strings.ToLower(message), "apimart") {
+		t.Fatalf("task error should not expose upstream brand: %q", message)
 	}
 }
 
@@ -6884,8 +7288,8 @@ func TestLuoyeIndependentSub2APIDefaultGroupAndBilling(t *testing.T) {
 	if generationUserHeader != "42" {
 		t.Fatalf("gateway user header = %q", generationUserHeader)
 	}
-	if reserveAmount != 0.051 {
-		t.Fatalf("reserve amount = %#v, want 0.051", reserveAmount)
+	if reserveAmount != 0.006 {
+		t.Fatalf("reserve amount = %#v, want 0.006", reserveAmount)
 	}
 	if !reflect.DeepEqual(calls, []string{"reserve", "commit"}) {
 		t.Fatalf("billing calls = %#v", calls)
@@ -7640,6 +8044,93 @@ func TestTeamOwnerAndManagerRoleBoundaries(t *testing.T) {
 	}
 }
 
+func TestTeamMemberRemarkAndDisplayName(t *testing.T) {
+	app := newTestApp(t)
+	defer app.Close()
+	owner := service.AuthOwner{ID: "sub2api:remark-owner", Name: "Remark Owner", Provider: service.AuthProviderSub2API}
+	manager := service.AuthOwner{ID: "sub2api:remark-manager", Name: "Remark Manager", Provider: service.AuthProviderSub2API}
+	member := service.AuthOwner{ID: "sub2api:remark-member", Name: "Original Member", Provider: service.AuthProviderSub2API}
+	_, ownerSession, err := app.auth.UpsertSub2APISession(owner)
+	if err != nil {
+		t.Fatalf("owner session: %v", err)
+	}
+	_, managerSession, err := app.auth.UpsertSub2APISession(manager)
+	if err != nil {
+		t.Fatalf("manager session: %v", err)
+	}
+	_, memberSession, err := app.auth.UpsertSub2APISession(member)
+	if err != nil {
+		t.Fatalf("member session: %v", err)
+	}
+	saveTestSub2APIBinding(t, app, owner.ID, "remark-owner@example.com")
+	saveTestSub2APIBinding(t, app, manager.ID, "remark-manager@example.com")
+	saveTestSub2APIBinding(t, app, member.ID, "remark-member@example.com")
+
+	teamID := createHTTPTestTeam(t, app, ownerSession)
+	managerInvite := createHTTPTestInvite(t, app, ownerSession, teamID, "remark-manager@example.com", "manager")
+	acceptHTTPTestInvite(t, app, managerSession, managerInvite)
+	memberInvite := createHTTPTestInvite(t, app, ownerSession, teamID, "remark-member@example.com", "member")
+	acceptHTTPTestInvite(t, app, memberSession, memberInvite)
+
+	req := httptest.NewRequest(http.MethodPatch, "/api/teams/"+teamID+"/members/"+member.ID, strings.NewReader(`{"remark":"设计组 A"}`))
+	req.Header.Set("Authorization", "Bearer "+managerSession)
+	res := httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("manager set member remark status = %d body = %s", res.Code, res.Body.String())
+	}
+	var patchBody map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &patchBody); err != nil {
+		t.Fatalf("remark patch json: %v", err)
+	}
+	team := util.StringMap(patchBody["team"])
+	foundRemark := false
+	for _, item := range util.AsMapSlice(team["members"]) {
+		if util.Clean(item["user_id"]) == member.ID {
+			foundRemark = util.Clean(item["remark"]) == "设计组 A"
+		}
+	}
+	if !foundRemark {
+		t.Fatalf("member remark missing after patch: %#v", team)
+	}
+
+	req = httptest.NewRequest(http.MethodPatch, "/api/teams/"+teamID+"/members/"+member.ID, strings.NewReader(`{"remark":"自己改"}`))
+	req.Header.Set("Authorization", "Bearer "+memberSession)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("member set own remark status = %d body = %s", res.Code, res.Body.String())
+	}
+
+	if updated := app.auth.UpdateUser(member.ID, map[string]any{"name": "Renamed Member"}); updated == nil {
+		t.Fatal("UpdateUser(name) returned nil")
+	}
+	req = httptest.NewRequest(http.MethodGet, "/api/teams", nil)
+	req.Header.Set("Authorization", "Bearer "+ownerSession)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("owner teams status = %d body = %s", res.Code, res.Body.String())
+	}
+	var workspace map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &workspace); err != nil {
+		t.Fatalf("owner teams json: %v", err)
+	}
+	teams := util.AsMapSlice(workspace["teams"])
+	if len(teams) != 1 {
+		t.Fatalf("owner teams = %#v", workspace)
+	}
+	foundName := false
+	for _, item := range util.AsMapSlice(teams[0]["members"]) {
+		if util.Clean(item["user_id"]) == member.ID {
+			foundName = util.Clean(item["name"]) == "Renamed Member" && util.Clean(item["remark"]) == "设计组 A"
+		}
+	}
+	if !foundName {
+		t.Fatalf("member display name or remark not refreshed: %#v", teams[0])
+	}
+}
+
 func TestTeamMembersCanLeaveButOwnerCannot(t *testing.T) {
 	app := newTestApp(t)
 	defer app.Close()
@@ -7975,6 +8466,9 @@ func expireHTTPTestInvite(t *testing.T, app *App, inviteID string) {
 			return ""
 		}
 		return binding.UserEmail
+	})
+	app.teams.SetUserNameLookup(func(ownerID string) string {
+		return app.auth.DisplayNameForUser(ownerID)
 	})
 }
 

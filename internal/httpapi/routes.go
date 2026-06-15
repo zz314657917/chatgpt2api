@@ -1715,6 +1715,15 @@ func imageTaskRequestMetadata(body map[string]any) map[string]any {
 	if fallback := util.StringMap(body["fallback_reference_image"]); len(fallback) > 0 {
 		metadata["fallback_reference_image"] = fallback
 	}
+	if publicImageURLs := util.AsStringSlice(body["official_public_image_urls"]); len(publicImageURLs) > 0 {
+		metadata["official_public_image_urls"] = publicImageURLs
+	}
+	if publicImageURLs := publicJSONImageURLs(util.AsStringSlice(body["image_urls"])); len(publicImageURLs) > 0 {
+		metadata["official_public_image_urls"] = publicImageURLs
+	}
+	if compression, ok := service.NormalizeImageOutputCompressionValue(body["output_compression"]); ok {
+		metadata["raw_output_compression"] = compression
+	}
 	for _, key := range []string{"team_id", "payer_user_id", "actor_user_id", "actor_name"} {
 		if value := util.Clean(body[key]); value != "" {
 			metadata[key] = value

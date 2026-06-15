@@ -242,6 +242,7 @@ function cloneLightweightImageRefs(refs?: CanvasImageRef[]): CanvasImageRef[] | 
     path: ref.path,
     local_url: ref.local_url,
     url: ref.url,
+    public_url: ref.public_url,
     name: ref.name,
     thumbnail_url: ref.thumbnail_url,
     preview_url: ref.preview_url,

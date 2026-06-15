@@ -417,7 +417,7 @@ function billingPeriodLabel(period?: string) {
 
 function formatBillingAmount(value: unknown) {
   const amount = Math.max(0, Number(value) || 0) / 1000;
-  return `¥${amount.toFixed(3)}`;
+  return `✪${amount.toFixed(3)}`;
 }
 
 function billingSummary(user: ManagedUser) {
@@ -1580,7 +1580,7 @@ function UsersContent() {
               {(bulkBillingForm.operation === "switch_type" || !isBulkAdjustmentNoAmount(normalizeBillingAdjustmentType(bulkBillingForm.billingType, bulkBillingForm.adjustmentType))) ? (
                 <div className="space-y-2">
                   <label className="text-sm font-medium text-stone-700 dark:text-foreground">
-                    {bulkBillingForm.billingType === "subscription" ? "配额上限（厘，1000 = ¥1）" : "标准余额（厘，1000 = ¥1）"}
+                    {bulkBillingForm.billingType === "subscription" ? "配额上限（厘，1000 = ✪1）" : "标准余额（厘，1000 = ✪1）"}
                   </label>
                   <Input
                     type="number"
@@ -1765,7 +1765,7 @@ function UsersContent() {
                 </div>
                 {billingForm.billingType === "standard" ? (
                   <div className="space-y-2">
-                    <label className="text-sm font-medium text-stone-700 dark:text-foreground">当前余额（厘，1000 = ¥1）</label>
+                    <label className="text-sm font-medium text-stone-700 dark:text-foreground">当前余额（厘，1000 = ✪1）</label>
                     <Input
                       type="number"
                       min="0"
@@ -1778,7 +1778,7 @@ function UsersContent() {
                 ) : (
                   <>
                     <div className="space-y-2">
-                      <label className="text-sm font-medium text-stone-700 dark:text-foreground">配额上限（厘，1000 = ¥1）</label>
+                      <label className="text-sm font-medium text-stone-700 dark:text-foreground">配额上限（厘，1000 = ✪1）</label>
                       <Input
                         type="number"
                         min="0"

@@ -42,6 +42,8 @@ type BillingReference struct {
 	ChargeKey      string
 	RefundForKey   string
 	OutputIndex    int
+	Amount         float64
+	AmountUnit     string
 }
 
 type BillingChargeResult struct {

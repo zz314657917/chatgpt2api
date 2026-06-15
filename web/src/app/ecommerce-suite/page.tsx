@@ -35,6 +35,7 @@ import {
   commerceSuiteOptionLabel,
 } from "@/app/ecommerce-suite/ecommerce-suite-options";
 import { AuthenticatedImage } from "@/components/authenticated-image";
+import { useMobileNav } from "@/components/mobile-nav-context";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -64,6 +65,8 @@ import {
   fetchCreationTasks,
   fetchManagedImages,
   fetchTeamWorkspace,
+  isImageCreationModel,
+  isOfficialImageModel,
   uploadCreationTaskReferenceImage,
   type CreationTask,
   type ImageModel,
@@ -73,6 +76,7 @@ import {
 import { fetchAuthenticatedImageBlob } from "@/lib/authenticated-image";
 import { imageExtension, downloadImageFile } from "@/lib/image-download";
 import { getManagedImagePreviewUrlFromPath, getManagedImageUrlFromPath } from "@/lib/image-path";
+import { IMAGE_QUALITY_OPTIONS, isImageQuality } from "@/lib/image-parameters";
 import { useAuthGuard } from "@/lib/use-auth-guard";
 import { cn } from "@/lib/utils";
 import {
@@ -353,7 +357,14 @@ async function managedImageToReferenceImage(item: ManagedImageSummary, role: Ref
   }
   const blob = await fetchAuthenticatedImageBlob(url);
   const file = new File([blob], managedImageFileName(item), { type: blob.type || "image/png" });
-  return fileToReferenceImage(file, role);
+  return {
+    ...await fileToReferenceImage(file, role),
+    publicUrl: url,
+  };
+}
+
+function commercePublicReferenceImageUrls(images: CommerceSuiteReferenceImage[]) {
+  return Array.from(new Set(images.map((image) => image.publicUrl?.trim() || "").filter(Boolean)));
 }
 
 async function dataUrlToFile(dataUrl: string, name: string, type: string) {
@@ -455,7 +466,11 @@ async function buildSummaryBlob(project: CommerceSuiteProject) {
   });
 }
 
-function mergeModelOptions(localOptions: readonly ModelOption[], selected: ImageModel) {
+function mergeModelOptions(
+  localOptions: readonly ModelOption[],
+  selected: ImageModel,
+  canKeepSelectedModel: (model: ImageModel) => boolean = () => true,
+) {
   const seen = new Set<string>();
   const merged: ModelOption[] = [];
   for (const option of localOptions) {
@@ -465,7 +480,7 @@ function mergeModelOptions(localOptions: readonly ModelOption[], selected: Image
     seen.add(option.value);
     merged.push(option);
   }
-  if (selected && !seen.has(selected)) {
+  if (selected && !seen.has(selected) && canKeepSelectedModel(selected)) {
     merged.unshift({ value: selected, label: selected });
   }
   return merged;
@@ -473,6 +488,7 @@ function mergeModelOptions(localOptions: readonly ModelOption[], selected: Image
 
 export default function EcommerceSuitePage() {
   const { isCheckingAuth } = useAuthGuard(undefined, "/ecommerce-suite");
+  const { clearPanel, closeDrawer, setPanel } = useMobileNav();
   const [projects, setProjects] = useState<CommerceSuiteProject[]>([]);
   const [selectedId, setSelectedId] = useState("");
   const [loading, setLoading] = useState(true);
@@ -510,7 +526,10 @@ export default function EcommerceSuitePage() {
   );
   const selectedProjectRef = useRef<CommerceSuiteProject | null>(selectedProject);
   const chatModelOptions = useMemo(() => mergeModelOptions(CHAT_MODEL_OPTIONS, selectedProject?.chatModel || DEFAULT_CHAT_MODEL), [selectedProject?.chatModel]);
-  const imageModelOptions = useMemo(() => mergeModelOptions(IMAGE_CREATION_MODEL_OPTIONS, selectedProject?.imageModel || DEFAULT_IMAGE_MODEL), [selectedProject?.imageModel]);
+  const imageModelOptions = useMemo(
+    () => mergeModelOptions(IMAGE_CREATION_MODEL_OPTIONS, selectedProject?.imageModel || DEFAULT_IMAGE_MODEL, isImageCreationModel),
+    [selectedProject?.imageModel],
+  );
   const pendingTaskIds = useMemo(() => {
     if (!selectedProject) {
       return [];
@@ -612,20 +631,20 @@ export default function EcommerceSuitePage() {
     setProjects((current) => current.map((item) => item.id === nextProject.id ? nextProject : item));
   }, []);
 
-  const createProject = async () => {
+  const createProject = useCallback(async () => {
     const project = createCommerceSuiteProject();
     await persistProject(project);
     toast.success("已创建电商套图项目");
-  };
+  }, [persistProject]);
 
-  const createProjectFromFeature = async (templateIds: readonly string[]) => {
+  const createProjectFromFeature = useCallback(async (templateIds: readonly string[]) => {
     const project = {
       ...createCommerceSuiteProject(),
       selectedTemplates: [...templateIds],
     };
     await persistProject(project);
     toast.success("已创建项目，可上传参考图继续");
-  };
+  }, [persistProject]);
 
   const applyFeatureToProject = async (templateIds: readonly string[]) => {
     const project = selectedProjectRef.current;
@@ -652,7 +671,7 @@ export default function EcommerceSuitePage() {
     }
   };
 
-  const removeProject = async (project: CommerceSuiteProject) => {
+  const removeProject = useCallback(async (project: CommerceSuiteProject) => {
     if (!window.confirm(`删除「${project.title}」？`)) {
       return;
     }
@@ -664,20 +683,20 @@ export default function EcommerceSuitePage() {
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "删除失败");
     }
-  };
+  }, [applyProjects]);
 
-  const beginRenameProject = (project: CommerceSuiteProject) => {
+  const beginRenameProject = useCallback((project: CommerceSuiteProject) => {
     setSelectedId(project.id);
     setRenamingProjectId(project.id);
     setRenamingTitle(project.title);
-  };
+  }, []);
 
-  const cancelRenameProject = () => {
+  const cancelRenameProject = useCallback(() => {
     setRenamingProjectId("");
     setRenamingTitle("");
-  };
+  }, []);
 
-  const commitRenameProject = async () => {
+  const commitRenameProject = useCallback(async () => {
     const project = projectsRef.current.find((item) => item.id === renamingProjectId);
     if (!project) {
       cancelRenameProject();
@@ -694,7 +713,172 @@ export default function EcommerceSuitePage() {
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "重命名失败");
     }
-  };
+  }, [cancelRenameProject, persistProject, renamingProjectId, renamingTitle]);
+
+  const mobileProjectPanel = useMemo(
+    () => ({
+      title: "项目列表",
+      description: `${projects.length} 个项目`,
+      content: (
+        <div className="flex h-[min(56dvh,520px)] min-h-[220px] flex-col gap-3">
+          <div className="grid grid-cols-2 gap-2">
+            <Button
+              className="h-10 rounded-xl"
+              onClick={() => {
+                void createProject();
+                closeDrawer();
+              }}
+            >
+              <Plus className="size-4" />
+              新建
+            </Button>
+            <Button variant="outline" className="h-10 rounded-xl" onClick={() => void reload()} disabled={loading}>
+              {loading ? <LoaderCircle className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
+              刷新
+            </Button>
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+            {projects.length === 0 ? (
+              <div className="grid gap-2">
+                {FEATURE_ACTIONS.map((feature) => {
+                  const Icon = feature.icon;
+                  return (
+                    <button
+                      key={feature.id}
+                      type="button"
+                      className="rounded-2xl border border-border bg-background p-3 text-left transition hover:bg-accent"
+                      onClick={() => {
+                        void createProjectFromFeature(feature.templateIds);
+                        closeDrawer();
+                      }}
+                    >
+                      <div className="flex items-center gap-2 text-sm font-semibold">
+                        <Icon className="size-4 text-[#1456f0]" />
+                        {feature.title}
+                      </div>
+                      <div className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">{feature.description}</div>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="grid gap-2">
+                {projects.map((project) => {
+                  const active = project.id === selectedProject?.id;
+                  const renaming = renamingProjectId === project.id;
+                  return (
+                    <div
+                      key={project.id}
+                      role="button"
+                      tabIndex={0}
+                      className={cn(
+                        "rounded-2xl border p-3 text-left transition",
+                        active
+                          ? "border-[#1456f0]/40 bg-[#edf4ff] text-[#123a8c] dark:bg-sky-950/30 dark:text-sky-200"
+                          : "border-border bg-background hover:bg-accent",
+                      )}
+                      onClick={() => {
+                        if (!renaming) {
+                          setSelectedId(project.id);
+                          closeDrawer();
+                        }
+                      }}
+                      onKeyDown={(event) => {
+                        if (!renaming && (event.key === "Enter" || event.key === " ")) {
+                          event.preventDefault();
+                          setSelectedId(project.id);
+                          closeDrawer();
+                        }
+                      }}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        {renaming ? (
+                          <Input
+                            value={renamingTitle}
+                            autoFocus
+                            onChange={(event) => setRenamingTitle(event.target.value)}
+                            onClick={(event) => event.stopPropagation()}
+                            onBlur={() => void commitRenameProject()}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter") {
+                                event.preventDefault();
+                                void commitRenameProject();
+                              } else if (event.key === "Escape") {
+                                event.preventDefault();
+                                cancelRenameProject();
+                              }
+                            }}
+                            className="h-8 min-w-0 flex-1 rounded-xl text-xs font-semibold"
+                          />
+                        ) : (
+                          <span className="min-w-0 flex-1 truncate text-sm font-semibold">{project.title}</span>
+                        )}
+                        <Badge variant={project.results.some((result) => isActiveTask(result.status)) ? "warning" : "secondary"}>
+                          {projectStatus(project)}
+                        </Badge>
+                      </div>
+                      <div className="mt-2 line-clamp-2 text-xs leading-5 text-muted-foreground">
+                        {project.analysisText || `${project.referenceImages.length} 张参考图 · ${project.selectedTemplates.length} 个设计`}
+                      </div>
+                      <div className="mt-2 flex items-center justify-between gap-2">
+                        <span className="min-w-0 truncate text-[11px] text-muted-foreground">{formatDateTime(project.updatedAt)}</span>
+                        <span className="flex shrink-0 items-center gap-1">
+                          <button
+                            type="button"
+                            className="flex size-7 items-center justify-center rounded-lg text-muted-foreground transition hover:bg-background hover:text-foreground"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              beginRenameProject(project);
+                            }}
+                            title="编辑名称"
+                            aria-label="编辑名称"
+                          >
+                            <Pencil className="size-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            className="flex size-7 items-center justify-center rounded-lg text-muted-foreground transition hover:bg-rose-500/10 hover:text-rose-600"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              void removeProject(project);
+                            }}
+                            title="删除项目"
+                            aria-label="删除项目"
+                          >
+                            <Trash2 className="size-3.5" />
+                          </button>
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      ),
+    }),
+    [
+      closeDrawer,
+      beginRenameProject,
+      cancelRenameProject,
+      commitRenameProject,
+      createProject,
+      createProjectFromFeature,
+      loading,
+      projects,
+      reload,
+      removeProject,
+      renamingProjectId,
+      renamingTitle,
+      selectedProject?.id,
+    ],
+  );
+
+  useEffect(() => {
+    setPanel(mobileProjectPanel);
+    return () => clearPanel();
+  }, [clearPanel, mobileProjectPanel, setPanel]);
 
   const loadReferenceLibraryImages = useCallback(async (
     scope = referenceLibraryScope,
@@ -923,6 +1107,7 @@ export default function EcommerceSuitePage() {
     try {
       const referenceIds = await ensureReferenceUploads(project);
       const latest = selectedProjectRef.current || project;
+      const publicImageUrls = commercePublicReferenceImageUrls(latest.referenceImages);
       const nextResults = latest.results.filter((result) => !templateIds.includes(result.templateId));
       const placeholders = templateIds.map((templateId) => ({
         templateId,
@@ -943,7 +1128,9 @@ export default function EcommerceSuitePage() {
             buildGenerationPrompt(pendingProject, placeholder.templateId),
             pendingProject.imageModel,
             pendingProject.size,
-            undefined,
+            isOfficialImageModel(pendingProject.imageModel) && isImageQuality(pendingProject.imageQuality)
+              ? pendingProject.imageQuality
+              : undefined,
             1,
             [{ role: "system", content: "你是电商套图视觉设计师，输出适合商品详情页的单张成品图。" }],
             "private",
@@ -952,6 +1139,8 @@ export default function EcommerceSuitePage() {
             undefined,
             undefined,
             pendingProject.id,
+            undefined,
+            publicImageUrls,
           ),
         ),
       );
@@ -1135,7 +1324,7 @@ export default function EcommerceSuitePage() {
       <section className="flex h-full min-h-0 w-full overflow-hidden rounded-[24px] border border-border bg-card text-card-foreground shadow-[0_16px_42px_rgba(24,40,72,0.08)]">
         <aside
         className={cn(
-          "relative z-20 flex h-full min-h-0 shrink-0 flex-col overflow-hidden border-r border-border bg-muted/30 transition-[width] duration-300 ease-out",
+          "relative z-20 hidden h-full min-h-0 shrink-0 flex-col overflow-hidden border-r border-border bg-muted/30 transition-[width] duration-300 ease-out lg:flex",
           leftRailExpanded ? "w-[292px]" : "w-[68px]",
         )}
         onMouseEnter={() => {
@@ -1325,6 +1514,17 @@ export default function EcommerceSuitePage() {
       </aside>
 
       <main className="grid h-full min-h-0 min-w-0 flex-1 grid-cols-[minmax(360px,0.76fr)_minmax(440px,1fr)] overflow-hidden max-xl:grid-cols-1">
+        <div className="flex items-center justify-between gap-2 border-b border-border bg-background/80 px-3 py-2 lg:hidden">
+          <span className="inline-flex size-9 shrink-0 items-center justify-center rounded-full bg-[#1456f0]/10 text-[#1456f0] dark:bg-sky-400/10 dark:text-sky-300">
+            <PackageSearch className="size-4" />
+          </span>
+          <div className="min-w-0 flex-1 truncate text-center text-sm font-semibold text-foreground">
+            {selectedProject?.title || "电商套图"}
+          </div>
+          <Button size="icon" className="size-9 rounded-full" onClick={() => void createProject()} title="新建项目" aria-label="新建项目">
+            <Plus className="size-4" />
+          </Button>
+        </div>
         <section className="hide-scrollbar h-full min-h-0 overflow-y-auto border-r border-border p-4 max-xl:border-r-0">
           {!selectedProject ? (
             <div className="grid gap-4">
@@ -1551,6 +1751,26 @@ export default function EcommerceSuitePage() {
                       </SelectContent>
                     </Select>
                   </label>
+                  {isOfficialImageModel(selectedProject.imageModel) ? (
+                    <label className="grid gap-1.5">
+                      <span className="text-xs font-medium text-muted-foreground">质量强度</span>
+                      <Select
+                        value={isImageQuality(selectedProject.imageQuality) ? selectedProject.imageQuality : "auto"}
+                        onValueChange={(value) =>
+                          updateSelectedProject({ imageQuality: isImageQuality(value) ? value : "auto" })
+                        }
+                      >
+                        <SelectTrigger className="h-10 rounded-xl">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {IMAGE_QUALITY_OPTIONS.map((option) => (
+                            <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </label>
+                  ) : null}
                 </div>
               </Card>
 

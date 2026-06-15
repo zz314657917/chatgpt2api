@@ -44,7 +44,7 @@ test("task-004 luoye browser smoke", async ({ browser }) => {
   await page.screenshot({ path: path.join(outDir, "image-authenticated.png") });
   const imageText = await page.locator("body").innerText({ timeout: 10000 });
   record("launch token returns to /image", page.url().startsWith(`${baseURL}/image`), page.url());
-  record("top nav balance visible", /余额|¥123\.45|123\.45/.test(imageText), imageText.slice(0, 600));
+  record("top nav balance visible", /余额|✪123\.45|123\.45/.test(imageText), imageText.slice(0, 600));
   record("recharge entry visible", imageText.includes("充值"), imageText.slice(0, 600));
   record("ordinary image page hides forbidden API text", !/(API Key|Token|OpenAI-compatible|OpenAI compatible|API 选择)/.test(imageText), imageText.match(/API Key|Token|OpenAI-compatible|OpenAI compatible|API 选择/)?.[0] || "");
 

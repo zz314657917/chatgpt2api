@@ -219,6 +219,20 @@ func (s *AuthService) ListUsers() []map[string]any {
 	return listManagedAuthUsersLocked(s.items, s.roles, s.accounts)
 }
 
+func (s *AuthService) DisplayNameForUser(id string) string {
+	id = util.Clean(id)
+	if id == "" {
+		return ""
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user := managedAuthUserByIDLocked(s.items, s.roles, s.accounts, id)
+	if user == nil {
+		return ""
+	}
+	return util.Clean(user["name"])
+}
+
 func (s *AuthService) ListRoles() []map[string]any {
 	s.mu.Lock()
 	defer s.mu.Unlock()

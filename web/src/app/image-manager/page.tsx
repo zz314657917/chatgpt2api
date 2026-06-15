@@ -11,6 +11,8 @@ import { writeCanvasAssetIntent } from "@/app/canvas/canvas-asset-intent";
 import { AuthenticatedImage } from "@/components/authenticated-image";
 import { DateRangeFilter } from "@/components/date-range-filter";
 import { ImageLightbox } from "@/components/image-lightbox";
+import { MobileBottomDrawer } from "@/components/mobile-bottom-drawer";
+import { useMobileNav } from "@/components/mobile-nav-context";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -438,6 +440,7 @@ function ImageManagerContent({
 }) {
   const navigate = useNavigate();
   const location = useLocation();
+  const { clearPanel, closeDrawer, openDrawer, setPanel } = useMobileNav();
   const activeLoadRef = useRef<AbortController | null>(null);
   const autoRefreshAbortRef = useRef<AbortController | null>(null);
   const imageGridRef = useRef<VirtuosoGridHandle | null>(null);
@@ -619,6 +622,11 @@ function ImageManagerContent({
   const allSelected = items.length > 0 && selectedCount === items.length;
   const libraryViewLabel = galleryView === "team" ? "团队" : galleryView === "all" ? "全部" : galleryView === "public" ? "公共" : "个人";
   const imageCountLabel = hasMoreItems ? `已加载 ${items.length} 张` : `当前 ${items.length} 张`;
+  const selectedCollectionLabel = !selectedCollectionId
+    ? "全部素材"
+    : selectedCollectionId === MANAGED_IMAGE_UNCLASSIFIED_COLLECTION_ID
+      ? "未归类"
+      : collections.find((item) => item.id === selectedCollectionId)?.name || "未命名";
   const libraryHintText = galleryView === "team" && teamStorage
     ? `容量 ${formatStorageBytes(teamStorage.used_bytes)} / ${formatStorageBytes(teamStorage.limit_bytes)}，剩余 ${formatStorageBytes(teamStorage.remaining_bytes)}。`
     : galleryView === "public"
@@ -751,14 +759,14 @@ function ImageManagerContent({
     }
   }, [clearLoadedItemsForQueryChange, collectionScopeOptions, selectedCollectionId]);
 
-  const openCollectionEditor = (target: CollectionEditTarget) => {
+  const openCollectionEditor = useCallback((target: CollectionEditTarget) => {
     if (!canMutateCollections) {
       toast.error(galleryView === "public" ? "公共素材库不允许修改素材集" : "当前账号没有素材集管理权限");
       return;
     }
     setCollectionEditTarget(target);
     setCollectionNameInput(target.mode === "rename" ? target.collection.name : "");
-  };
+  }, [canMutateCollections, galleryView]);
 
   const handleSaveCollection = async () => {
     if (!canMutateCollections || !collectionEditTarget || collectionMutating) {
@@ -1105,7 +1113,7 @@ function ImageManagerContent({
     }
   }, [buildImageListFilters, currentCacheKey, hasMoreItems, isLoading, isLoadingMore, nextCursor]);
 
-  const handleGalleryViewChange = (view: ImageGalleryView) => {
+  const handleGalleryViewChange = useCallback((view: ImageGalleryView) => {
     if (view === galleryView) {
       return;
     }
@@ -1114,13 +1122,13 @@ function ImageManagerContent({
     setSelectedImageIds({});
     clearLoadedItemsForQueryChange();
     setLoadError("");
-  };
+  }, [clearLoadedItemsForQueryChange, galleryView]);
 
-  const updateCollectionFilter = (collectionId: string) => {
+  const updateCollectionFilter = useCallback((collectionId: string) => {
     setSelectedCollectionId(collectionId);
     setSelectedImageIds({});
     clearLoadedItemsForQueryChange();
-  };
+  }, [clearLoadedItemsForQueryChange]);
 
   const updateSearchKeyword = (value: string) => {
     setSearchKeyword(value);
@@ -1914,145 +1922,206 @@ function ImageManagerContent({
     </div>
   );
 
+  const renderLibraryControls = useCallback((compact = false, closeAfterSelect = false) => (
+    <>
+      <div className={cn("flex shrink-0 min-w-0 flex-col justify-start gap-1 overflow-hidden", compact ? "" : "h-[64px]")}>
+        <div className="inline-flex h-10 w-full shrink-0 items-center rounded-lg border border-border bg-muted/50 p-1">
+          {[
+            { value: "mine" as const, label: "个人", icon: ImageIcon },
+            ...(hasTeamLibrary ? [{ value: "team" as const, label: "团队", icon: Users }] : []),
+            { value: "public" as const, label: "公共", icon: Globe2 },
+          ].map((option) => {
+            const Icon = option.icon;
+            const active = galleryView === option.value;
+            return (
+              <button
+                key={option.value}
+                type="button"
+                className={`inline-flex h-8 min-w-0 flex-1 basis-0 items-center justify-center gap-1.5 overflow-hidden whitespace-nowrap rounded-md px-3 text-sm font-medium leading-none transition ${
+                  active
+                    ? "bg-background text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+                onClick={() => {
+                  handleGalleryViewChange(option.value);
+                  if (closeAfterSelect) {
+                    closeDrawer();
+                  }
+                }}
+                aria-pressed={active}
+              >
+                <Icon className="size-4 shrink-0" />
+                <span className="truncate">{option.label}</span>
+              </button>
+            );
+          })}
+        </div>
+        <div className="flex h-5 shrink-0 min-w-0 items-center gap-x-2 overflow-hidden text-sm leading-5 text-muted-foreground">
+          <ImageIcon className="size-4 shrink-0" />
+          <span className="shrink-0">{libraryViewLabel}</span>
+          <span className="min-w-0 truncate">{imageCountLabel}</span>
+        </div>
+      </div>
+
+      <div className="flex min-w-0 flex-col gap-2 rounded-xl border border-border bg-background/70 p-2">
+        <div className="flex items-center justify-between gap-2">
+          <div className="inline-flex min-w-0 items-center gap-1.5 text-sm font-medium text-foreground">
+            <Folder className="size-4 text-muted-foreground" />
+            <span>素材集</span>
+          </div>
+          {canMutateCollections ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-7 shrink-0 rounded-lg px-2 text-xs"
+              onClick={() => openCollectionEditor({ mode: "create" })}
+            >
+              <FolderPlus className="size-3.5" />
+              新建
+            </Button>
+          ) : null}
+        </div>
+        <div className={cn("flex flex-col gap-1 overflow-y-auto pr-1", compact ? "max-h-[42dvh]" : "max-h-44")}>
+          <button
+            type="button"
+            className={cn(
+              "flex h-9 min-w-0 items-center justify-between gap-2 rounded-lg px-2 text-left text-sm transition",
+              !selectedCollectionId
+                ? "bg-[#eef4ff] text-[#1456f0] dark:bg-sky-950/30 dark:text-sky-300"
+                : "text-muted-foreground hover:bg-muted hover:text-foreground",
+            )}
+            onClick={() => {
+              updateCollectionFilter("");
+              if (closeAfterSelect) {
+                closeDrawer();
+              }
+            }}
+          >
+            <span className="min-w-0 truncate">全部素材</span>
+            <span className="shrink-0 rounded-full bg-background px-2 py-0.5 text-[11px] text-muted-foreground">{items.length}</span>
+          </button>
+          <button
+            type="button"
+            className={cn(
+              "flex h-9 min-w-0 items-center justify-between gap-2 rounded-lg px-2 text-left text-sm transition",
+              selectedCollectionId === MANAGED_IMAGE_UNCLASSIFIED_COLLECTION_ID
+                ? "bg-[#eef4ff] text-[#1456f0] dark:bg-sky-950/30 dark:text-sky-300"
+                : "text-muted-foreground hover:bg-muted hover:text-foreground",
+            )}
+            onClick={() => {
+              updateCollectionFilter(MANAGED_IMAGE_UNCLASSIFIED_COLLECTION_ID);
+              if (closeAfterSelect) {
+                closeDrawer();
+              }
+            }}
+          >
+            <span className="min-w-0 truncate">未归类</span>
+            <span className="shrink-0 rounded-full bg-background px-2 py-0.5 text-[11px] text-muted-foreground">{unclassifiedCount}</span>
+          </button>
+          {collections.length > 0 ? collections.map((collection) => {
+            const active = selectedCollectionId === collection.id;
+            return (
+              <div
+                key={collection.id}
+                className={cn(
+                  "group flex min-w-0 items-center gap-1 rounded-lg transition",
+                  active ? "bg-[#eef4ff] text-[#1456f0] dark:bg-sky-950/30 dark:text-sky-300" : "text-muted-foreground hover:bg-muted hover:text-foreground",
+                )}
+              >
+                <button
+                  type="button"
+                  className="flex h-9 min-w-0 flex-1 items-center justify-between gap-2 px-2 text-left text-sm"
+                  onClick={() => {
+                    updateCollectionFilter(collection.id);
+                    if (closeAfterSelect) {
+                      closeDrawer();
+                    }
+                  }}
+                  title={collection.name}
+                >
+                  <span className="min-w-0 truncate">{collection.name}</span>
+                  <span className="shrink-0 rounded-full bg-background px-2 py-0.5 text-[11px] text-muted-foreground">{collection.images_count}</span>
+                </button>
+                {canMutateCollections && active ? (
+                  <div className="flex shrink-0 items-center pr-1">
+                    <button
+                      type="button"
+                      className="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition hover:bg-background hover:text-foreground"
+                      onClick={() => openCollectionEditor({ mode: "rename", collection })}
+                      title="重命名素材集"
+                      aria-label="重命名素材集"
+                    >
+                      <Pencil className="size-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      className="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition hover:bg-rose-50 hover:text-rose-600"
+                      onClick={() => setCollectionDeleteTarget({ collection })}
+                      title="删除素材集"
+                      aria-label="删除素材集"
+                    >
+                      <Trash2 className="size-3.5" />
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+            );
+          }) : (
+            <div className="rounded-lg border border-dashed border-border px-3 py-2 text-xs text-muted-foreground">
+              {canMutateCollections ? "暂无素材集，可先新建角色、场景或风格分组。" : "暂无素材集"}
+            </div>
+          )}
+        </div>
+        {collectionReadOnlyHint ? (
+          <div className="rounded-lg border border-dashed border-border px-3 py-2 text-xs leading-5 text-muted-foreground">
+            {collectionReadOnlyHint}
+          </div>
+        ) : null}
+      </div>
+    </>
+  ), [
+    canMutateCollections,
+    closeDrawer,
+    collectionReadOnlyHint,
+    collections,
+    galleryView,
+    handleGalleryViewChange,
+    hasTeamLibrary,
+    imageCountLabel,
+    items.length,
+    libraryViewLabel,
+    openCollectionEditor,
+    selectedCollectionId,
+    unclassifiedCount,
+    updateCollectionFilter,
+  ]);
+
+  const mobileLibraryPanel = useMemo(
+    () => ({
+      title: "素材库",
+      description: `${libraryViewLabel} · ${imageCountLabel}`,
+      content: (
+        <div className="h-[min(56dvh,520px)] min-h-[220px] overflow-y-auto pr-1">
+          <div className="grid gap-3">
+            {renderLibraryControls(true, true)}
+          </div>
+        </div>
+      ),
+    }),
+    [imageCountLabel, libraryViewLabel, renderLibraryControls],
+  );
+
+  useEffect(() => {
+    setPanel(mobileLibraryPanel);
+    return () => clearPanel();
+  }, [clearPanel, mobileLibraryPanel, setPanel]);
+
   return (
     <section className="flex h-full min-h-0 flex-col gap-4 pt-3 pb-20 sm:pb-24">
       <div className="grid min-w-0 gap-4 lg:grid-cols-[300px_minmax(0,1fr)] xl:grid-cols-[320px_minmax(0,1fr)_320px]">
-        <aside className="flex min-w-0 flex-col gap-3 rounded-[18px] border border-border bg-background/80 p-3 shadow-[0_6px_20px_rgba(15,23,42,0.04)] sm:p-4 lg:sticky lg:top-4 lg:self-start">
-          <div className="flex h-[64px] shrink-0 min-w-0 flex-col justify-start gap-1 overflow-hidden">
-            <div className="inline-flex h-10 w-full shrink-0 items-center rounded-lg border border-border bg-muted/50 p-1">
-              {[
-                { value: "mine" as const, label: "个人", icon: ImageIcon },
-                ...(hasTeamLibrary ? [{ value: "team" as const, label: "团队", icon: Users }] : []),
-                { value: "public" as const, label: "公共", icon: Globe2 },
-              ].map((option) => {
-                const Icon = option.icon;
-                const active = galleryView === option.value;
-                return (
-                  <button
-                    key={option.value}
-                    type="button"
-                    className={`inline-flex h-8 min-w-0 flex-1 basis-0 items-center justify-center gap-1.5 overflow-hidden whitespace-nowrap rounded-md px-3 text-sm font-medium leading-none transition ${
-                      active
-                        ? "bg-background text-foreground shadow-sm"
-                        : "text-muted-foreground hover:text-foreground"
-                    }`}
-                    onClick={() => handleGalleryViewChange(option.value)}
-                    aria-pressed={active}
-                  >
-                    <Icon className="size-4 shrink-0" />
-                    <span className="truncate">{option.label}</span>
-                  </button>
-                );
-              })}
-            </div>
-            <div className="flex h-5 shrink-0 min-w-0 items-center gap-x-2 overflow-hidden text-sm leading-5 text-muted-foreground">
-              <ImageIcon className="size-4 shrink-0" />
-              <span className="shrink-0">{libraryViewLabel}</span>
-              <span className="min-w-0 truncate">{imageCountLabel}</span>
-            </div>
-          </div>
-
-          <div className="flex min-w-0 flex-col gap-2 rounded-xl border border-border bg-background/70 p-2">
-            <div className="flex items-center justify-between gap-2">
-              <div className="inline-flex min-w-0 items-center gap-1.5 text-sm font-medium text-foreground">
-                <Folder className="size-4 text-muted-foreground" />
-                <span>素材集</span>
-              </div>
-              {canMutateCollections ? (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="h-7 shrink-0 rounded-lg px-2 text-xs"
-                  onClick={() => openCollectionEditor({ mode: "create" })}
-                >
-                  <FolderPlus className="size-3.5" />
-                  新建
-                </Button>
-              ) : null}
-            </div>
-            <div className="flex max-h-44 flex-col gap-1 overflow-y-auto pr-1">
-              <button
-                type="button"
-                className={cn(
-                  "flex h-9 min-w-0 items-center justify-between gap-2 rounded-lg px-2 text-left text-sm transition",
-                  !selectedCollectionId
-                    ? "bg-[#eef4ff] text-[#1456f0] dark:bg-sky-950/30 dark:text-sky-300"
-                    : "text-muted-foreground hover:bg-muted hover:text-foreground",
-                )}
-                onClick={() => updateCollectionFilter("")}
-              >
-                <span className="min-w-0 truncate">全部素材</span>
-                <span className="shrink-0 rounded-full bg-background px-2 py-0.5 text-[11px] text-muted-foreground">{items.length}</span>
-              </button>
-              <button
-                type="button"
-                className={cn(
-                  "flex h-9 min-w-0 items-center justify-between gap-2 rounded-lg px-2 text-left text-sm transition",
-                  selectedCollectionId === MANAGED_IMAGE_UNCLASSIFIED_COLLECTION_ID
-                    ? "bg-[#eef4ff] text-[#1456f0] dark:bg-sky-950/30 dark:text-sky-300"
-                    : "text-muted-foreground hover:bg-muted hover:text-foreground",
-                )}
-                onClick={() => updateCollectionFilter(MANAGED_IMAGE_UNCLASSIFIED_COLLECTION_ID)}
-              >
-                <span className="min-w-0 truncate">未归类</span>
-                <span className="shrink-0 rounded-full bg-background px-2 py-0.5 text-[11px] text-muted-foreground">{unclassifiedCount}</span>
-              </button>
-              {collections.length > 0 ? collections.map((collection) => {
-                const active = selectedCollectionId === collection.id;
-                return (
-                  <div
-                    key={collection.id}
-                    className={cn(
-                      "group flex min-w-0 items-center gap-1 rounded-lg transition",
-                      active ? "bg-[#eef4ff] text-[#1456f0] dark:bg-sky-950/30 dark:text-sky-300" : "text-muted-foreground hover:bg-muted hover:text-foreground",
-                    )}
-                  >
-                    <button
-                      type="button"
-                      className="flex h-9 min-w-0 flex-1 items-center justify-between gap-2 px-2 text-left text-sm"
-                      onClick={() => updateCollectionFilter(collection.id)}
-                      title={collection.name}
-                    >
-                      <span className="min-w-0 truncate">{collection.name}</span>
-                      <span className="shrink-0 rounded-full bg-background px-2 py-0.5 text-[11px] text-muted-foreground">{collection.images_count}</span>
-                    </button>
-                    {canMutateCollections && active ? (
-                      <div className="flex shrink-0 items-center pr-1">
-                        <button
-                          type="button"
-                          className="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition hover:bg-background hover:text-foreground"
-                          onClick={() => openCollectionEditor({ mode: "rename", collection })}
-                          title="重命名素材集"
-                          aria-label="重命名素材集"
-                        >
-                          <Pencil className="size-3.5" />
-                        </button>
-                        <button
-                          type="button"
-                          className="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition hover:bg-rose-50 hover:text-rose-600"
-                          onClick={() => setCollectionDeleteTarget({ collection })}
-                          title="删除素材集"
-                          aria-label="删除素材集"
-                        >
-                          <Trash2 className="size-3.5" />
-                        </button>
-                      </div>
-                    ) : null}
-                  </div>
-                );
-              }) : (
-                <div className="rounded-lg border border-dashed border-border px-3 py-2 text-xs text-muted-foreground">
-                  {canMutateCollections ? "暂无素材集，可先新建角色、场景或风格分组。" : "暂无素材集"}
-                </div>
-              )}
-            </div>
-            {collectionReadOnlyHint ? (
-              <div className="rounded-lg border border-dashed border-border px-3 py-2 text-xs leading-5 text-muted-foreground">
-                {collectionReadOnlyHint}
-              </div>
-            ) : null}
-          </div>
+        <aside className="hidden min-w-0 flex-col gap-3 rounded-[18px] border border-border bg-background/80 p-3 shadow-[0_6px_20px_rgba(15,23,42,0.04)] sm:p-4 lg:sticky lg:top-4 lg:flex lg:self-start">
+          {renderLibraryControls()}
 
           <div className="flex min-w-0 flex-col gap-2">
             <div className="flex items-center justify-between gap-2">
@@ -2068,7 +2137,7 @@ function ImageManagerContent({
                 </button>
               ) : null}
             </div>
-            <div className="md:hidden">
+            <div className="lg:hidden">
               <div className="flex items-center gap-2">
                 <div className="min-w-0 flex-1">
                   {renderSearchFilter("搜索图片")}
@@ -2134,7 +2203,7 @@ function ImageManagerContent({
               </div>
             </div>
 
-            <div className="hidden flex-col gap-2 md:flex">
+            <div className="hidden flex-col gap-2 lg:flex">
               <div className="grid grid-cols-1 gap-2 lg:grid-cols-2">
                 {renderDateRangeFilter("w-full sm:w-full")}
                 {renderSearchFilter()}
@@ -2154,6 +2223,62 @@ function ImageManagerContent({
         </aside>
 
         <div className="min-w-0">
+        <div className="mb-3 grid gap-2 lg:hidden">
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              className="flex h-10 min-w-0 flex-1 items-center gap-2 rounded-full border border-border bg-background px-3 text-left text-sm font-medium"
+              onClick={openDrawer}
+            >
+              <Folder className="size-4 shrink-0 text-muted-foreground" />
+              <span className="min-w-0 flex-1 truncate">
+                {libraryViewLabel} · {selectedCollectionLabel}
+              </span>
+              <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">{items.length}</span>
+            </button>
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              className={cn(
+                "size-10 rounded-full",
+                hasActiveFilters && "border-[#bfdbfe] bg-[#eef4ff] text-[#1456f0] dark:border-sky-900/70 dark:bg-sky-950/30 dark:text-sky-300",
+              )}
+              onClick={() => setIsMobileFiltersOpen(true)}
+              aria-label="打开筛选"
+              title="筛选"
+            >
+              <SlidersHorizontal className="size-4" />
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              className="size-10 rounded-full"
+              disabled={isLoading || isMutatingImages}
+              onClick={() => void loadImages({ force: true })}
+              aria-label="刷新素材库"
+              title="刷新素材库"
+            >
+              <RefreshCw className={cn("size-4", isLoading && "animate-spin")} />
+            </Button>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="min-w-0 flex-1">{renderSearchFilter("搜索图片")}</div>
+          </div>
+          {activeFilterLabels.length > 0 ? (
+            <div className="hide-scrollbar flex gap-1.5 overflow-x-auto">
+              {activeFilterLabels.map((label) => (
+                <span key={label} className="shrink-0 rounded-full bg-muted px-2.5 py-1 text-[11px] font-medium text-muted-foreground">
+                  {label}
+                </span>
+              ))}
+              <button type="button" className="shrink-0 rounded-full px-2.5 py-1 text-[11px] font-medium text-[#1456f0]" onClick={clearImageFilters}>
+                清除
+              </button>
+            </div>
+          ) : null}
+        </div>
         <Popover open={isImageActionsOpen} onOpenChange={setIsImageActionsOpen}>
           <div className="fixed right-4 bottom-[calc(env(safe-area-inset-bottom)+1rem)] z-40 sm:right-6 sm:bottom-6">
             <PopoverTrigger asChild>
@@ -2328,7 +2453,7 @@ function ImageManagerContent({
           </div>
         </Popover>
 
-        <div className="h-[calc(100dvh-14rem)] min-h-[360px] overflow-hidden rounded-[20px] sm:min-h-[520px]">
+        <div className="h-[calc(100dvh-11rem)] min-h-[420px] overflow-hidden rounded-[20px] sm:min-h-[520px] lg:h-[calc(100dvh-14rem)]">
           {showImageLoadingState ? (
             <div className="flex h-full flex-col items-center justify-center gap-3 px-6 py-14 text-center">
               <div className="rounded-[16px] bg-[#edf4ff] p-4 text-[#1456f0] ring-1 ring-blue-100">
@@ -2753,6 +2878,34 @@ function ImageManagerContent({
           )}
         </aside>
       </div>
+      <MobileBottomDrawer
+        open={isMobileFiltersOpen}
+        onOpenChange={setIsMobileFiltersOpen}
+        title={<span className="inline-flex items-center gap-2"><SlidersHorizontal className="size-4" />筛选素材</span>}
+        description={activeFilterCount > 0 ? `${activeFilterCount} 个筛选已启用` : "按时间、格式、方向和标签筛选"}
+        contentClassName="px-4"
+      >
+        <div className="grid gap-3">
+          {renderSearchFilter("搜索图片")}
+          {renderDateRangeFilter("w-full sm:w-full")}
+          <div className="grid grid-cols-2 gap-2">{renderFilterControls()}</div>
+          {renderTagFilters()}
+          {renderAutoRefreshControls("mobile", "flex min-w-0 items-center gap-2")}
+          <div className="flex h-9 min-w-0 items-center gap-1.5 rounded-xl border border-border bg-background/60 px-3 text-xs leading-none text-muted-foreground">
+            <Info className="size-3.5 shrink-0" />
+            <span className="min-w-0 truncate">{libraryHintText}</span>
+          </div>
+          <Button
+            type="button"
+            variant="outline"
+            className="h-10 rounded-full text-sm shadow-none"
+            onClick={clearImageFilters}
+            disabled={!hasActiveFilters}
+          >
+            重置筛选
+          </Button>
+        </div>
+      </MobileBottomDrawer>
       <ImageLightbox
         images={lightboxImages}
         currentIndex={lightboxIndex}

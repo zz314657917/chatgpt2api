@@ -164,6 +164,154 @@ func TestImageTaskServicePublicTaskIncludesPendingBillingCharge(t *testing.T) {
 	}
 }
 
+func TestImageTaskServiceStoresResolvedModelFromHandlerResult(t *testing.T) {
+	handler := func(context.Context, Identity, map[string]any) (map[string]any, error) {
+		return map[string]any{
+			"model":       util.ImageModelGPT55,
+			"output_type": "text",
+			"data":        []map[string]any{{"text_response": "hello"}},
+		}, nil
+	}
+	svc := newTestImageTaskService(t, failingImageTaskHandler, failingImageTaskHandler, handler, func() int { return 30 })
+	billing := &recordingExternalTaskBilling{}
+	svc.SetExternalBilling(billing)
+	identity := Identity{ID: "sub2api:42", OwnerID: "sub2api:42", Role: AuthRoleUser, Provider: AuthProviderSub2API}
+
+	_, err := svc.SubmitChat(context.Background(), identity, "chat-resolved-model", "hello", util.ImageModelAuto, []map[string]any{{"role": "user", "content": "hello"}}, true)
+	if err != nil {
+		t.Fatalf("SubmitChat() error = %v", err)
+	}
+	waitForTaskStatus(t, svc, identity, "chat-resolved-model", TaskStatusSuccess)
+	got := svc.ListTasks(identity, []string{"chat-resolved-model"})
+	item := got["items"].([]map[string]any)[0]
+	if model := util.Clean(item["model"]); model != util.ImageModelGPT55 {
+		t.Fatalf("stored model = %q, want %q in %#v", model, util.ImageModelGPT55, item)
+	}
+	if !reflect.DeepEqual(billing.calls, []string{"reserve", "commit"}) {
+		t.Fatalf("external billing calls = %#v", billing.calls)
+	}
+	if model := util.Clean(billing.commitTask["model"]); model != util.ImageModelGPT55 {
+		t.Fatalf("external billing task model = %q, want %q in %#v", model, util.ImageModelGPT55, billing.commitTask)
+	}
+}
+
+func TestImageTaskServiceExternalBillingUsesRawAPIMartCost(t *testing.T) {
+	handler := func(context.Context, Identity, map[string]any) (map[string]any, error) {
+		return map[string]any{"data": []map[string]any{{"url": "https://example.test/image.png"}}}, nil
+	}
+	svc := newTestImageTaskService(t, handler, handler, handler, func() int { return 30 })
+	billing := &recordingExternalTaskBilling{}
+	svc.SetExternalBilling(billing)
+	identity := Identity{ID: "sub2api:42", OwnerID: "sub2api:42", Role: AuthRoleUser, Provider: AuthProviderSub2API}
+
+	_, err := svc.SubmitEdit(context.Background(), identity, "official-edit-cost", "edit", util.ImageModelGPTOfficial, "16:9", "medium", "https://base.test", []any{"image"}, 1, nil)
+	if err != nil {
+		t.Fatalf("SubmitEdit() error = %v", err)
+	}
+	waitForTaskStatus(t, svc, identity, "official-edit-cost", TaskStatusSuccess)
+
+	if len(billing.reserveAmounts) == 0 || billing.reserveAmounts[0] != 0.026 {
+		t.Fatalf("first external reserve amount = %#v, want 0.026", billing.reserveAmounts)
+	}
+	if billing.commitAmount != 0.026 {
+		t.Fatalf("external commit amount = %.12f, want 0.026", billing.commitAmount)
+	}
+	if billing.reserveUnit != imageTaskAmountUnitAPIMartCost || billing.commitUnit != imageTaskAmountUnitAPIMartCost {
+		t.Fatalf("external amount units reserve=%q commit=%q, want %q", billing.reserveUnit, billing.commitUnit, imageTaskAmountUnitAPIMartCost)
+	}
+	got := svc.ListTasks(identity, []string{"official-edit-cost"})
+	item := got["items"].([]map[string]any)[0]
+	if util.ToInt(item["billing_consumed_amount"], -1) != 219 {
+		t.Fatalf("local consumed amount = %#v, want 219 in %#v", item["billing_consumed_amount"], item)
+	}
+}
+
+func TestImageTaskServiceExternalBillingUsesTaskStatusCostOverride(t *testing.T) {
+	handler := func(context.Context, Identity, map[string]any) (map[string]any, error) {
+		return map[string]any{
+			"external_billing_consumed_amount": 0.11055,
+			"data": []map[string]any{
+				{"url": "https://example.test/image.png"},
+			},
+		}, nil
+	}
+	svc := newTestImageTaskService(t, handler, handler, handler, func() int { return 30 })
+	billing := &recordingExternalTaskBilling{}
+	svc.SetExternalBilling(billing)
+	identity := Identity{ID: "sub2api:42", OwnerID: "sub2api:42", Role: AuthRoleUser, Provider: AuthProviderSub2API}
+
+	_, err := svc.submit(context.Background(), identity, "official-edit-status-cost", "edit", map[string]any{
+		"prompt":        "edit",
+		"model":         util.ImageModelGPTOfficial,
+		"size":          "16:9",
+		"quality":       "medium",
+		"images":        []any{"image"},
+		"output_format": "png",
+		"base_url":      "https://base.test",
+	})
+	if err != nil {
+		t.Fatalf("submit() error = %v", err)
+	}
+	waitForTaskStatus(t, svc, identity, "official-edit-status-cost", TaskStatusSuccess)
+
+	if len(billing.commitAmounts) != 2 || billing.commitAmounts[0] != 0.026 || billing.commitAmounts[1] != 0.08455 {
+		t.Fatalf("external commit amounts = %#v, want [0.026 0.08455]", billing.commitAmounts)
+	}
+	if len(billing.reserveAmounts) != 2 || billing.reserveAmounts[0] != 0.026 || billing.reserveAmounts[1] != 0.08455 {
+		t.Fatalf("external reserve amounts = %#v, want [0.026 0.08455]", billing.reserveAmounts)
+	}
+	if billing.reserveUnit != imageTaskAmountUnitAPIMartCost || billing.commitUnit != imageTaskAmountUnitAPIMartCost {
+		t.Fatalf("external amount units reserve=%q commit=%q, want %q", billing.reserveUnit, billing.commitUnit, imageTaskAmountUnitAPIMartCost)
+	}
+	got := svc.ListTasks(identity, []string{"official-edit-status-cost"})
+	item := got["items"].([]map[string]any)[0]
+	if util.ToInt(item["billing_consumed_amount"], -1) != 929 {
+		t.Fatalf("local consumed amount = %#v, want 929 in %#v", item["billing_consumed_amount"], item)
+	}
+}
+
+func TestImageTaskServiceAutoImageModelUsesResolvedBridgeCostModel(t *testing.T) {
+	handler := func(context.Context, Identity, map[string]any) (map[string]any, error) {
+		return map[string]any{
+			"model": util.ImageModelGPT,
+			"data": []map[string]any{
+				{"url": "https://example.test/image.png"},
+			},
+		}, nil
+	}
+	svc := newTestImageTaskService(t, handler, handler, handler, func() int { return 30 })
+	billing := &recordingExternalTaskBilling{}
+	svc.SetExternalBilling(billing)
+	identity := Identity{ID: "sub2api:42", OwnerID: "sub2api:42", Role: AuthRoleUser, Provider: AuthProviderSub2API}
+
+	_, err := svc.SubmitGeneration(context.Background(), identity, "auto-cost", "draw", util.ImageModelAuto, "1024x1024", "high", "https://base.test", 1, nil)
+	if err != nil {
+		t.Fatalf("SubmitGeneration() error = %v", err)
+	}
+	waitForTaskStatus(t, svc, identity, "auto-cost", TaskStatusSuccess)
+
+	if len(billing.reserveAmounts) == 0 || billing.reserveAmounts[0] != 0.006 {
+		t.Fatalf("external reserve amount = %#v, want 0.006", billing.reserveAmounts)
+	}
+	if billing.commitAmount != 0.006 {
+		t.Fatalf("external commit amount = %.12f, want 0.006", billing.commitAmount)
+	}
+	if billing.reserveModel != util.ImageModelGPT || billing.commitModel != util.ImageModelGPT {
+		t.Fatalf("external billing models reserve=%q commit=%q, want %q", billing.reserveModel, billing.commitModel, util.ImageModelGPT)
+	}
+	if billing.reserveUnit != imageTaskAmountUnitAPIMartCost || billing.commitUnit != imageTaskAmountUnitAPIMartCost {
+		t.Fatalf("external amount units reserve=%q commit=%q, want %q", billing.reserveUnit, billing.commitUnit, imageTaskAmountUnitAPIMartCost)
+	}
+	got := svc.ListTasks(identity, []string{"auto-cost"})
+	item := got["items"].([]map[string]any)[0]
+	if model := util.Clean(item["model"]); model != util.ImageModelGPT {
+		t.Fatalf("stored model = %q, want %q", model, util.ImageModelGPT)
+	}
+	if util.ToInt(item["billing_consumed_amount"], -1) != 51 {
+		t.Fatalf("local consumed amount = %#v, want 51 in %#v", item["billing_consumed_amount"], item)
+	}
+}
+
 func TestImageTaskServiceRejectsBlankPromptBeforeQueueing(t *testing.T) {
 	svc := newTestImageTaskService(t, failingImageTaskHandler, failingImageTaskHandler, failingImageTaskHandler, func() int { return 30 })
 	identity := Identity{ID: "alice", Name: "Alice", Role: "user"}
@@ -1682,7 +1830,7 @@ func TestImageTaskServiceRefundsExternalReserveWhenTaskSaveFails(t *testing.T) {
 		t.Fatalf("external billing calls = %#v", billing.calls)
 	}
 	if billing.refundAmount != billing.reserveAmount {
-		t.Fatalf("refund amount = %d, reserve amount = %d", billing.refundAmount, billing.reserveAmount)
+		t.Fatalf("refund amount = %v, reserve amount = %v", billing.refundAmount, billing.reserveAmount)
 	}
 	if got := svc.ListTasks(identity, []string{"save-fails"}); len(got["items"].([]map[string]any)) != 0 {
 		t.Fatalf("failed save task should not remain visible: %#v", got)
@@ -1715,25 +1863,39 @@ func (s *failingJSONDocumentStore) DeleteJSONDocument(name string) error {
 }
 
 type recordingExternalTaskBilling struct {
-	calls         []string
-	reserveAmount int
-	refundAmount  int
-	commitAmount  int
+	calls          []string
+	reserveAmount  float64
+	reserveAmounts []float64
+	reserveModel   string
+	reserveUnit    string
+	refundAmount   float64
+	commitAmount   float64
+	commitAmounts  []float64
+	commitModel    string
+	commitUnit     string
+	commitTask     map[string]any
 }
 
-func (b *recordingExternalTaskBilling) ReserveTask(_ context.Context, _ Identity, _ map[string]any, amount int, _ BillingReference) error {
+func (b *recordingExternalTaskBilling) ReserveTask(_ context.Context, _ Identity, _ map[string]any, amount float64, ref BillingReference) error {
 	b.calls = append(b.calls, "reserve")
 	b.reserveAmount = amount
+	b.reserveAmounts = append(b.reserveAmounts, amount)
+	b.reserveModel = ref.Model
+	b.reserveUnit = ref.AmountUnit
 	return nil
 }
 
-func (b *recordingExternalTaskBilling) CommitTask(_ context.Context, _ Identity, _ map[string]any, amount int, _ BillingReference) error {
+func (b *recordingExternalTaskBilling) CommitTask(_ context.Context, _ Identity, task map[string]any, amount float64, ref BillingReference) error {
 	b.calls = append(b.calls, "commit")
 	b.commitAmount = amount
+	b.commitAmounts = append(b.commitAmounts, amount)
+	b.commitModel = ref.Model
+	b.commitUnit = ref.AmountUnit
+	b.commitTask = publicTask(task)
 	return nil
 }
 
-func (b *recordingExternalTaskBilling) RefundTask(_ context.Context, _ Identity, _ map[string]any, amount int, _ BillingReference) error {
+func (b *recordingExternalTaskBilling) RefundTask(_ context.Context, _ Identity, _ map[string]any, amount float64, _ BillingReference) error {
 	b.calls = append(b.calls, "refund")
 	b.refundAmount = amount
 	return nil
