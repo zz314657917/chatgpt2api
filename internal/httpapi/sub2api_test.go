@@ -65,6 +65,13 @@ func TestSub2APIChatPayloadRoutesAutoToDefaultChatModel(t *testing.T) {
 	}
 }
 
+func TestSub2APIImagePayloadNormalizesDecimalRatio(t *testing.T) {
+	payload := sub2APIImageJSONPayload(map[string]any{"prompt": "draw", "model": util.ImageModelGPT, "size": "1:1.4"})
+	if payload["size"] != "5:7" {
+		t.Fatalf("size = %#v, want 5:7", payload["size"])
+	}
+}
+
 func TestSub2APIImageBatchesPassesRequestedCountInOneCall(t *testing.T) {
 	app := &App{}
 	callCount := 0
