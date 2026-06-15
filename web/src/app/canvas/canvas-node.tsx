@@ -802,14 +802,6 @@ export function SmartCanvasTopBar({
             <PopoverContent align="end" sideOffset={8} className={cn("w-44 rounded-2xl border p-2", canvasPanelClass)}>
               <div className="space-y-1">
                 <ToolbarMenuButton icon={<Clock3 className="size-4" />} label={`最近操作${operationCount ? ` ${operationCount}` : ""}`} onClick={onOperationHistoryToggle} />
-                <ToolbarMenuButton icon={<Sparkles className="size-4" />} label="AI提示词" onClick={() => onAddNode("llm")} />
-                <ToolbarMenuButton icon={<WandSparkles className="size-4" />} label="图片生成" onClick={() => onAddNode("image_generation")} />
-                <ToolbarMenuButton icon={<FileText className="size-4" />} label="提示词" onClick={() => onAddNode("prompt")} />
-                <ToolbarMenuButton icon={<Repeat2 className="size-4" />} label="循环" onClick={() => onAddNode("loop")} />
-                <ToolbarMenuButton icon={<Layers3 className="size-4" />} label="组" onClick={() => onAddNode("group")} />
-                <ToolbarMenuButton icon={<Clapperboard className="size-4" />} label="视频" onClick={() => onAddNode("video_generation")} />
-                <ToolbarMenuButton icon={<CircleDot className="size-4" />} label="Output" onClick={() => onAddNode("result")} />
-                <ToolbarMenuButton icon={<CircleHelp className="size-4" />} label="帮助" onClick={onHelpClick} />
                 <ToolbarMenuButton icon={<Eraser className="size-4" />} label={`清理空白节点${blankNodeCount ? ` ${blankNodeCount}` : ""}`} onClick={onCleanupBlankNodes} disabled={blankNodeCount === 0} />
               </div>
             </PopoverContent>
