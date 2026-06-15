@@ -13,6 +13,7 @@ import (
 	"image/color"
 	"image/jpeg"
 	"image/png"
+	"math/big"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -1587,7 +1588,9 @@ func AssistantHistoryMessages(messages []map[string]any) []string {
 }
 
 func NormalizeImageGenerationSize(size string) string {
-	switch strings.ToLower(strings.TrimSpace(size)) {
+	trimmed := strings.TrimSpace(size)
+	normalized := strings.ToLower(trimmed)
+	switch normalized {
 	case "1080p":
 		return "1080x1080"
 	case "2k":
@@ -1605,8 +1608,56 @@ func NormalizeImageGenerationSize(size string) string {
 	case "128:128":
 		return "128x128"
 	default:
-		return strings.TrimSpace(size)
+		if ratio := normalizeImageGenerationRatio(trimmed); ratio != "" {
+			return ratio
+		}
+		return trimmed
 	}
+}
+
+func normalizeImageGenerationRatio(size string) string {
+	normalized := strings.ToLower(strings.TrimSpace(size))
+	normalized = strings.ReplaceAll(normalized, " ", "")
+	normalized = strings.ReplaceAll(normalized, "×", "x")
+	match := regexp.MustCompile(`^(\d+(?:\.\d+)?)([:x])(\d+(?:\.\d+)?)$`).FindStringSubmatch(normalized)
+	if len(match) != 4 {
+		return ""
+	}
+	if match[2] == "x" && !strings.Contains(match[1], ".") && !strings.Contains(match[3], ".") {
+		return ""
+	}
+	widthNumerator, widthDenominator, ok := decimalRatioComponent(match[1])
+	if !ok {
+		return ""
+	}
+	heightNumerator, heightDenominator, ok := decimalRatioComponent(match[3])
+	if !ok {
+		return ""
+	}
+	width := new(big.Int).Mul(widthNumerator, heightDenominator)
+	height := new(big.Int).Mul(heightNumerator, widthDenominator)
+	divisor := new(big.Int).GCD(nil, nil, width, height)
+	if divisor.Sign() <= 0 {
+		return ""
+	}
+	width.Div(width, divisor)
+	height.Div(height, divisor)
+	return width.String() + ":" + height.String()
+}
+
+func decimalRatioComponent(value string) (*big.Int, *big.Int, bool) {
+	integerPart, decimalPart, hasDecimal := strings.Cut(value, ".")
+	digits := integerPart
+	denominator := big.NewInt(1)
+	if hasDecimal {
+		digits += decimalPart
+		denominator.Exp(big.NewInt(10), big.NewInt(int64(len(decimalPart))), nil)
+	}
+	numerator := new(big.Int)
+	if _, ok := numerator.SetString(digits, 10); !ok || numerator.Sign() <= 0 {
+		return nil, nil, false
+	}
+	return numerator, denominator, true
 }
 
 func imageSizeDimensions(size string) (int, int, bool) {
