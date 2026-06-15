@@ -1596,6 +1596,11 @@ func (a *App) handleCreationTasks(w http.ResponseWriter, r *http.Request) {
 		if !a.attachCreationTaskSpace(w, identity, body) {
 			return
 		}
+		service.NormalizeProStudioRequest(body)
+		if err := service.ValidateProStudioRequest(body); err != nil {
+			util.WriteError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		model := firstNonEmpty(util.Clean(body["model"]), util.ImageModelAuto)
 		n := util.ToInt(body["n"], 1)
 		task, err := a.tasks.SubmitGenerationWithOptions(r.Context(), identity, util.Clean(body["client_task_id"]), util.Clean(body["prompt"]), model, util.Clean(body["size"]), util.Clean(body["quality"]), a.resolveImageBaseURL(r), n, body["messages"], imageTaskRequestMetadata(body), imageOutputOptionsFromBody(body), imageGenerationToolOptionsFromBody(model, n, body), util.Clean(body["visibility"]))
@@ -1652,6 +1657,11 @@ func (a *App) handleCreationTasks(w http.ResponseWriter, r *http.Request) {
 		if !a.attachCreationTaskSpace(w, identity, body) {
 			return
 		}
+		service.NormalizeProStudioRequest(body)
+		if err := service.ValidateProStudioRequest(body); err != nil {
+			util.WriteError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		task, err := a.tasks.SubmitEditWithOptions(r.Context(), identity, util.Clean(body["client_task_id"]), util.Clean(body["prompt"]), firstNonEmpty(util.Clean(body["model"]), util.ImageModelAuto), util.Clean(body["size"]), util.Clean(body["quality"]), a.resolveImageBaseURL(r), images, util.ToInt(body["n"], 1), body["messages"], imageTaskRequestMetadata(body), imageOutputOptionsFromBody(body), imageToolOptionsFromBody(body), util.Clean(body["visibility"]))
 		if err != nil {
 			writeCreationTaskSubmitError(w, err)
@@ -1697,7 +1707,15 @@ func (a *App) handleCreationTaskDiagnostics(w http.ResponseWriter, r *http.Reque
 func imageTaskRequestMetadata(body map[string]any) map[string]any {
 	size := util.Clean(body["size"])
 	metadata := map[string]any{}
-	if preset := service.NormalizeImageResolutionPreset(util.Clean(body["image_resolution"])); preset != "" {
+	preset := service.NormalizeImageResolutionPreset(util.Clean(body["image_resolution"]))
+	if service.IsProStudioRequest(body) {
+		if settings := util.StringMap(body["official_settings"]); len(settings) > 0 {
+			preset = util.Clean(settings["resolution"])
+		} else {
+			preset = util.Clean(body["image_resolution"])
+		}
+	}
+	if preset != "" {
 		metadata["image_resolution"] = preset
 	}
 	if size != "" {
@@ -1714,6 +1732,15 @@ func imageTaskRequestMetadata(body map[string]any) map[string]any {
 	}
 	if fallback := util.StringMap(body["fallback_reference_image"]); len(fallback) > 0 {
 		metadata["fallback_reference_image"] = fallback
+	}
+	if service.IsProStudioRequest(body) {
+		metadata["professional_mode"] = true
+		if meta := util.StringMap(body["pro_studio"]); len(meta) > 0 {
+			metadata["pro_studio"] = meta
+		}
+		if settings := util.StringMap(body["official_settings"]); len(settings) > 0 {
+			metadata["official_settings"] = settings
+		}
 	}
 	if publicImageURLs := util.AsStringSlice(body["official_public_image_urls"]); len(publicImageURLs) > 0 {
 		metadata["official_public_image_urls"] = publicImageURLs
@@ -1735,7 +1762,11 @@ func imageTaskRequestMetadata(body map[string]any) map[string]any {
 func imageOutputOptionsFromBody(body map[string]any) service.ImageOutputOptions {
 	format := service.NormalizeImageOutputFormat(util.Clean(body["output_format"]))
 	options := service.ImageOutputOptions{Format: format}
-	if service.SupportsImageOutputCompression(format) {
+	compressionSupported := service.SupportsImageOutputCompression(format)
+	if service.IsProStudioRequest(body) {
+		compressionSupported = service.SupportsOfficialImageOutputCompression(format)
+	}
+	if compressionSupported {
 		if compression, ok := service.NormalizeImageOutputCompressionValue(body["output_compression"]); ok {
 			options.Compression = &compression
 		}

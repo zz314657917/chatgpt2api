@@ -16,6 +16,7 @@ import {
   type ImageTaskToolOptions,
 } from "@/lib/image-task-request";
 import type { ImageOutputFormat, ImageQuality } from "@/lib/image-parameters";
+import type { ProStudioOfficialSettingsPayload, ProStudioPayloadMeta } from "@/lib/pro-studio";
 
 export type AccountType = "Free" | "Plus" | "ProLite" | "Pro" | "Team";
 export type AccountStatus = "正常" | "限流" | "异常" | "禁用" | "刷新中" | "过期待刷新";
@@ -603,6 +604,9 @@ export type ManagedImageDetail = ManagedImageSummary & {
   prompt?: string;
   model?: ImageModel;
   quality?: ImageQuality;
+  professional_mode?: boolean;
+  pro_studio?: ProStudioPayloadMeta;
+  official_settings?: ProStudioOfficialSettingsPayload;
   url: string;
   resolution_preset?: string;
   requested_size?: string;
@@ -943,6 +947,12 @@ export type CreationTaskData = {
   output_format?: ImageOutputFormat;
 };
 
+export type CreationTaskProStudioFields = {
+  professional_mode?: boolean;
+  pro_studio?: ProStudioPayloadMeta;
+  official_settings?: ProStudioOfficialSettingsPayload;
+};
+
 export type CreationTask = {
   id: string;
   status: "queued" | "running" | "success" | "error" | "cancelled";
@@ -952,6 +962,9 @@ export type CreationTask = {
   quality?: ImageQuality;
   output_format?: ImageOutputFormat;
   output_compression?: number;
+  professional_mode?: boolean;
+  pro_studio?: ProStudioPayloadMeta;
+  official_settings?: ProStudioOfficialSettingsPayload;
   background?: string;
   moderation?: string;
   style?: string;
@@ -1966,6 +1979,7 @@ export async function createImageGenerationTask(
   toolOptions?: ImageTaskToolOptions,
   frontendConversationId?: string,
   fallbackReferenceImage?: FallbackReferenceImage,
+  extraBody: Record<string, unknown> = {},
 ) {
   const requestParameters = buildImageTaskRequestParameters({
     model,
@@ -1982,6 +1996,7 @@ export async function createImageGenerationTask(
       client_task_id: clientTaskId,
       prompt,
       ...imageTaskRequestBodyFields(requestParameters),
+      ...extraBody,
       ...(messages?.length ? { messages } : {}),
       ...(frontendConversationId ? { frontend_conversation_id: frontendConversationId } : {}),
       ...(fallbackReferenceImage ? { fallback_reference_image: fallbackReferenceImage } : {}),
@@ -2039,6 +2054,7 @@ export async function createImageEditTask(
   frontendConversationId?: string,
   fallbackReferenceImage?: FallbackReferenceImage,
   publicImageUrls?: string[],
+  extraBody: Record<string, unknown> = {},
 ) {
   const formData = new FormData();
   const uploadFiles = Array.isArray(files) ? files : [files];
@@ -2059,6 +2075,20 @@ export async function createImageEditTask(
   formData.append("prompt", prompt);
   for (const [key, value] of Object.entries(imageTaskRequestBodyFields(requestParameters))) {
     formData.append(key, String(value));
+  }
+  for (const [key, value] of Object.entries(extraBody)) {
+    if (value === undefined || value === null) {
+      continue;
+    }
+    if (Array.isArray(value)) {
+      value.forEach((item) => {
+        if (item !== undefined && item !== null) {
+          formData.append(key, typeof item === "object" ? JSON.stringify(item) : String(item));
+        }
+      });
+      continue;
+    }
+    formData.append(key, typeof value === "object" ? JSON.stringify(value) : String(value));
   }
   publicImageUrls?.filter(Boolean).forEach((url) => {
     formData.append("image_urls", url);
@@ -2119,6 +2149,7 @@ export async function createImageEditTaskFromReferenceIds(
   frontendConversationId?: string,
   fallbackReferenceImage?: FallbackReferenceImage,
   publicImageUrls?: string[],
+  extraBody: Record<string, unknown> = {},
 ) {
   const requestParameters = buildImageTaskRequestParameters({
     model,
@@ -2136,6 +2167,7 @@ export async function createImageEditTaskFromReferenceIds(
       reference_image_ids: referenceImageIds,
       prompt,
       ...imageTaskRequestBodyFields(requestParameters),
+      ...extraBody,
       ...(publicImageUrls?.length ? { image_urls: publicImageUrls } : {}),
       ...(messages?.length ? { messages } : {}),
       ...(frontendConversationId ? { frontend_conversation_id: frontendConversationId } : {}),

@@ -48,6 +48,8 @@ import {
 
 import { AuthenticatedImage } from "@/components/authenticated-image";
 import { ImageOutputControls } from "@/components/image-output-controls";
+import { ProStudioBadge } from "@/components/pro-studio/pro-studio-badge";
+import { ProStudioPanel } from "@/components/pro-studio/pro-studio-panel";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -74,6 +76,7 @@ import {
   type ImageAspectRatio,
   type ImageResolution,
 } from "@/lib/image-parameters";
+import { OFFICIAL_IMAGE_MODEL, normalizeProStudioState, type ProStudioState } from "@/lib/pro-studio";
 import { cn } from "@/lib/utils";
 
 import {
@@ -3062,6 +3065,7 @@ function CanvasRunInsight({ item, compact = false }: { item: SmartCanvasItem; co
         {showStatusSupplement ? <span className="shrink-0 font-semibold">{currentStatusLabel}</span> : null}
         {meta.length > 0 ? <span className="min-w-0 truncate opacity-80">{meta.join(" · ")}</span> : null}
       </div>
+      <ProStudioBadge proStudio={item.data?.pro_studio} officialSettings={item.data?.official_settings} compact />
       {blockedBy ? <div className="truncate">阻断来源：{blockedBy}</div> : null}
       {detail?.message ? <div className={cn(compact ? "line-clamp-1" : "line-clamp-2", "whitespace-pre-wrap break-words")}>{detail.message}</div> : null}
     </div>
@@ -4114,6 +4118,9 @@ function GeneratorNodeBody({
   const outputImages = item.data?.output?.images || [];
   const nodeRunning = isActiveTask(item.data?.status);
   const imageModel = item.data?.model || "auto";
+  const proStudioState = normalizeProStudioState(item.data?.pro_studio_state as Partial<ProStudioState> | undefined, "free_canvas");
+  const proStudioEnabled = item.data?.professional_mode === true || proStudioState.enabled;
+  const activeImageModel = proStudioEnabled ? OFFICIAL_IMAGE_MODEL : imageModel;
   const imageCount = Math.max(1, Math.min(10, Number(item.data?.n || 1)));
   const hasInputImages = images.length > 0;
   const ratioValue: CanvasImageRatioValue = hasInputImages && (!item.data?.size_user_modified || !String(item.data?.size || "").trim())
@@ -4124,8 +4131,8 @@ function GeneratorNodeBody({
   const imageResolutionOptions = hasInputImages && item.data?.image_resolution_user_modified !== true
     ? canvasImageResolutionOptions.map((option) => option.value === "unspecified" ? { ...option, label: "保持原图清晰度" } : option)
     : canvasImageResolutionOptions;
-  const outputControlsSupported = supportsImageOutputControls(imageModel);
-  const imageQualitySupported = supportsImageQuality(imageModel);
+  const outputControlsSupported = supportsImageOutputControls(activeImageModel);
+  const imageQualitySupported = supportsImageQuality(activeImageModel);
   const outputFormat = normalizeImageOutputFormat(item.data?.output_format);
   const outputCompression = typeof item.data?.output_compression === "number" ? item.data.output_compression : undefined;
   const imageQuality = isImageQuality(item.data?.quality) ? item.data.quality : "auto";
@@ -4204,6 +4211,26 @@ function GeneratorNodeBody({
           </div>
         ) : null}
       </div>
+      <ProStudioPanel
+        scope="canvas"
+        state={proStudioState}
+        onChange={(next) => onUpdateData({
+          professional_mode: next.enabled,
+          pro_studio_state: next,
+          model: next.enabled ? OFFICIAL_IMAGE_MODEL : item.data?.model || "auto",
+          size: next.enabled ? next.settings.size : item.data?.size,
+          image_resolution: next.enabled ? next.settings.resolution : item.data?.image_resolution,
+          quality: next.enabled ? next.settings.quality : item.data?.quality,
+          output_format: next.enabled ? next.settings.outputFormat : item.data?.output_format,
+          output_compression: next.enabled ? next.settings.outputCompression : item.data?.output_compression,
+          n: next.enabled ? next.settings.n : item.data?.n,
+        })}
+        fieldClassName={cn("flex h-9 min-w-0 items-center justify-between gap-2 rounded-xl border px-3 text-xs", canvasFieldClass)}
+        selectTriggerClassName="h-8 min-w-0 flex-1 justify-end gap-1 border-0 bg-transparent px-0 py-0 text-right text-xs font-bold shadow-none focus-visible:ring-0 [&_svg]:size-4 [&_svg]:opacity-60 [&>span]:flex-none"
+        inputClassName="h-8 min-w-0 border-0 bg-transparent px-0 text-right text-xs font-bold shadow-none focus-visible:ring-0 disabled:cursor-not-allowed"
+        labelClassName={cn("text-[11px] font-bold", canvasSubtleTextClass)}
+        compact
+      />
       <div className="grid grid-cols-[76px_1fr] gap-2">
         <Select value="api" disabled>
           <SelectTrigger className={canvasSelectClass}>
@@ -4213,18 +4240,20 @@ function GeneratorNodeBody({
             <SelectItem value="api">生成</SelectItem>
           </SelectContent>
         </Select>
-        <Select value={imageModel} onValueChange={(model) => onUpdateData({ model })}>
+        <Select value={activeImageModel} onValueChange={(model) => onUpdateData({ model })} disabled={proStudioEnabled}>
           <SelectTrigger className={canvasSelectClass}>
             <SelectValue placeholder="模型" />
           </SelectTrigger>
           <SelectContent>
-            {models.map((model) => (
-              <SelectItem key={model.id} value={model.id}>{model.name || model.id}</SelectItem>
-            ))}
+            {proStudioEnabled
+              ? <SelectItem value={OFFICIAL_IMAGE_MODEL}>{OFFICIAL_IMAGE_MODEL}</SelectItem>
+              : models.map((model) => (
+                  <SelectItem key={model.id} value={model.id}>{model.name || model.id}</SelectItem>
+                ))}
           </SelectContent>
         </Select>
       </div>
-      <div className="grid grid-cols-2 gap-2">
+      {!proStudioEnabled ? <div className="grid grid-cols-2 gap-2">
         <Select
           value={imageResolutionValue}
           onValueChange={(imageResolution) => onUpdateData({
@@ -4319,7 +4348,20 @@ function GeneratorNodeBody({
             <ChevronRight className="size-3.5" />
           </button>
         </div>
-      </div>
+      </div> : null}
+      {proStudioEnabled ? (
+        <ProStudioBadge proStudio={{ enabled: true, mode: proStudioState.mode === "off" ? "preset" : proStudioState.mode, intent: proStudioState.intent, quality_tier: proStudioState.qualityTier }} officialSettings={{
+          model: OFFICIAL_IMAGE_MODEL,
+          size: proStudioState.settings.size,
+          resolution: proStudioState.settings.resolution,
+          quality: proStudioState.settings.quality,
+          output_format: proStudioState.settings.outputFormat,
+          ...(typeof proStudioState.settings.outputCompression === "number" ? { output_compression: proStudioState.settings.outputCompression } : {}),
+          background: proStudioState.settings.background,
+          moderation: proStudioState.settings.moderation,
+          n: proStudioState.settings.n,
+        }} />
+      ) : null}
       {outputImages.length > 0 ? <CanvasImageStrip images={outputImages} limit={3} onOpen={onOpenImage} className="grid-cols-3" lightweight={lightweightMedia} /> : null}
       <CanvasRunInsight item={item} />
       {nodeRunning ? (

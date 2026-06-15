@@ -2495,6 +2495,7 @@ func readMultipartImageBody(r *http.Request) (map[string]any, []protocol.Uploade
 		"image_urls":               r.MultipartForm.Value["image_urls"],
 		"output_format":            firstForm(r.MultipartForm, "output_format"),
 		"output_compression":       firstForm(r.MultipartForm, "output_compression"),
+		"professional_mode":        firstForm(r.MultipartForm, "professional_mode"),
 		"share_prompt_parameters":  firstForm(r.MultipartForm, "share_prompt_parameters"),
 		"share_reference_images":   firstForm(r.MultipartForm, "share_reference_images"),
 		"frontend_conversation_id": firstForm(r.MultipartForm, "frontend_conversation_id"),
@@ -2515,6 +2516,20 @@ func readMultipartImageBody(r *http.Request) (map[string]any, []protocol.Uploade
 			return nil, nil, fmt.Errorf("invalid fallback_reference_image")
 		}
 		body["fallback_reference_image"] = fallback
+	}
+	if rawProStudio := strings.TrimSpace(firstForm(r.MultipartForm, "pro_studio")); rawProStudio != "" {
+		var proStudio any
+		if err := json.Unmarshal([]byte(rawProStudio), &proStudio); err != nil {
+			return nil, nil, fmt.Errorf("invalid pro_studio")
+		}
+		body["pro_studio"] = proStudio
+	}
+	if rawSettings := strings.TrimSpace(firstForm(r.MultipartForm, "official_settings")); rawSettings != "" {
+		var settings any
+		if err := json.Unmarshal([]byte(rawSettings), &settings); err != nil {
+			return nil, nil, fmt.Errorf("invalid official_settings")
+		}
+		body["official_settings"] = settings
 	}
 	var images []protocol.UploadedImage
 	for _, field := range []string{"image", "image[]"} {
@@ -2960,7 +2975,11 @@ func (a *App) recordGeneratedImagesForPayload(identity service.Identity, urls []
 	outputFormat := service.NormalizeImageOutputFormat(util.Clean(payload["output_format"]))
 	outputCompression, hasOutputCompression := service.NormalizeImageOutputCompressionValue(payload["output_compression"])
 	var outputCompressionPtr *int
-	if hasOutputCompression && service.SupportsImageOutputCompression(outputFormat) {
+	outputCompressionSupported := service.SupportsImageOutputCompression(outputFormat)
+	if service.IsProStudioRequest(payload) {
+		outputCompressionSupported = service.SupportsOfficialImageOutputCompression(outputFormat)
+	}
+	if hasOutputCompression && outputCompressionSupported {
 		outputCompressionPtr = &outputCompression
 	}
 	var partialImagesPtr *int
@@ -2982,10 +3001,44 @@ func (a *App) recordGeneratedImagesForPayload(identity service.Identity, urls []
 		PartialImages:     partialImagesPtr,
 		InputImageMask:    util.Clean(payload["input_image_mask"]),
 		ReferenceImages:   imageReferenceMetadataFromPayload(payload),
+		ProfessionalMode:  service.IsProStudioRequest(payload),
+		ProStudio:         proStudioMetadataFromPayload(payload),
+		OfficialSettings:  officialSettingsMetadataFromPayload(payload),
 		SharePromptParams: sharePromptParams,
 		ShareReferences:   sharePromptParams && util.ToBool(payload["share_reference_images"]),
 	})
 	a.cleanupImageStorage()
+}
+
+func proStudioMetadataFromPayload(payload map[string]any) map[string]any {
+	meta := util.StringMap(payload["pro_studio"])
+	if len(meta) == 0 {
+		return nil
+	}
+	return util.CopyMap(meta)
+}
+
+func officialSettingsMetadataFromPayload(payload map[string]any) map[string]any {
+	settings := util.StringMap(payload["official_settings"])
+	if len(settings) == 0 && service.IsProStudioRequest(payload) {
+		settings = map[string]any{
+			"model":         service.OfficialImageModel,
+			"size":          util.Clean(payload["size"]),
+			"resolution":    firstNonEmpty(util.Clean(payload["resolution"]), util.Clean(payload["image_resolution"])),
+			"quality":       util.Clean(payload["quality"]),
+			"output_format": service.NormalizeImageOutputFormat(util.Clean(payload["output_format"])),
+			"background":    util.Clean(payload["background"]),
+			"moderation":    util.Clean(payload["moderation"]),
+			"n":             util.ToInt(payload["n"], 1),
+		}
+		if compression, ok := service.NormalizeImageOutputCompressionValue(payload["output_compression"]); ok && service.SupportsOfficialImageOutputCompression(util.Clean(settings["output_format"])) {
+			settings["output_compression"] = compression
+		}
+	}
+	if len(settings) == 0 {
+		return nil
+	}
+	return util.CopyMap(settings)
 }
 
 func (a *App) cleanupImageStorage() {

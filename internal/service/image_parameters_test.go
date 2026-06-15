@@ -46,6 +46,9 @@ func TestImageParameterNormalization(t *testing.T) {
 	if SupportsImageOutputCompression("png") || SupportsImageOutputCompression("webp") {
 		t.Fatal("png/webp should not support output compression")
 	}
+	if !SupportsOfficialImageOutputCompression("webp") {
+		t.Fatal("official webp should support output compression")
+	}
 	if got, ok := NormalizeImageOutputCompressionValue("120"); !ok || got != 100 {
 		t.Fatalf("NormalizeImageOutputCompressionValue(120) = %d, %v; want 100, true", got, ok)
 	}

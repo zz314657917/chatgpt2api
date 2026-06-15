@@ -564,6 +564,68 @@ func TestImageTaskServicePassesImageRequestMetadataToHandler(t *testing.T) {
 	waitForTaskStatus(t, svc, identity, "task-1", TaskStatusSuccess)
 }
 
+func TestImageTaskServicePreservesProStudioMetadata(t *testing.T) {
+	handlerCalls := make(chan map[string]any, 1)
+	handler := func(ctx context.Context, identity Identity, payload map[string]any) (map[string]any, error) {
+		handlerCalls <- payload
+		return map[string]any{"data": []map[string]any{{"url": "https://example.test/pro.png"}}}, nil
+	}
+	svc := newTestImageTaskService(t, handler, handler, handler, func() int { return 30 })
+	identity := Identity{ID: "alice", Name: "Alice", Role: "user"}
+	compression := 72
+	metadata := map[string]any{
+		"professional_mode": true,
+		"image_resolution":  "1k",
+		"pro_studio": map[string]any{
+			"enabled":      true,
+			"mode":         "preset",
+			"intent":       "product_main",
+			"quality_tier": "production",
+		},
+		"official_settings": map[string]any{
+			"model":              OfficialImageModel,
+			"size":               "1:1",
+			"resolution":         "1k",
+			"quality":            "high",
+			"output_format":      "webp",
+			"output_compression": compression,
+			"background":         "opaque",
+			"moderation":         "low",
+			"n":                  1,
+		},
+	}
+	if _, err := svc.SubmitGenerationWithOptions(context.Background(), identity, "pro-task", "draw", OfficialImageModel, "1:1", "high", "https://base.test", 1, nil, metadata, ImageOutputOptions{Format: "webp", Compression: &compression}, ImageToolOptions{Background: "opaque", Moderation: "low"}); err != nil {
+		t.Fatalf("SubmitGenerationWithOptions() error = %v", err)
+	}
+
+	select {
+	case payload := <-handlerCalls:
+		if payload["professional_mode"] != true || payload["image_resolution"] != "1k" || payload["output_compression"] != 72 {
+			t.Fatalf("pro studio handler payload = %#v", payload)
+		}
+		settings := util.StringMap(payload["official_settings"])
+		if settings["resolution"] != "1k" || settings["output_format"] != "webp" {
+			t.Fatalf("handler official_settings = %#v", settings)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for handler payload")
+	}
+	waitForTaskStatus(t, svc, identity, "pro-task", TaskStatusSuccess)
+	got := svc.ListTasks(identity, []string{"pro-task"})
+	items := got["items"].([]map[string]any)
+	if len(items) != 1 {
+		t.Fatalf("ListTasks() = %#v", got)
+	}
+	item := items[0]
+	if item["professional_mode"] != true || item["image_resolution"] != "1k" || item["output_compression"] != 72 {
+		t.Fatalf("pro studio public task = %#v", item)
+	}
+	settings := util.StringMap(item["official_settings"])
+	if settings["resolution"] != "1k" || settings["output_format"] != "webp" {
+		t.Fatalf("public official_settings = %#v", settings)
+	}
+}
+
 func TestImageTaskServicePassesVideoOptionsToHandler(t *testing.T) {
 	handlerCalls := make(chan map[string]any, 1)
 	videoHandler := func(ctx context.Context, identity Identity, payload map[string]any) (map[string]any, error) {

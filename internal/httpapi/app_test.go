@@ -612,6 +612,123 @@ func TestCreationTaskGPTImageGenerationRunsSequentialOutputs(t *testing.T) {
 	}
 }
 
+func TestCreationTaskProStudioLocksOfficialModelAndMetadata(t *testing.T) {
+	app := newTestAppWithBillingDefaults(t, "standard", "1000000", "1000000", "monthly")
+	defer app.Close()
+
+	_, rawKey, err := app.auth.CreateAPIKey(service.AuthRoleUser, "frontend", service.AuthOwner{})
+	if err != nil {
+		t.Fatalf("CreateAPIKey() error = %v", err)
+	}
+	requests := make(chan protocol.ConversationRequest, 1)
+	installHTTPTestImageStreamFunc(t, app, func(ctx context.Context, client *backend.Client, request protocol.ConversationRequest, index, total int) (<-chan protocol.ImageOutput, <-chan error) {
+		requests <- request
+		return httpTestImageOutputStream(request, index)
+	})
+
+	body := jsonString(map[string]any{
+		"client_task_id":     "task-pro-studio",
+		"prompt":             "draw pro product",
+		"professional_mode":  true,
+		"model":              "gpt-image-2",
+		"size":               "1:1",
+		"image_resolution":   "1k",
+		"quality":            "high",
+		"output_format":      "webp",
+		"output_compression": 72,
+		"background":         "opaque",
+		"moderation":         "low",
+		"pro_studio": map[string]any{
+			"enabled":      true,
+			"mode":         "preset",
+			"intent":       "product_main",
+			"quality_tier": "production",
+		},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/creation-tasks/image-generations", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+rawKey)
+	res := httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("submit pro studio status = %d body = %s", res.Code, res.Body.String())
+	}
+
+	var listed map[string]any
+	waitForHTTPTestCondition(t, func() bool {
+		req = httptest.NewRequest(http.MethodGet, "/api/creation-tasks?ids=task-pro-studio", nil)
+		req.Header.Set("Authorization", "Bearer "+rawKey)
+		res = httptest.NewRecorder()
+		app.Handler().ServeHTTP(res, req)
+		if res.Code != http.StatusOK {
+			t.Fatalf("list pro studio status = %d body = %s", res.Code, res.Body.String())
+		}
+		if err := json.Unmarshal(res.Body.Bytes(), &listed); err != nil {
+			t.Fatalf("list pro studio json: %v", err)
+		}
+		items := util.AsMapSlice(listed["items"])
+		return len(items) == 1 && items[0]["status"] == service.TaskStatusSuccess
+	})
+	select {
+	case request := <-requests:
+		if request.Model != service.OfficialImageModel {
+			t.Fatalf("request model = %#v, want official", request.Model)
+		}
+	default:
+		t.Fatal("missing captured pro studio request")
+	}
+	items := util.AsMapSlice(listed["items"])
+	item := items[0]
+	if item["model"] != service.OfficialImageModel ||
+		item["professional_mode"] != true ||
+		item["image_resolution"] != "1k" ||
+		item["output_format"] != "webp" ||
+		util.ToInt(item["output_compression"], 0) != 72 {
+		t.Fatalf("pro studio task = %#v", item)
+	}
+	proStudio := util.StringMap(item["pro_studio"])
+	if proStudio["intent"] != "product_main" || proStudio["quality_tier"] != "production" {
+		t.Fatalf("pro_studio = %#v", proStudio)
+	}
+	settings := util.StringMap(item["official_settings"])
+	if settings["model"] != service.OfficialImageModel ||
+		settings["resolution"] != "1k" ||
+		settings["output_format"] != "webp" ||
+		util.ToInt(settings["output_compression"], 0) != 72 {
+		t.Fatalf("official_settings = %#v", settings)
+	}
+}
+
+func TestCreationTaskProStudioRejectsBatchOverLimit(t *testing.T) {
+	app := newTestApp(t)
+	defer app.Close()
+
+	_, rawKey, err := app.auth.CreateAPIKey(service.AuthRoleUser, "frontend", service.AuthOwner{})
+	if err != nil {
+		t.Fatalf("CreateAPIKey() error = %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/creation-tasks/image-generations", strings.NewReader(jsonString(map[string]any{
+		"client_task_id":    "task-pro-studio-too-many",
+		"prompt":            "draw pro product",
+		"professional_mode": true,
+		"size":              "1:1",
+		"image_resolution":  "4k",
+		"quality":           "high",
+		"output_format":     "webp",
+		"background":        "opaque",
+		"moderation":        "low",
+		"n":                 5,
+	})))
+	req.Header.Set("Authorization", "Bearer "+rawKey)
+	res := httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("pro studio n>4 status = %d body = %s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), "professional_mode n must be between 1 and 4") {
+		t.Fatalf("pro studio n>4 body = %s", res.Body.String())
+	}
+}
+
 func TestLogsEndpointUsesDefaultLogView(t *testing.T) {
 	app := newTestApp(t)
 	defer app.Close()
