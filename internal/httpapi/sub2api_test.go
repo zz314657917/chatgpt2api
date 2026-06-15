@@ -46,7 +46,7 @@ func TestSub2APIChatModelRoutesAutoToDefaultChatModel(t *testing.T) {
 		{name: "empty", model: "", want: util.DefaultChatModel},
 		{name: "auto", model: util.ImageModelAuto, want: util.DefaultChatModel},
 		{name: "explicit gpt 5.5", model: util.ImageModelGPT55, want: util.ImageModelGPT55},
-		{name: "explicit gpt 5", model: util.ImageModelGPT5, want: util.ImageModelGPT5},
+		{name: "explicit gpt 5.4 mini", model: util.ImageModelGPT54Mini, want: util.ImageModelGPT54Mini},
 	}
 
 	for _, tt := range tests {
@@ -71,8 +71,8 @@ func TestSub2APIChatTaskResultIncludesResolvedModel(t *testing.T) {
 		t.Fatalf("model = %q, want %q", got, util.DefaultChatModel)
 	}
 
-	result = sub2APIChatTaskResult(map[string]any{"model": util.ImageModelGPT5}, "hello", util.DefaultChatModel)
-	if got := util.Clean(result["model"]); got != util.ImageModelGPT5 {
+	result = sub2APIChatTaskResult(map[string]any{"model": util.ImageModelGPT54Mini}, "hello", util.DefaultChatModel)
+	if got := util.Clean(result["model"]); got != util.ImageModelGPT54Mini {
 		t.Fatalf("model = %q, want upstream response model", got)
 	}
 }

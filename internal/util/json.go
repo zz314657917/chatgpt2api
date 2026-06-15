@@ -23,14 +23,9 @@ const (
 	ImageModelCodex       = "codex-gpt-image-2"
 	ImageModelGeminiFlash = "gemini-3.1-flash-image"
 	ImageModelGeminiPro   = "gemini-3-pro-image"
-	ImageModelGPT5        = "gpt-5"
-	ImageModelGPT51       = "gpt-5-1"
-	ImageModelGPT52       = "gpt-5-2"
-	ImageModelGPT53       = "gpt-5-3"
-	ImageModelGPT53Mini   = "gpt-5-3-mini"
 	ImageModelGPT54       = "gpt-5.4"
+	ImageModelGPT54Mini   = "gpt-5.4-mini"
 	ImageModelGPT55       = "gpt-5.5"
-	ImageModelGPTMini     = "gpt-5-mini"
 	DefaultChatModel      = ImageModelGPT55
 )
 
@@ -49,14 +44,9 @@ var ModelIDs = []string{
 	ImageModelGeminiFlash,
 	ImageModelGeminiPro,
 	ImageModelAuto,
-	ImageModelGPTMini,
-	ImageModelGPT53Mini,
-	ImageModelGPT5,
-	ImageModelGPT51,
-	ImageModelGPT52,
-	ImageModelGPT53,
-	ImageModelGPT54,
 	ImageModelGPT55,
+	ImageModelGPT54,
+	ImageModelGPT54Mini,
 }
 
 var ImageGenerationModelIDs = []string{
@@ -81,14 +71,9 @@ var ResponsesImageToolModels = map[string]struct{}{
 	ImageModelGPT:         {},
 	ImageModelGPTOfficial: {},
 	ImageModelCodex:       {},
-	ImageModelGPTMini:     {},
-	ImageModelGPT53Mini:   {},
-	ImageModelGPT5:        {},
-	ImageModelGPT51:       {},
-	ImageModelGPT52:       {},
-	ImageModelGPT53:       {},
-	ImageModelGPT54:       {},
 	ImageModelGPT55:       {},
+	ImageModelGPT54:       {},
+	ImageModelGPT54Mini:   {},
 }
 
 func Clean(v any) string {

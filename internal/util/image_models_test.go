@@ -10,14 +10,9 @@ func TestImageGenerationModelSetExcludesTextModels(t *testing.T) {
 	}
 
 	for _, model := range []string{
-		ImageModelGPTMini,
-		ImageModelGPT53Mini,
-		ImageModelGPT5,
-		ImageModelGPT51,
-		ImageModelGPT52,
-		ImageModelGPT53,
-		ImageModelGPT54,
 		ImageModelGPT55,
+		ImageModelGPT54,
+		ImageModelGPT54Mini,
 	} {
 		if IsImageGenerationModel(model) {
 			t.Fatalf("IsImageGenerationModel(%q) = true, want false", model)
@@ -26,7 +21,7 @@ func TestImageGenerationModelSetExcludesTextModels(t *testing.T) {
 }
 
 func TestResponsesImageToolModelsIncludeTextModels(t *testing.T) {
-	for _, model := range []string{ImageModelAuto, ImageModelGPT, ImageModelGPTOfficial, ImageModelCodex, ImageModelGPT5, ImageModelGPT54, ImageModelGPT55} {
+	for _, model := range []string{ImageModelAuto, ImageModelGPT, ImageModelGPTOfficial, ImageModelCodex, ImageModelGPT55, ImageModelGPT54, ImageModelGPT54Mini} {
 		if !IsResponsesImageToolModel(model) {
 			t.Fatalf("IsResponsesImageToolModel(%q) = false, want true", model)
 		}
@@ -49,14 +44,9 @@ func TestModelListIncludesTextAndImageModels(t *testing.T) {
 		ImageModelGeminiFlash,
 		ImageModelGeminiPro,
 		ImageModelAuto,
-		ImageModelGPTMini,
-		ImageModelGPT53Mini,
-		ImageModelGPT5,
-		ImageModelGPT51,
-		ImageModelGPT52,
-		ImageModelGPT53,
-		ImageModelGPT54,
 		ImageModelGPT55,
+		ImageModelGPT54,
+		ImageModelGPT54Mini,
 	}
 	gotOrder := ModelList()
 	if len(gotOrder) != len(wantOrder) {
@@ -80,12 +70,9 @@ func TestModelListIncludesTextAndImageModels(t *testing.T) {
 		ImageModelCodex,
 		ImageModelGeminiFlash,
 		ImageModelGeminiPro,
-		ImageModelGPTMini,
-		ImageModelGPT53Mini,
-		ImageModelGPT5,
-		ImageModelGPT53,
-		ImageModelGPT54,
 		ImageModelGPT55,
+		ImageModelGPT54,
+		ImageModelGPT54Mini,
 	} {
 		if _, ok := got[model]; !ok {
 			t.Fatalf("ModelList() missing %q", model)
