@@ -67,9 +67,18 @@ const GPT_IMAGE_2_BASE_PRICE_USD = {
 
 const GEMINI_FLASH_IMAGE_BASE_PRICE_USD = {
   default: 0.0375,
+  "0.5K": 0.0375,
   "1K": 0.0375,
   "2K": 0.05,
   "4K": 0.075,
+} as const;
+
+const GEMINI_FLASH_OFFICIAL_IMAGE_BASE_PRICE_USD = {
+  default: 0.067,
+  "0.5K": 0.067,
+  "1K": 0.067,
+  "2K": 0.101,
+  "4K": 0.151,
 } as const;
 
 const GEMINI_PRO_IMAGE_BASE_PRICE_USD = {
@@ -77,6 +86,13 @@ const GEMINI_PRO_IMAGE_BASE_PRICE_USD = {
   "1K": 0.05,
   "2K": 0.05,
   "4K": 0.0625,
+} as const;
+
+const GEMINI_PRO_OFFICIAL_IMAGE_BASE_PRICE_USD = {
+  default: 0.134,
+  "1K": 0.134,
+  "2K": 0.134,
+  "4K": 0.24,
 } as const;
 
 const GPT_IMAGE_2_OFFICIAL_BASE_PRICE_USD: Record<string, number> = {
@@ -374,23 +390,57 @@ export function estimateImageDisplayPriceUSD(model: ImageModel, count: number, s
       sizeOrResolution === "2K" || sizeOrResolution === "4K" || sizeOrResolution === "1K" ? sizeOrResolution : "default";
     basePrice = GPT_IMAGE_2_BASE_PRICE_USD[normalizedResolution];
   } else if (model === "gpt-image-2-official") {
-    const normalizedSize = sizeOrResolution.trim();
-    const normalizedQuality = quality === "low" || quality === "medium" || quality === "high" ? quality : "auto";
+    const normalizedSize = officialImageEstimateSizeKey(sizeOrResolution);
+    const normalizedQuality = officialImageEstimateQualityKey(sizeOrResolution, quality);
     basePrice =
       GPT_IMAGE_2_OFFICIAL_BASE_PRICE_USD[`${normalizedSize}@${normalizedQuality}`] ??
       GPT_IMAGE_2_OFFICIAL_BASE_PRICE_USD[`${normalizedSize}@auto`] ??
       GPT_IMAGE_2_OFFICIAL_BASE_PRICE_USD.default;
-  } else if (GEMINI_FLASH_IMAGE_MODELS.has(model)) {
+  } else if (model === "gemini-3.1-flash-image-preview") {
     const normalizedResolution =
-      sizeOrResolution === "2K" || sizeOrResolution === "4K" || sizeOrResolution === "1K" ? sizeOrResolution : "default";
+      sizeOrResolution === "0.5K" || sizeOrResolution === "2K" || sizeOrResolution === "4K" || sizeOrResolution === "1K"
+        ? sizeOrResolution
+        : "default";
     basePrice = GEMINI_FLASH_IMAGE_BASE_PRICE_USD[normalizedResolution];
-  } else if (GEMINI_PRO_IMAGE_MODELS.has(model)) {
+  } else if (model === "gemini-3.1-flash-image-preview-official") {
+    const normalizedResolution =
+      sizeOrResolution === "0.5K" || sizeOrResolution === "2K" || sizeOrResolution === "4K" || sizeOrResolution === "1K"
+        ? sizeOrResolution
+        : "default";
+    basePrice = GEMINI_FLASH_OFFICIAL_IMAGE_BASE_PRICE_USD[normalizedResolution];
+  } else if (model === "gemini-3-pro-image-preview") {
     const normalizedResolution =
       sizeOrResolution === "2K" || sizeOrResolution === "4K" || sizeOrResolution === "1K" ? sizeOrResolution : "default";
     basePrice = GEMINI_PRO_IMAGE_BASE_PRICE_USD[normalizedResolution];
+  } else if (model === "gemini-3-pro-image-preview-official") {
+    const normalizedResolution =
+      sizeOrResolution === "2K" || sizeOrResolution === "4K" || sizeOrResolution === "1K" ? sizeOrResolution : "default";
+    basePrice = GEMINI_PRO_OFFICIAL_IMAGE_BASE_PRICE_USD[normalizedResolution];
   }
 
   return basePrice === null ? null : basePrice * IMAGE_PRICE_ESTIMATE_MULTIPLIER * normalizedCount;
+}
+
+function officialImageEstimateSizeKey(sizeOrResolution: string) {
+  const normalized = sizeOrResolution.trim();
+  if (normalized === "1K") {
+    return "1024x1024";
+  }
+  if (normalized === "2K") {
+    return "2048x2048";
+  }
+  if (normalized === "4K") {
+    return "3840x2160";
+  }
+  return normalized;
+}
+
+function officialImageEstimateQualityKey(sizeOrResolution: string, quality: string) {
+  if (quality === "low" || quality === "medium" || quality === "high") {
+    return quality;
+  }
+  const normalizedSize = sizeOrResolution.trim();
+  return normalizedSize === "1K" || normalizedSize === "2K" || normalizedSize === "4K" ? "medium" : "auto";
 }
 
 export function estimateImageBillingUnits(model: ImageModel, count: number, sizeOrResolution: string, quality = "auto") {

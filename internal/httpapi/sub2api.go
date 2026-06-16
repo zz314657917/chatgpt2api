@@ -234,7 +234,7 @@ func (a *App) callSub2APIImageGenerations(ctx context.Context, identity service.
 }
 
 func (a *App) callSub2APIImageEdits(ctx context.Context, identity service.Identity, payload map[string]any, binding service.Sub2APIBinding) (map[string]any, error) {
-	if sub2APIUsesOfficialImageGateway(payload) {
+	if sub2APIUsesImageGenerationsJSONGateway(payload) {
 		return a.callSub2APIImageBatchesWithBinding(ctx, identity, payload, binding, func(ctx context.Context, batchPayload map[string]any) (map[string]any, error) {
 			body, err := sub2APIImageGatewayJSONPayload(batchPayload)
 			if err != nil {
@@ -547,11 +547,30 @@ func sub2APIImageGatewayJSONPayload(payload map[string]any) (map[string]any, err
 	if sub2APIUsesOfficialImageGateway(payload) {
 		return sub2APIOfficialImageGatewayPayload(payload)
 	}
+	if sub2APIUsesGeminiImageGateway(payload) {
+		return sub2APIGeminiImageGatewayPayload(payload), nil
+	}
 	return sub2APIImageJSONPayload(payload), nil
+}
+
+func sub2APIUsesImageGenerationsJSONGateway(payload map[string]any) bool {
+	return sub2APIUsesOfficialImageGateway(payload) || sub2APIUsesGeminiImageGateway(payload)
 }
 
 func sub2APIUsesOfficialImageGateway(payload map[string]any) bool {
 	return sub2APIImageModel(payload["model"]) == util.ImageModelGPTOfficial
+}
+
+func sub2APIUsesGeminiImageGateway(payload map[string]any) bool {
+	switch sub2APIImageModel(payload["model"]) {
+	case util.ImageModelGeminiProPreview,
+		util.ImageModelGeminiProPreviewOfficial,
+		util.ImageModelGeminiFlashPreview,
+		util.ImageModelGeminiFlashPreviewOfficial:
+		return true
+	default:
+		return false
+	}
 }
 
 func sub2APIImageJSONPayload(payload map[string]any) map[string]any {
@@ -585,6 +604,43 @@ func sub2APIImageJSONPayload(payload map[string]any) map[string]any {
 	for key, value := range out {
 		if value == "" {
 			delete(out, key)
+		}
+	}
+	return out
+}
+
+func sub2APIGeminiImageGatewayPayload(payload map[string]any) map[string]any {
+	out := sub2APIImageJSONPayload(payload)
+	delete(out, "quality")
+	delete(out, "background")
+	delete(out, "moderation")
+	delete(out, "style")
+	delete(out, "partial_images")
+	delete(out, "input_image_mask")
+	if size := sub2APIGeminiImageSize(payload); size != "" {
+		out["size"] = size
+	} else {
+		delete(out, "size")
+	}
+	if resolution := sub2APIGeminiImageResolution(payload); resolution != "" {
+		out["resolution"] = resolution
+	} else {
+		delete(out, "resolution")
+	}
+	if sub2APIGeminiOfficialModel(payload["model"]) {
+		delete(out, "official_fallback")
+	}
+	if urls := sub2APIGeminiImageURLs(payload); len(urls) > 0 {
+		out["image_urls"] = urls
+	}
+	if maskURL := sub2APIGeminiMaskURL(payload); maskURL != "" {
+		out["mask_url"] = maskURL
+	}
+	if sub2APIGeminiFlashModel(payload["model"]) {
+		for _, key := range []string{"google_search", "google_image_search"} {
+			if _, ok := payload[key]; ok {
+				out[key] = util.ToBool(payload[key])
+			}
 		}
 	}
 	return out
@@ -670,6 +726,47 @@ func sub2APIImageSize(payload map[string]any) string {
 	}
 }
 
+func sub2APIGeminiImageSize(payload map[string]any) string {
+	size := firstNonEmpty(util.Clean(payload["size"]), util.Clean(payload["requested_size"]))
+	size = protocol.NormalizeImageGenerationSize(size)
+	normalized := strings.ToLower(strings.TrimSpace(size))
+	if normalized == "" {
+		return "auto"
+	}
+	if normalized == "auto" || sub2APIGeminiImageSizeSupported(payload["model"], normalized) {
+		return normalized
+	}
+	return "auto"
+}
+
+func sub2APIGeminiImageSizeSupported(model any, size string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(size))
+	common := map[string]struct{}{
+		"1:1":  {},
+		"3:2":  {},
+		"2:3":  {},
+		"4:3":  {},
+		"3:4":  {},
+		"16:9": {},
+		"9:16": {},
+		"5:4":  {},
+		"4:5":  {},
+		"21:9": {},
+	}
+	if _, ok := common[normalized]; ok {
+		return true
+	}
+	if !sub2APIGeminiFlashModel(model) {
+		return false
+	}
+	switch normalized {
+	case "1:4", "4:1", "1:8", "8:1":
+		return true
+	default:
+		return false
+	}
+}
+
 var sub2APIOfficialImageSizes = map[string]struct{}{
 	"auto": {},
 	"1:1":  {},
@@ -729,6 +826,42 @@ func sub2APIImageResolution(payload map[string]any) string {
 	}
 }
 
+func sub2APIGeminiImageResolution(payload map[string]any) string {
+	value := firstNonEmpty(util.Clean(payload["resolution"]), util.Clean(payload["image_resolution"]))
+	resolution := service.NormalizeImageResolutionPreset(value)
+	switch resolution {
+	case "1080p":
+		return "1K"
+	case "2k":
+		return "2K"
+	case "4k":
+		return "4K"
+	default:
+		if strings.EqualFold(strings.TrimSpace(value), "0.5K") && sub2APIGeminiFlashModel(payload["model"]) {
+			return "0.5K"
+		}
+		return ""
+	}
+}
+
+func sub2APIGeminiFlashModel(model any) bool {
+	switch sub2APIImageModel(model) {
+	case util.ImageModelGeminiFlashPreview, util.ImageModelGeminiFlashPreviewOfficial:
+		return true
+	default:
+		return false
+	}
+}
+
+func sub2APIGeminiOfficialModel(model any) bool {
+	switch sub2APIImageModel(model) {
+	case util.ImageModelGeminiProPreviewOfficial, util.ImageModelGeminiFlashPreviewOfficial:
+		return true
+	default:
+		return false
+	}
+}
+
 func sub2APIOfficialImageOutputCompressionSupported(format string) bool {
 	switch service.NormalizeImageOutputFormat(format) {
 	case "jpeg", "webp":
@@ -736,6 +869,30 @@ func sub2APIOfficialImageOutputCompressionSupported(format string) bool {
 	default:
 		return false
 	}
+}
+
+func sub2APIGeminiImageURLs(payload map[string]any) []string {
+	urls := make([]string, 0, 4)
+	appendURL := func(value string) {
+		if value = strings.TrimSpace(value); value != "" {
+			urls = append(urls, value)
+		}
+	}
+	for _, url := range util.AsStringSlice(payload["official_public_image_urls"]) {
+		appendURL(url)
+	}
+	for _, url := range util.AsStringSlice(payload["image_urls"]) {
+		appendURL(url)
+	}
+	appendURL(util.Clean(payload["image_url"]))
+	for _, image := range uploadedImagesFromPayload(payload["images"]) {
+		appendURL(sub2APIUploadedImageDataURL(image))
+	}
+	return dedupe(urls)
+}
+
+func sub2APIGeminiMaskURL(payload map[string]any) string {
+	return firstNonEmpty(util.Clean(payload["mask_url"]), util.Clean(payload["input_image_mask"]))
 }
 
 func sub2APIOfficialPayloadNeedsImageURLs(payload map[string]any) bool {
@@ -870,6 +1027,14 @@ func sub2APIImageContentType(image protocol.UploadedImage) string {
 	default:
 		return "image/png"
 	}
+}
+
+func sub2APIUploadedImageDataURL(image protocol.UploadedImage) string {
+	if len(image.Data) == 0 {
+		return ""
+	}
+	contentType := sub2APIImageContentType(image)
+	return "data:" + contentType + ";base64," + base64.StdEncoding.EncodeToString(image.Data)
 }
 
 func sub2APIChatPayload(payload map[string]any) map[string]any {
@@ -1159,15 +1324,34 @@ func sub2APITaskCost(result map[string]any) (float64, bool) {
 		result,
 		util.StringMap(result["data"]),
 		util.StringMap(result["result"]),
+		util.StringMap(result["billing"]),
+		util.StringMap(result["usage"]),
+		util.StringMap(util.StringMap(result["data"])["billing"]),
+		util.StringMap(util.StringMap(result["data"])["usage"]),
+		util.StringMap(util.StringMap(result["result"])["billing"]),
+		util.StringMap(util.StringMap(result["result"])["usage"]),
 	} {
+		if unit := sub2APICostAmountUnit(container); unit == "credits" || unit == "credit" {
+			for _, key := range []string{"credits_cost", "credit_cost", "credits", "used_credits", "total_credits", "price_credits", "credits_used", "cost", "price", "amount", "charged_amount", "consumed_amount", "fee"} {
+				if creditsCost, ok := sub2APINumber(container[key]); ok && creditsCost > 0 {
+					return creditsCost / 10, true
+				}
+			}
+		}
 		if cost, ok := sub2APINumber(container["cost"]); ok && cost > 0 {
 			return cost, true
 		}
-		if creditsCost, ok := sub2APINumber(container["credits_cost"]); ok && creditsCost > 0 {
-			return creditsCost / 10, true
+		for _, key := range []string{"credits_cost", "credit_cost", "credits", "used_credits", "total_credits", "price_credits", "credits_used"} {
+			if creditsCost, ok := sub2APINumber(container[key]); ok && creditsCost > 0 {
+				return creditsCost / 10, true
+			}
 		}
 	}
 	return 0, false
+}
+
+func sub2APICostAmountUnit(container map[string]any) string {
+	return strings.ToLower(strings.TrimSpace(util.Clean(firstNonNil(container["unit"], container["amount_unit"], container["currency"]))))
 }
 
 func sub2APIBillingAmount(value any) float64 {
