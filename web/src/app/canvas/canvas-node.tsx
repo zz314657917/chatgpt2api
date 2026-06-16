@@ -48,6 +48,7 @@ import {
 
 import { AuthenticatedImage } from "@/components/authenticated-image";
 import { ImageOutputControls } from "@/components/image-output-controls";
+import { ImageRatioPicker } from "@/components/image-ratio-picker";
 import { ProStudioBadge } from "@/components/pro-studio/pro-studio-badge";
 import { ProStudioPanel } from "@/components/pro-studio/pro-studio-panel";
 import { Badge } from "@/components/ui/badge";
@@ -77,6 +78,7 @@ import {
   type ImageResolution,
 } from "@/lib/image-parameters";
 import { OFFICIAL_IMAGE_MODEL, normalizeProStudioState, type ProStudioState } from "@/lib/pro-studio";
+import type { ImageRatioPickerOption } from "@/lib/image-ratio-picker-options";
 import { cn } from "@/lib/utils";
 
 import {
@@ -206,9 +208,17 @@ const canvasImageResolutionOptions = [
     .map((option) => ({ value: option.value, label: option.label })),
 ] as const satisfies ReadonlyArray<{ value: "unspecified" | Exclude<ImageResolution, "auto">; label: string }>;
 const canvasImageRatioOptions = [
-  ...IMAGE_ASPECT_RATIO_OPTIONS.filter((option) => option.value !== "" && option.value !== "custom").map((option) => ({ value: option.value, label: option.value })),
-  ...PIXEL_ICON_SIZE_OPTIONS.map((option) => ({ value: option.value, label: option.value })),
-] as const satisfies ReadonlyArray<{ value: Exclude<ImageAspectRatio, "" | "custom">; label: string }>;
+  ...IMAGE_ASPECT_RATIO_OPTIONS.filter((option) => option.value !== "" && option.value !== "custom").map((option) => ({
+    value: option.value,
+    label: option.value,
+    section: "常用画幅",
+  })),
+  ...PIXEL_ICON_SIZE_OPTIONS.map((option) => ({
+    value: option.value,
+    label: option.value,
+    section: "像素图标尺寸",
+  })),
+] as const satisfies ReadonlyArray<ImageRatioPickerOption<Exclude<ImageAspectRatio, "" | "custom">>>;
 type CanvasImageRatioValue = "auto" | Exclude<ImageAspectRatio, "" | "custom">;
 const canvasVideoRatioOptions = [
   { value: "16:9", label: "16:9" },
@@ -3680,6 +3690,7 @@ function LlmNodeBody({
   onRunLlm: () => void;
   onStopNode: () => void;
 }) {
+  const [imageRatioOpen, setImageRatioOpen] = useState(false);
   const upstream = incomingItems(canvas, item.id);
   const upstreamTexts = upstream
     .map((node) => ({
@@ -4131,6 +4142,13 @@ function GeneratorNodeBody({
   const imageResolutionOptions = hasInputImages && item.data?.image_resolution_user_modified !== true
     ? canvasImageResolutionOptions.map((option) => option.value === "unspecified" ? { ...option, label: "保持原图清晰度" } : option)
     : canvasImageResolutionOptions;
+  const imageRatioOptions = hasInputImages
+    ? [
+        { value: "auto", label: "原图", description: "保持输入图片比例", section: "输入图片", glyphValue: "auto" },
+        ...canvasImageRatioOptions,
+      ] satisfies ReadonlyArray<ImageRatioPickerOption<CanvasImageRatioValue>>
+    : canvasImageRatioOptions satisfies ReadonlyArray<ImageRatioPickerOption<CanvasImageRatioValue>>;
+  const imageRatioLabel = imageRatioOptions.find((option) => option.value === ratioValue)?.label || ratioValue;
   const outputControlsSupported = supportsImageOutputControls(activeImageModel);
   const imageQualitySupported = supportsImageQuality(activeImageModel);
   const outputFormat = normalizeImageOutputFormat(item.data?.output_format);
@@ -4272,24 +4290,21 @@ function GeneratorNodeBody({
             ))}
           </SelectContent>
         </Select>
-        <Select
+        <ImageRatioPicker
+          label="画幅/尺寸"
           value={ratioValue}
+          valueLabel={imageRatioLabel}
+          options={imageRatioOptions}
+          open={imageRatioOpen}
+          onOpenChange={setImageRatioOpen}
           onValueChange={(size) => onUpdateData({
             size: size === "auto" ? "" : size,
             size_user_modified: true,
             ...(isPixelIconSize(size) ? { image_resolution: "", image_resolution_user_modified: true } : {}),
           })}
-        >
-          <SelectTrigger className={canvasSelectClass}>
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {hasInputImages ? <SelectItem value="auto">保持原图比例</SelectItem> : null}
-            {canvasImageRatioOptions.map((option) => (
-              <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+          triggerClassName={cn(canvasSelectClass, "justify-between")}
+          contentClassName="w-[min(21rem,calc(100vw-2rem))]"
+        />
         {outputControlsSupported ? (
           <ImageOutputControls
             imageModel={imageModel}

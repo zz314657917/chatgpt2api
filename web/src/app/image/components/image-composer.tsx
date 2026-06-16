@@ -34,6 +34,7 @@ import {
 } from "react";
 
 import { ImageOutputControls } from "@/components/image-output-controls";
+import { ImageRatioPicker } from "@/components/image-ratio-picker";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Textarea } from "@/components/ui/textarea";
@@ -41,9 +42,7 @@ import { hasImageResultDragPayload, parseImageResultDragPayload } from "@/app/im
 import { hasManagedImageDragPayload, parseManagedImageDragPayload } from "@/components/managed-image-drag";
 import {
   CUSTOM_IMAGE_ASPECT_RATIO,
-  IMAGE_ASPECT_RATIO_OPTIONS,
   IMAGE_QUALITY_OPTIONS,
-  PIXEL_ICON_SIZE_OPTIONS,
   IMAGE_RESOLUTION_OPTIONS,
   IMAGE_SIZE_MODE_OPTIONS,
   buildImageSize,
@@ -69,6 +68,7 @@ import {
   type ImageModel,
   type ManagedImageSummary,
 } from "@/lib/api";
+import { DEFAULT_IMAGE_RATIO_PICKER_OPTIONS, imageRatioPickerValueLabel } from "@/lib/image-ratio-picker-options";
 import { cn } from "@/lib/utils";
 
 const ImageLightbox = lazy(() =>
@@ -190,21 +190,6 @@ type ImageSettingsMenuOption<Value extends string> = {
   description?: string;
   section?: string;
 };
-
-const IMAGE_ASPECT_RATIO_SETTINGS_OPTIONS = [
-  ...IMAGE_ASPECT_RATIO_OPTIONS.filter((option) => option.value !== CUSTOM_IMAGE_ASPECT_RATIO).map((option) => ({
-    ...option,
-    section: "常用画幅",
-  })),
-  ...PIXEL_ICON_SIZE_OPTIONS.map((option) => ({
-    ...option,
-    section: "像素图标尺寸",
-  })),
-  {
-    ...IMAGE_ASPECT_RATIO_OPTIONS[IMAGE_ASPECT_RATIO_OPTIONS.length - 1],
-    section: "自定义",
-  },
-] satisfies ReadonlyArray<ImageSettingsMenuOption<ImageAspectRatio>>;
 
 const IMAGE_QUALITY_SETTINGS_OPTIONS = IMAGE_QUALITY_OPTIONS satisfies ReadonlyArray<ImageSettingsMenuOption<ImageQuality>>;
 
@@ -413,7 +398,7 @@ export function ImageComposer({
   const imageAspectRatioLabel =
     imageAspectRatio === CUSTOM_IMAGE_ASPECT_RATIO
       ? imageCustomRatio.trim() || "自定义比例"
-      : IMAGE_ASPECT_RATIO_SETTINGS_OPTIONS.find((option) => option.value === imageAspectRatio)?.label || "Auto";
+      : imageRatioPickerValueLabel(DEFAULT_IMAGE_RATIO_PICKER_OPTIONS, imageAspectRatio, "Auto");
   const imageResolutionLabel =
     IMAGE_RESOLUTION_OPTIONS.find((option) => option.value === imageResolution)?.label || "Auto";
   const structuredImageParameters = supportsStructuredImageParameters(imageModel);
@@ -1155,11 +1140,11 @@ export function ImageComposer({
                           <>
                             <div className={imageSettingsFieldClass}>
                               <span className="shrink-0 font-medium text-[#45515e] dark:text-muted-foreground">画幅/尺寸</span>
-                              <ImageSettingsPopoverMenu
+                              <ImageRatioPicker
                                 label="画幅/尺寸"
                                 value={imageAspectRatio}
                                 valueLabel={imageAspectRatioLabel}
-                                options={IMAGE_ASPECT_RATIO_SETTINGS_OPTIONS}
+                                options={DEFAULT_IMAGE_RATIO_PICKER_OPTIONS}
                                 open={isAspectRatioMenuOpen}
                                 onOpenChange={(open) => {
                                   setIsAspectRatioMenuOpen(open);
@@ -1175,6 +1160,9 @@ export function ImageComposer({
                                     onImageResolutionChange("auto");
                                   }
                                 }}
+                                side="top"
+                                triggerClassName="h-7 flex-1 justify-end border-0 bg-transparent px-0 py-0 text-right text-xs font-semibold text-[#18181b] shadow-none hover:bg-transparent focus-visible:ring-0 dark:text-foreground"
+                                contentClassName="w-[min(21rem,calc(100vw-2rem))]"
                               />
                             </div>
                             {resolutionControlsVisible ? (
