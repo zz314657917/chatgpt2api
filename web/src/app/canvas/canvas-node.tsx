@@ -3690,7 +3690,6 @@ function LlmNodeBody({
   onRunLlm: () => void;
   onStopNode: () => void;
 }) {
-  const [imageRatioOpen, setImageRatioOpen] = useState(false);
   const upstream = incomingItems(canvas, item.id);
   const upstreamTexts = upstream
     .map((node) => ({
@@ -4092,6 +4091,7 @@ function GeneratorNodeBody({
   onOpenImage: (image: CanvasImageRef) => void;
   onDeleteDirectImage: (image: CanvasImageRef) => void;
 }) {
+  const [imageRatioOpen, setImageRatioOpen] = useState(false);
   const upstream = incomingItems(canvas, item.id);
   const upstreamPrompts = upstream
     .filter((node) => node.type === "prompt" || node.type === "llm" || node.type === "loop" || node.type === "group")
@@ -4377,7 +4377,13 @@ function GeneratorNodeBody({
           n: proStudioState.settings.n,
         }} />
       ) : null}
-      {outputImages.length > 0 ? <CanvasImageStrip images={outputImages} limit={3} onOpen={onOpenImage} className="grid-cols-3" lightweight={lightweightMedia} /> : null}
+      {outputImages.length > 0 ? (
+        <CanvasGeneratedImagePreview
+          images={outputImages}
+          onOpenImage={onOpenImage}
+          lightweight={lightweightMedia}
+        />
+      ) : null}
       <CanvasRunInsight item={item} />
       {nodeRunning ? (
         <Button
@@ -5217,6 +5223,120 @@ function CanvasGenerationLoading({ status, onStop }: { status?: CreationTask["st
           ) : null}
         </div>
       </div>
+    </div>
+  );
+}
+
+function canvasGalleryImageKey(image: CanvasImageRef, index: number) {
+  return `${canvasImageKey(image) || canvasImageSource(image) || image.name || "image"}-${index}`;
+}
+
+function CanvasGeneratedImagePreview({
+  images,
+  onOpenImage,
+  lightweight,
+}: {
+  images: CanvasImageRef[];
+  onOpenImage: (image: CanvasImageRef) => void;
+  lightweight: boolean;
+}) {
+  const [activeKey, setActiveKey] = useState("");
+  const activeIndex = Math.max(0, images.findIndex((image, index) => canvasGalleryImageKey(image, index) === activeKey));
+  const activeImage = images[activeIndex];
+  const activeSource = activeImage ? canvasImageSource(activeImage) || canvasImagePreviewSource(activeImage) : "";
+
+  if (!activeImage) {
+    return null;
+  }
+
+  return (
+    <div className={cn("rounded-xl border border-border bg-background/70 p-2 dark:border-slate-700 dark:bg-slate-950/45", images.length > 1 && "grid grid-cols-[minmax(0,1fr)_52px] gap-2")}>
+      <button
+        type="button"
+        className="group relative flex h-[210px] min-w-0 items-center justify-center overflow-hidden rounded-lg border border-border bg-muted/70 text-muted-foreground transition hover:border-sky-300 dark:border-slate-700 dark:bg-slate-900/70 dark:text-slate-500 dark:hover:border-sky-400/50"
+        title={canvasImageLabel(activeImage, activeIndex)}
+        aria-label={`查看${canvasImageLabel(activeImage, activeIndex)}`}
+        data-node-interactive="true"
+        draggable
+        onClick={(event) => {
+          event.stopPropagation();
+          onOpenImage(activeImage);
+        }}
+        onDragStart={(event) => {
+          event.stopPropagation();
+          if (!setCanvasImageDragData(event.dataTransfer, [activeImage])) {
+            event.preventDefault();
+          }
+        }}
+      >
+        {lightweight ? (
+          <CanvasImagePlaceholder label={canvasImageLabel(activeImage, activeIndex)} />
+        ) : activeSource ? (
+          <AuthenticatedImage
+            src={activeSource}
+            alt={canvasImageLabel(activeImage, activeIndex)}
+            className="h-full w-full object-contain transition duration-150 group-hover:scale-[1.01]"
+            placeholderClassName="min-h-0 h-full bg-muted text-muted-foreground dark:bg-slate-900 dark:text-slate-500"
+          />
+        ) : (
+          <ImageIcon className="size-5" />
+        )}
+        <span className="absolute left-2 top-2 rounded-md bg-black/55 px-1.5 py-0.5 text-[10px] font-black text-white shadow-sm">
+          {activeIndex + 1} / {images.length}
+        </span>
+        <span className="absolute bottom-2 right-2 flex size-7 items-center justify-center rounded-full border border-white/70 bg-black/45 text-white opacity-0 shadow-sm backdrop-blur-sm transition group-hover:opacity-100">
+          <Pencil className="size-3.5" />
+        </span>
+      </button>
+      {images.length > 1 ? (
+        <div
+          className="flex max-h-[210px] flex-col gap-1.5 overflow-y-auto pr-0.5"
+          data-node-interactive="true"
+          onWheel={(event) => event.stopPropagation()}
+        >
+          {images.map((image, index) => {
+            const key = canvasGalleryImageKey(image, index);
+            const selected = index === activeIndex;
+            const thumbnailSource = canvasImagePreviewSource(image);
+            return (
+              <button
+                key={key}
+                type="button"
+                className={cn(
+                  "relative size-11 shrink-0 overflow-hidden rounded-lg border bg-muted text-muted-foreground transition dark:bg-slate-900 dark:text-slate-500",
+                  selected
+                    ? "border-sky-500 ring-2 ring-sky-400/55 dark:border-sky-300"
+                    : "border-border opacity-80 hover:border-sky-300 hover:opacity-100 dark:border-slate-700 dark:hover:border-sky-400/50",
+                )}
+                title={canvasImageLabel(image, index)}
+                aria-label={`切换到${canvasImageLabel(image, index)}`}
+                aria-pressed={selected}
+                data-node-interactive="true"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setActiveKey(key);
+                }}
+              >
+                {lightweight ? (
+                  <CanvasImagePlaceholder label={`${index + 1}`} />
+                ) : thumbnailSource ? (
+                  <AuthenticatedImage
+                    src={thumbnailSource}
+                    alt={canvasImageLabel(image, index)}
+                    className="h-full w-full object-cover"
+                    placeholderClassName="min-h-0 h-full bg-muted text-muted-foreground dark:bg-slate-900 dark:text-slate-500"
+                  />
+                ) : (
+                  <ImageIcon className="mx-auto size-4" />
+                )}
+                <span className="absolute left-1 top-1 rounded bg-black/55 px-1 text-[9px] font-black leading-4 text-white">
+                  {index + 1}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
     </div>
   );
 }
