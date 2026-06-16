@@ -288,28 +288,28 @@ export const IMAGE_MODEL_ROUTE_DETAILS: Partial<Record<
   }
 >> = {
   "gpt-image-2": {
-    routeLabel: "常规",
-    description: "常规图片通道，比例只作为构图偏好，实际像素以上游返回为准。",
+    routeLabel: "标准版本",
+    description: "标准版本图片通道，比例只作为构图偏好，实际像素以上游返回为准。",
   },
   "gpt-image-2-official": {
-    routeLabel: "官方",
-    description: "官方图片通道，固定像素为本地输出尺寸，实际像素以结果为准。",
+    routeLabel: "官方版本",
+    description: "官方版本图片通道，固定像素为本地输出尺寸，实际像素以结果为准。",
   },
   "gemini-3-pro-image-preview": {
-    routeLabel: "标准版本",
-    description: "标准版本。",
+    routeLabel: "Nano Banana Pro 标准版本",
+    description: "Nano Banana Pro 标准版本。",
   },
   "gemini-3-pro-image-preview-official": {
-    routeLabel: "官方版本",
-    description: "官方版本。",
+    routeLabel: "Nano Banana Pro 官方版本",
+    description: "Nano Banana Pro 官方版本。",
   },
   "gemini-3.1-flash-image-preview": {
-    routeLabel: "标准版本",
-    description: "标准版本。",
+    routeLabel: "Nano Banana 2 标准版本",
+    description: "Nano Banana 2 标准版本。",
   },
   "gemini-3.1-flash-image-preview-official": {
-    routeLabel: "官方版本",
-    description: "官方版本。",
+    routeLabel: "Nano Banana 2 官方版本",
+    description: "Nano Banana 2 官方版本。",
   },
 };
 
@@ -380,6 +380,18 @@ export function isOfficialImageModel(model: ImageModel | string | undefined) {
 
 export function supportsImageQuality(model: ImageModel) {
   return isOfficialImageModel(model);
+}
+
+export function imageReferenceInputLimit(model: ImageModel | string | undefined) {
+  switch (model) {
+    case "gemini-3-pro-image-preview":
+    case "gemini-3-pro-image-preview-official":
+    case "gemini-3.1-flash-image-preview":
+    case "gemini-3.1-flash-image-preview-official":
+      return 14;
+    default:
+      return 16;
+  }
 }
 
 export function estimateImageDisplayPriceUSD(model: ImageModel, count: number, sizeOrResolution: string, quality = "auto") {

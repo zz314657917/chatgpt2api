@@ -5,6 +5,7 @@ import {
   IMAGE_MODEL_ROUTE_DETAILS,
   estimateImageBillingUnits,
   estimateImageDisplayPriceUSD,
+  imageReferenceInputLimit,
   isImageTaskModel,
 } from "@/lib/api";
 
@@ -17,10 +18,12 @@ assert.equal(geminiFlash?.label, "gemini-3.1-flash-image-preview");
 assert.equal(geminiFlashOfficial?.label, "gemini-3.1-flash-image-preview-official");
 assert.equal(geminiPro?.label, "gemini-3-pro-image-preview");
 assert.equal(geminiProOfficial?.label, "gemini-3-pro-image-preview-official");
-assert.equal(IMAGE_MODEL_ROUTE_DETAILS["gemini-3.1-flash-image-preview"]?.routeLabel, "标准版本");
-assert.equal(IMAGE_MODEL_ROUTE_DETAILS["gemini-3.1-flash-image-preview-official"]?.routeLabel, "官方版本");
-assert.equal(IMAGE_MODEL_ROUTE_DETAILS["gemini-3-pro-image-preview"]?.routeLabel, "标准版本");
-assert.equal(IMAGE_MODEL_ROUTE_DETAILS["gemini-3-pro-image-preview-official"]?.routeLabel, "官方版本");
+assert.equal(IMAGE_MODEL_ROUTE_DETAILS["gpt-image-2"]?.routeLabel, "标准版本");
+assert.equal(IMAGE_MODEL_ROUTE_DETAILS["gpt-image-2-official"]?.routeLabel, "官方版本");
+assert.equal(IMAGE_MODEL_ROUTE_DETAILS["gemini-3.1-flash-image-preview"]?.routeLabel, "Nano Banana 2 标准版本");
+assert.equal(IMAGE_MODEL_ROUTE_DETAILS["gemini-3.1-flash-image-preview-official"]?.routeLabel, "Nano Banana 2 官方版本");
+assert.equal(IMAGE_MODEL_ROUTE_DETAILS["gemini-3-pro-image-preview"]?.routeLabel, "Nano Banana Pro 标准版本");
+assert.equal(IMAGE_MODEL_ROUTE_DETAILS["gemini-3-pro-image-preview-official"]?.routeLabel, "Nano Banana Pro 官方版本");
 assert.equal(isImageTaskModel("gemini-3.1-flash-image-preview"), true);
 assert.equal(isImageTaskModel("gemini-3.1-flash-image-preview-official"), true);
 assert.equal(isImageTaskModel("gemini-3-pro-image-preview"), true);
@@ -29,6 +32,12 @@ assert.equal(isImageTaskModel("gpt-5.4"), false);
 assert.equal(isImageTaskModel("gpt-5.5"), false);
 assert.equal(isImageTaskModel("gpt-5.4-mini"), false);
 assert.equal(isImageTaskModel("gpt-5.5-openai-compact"), false);
+assert.equal(imageReferenceInputLimit("gpt-image-2"), 16);
+assert.equal(imageReferenceInputLimit("gpt-image-2-official"), 16);
+assert.equal(imageReferenceInputLimit("gemini-3.1-flash-image-preview"), 14);
+assert.equal(imageReferenceInputLimit("gemini-3.1-flash-image-preview-official"), 14);
+assert.equal(imageReferenceInputLimit("gemini-3-pro-image-preview"), 14);
+assert.equal(imageReferenceInputLimit("gemini-3-pro-image-preview-official"), 14);
 assert.equal(estimateImageBillingUnits("gpt-image-2-official", 1, "2K", "auto"), 721);
 assert.equal(estimateImageBillingUnits("gpt-image-2-official", 1, "2048x2048", "auto"), 82);
 assert.equal(estimateImageBillingUnits("gpt-image-2-official", 1, "2K", "low"), 82);

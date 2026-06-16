@@ -69,6 +69,7 @@ import {
   fetchCreationTasks,
   fetchManagedImages,
   fetchTeamWorkspace,
+  imageReferenceInputLimit,
   isImageCreationModel,
   isOfficialImageModel,
   uploadCreationTaskReferenceImage,
@@ -107,7 +108,6 @@ import exampleModuleImage from "./example-module.webp";
 import exampleSummaryImage from "./example-summary.webp";
 
 const POLL_INTERVAL_MS = 1800;
-const MAX_REFERENCE_IMAGES = 16;
 const SUMMARY_TILE_SIZE = 720;
 const SUMMARY_GAP = 28;
 const SUMMARY_HEADER_HEIGHT = 112;
@@ -269,6 +269,10 @@ function isActiveTask(status?: CreationTask["status"] | "idle") {
 
 function isNonEmptyString(value: string | undefined): value is string {
   return Boolean(value);
+}
+
+function commerceReferenceImageLimit(project: Pick<CommerceSuiteProject, "professionalMode" | "imageModel"> | null | undefined) {
+  return imageReferenceInputLimit(project?.professionalMode ? OFFICIAL_IMAGE_MODEL : project?.imageModel);
 }
 
 function templateById(id: string) {
@@ -615,6 +619,11 @@ export default function EcommerceSuitePage() {
     () => mergeModelOptions(IMAGE_CREATION_MODEL_OPTIONS, selectedProject?.imageModel || DEFAULT_IMAGE_MODEL, isImageCreationModel),
     [selectedProject?.imageModel],
   );
+  const selectedProjectImageReferenceLimit = imageReferenceInputLimit(
+    selectedProject?.professionalMode ? OFFICIAL_IMAGE_MODEL : selectedProject?.imageModel,
+  );
+  const selectedProjectId = selectedProject?.id || "";
+  const selectedProjectReferenceCount = selectedProject?.referenceImages.length || 0;
   const pendingTaskIds = useMemo(() => {
     if (!selectedProject) {
       return [];
@@ -632,6 +641,13 @@ export default function EcommerceSuitePage() {
   useEffect(() => {
     selectedProjectRef.current = selectedProject;
   }, [selectedProject]);
+
+  useEffect(() => {
+    if (!selectedProjectId || selectedProjectReferenceCount <= selectedProjectImageReferenceLimit) {
+      return;
+    }
+    toast.warning(`当前图片模型最多支持 ${selectedProjectImageReferenceLimit} 张产品图和参考图，请移除多余图片后再生成`);
+  }, [selectedProjectId, selectedProjectReferenceCount, selectedProjectImageReferenceLimit]);
 
   useEffect(() => {
     if (!selectedProject?.results.some((result) => isActiveTask(result.status))) {
@@ -1039,8 +1055,9 @@ export default function EcommerceSuitePage() {
   const applyReferenceLibraryImage = async (item: ManagedImageSummary) => {
     const project = selectedProjectRef.current;
     if (!project || referenceLibraryApplyingPath) return;
-    if (project.referenceImages.length >= MAX_REFERENCE_IMAGES) {
-      toast.error(`最多添加 ${MAX_REFERENCE_IMAGES} 张产品图和参考图`);
+    const referenceImageLimit = commerceReferenceImageLimit(project);
+    if (project.referenceImages.length >= referenceImageLimit) {
+      toast.error(`当前图片模型最多添加 ${referenceImageLimit} 张产品图和参考图`);
       return;
     }
     setReferenceLibraryApplyingPath(item.path);
@@ -1049,7 +1066,7 @@ export default function EcommerceSuitePage() {
       const ref = await managedImageToReferenceImage(item, role);
       await persistProject({
         ...project,
-        referenceImages: [...project.referenceImages, ref].slice(0, MAX_REFERENCE_IMAGES),
+        referenceImages: [...project.referenceImages, ref].slice(0, referenceImageLimit),
       });
       setReferenceLibraryOpen(false);
       toast.success(`已从素材库添加${referenceRoleLabel(role)}`);
@@ -1067,9 +1084,10 @@ export default function EcommerceSuitePage() {
       toast.error("请选择图片文件");
       return;
     }
-    const availableSlots = Math.max(0, MAX_REFERENCE_IMAGES - selectedProject.referenceImages.length);
+    const referenceImageLimit = commerceReferenceImageLimit(selectedProject);
+    const availableSlots = Math.max(0, referenceImageLimit - selectedProject.referenceImages.length);
     if (availableSlots <= 0) {
-      toast.error(`最多添加 ${MAX_REFERENCE_IMAGES} 张产品图和参考图`);
+      toast.error(`当前图片模型最多添加 ${referenceImageLimit} 张产品图和参考图`);
       return;
     }
     setUploading(true);
@@ -1081,7 +1099,7 @@ export default function EcommerceSuitePage() {
       });
       toast.success(`已添加 ${refs.length} 张${referenceRoleLabel(role)}`);
       if (imageFiles.length > refs.length) {
-        toast.warning(`最多添加 ${MAX_REFERENCE_IMAGES} 张，已忽略多余图片`);
+        toast.warning(`当前图片模型最多添加 ${referenceImageLimit} 张，已忽略多余图片`);
       }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "读取参考图失败");
@@ -1182,6 +1200,11 @@ export default function EcommerceSuitePage() {
     if (!project || generating) return;
     if (!hasProductImages(project)) {
       toast.error("请先上传产品图");
+      return;
+    }
+    const referenceImageLimit = commerceReferenceImageLimit(project);
+    if (project.referenceImages.length > referenceImageLimit) {
+      toast.error(`当前图片模型最多支持 ${referenceImageLimit} 张产品图和参考图，请先移除多余图片`);
       return;
     }
     if (templateIds.length === 0) {
@@ -1773,12 +1796,15 @@ export default function EcommerceSuitePage() {
                     <div className="text-sm font-semibold text-foreground">产品图与参考图</div>
                     <div className="text-xs text-muted-foreground">产品图锁定主体，参考图补充风格、场景、细节和竞品方向</div>
                   </div>
-                  <Badge variant="info">{selectedProject.referenceImages.length}/{MAX_REFERENCE_IMAGES}</Badge>
+                  <Badge variant={selectedProject.referenceImages.length > selectedProjectImageReferenceLimit ? "danger" : "info"}>
+                    {selectedProject.referenceImages.length}/{selectedProjectImageReferenceLimit}
+                  </Badge>
                 </div>
                 <div className="grid grid-cols-2 gap-2 max-sm:grid-cols-1">
                   {REFERENCE_IMAGE_SLOTS.map((slot) => {
                     const images = selectedProject.referenceImages.filter((item) => item.role === slot.role);
                     const inputId = `commerce-reference-${slot.role}`;
+                    const referenceLimitReached = selectedProject.referenceImages.length >= selectedProjectImageReferenceLimit;
                     return (
                       <div key={slot.role} className="grid gap-1.5 rounded-xl border border-border bg-background p-2">
                         <div className="flex h-7 items-center justify-between gap-2">
@@ -1793,12 +1819,19 @@ export default function EcommerceSuitePage() {
                               size="sm"
                               className="h-7 rounded-lg px-2 text-xs"
                               onClick={() => openReferenceLibrary(slot.role)}
+                              disabled={referenceLimitReached}
                             >
                               <Images className="size-3" />
                               素材库
                             </Button>
-                            <Button asChild variant="outline" size="sm" className="h-7 rounded-lg px-2 text-xs">
-                              <label htmlFor={inputId} className="cursor-pointer">
+                            <Button
+                              asChild
+                              variant="outline"
+                              size="sm"
+                              className={cn("h-7 rounded-lg px-2 text-xs", (referenceLimitReached || uploading) && "pointer-events-none opacity-50")}
+                              aria-disabled={referenceLimitReached || uploading}
+                            >
+                              <label htmlFor={inputId} className={cn(referenceLimitReached || uploading ? "cursor-not-allowed" : "cursor-pointer")}>
                                 {uploading ? <LoaderCircle className="size-3 animate-spin" /> : <ImagePlus className="size-3" />}
                                 上传
                               </label>
@@ -1810,7 +1843,7 @@ export default function EcommerceSuitePage() {
                             accept="image/*"
                             multiple
                             className="sr-only"
-                            disabled={uploading}
+                            disabled={uploading || referenceLimitReached}
                             onChange={(event) => {
                               void handleReferenceUpload(event.target.files, slot.role);
                               event.target.value = "";
