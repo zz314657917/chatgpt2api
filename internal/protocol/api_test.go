@@ -1318,7 +1318,7 @@ func TestResponseImageGenerationRequestRejectsExternalImageModel(t *testing.T) {
 		"model": "gpt-5.5",
 		"input": "生成一张产品图",
 		"tools": []any{
-			map[string]any{"type": "image_generation", "model": util.ImageModelGeminiFlash, "size": "16:9"},
+			map[string]any{"type": "image_generation", "model": util.ImageModelGeminiFlashPreview, "size": "16:9"},
 		},
 	}
 
@@ -1326,7 +1326,7 @@ func TestResponseImageGenerationRequestRejectsExternalImageModel(t *testing.T) {
 	if err == nil {
 		t.Fatal("ResponseImageGenerationRequest() error = nil, want unsupported model")
 	}
-	if !strings.Contains(err.Error(), "unsupported image_generation model: "+util.ImageModelGeminiFlash) {
+	if !strings.Contains(err.Error(), "unsupported image_generation model: "+util.ImageModelGeminiFlashPreview) {
 		t.Fatalf("error = %v", err)
 	}
 }

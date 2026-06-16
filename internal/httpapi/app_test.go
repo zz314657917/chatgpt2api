@@ -1297,7 +1297,7 @@ func TestProtocolImageBillingUnitAmountResolutionOverridesSize(t *testing.T) {
 }
 
 func TestProtocolImageBillingUnitAmountGeminiProReferencePrice(t *testing.T) {
-	got := protocolImageBillingUnitAmount(util.ImageModelGeminiPro, map[string]any{
+	got := protocolImageBillingUnitAmount(util.ImageModelGeminiProPreview, map[string]any{
 		"size":             "16:9",
 		"image_resolution": "4k",
 	})
@@ -3671,7 +3671,7 @@ func TestCanvasModelsUseSub2APIGatewayForBoundUser(t *testing.T) {
 		t.Fatalf("canvas models json: %v", err)
 	}
 	items := util.AsMapSlice(payload["items"])
-	if len(items) != 6 {
+	if len(items) != 8 {
 		t.Fatalf("canvas models items = %#v", items)
 	}
 	ids := map[string]string{}
@@ -3682,13 +3682,34 @@ func TestCanvasModelsUseSub2APIGatewayForBoundUser(t *testing.T) {
 		capabilities[util.Clean(item["id"])] = util.AsStringSlice(item["capabilities"])
 		enabled[util.Clean(item["id"])] = util.ToBool(item["enabled"])
 	}
-	if ids["remote-chat"] != "text" || ids[util.ImageModelGPT] != "image" || ids[util.ImageModelGPTOfficial] != "image" || ids[util.ImageModelGeminiFlash] != "image" || ids[util.ImageModelGeminiPro] != "image" || ids["sora-2"] != "video" {
+	if ids["remote-chat"] != "text" ||
+		ids[util.ImageModelGPT] != "image" ||
+		ids[util.ImageModelGPTOfficial] != "image" ||
+		ids[util.ImageModelGeminiProPreview] != "image" ||
+		ids[util.ImageModelGeminiProPreviewOfficial] != "image" ||
+		ids[util.ImageModelGeminiFlashPreview] != "image" ||
+		ids[util.ImageModelGeminiFlashPreviewOfficial] != "image" ||
+		ids["sora-2"] != "video" {
 		t.Fatalf("canvas model kinds = %#v", ids)
 	}
-	if fmt.Sprint(capabilities["remote-chat"]) != "[chat]" || fmt.Sprint(capabilities[util.ImageModelGPT]) != "[image]" || fmt.Sprint(capabilities[util.ImageModelGPTOfficial]) != "[image]" || fmt.Sprint(capabilities[util.ImageModelGeminiFlash]) != "[image]" || fmt.Sprint(capabilities[util.ImageModelGeminiPro]) != "[image]" || fmt.Sprint(capabilities["sora-2"]) != "[video]" {
+	if fmt.Sprint(capabilities["remote-chat"]) != "[chat]" ||
+		fmt.Sprint(capabilities[util.ImageModelGPT]) != "[image]" ||
+		fmt.Sprint(capabilities[util.ImageModelGPTOfficial]) != "[image]" ||
+		fmt.Sprint(capabilities[util.ImageModelGeminiProPreview]) != "[image]" ||
+		fmt.Sprint(capabilities[util.ImageModelGeminiProPreviewOfficial]) != "[image]" ||
+		fmt.Sprint(capabilities[util.ImageModelGeminiFlashPreview]) != "[image]" ||
+		fmt.Sprint(capabilities[util.ImageModelGeminiFlashPreviewOfficial]) != "[image]" ||
+		fmt.Sprint(capabilities["sora-2"]) != "[video]" {
 		t.Fatalf("canvas model capabilities = %#v", capabilities)
 	}
-	if !enabled["remote-chat"] || !enabled[util.ImageModelGPT] || !enabled[util.ImageModelGPTOfficial] || !enabled[util.ImageModelGeminiFlash] || !enabled[util.ImageModelGeminiPro] || enabled["sora-2"] {
+	if !enabled["remote-chat"] ||
+		!enabled[util.ImageModelGPT] ||
+		!enabled[util.ImageModelGPTOfficial] ||
+		!enabled[util.ImageModelGeminiProPreview] ||
+		!enabled[util.ImageModelGeminiProPreviewOfficial] ||
+		!enabled[util.ImageModelGeminiFlashPreview] ||
+		!enabled[util.ImageModelGeminiFlashPreviewOfficial] ||
+		enabled["sora-2"] {
 		t.Fatalf("canvas model enabled flags = %#v", enabled)
 	}
 	if _, ok := ids[util.ImageModelAuto]; ok {
@@ -3753,14 +3774,20 @@ func TestCanvasModelsFallbackToSub2APIModelsForBoundUser(t *testing.T) {
 		t.Fatalf("canvas models json: %v", err)
 	}
 	items := util.AsMapSlice(payload["items"])
-	if len(items) != 5 {
+	if len(items) != 7 {
 		t.Fatalf("canvas models items = %#v", items)
 	}
 	ids := map[string]string{}
 	for _, item := range items {
 		ids[util.Clean(item["id"])] = util.Clean(item["kind"])
 	}
-	if ids["remote-chat"] != "text" || ids[util.ImageModelGPT] != "image" || ids[util.ImageModelGPTOfficial] != "image" || ids[util.ImageModelGeminiFlash] != "image" || ids[util.ImageModelGeminiPro] != "image" {
+	if ids["remote-chat"] != "text" ||
+		ids[util.ImageModelGPT] != "image" ||
+		ids[util.ImageModelGPTOfficial] != "image" ||
+		ids[util.ImageModelGeminiProPreview] != "image" ||
+		ids[util.ImageModelGeminiProPreviewOfficial] != "image" ||
+		ids[util.ImageModelGeminiFlashPreview] != "image" ||
+		ids[util.ImageModelGeminiFlashPreviewOfficial] != "image" {
 		t.Fatalf("canvas model kinds = %#v", ids)
 	}
 }

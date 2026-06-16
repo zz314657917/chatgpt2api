@@ -47,17 +47,22 @@ func TestAddBuiltInCanvasImageModelsIncludesOfficialRoute(t *testing.T) {
 	}))
 
 	assertCanvasModelIDs(t, items, map[string]bool{
-		util.ImageModelGPT:         true,
-		util.ImageModelGPTOfficial: true,
-		util.ImageModelGeminiFlash: true,
-		util.ImageModelGeminiPro:   true,
-		util.ImageModelCodex:       false,
-		"gpt-image-1.5":            true,
+		util.ImageModelGPT:                        true,
+		util.ImageModelGPTOfficial:                true,
+		util.ImageModelGeminiProPreview:           true,
+		util.ImageModelGeminiProPreviewOfficial:   true,
+		util.ImageModelGeminiFlashPreview:         true,
+		util.ImageModelGeminiFlashPreviewOfficial: true,
+		util.ImageModelCodex:                      false,
+		"gpt-image-1.5":                           true,
 	})
 	assertCanvasModelCapabilities(t, items, util.ImageModelGPTOfficial, "image")
-	assertCanvasModelCapabilities(t, items, util.ImageModelGeminiFlash, "image")
-	assertCanvasModelName(t, items, util.ImageModelGeminiFlash, "Nano Banana 2")
-	assertCanvasModelName(t, items, util.ImageModelGeminiPro, "Nano Banana Pro")
+	assertCanvasModelCapabilities(t, items, util.ImageModelGeminiProPreview, "image")
+	assertCanvasModelCapabilities(t, items, util.ImageModelGeminiProPreviewOfficial, "image")
+	assertCanvasModelCapabilities(t, items, util.ImageModelGeminiFlashPreview, "image")
+	assertCanvasModelCapabilities(t, items, util.ImageModelGeminiFlashPreviewOfficial, "image")
+	assertCanvasModelName(t, items, util.ImageModelGeminiProPreview, util.ImageModelGeminiProPreview)
+	assertCanvasModelName(t, items, util.ImageModelGeminiFlashPreview, util.ImageModelGeminiFlashPreview)
 }
 
 func TestCanvasModelOptionsDoNotExposeVideoWithoutSub2APIBinding(t *testing.T) {

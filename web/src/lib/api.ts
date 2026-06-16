@@ -24,8 +24,10 @@ export const IMAGE_MODEL_OPTIONS = [
   { value: "auto", label: "Auto" },
   { value: "gpt-image-2", label: "gpt-image-2" },
   { value: "gpt-image-2-official", label: "gpt-image-2-official" },
-  { value: "gemini-3.1-flash-image", label: "Nano Banana 2" },
-  { value: "gemini-3-pro-image", label: "Nano Banana Pro" },
+  { value: "gemini-3-pro-image-preview", label: "gemini-3-pro-image-preview" },
+  { value: "gemini-3-pro-image-preview-official", label: "gemini-3-pro-image-preview-official" },
+  { value: "gemini-3.1-flash-image-preview", label: "gemini-3.1-flash-image-preview" },
+  { value: "gemini-3.1-flash-image-preview-official", label: "gemini-3.1-flash-image-preview-official" },
   { value: "gpt-5.5", label: "gpt-5.5" },
   { value: "gpt-5.4", label: "gpt-5.4" },
   { value: "gpt-5.4-mini", label: "gpt-5.4-mini" },
@@ -36,9 +38,14 @@ export const DEFAULT_CHAT_MODEL: ImageModel = "auto";
 export const CODEX_IMAGE_MODEL: ImageModel = "codex-gpt-image-2";
 export const OFFICIAL_IMAGE_MODEL: ImageModel = "gpt-image-2-official";
 const IMAGE_MODEL_VALUES = new Set<string>(IMAGE_MODEL_OPTIONS.map((option) => option.value));
-const GEMINI_FLASH_IMAGE_MODEL = "gemini-3.1-flash-image";
-const GEMINI_PRO_IMAGE_MODEL = "gemini-3-pro-image";
-const IMAGE_TASK_MODEL_VALUES = new Set<string>(["gpt-image-2", "gpt-image-2-official", GEMINI_FLASH_IMAGE_MODEL, GEMINI_PRO_IMAGE_MODEL]);
+const GEMINI_FLASH_IMAGE_MODELS = new Set<string>(["gemini-3.1-flash-image-preview", "gemini-3.1-flash-image-preview-official"]);
+const GEMINI_PRO_IMAGE_MODELS = new Set<string>(["gemini-3-pro-image-preview", "gemini-3-pro-image-preview-official"]);
+const IMAGE_TASK_MODEL_VALUES = new Set<string>([
+  "gpt-image-2",
+  "gpt-image-2-official",
+  ...GEMINI_PRO_IMAGE_MODELS,
+  ...GEMINI_FLASH_IMAGE_MODELS,
+]);
 const CHAT_MODEL_VALUES = new Set<string>([
   "auto",
   "gpt-5.5",
@@ -272,6 +279,22 @@ export const IMAGE_MODEL_ROUTE_DETAILS: Partial<Record<
     routeLabel: "官方",
     description: "官方图片通道，固定像素为本地输出尺寸，实际像素以结果为准。",
   },
+  "gemini-3-pro-image-preview": {
+    routeLabel: "标准版本",
+    description: "标准版本。",
+  },
+  "gemini-3-pro-image-preview-official": {
+    routeLabel: "官方版本",
+    description: "官方版本。",
+  },
+  "gemini-3.1-flash-image-preview": {
+    routeLabel: "标准版本",
+    description: "标准版本。",
+  },
+  "gemini-3.1-flash-image-preview-official": {
+    routeLabel: "官方版本",
+    description: "官方版本。",
+  },
 };
 
 export function isImageModel(value: unknown): value is ImageModel {
@@ -357,11 +380,11 @@ export function estimateImageDisplayPriceUSD(model: ImageModel, count: number, s
       GPT_IMAGE_2_OFFICIAL_BASE_PRICE_USD[`${normalizedSize}@${normalizedQuality}`] ??
       GPT_IMAGE_2_OFFICIAL_BASE_PRICE_USD[`${normalizedSize}@auto`] ??
       GPT_IMAGE_2_OFFICIAL_BASE_PRICE_USD.default;
-  } else if (model === GEMINI_FLASH_IMAGE_MODEL) {
+  } else if (GEMINI_FLASH_IMAGE_MODELS.has(model)) {
     const normalizedResolution =
       sizeOrResolution === "2K" || sizeOrResolution === "4K" || sizeOrResolution === "1K" ? sizeOrResolution : "default";
     basePrice = GEMINI_FLASH_IMAGE_BASE_PRICE_USD[normalizedResolution];
-  } else if (model === GEMINI_PRO_IMAGE_MODEL) {
+  } else if (GEMINI_PRO_IMAGE_MODELS.has(model)) {
     const normalizedResolution =
       sizeOrResolution === "2K" || sizeOrResolution === "4K" || sizeOrResolution === "1K" ? sizeOrResolution : "default";
     basePrice = GEMINI_PRO_IMAGE_BASE_PRICE_USD[normalizedResolution];

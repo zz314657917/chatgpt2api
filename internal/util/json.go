@@ -17,32 +17,38 @@ import (
 )
 
 const (
-	ImageModelAuto        = "auto"
-	ImageModelGPT         = "gpt-image-2"
-	ImageModelGPTOfficial = "gpt-image-2-official"
-	ImageModelCodex       = "codex-gpt-image-2"
-	ImageModelGeminiFlash = "gemini-3.1-flash-image"
-	ImageModelGeminiPro   = "gemini-3-pro-image"
-	ImageModelGPT54       = "gpt-5.4"
-	ImageModelGPT54Mini   = "gpt-5.4-mini"
-	ImageModelGPT55       = "gpt-5.5"
-	DefaultChatModel      = ImageModelGPT55
+	ImageModelAuto                       = "auto"
+	ImageModelGPT                        = "gpt-image-2"
+	ImageModelGPTOfficial                = "gpt-image-2-official"
+	ImageModelCodex                      = "codex-gpt-image-2"
+	ImageModelGeminiProPreview           = "gemini-3-pro-image-preview"
+	ImageModelGeminiProPreviewOfficial   = "gemini-3-pro-image-preview-official"
+	ImageModelGeminiFlashPreview         = "gemini-3.1-flash-image-preview"
+	ImageModelGeminiFlashPreviewOfficial = "gemini-3.1-flash-image-preview-official"
+	ImageModelGPT54                      = "gpt-5.4"
+	ImageModelGPT54Mini                  = "gpt-5.4-mini"
+	ImageModelGPT55                      = "gpt-5.5"
+	DefaultChatModel                     = ImageModelGPT55
 )
 
 var ImageModels = map[string]struct{}{
-	ImageModelGPT:         {},
-	ImageModelGPTOfficial: {},
-	ImageModelCodex:       {},
-	ImageModelGeminiFlash: {},
-	ImageModelGeminiPro:   {},
+	ImageModelGPT:                        {},
+	ImageModelGPTOfficial:                {},
+	ImageModelCodex:                      {},
+	ImageModelGeminiProPreview:           {},
+	ImageModelGeminiProPreviewOfficial:   {},
+	ImageModelGeminiFlashPreview:         {},
+	ImageModelGeminiFlashPreviewOfficial: {},
 }
 
 var ModelIDs = []string{
 	ImageModelGPT,
 	ImageModelGPTOfficial,
 	ImageModelCodex,
-	ImageModelGeminiFlash,
-	ImageModelGeminiPro,
+	ImageModelGeminiProPreview,
+	ImageModelGeminiProPreviewOfficial,
+	ImageModelGeminiFlashPreview,
+	ImageModelGeminiFlashPreviewOfficial,
 	ImageModelAuto,
 	ImageModelGPT55,
 	ImageModelGPT54,
@@ -53,8 +59,10 @@ var ImageGenerationModelIDs = []string{
 	ImageModelGPT,
 	ImageModelGPTOfficial,
 	ImageModelCodex,
-	ImageModelGeminiFlash,
-	ImageModelGeminiPro,
+	ImageModelGeminiProPreview,
+	ImageModelGeminiProPreviewOfficial,
+	ImageModelGeminiFlashPreview,
+	ImageModelGeminiFlashPreviewOfficial,
 	ImageModelAuto,
 }
 

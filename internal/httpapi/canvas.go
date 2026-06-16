@@ -585,14 +585,21 @@ func canvasModelOptionsFromCatalog(result map[string]any) []canvasModelOption {
 }
 
 func addBuiltInCanvasImageModels(items []canvasModelOption) []canvasModelOption {
-	seen := make(map[string]canvasModelOption, len(items)+2)
+	seen := make(map[string]canvasModelOption, len(items)+6)
 	for _, item := range items {
 		if item.ID == "" || shouldHideCanvasModel(item.ID) {
 			continue
 		}
 		seen[item.ID] = item
 	}
-	for _, id := range []string{util.ImageModelGPT, util.ImageModelGPTOfficial, util.ImageModelGeminiFlash, util.ImageModelGeminiPro} {
+	for _, id := range []string{
+		util.ImageModelGPT,
+		util.ImageModelGPTOfficial,
+		util.ImageModelGeminiProPreview,
+		util.ImageModelGeminiProPreviewOfficial,
+		util.ImageModelGeminiFlashPreview,
+		util.ImageModelGeminiFlashPreviewOfficial,
+	} {
 		if _, ok := seen[id]; !ok {
 			seen[id] = newCanvasModelOption(id, canvasModelDisplayName(id), false)
 		}
@@ -830,7 +837,13 @@ func canvasModelCapabilitiesForModelList(id string, allowVideo bool) []string {
 	switch id {
 	case util.ImageModelAuto:
 		return []string{"chat", "image"}
-	case util.ImageModelGPT, util.ImageModelGPTOfficial, util.ImageModelCodex, util.ImageModelGeminiFlash, util.ImageModelGeminiPro:
+	case util.ImageModelGPT,
+		util.ImageModelGPTOfficial,
+		util.ImageModelCodex,
+		util.ImageModelGeminiProPreview,
+		util.ImageModelGeminiProPreviewOfficial,
+		util.ImageModelGeminiFlashPreview,
+		util.ImageModelGeminiFlashPreviewOfficial:
 		return []string{"image"}
 	default:
 		if canvasModelLooksLikeImage(id) {
@@ -841,14 +854,7 @@ func canvasModelCapabilitiesForModelList(id string, allowVideo bool) []string {
 }
 
 func canvasModelDisplayName(id string) string {
-	switch strings.TrimSpace(id) {
-	case util.ImageModelGeminiFlash:
-		return "Nano Banana 2"
-	case util.ImageModelGeminiPro:
-		return "Nano Banana Pro"
-	default:
-		return id
-	}
+	return strings.TrimSpace(id)
 }
 
 func canvasModelOptionHasCapability(item canvasModelOption, capability string) bool {
@@ -889,7 +895,13 @@ func canvasModelCapabilities(value any, id string) []string {
 	switch id {
 	case util.ImageModelAuto:
 		return []string{"chat", "image"}
-	case util.ImageModelGPT, util.ImageModelGPTOfficial, util.ImageModelCodex, util.ImageModelGeminiFlash, util.ImageModelGeminiPro:
+	case util.ImageModelGPT,
+		util.ImageModelGPTOfficial,
+		util.ImageModelCodex,
+		util.ImageModelGeminiProPreview,
+		util.ImageModelGeminiProPreviewOfficial,
+		util.ImageModelGeminiFlashPreview,
+		util.ImageModelGeminiFlashPreviewOfficial:
 		return []string{"image"}
 	default:
 		if canvasModelLooksLikeVideo(id) {
