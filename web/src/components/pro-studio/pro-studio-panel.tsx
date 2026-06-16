@@ -102,6 +102,16 @@ const PRO_STUDIO_QUALITY_OPTIONS = [
   { value: "high", label: "高质" },
 ] as const;
 
+const PRO_STUDIO_BACKGROUND_LABELS = {
+  auto: "自动",
+  opaque: "不透明",
+} as const;
+
+const PRO_STUDIO_MODERATION_LABELS = {
+  auto: "自动",
+  low: "低强度",
+} as const;
+
 const PRO_STUDIO_COUNT_OPTIONS = Array.from({ length: OFFICIAL_IMAGE_LIMITS.maxN }, (_, index) => index + 1);
 
 export function ProStudioPanel({
@@ -266,8 +276,26 @@ export function ProStudioPanel({
                   className={inputClassName}
                 />
               </label>
-              <ProStudioSelect label="背景" value={normalized.settings.background} options={OFFICIAL_IMAGE_BACKGROUND_OPTIONS} onValueChange={(background) => setSettings({ background: background as ProStudioState["settings"]["background"] })} fieldClassName={fieldClassName} selectTriggerClassName={selectTriggerClassName} labelClassName={stableLabelClassName} />
-              <ProStudioSelect label="审核" value={normalized.settings.moderation} options={OFFICIAL_IMAGE_MODERATION_OPTIONS} onValueChange={(moderation) => setSettings({ moderation: moderation as ProStudioState["settings"]["moderation"] })} fieldClassName={fieldClassName} selectTriggerClassName={selectTriggerClassName} labelClassName={stableLabelClassName} />
+              <ProStudioSelect
+                label="背景"
+                value={normalized.settings.background}
+                options={OFFICIAL_IMAGE_BACKGROUND_OPTIONS}
+                optionLabels={PRO_STUDIO_BACKGROUND_LABELS}
+                onValueChange={(background) => setSettings({ background: background as ProStudioState["settings"]["background"] })}
+                fieldClassName={fieldClassName}
+                selectTriggerClassName={selectTriggerClassName}
+                labelClassName={stableLabelClassName}
+              />
+              <ProStudioSelect
+                label="审核"
+                value={normalized.settings.moderation}
+                options={OFFICIAL_IMAGE_MODERATION_OPTIONS}
+                optionLabels={PRO_STUDIO_MODERATION_LABELS}
+                onValueChange={(moderation) => setSettings({ moderation: moderation as ProStudioState["settings"]["moderation"] })}
+                fieldClassName={fieldClassName}
+                selectTriggerClassName={selectTriggerClassName}
+                labelClassName={stableLabelClassName}
+              />
             </div>
           ) : null}
         </div>
@@ -453,6 +481,7 @@ function ProStudioSelect<T extends string>({
   label,
   value,
   options,
+  optionLabels,
   onValueChange,
   fieldClassName,
   selectTriggerClassName,
@@ -461,6 +490,7 @@ function ProStudioSelect<T extends string>({
   label: string;
   value: T;
   options: readonly T[];
+  optionLabels?: Partial<Record<T, string>>;
   onValueChange: (value: T) => void;
   fieldClassName: string;
   selectTriggerClassName: string;
@@ -475,7 +505,7 @@ function ProStudioSelect<T extends string>({
         </SelectTrigger>
         <SelectContent>
           {options.map((option) => (
-            <SelectItem key={option} value={option}>{option}</SelectItem>
+            <SelectItem key={option} value={option}>{optionLabels?.[option] || option}</SelectItem>
           ))}
         </SelectContent>
       </Select>
