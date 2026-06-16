@@ -1268,6 +1268,53 @@ func TestSub2APIOfficialInpaintPayloadUsesMaskURL(t *testing.T) {
 	}
 }
 
+func TestSub2APIGeminiImagePayloadUsesDataURIReferences(t *testing.T) {
+	payload, err := sub2APIImageGatewayJSONPayload(map[string]any{
+		"prompt":           "edit",
+		"model":            util.ImageModelGeminiFlashPreview,
+		"image_resolution": "0.5K",
+		"google_search":    true,
+		"images": []protocol.UploadedImage{
+			{Filename: "source.png", ContentType: "image/png", Data: []byte("private")},
+		},
+	})
+	if err != nil {
+		t.Fatalf("gemini payload error = %v", err)
+	}
+	if payload["model"] != util.ImageModelGeminiFlashPreview || payload["resolution"] != "0.5K" || payload["google_search"] != true {
+		t.Fatalf("gemini payload = %#v", payload)
+	}
+	urls := util.AsStringSlice(payload["image_urls"])
+	if len(urls) != 1 || !strings.HasPrefix(urls[0], "data:image/png;base64,") {
+		t.Fatalf("gemini image_urls = %#v", payload["image_urls"])
+	}
+	if _, ok := payload["quality"]; ok {
+		t.Fatalf("gemini payload should omit unsupported quality: %#v", payload)
+	}
+}
+
+func TestSub2APIGeminiProPayloadUsesMaskURL(t *testing.T) {
+	payload, err := sub2APIImageGatewayJSONPayload(map[string]any{
+		"prompt":           "inpaint",
+		"model":            util.ImageModelGeminiProPreview,
+		"image_resolution": "4k",
+		"input_image_mask": "data:image/png;base64,bWFzaw==",
+		"images": []protocol.UploadedImage{
+			{Filename: "source.jpg", ContentType: "image/jpeg", Data: []byte("private")},
+		},
+	})
+	if err != nil {
+		t.Fatalf("gemini pro payload error = %v", err)
+	}
+	if payload["resolution"] != "4K" || payload["mask_url"] != "data:image/png;base64,bWFzaw==" {
+		t.Fatalf("gemini pro payload = %#v", payload)
+	}
+	urls := util.AsStringSlice(payload["image_urls"])
+	if len(urls) != 1 || !strings.HasPrefix(urls[0], "data:image/jpeg;base64,") {
+		t.Fatalf("gemini pro image_urls = %#v", payload["image_urls"])
+	}
+}
+
 func TestSub2APIOfficialImageEditPayloadRejectsPrivateReferences(t *testing.T) {
 	_, err := sub2APIImageGatewayJSONPayload(map[string]any{
 		"prompt": "edit",
@@ -3237,15 +3284,48 @@ func TestSub2APIImageCreationTaskUsesOfficialFallbackAndPollsTask(t *testing.T) 
 }
 
 func TestSub2APITaskStatusCreditsCostBecomesExternalBillingCost(t *testing.T) {
-	result := map[string]any{
-		"status":       "completed",
-		"credits_cost": 1.1055,
+	tests := []struct {
+		name   string
+		result map[string]any
+		want   float64
+	}{
+		{
+			name:   "top level credits cost field",
+			result: map[string]any{"status": "completed", "credits_cost": 1.1055},
+			want:   0.11055,
+		},
+		{
+			name:   "top level cost with credits unit",
+			result: map[string]any{"status": "completed", "cost": 0.86816, "unit": "credits"},
+			want:   0.086816,
+		},
+		{
+			name: "nested billing price with credits amount unit",
+			result: map[string]any{
+				"status": "completed",
+				"data": map[string]any{
+					"billing": map[string]any{
+						"price":       "0.86816",
+						"amount_unit": "credits",
+					},
+				},
+			},
+			want: 0.086816,
+		},
+		{
+			name:   "plain cost remains apimart usd cost",
+			result: map[string]any{"status": "completed", "cost": 0.086816},
+			want:   0.086816,
+		},
 	}
 
-	cost, ok := sub2APITaskCost(result)
-
-	if !ok || cost != 0.11055 {
-		t.Fatalf("sub2APITaskCost() = %.12f ok=%v, want 0.11055 true", cost, ok)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cost, ok := sub2APITaskCost(tc.result)
+			if !ok || cost < tc.want-1e-12 || cost > tc.want+1e-12 {
+				t.Fatalf("sub2APITaskCost() = %.12f ok=%v, want %.12f true", cost, ok, tc.want)
+			}
+		})
 	}
 }
 
@@ -3339,6 +3419,106 @@ func TestSub2APIOfficialImageEditTaskUsesJSONGatewayPayload(t *testing.T) {
 	}
 	if received["output_format"] != "webp" || received["output_compression"] != float64(100) {
 		t.Fatalf("official edit output options = %#v", received)
+	}
+}
+
+func TestSub2APIGeminiImageEditTaskUsesDataURIReferences(t *testing.T) {
+	app := newTestApp(t)
+	defer app.Close()
+
+	var received map[string]any
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/images/generations" {
+			t.Fatalf("gateway request = %s %s", r.Method, r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer sub2-key" {
+			t.Fatalf("gateway Authorization = %q", got)
+		}
+		if !strings.Contains(r.Header.Get("Content-Type"), "application/json") {
+			t.Fatalf("gateway Content-Type = %q, want JSON", r.Header.Get("Content-Type"))
+		}
+		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
+			t.Fatalf("gateway json: %v", err)
+		}
+		util.WriteJSON(w, http.StatusOK, map[string]any{
+			"created": 123,
+			"data": []map[string]any{
+				{"b64_json": sub2APITestPNGBase64},
+			},
+		})
+	}))
+	defer gateway.Close()
+
+	owner := service.AuthOwner{ID: "sub2api:gemini-edit-user", Name: "gemini-edit", Provider: service.AuthProviderSub2API}
+	_, sessionKey, err := app.auth.UpsertSub2APISession(owner)
+	if err != nil {
+		t.Fatalf("UpsertSub2APISession() error = %v", err)
+	}
+	if err := app.sub2Bindings.Save(service.Sub2APIBinding{
+		OwnerID:        owner.ID,
+		Sub2APIUserID:  "gemini-edit-user",
+		SessionToken:   "session-gemini-edit-user",
+		APIKey:         "sub2-key",
+		GatewayBaseURL: gateway.URL,
+	}); err != nil {
+		t.Fatalf("Save(Sub2APIBinding) error = %v", err)
+	}
+	referenceBytes, err := base64.StdEncoding.DecodeString(sub2APITestPNGBase64)
+	if err != nil {
+		t.Fatalf("decode reference png: %v", err)
+	}
+	ref, err := app.images.StoreTempReferenceImage(service.UploadedTempReferenceImage{
+		ClientReferenceID: "client-ref-1",
+		Filename:          "source.png",
+		ContentType:       "image/png",
+		Data:              referenceBytes,
+	}, owner.ID)
+	if err != nil {
+		t.Fatalf("StoreTempReferenceImage() error = %v", err)
+	}
+
+	body := jsonString(map[string]any{
+		"client_task_id":      "sub2-gemini-edit-task",
+		"prompt":              "keep the product, change background",
+		"model":               util.ImageModelGeminiFlashPreview,
+		"reference_image_ids": []string{ref.ID},
+		"image_resolution":    "2K",
+		"n":                   2,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/creation-tasks/image-edits", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+sessionKey)
+	req.Header.Set("Content-Type", "application/json")
+	res := httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("submit gemini edit task status = %d body = %s", res.Code, res.Body.String())
+	}
+
+	waitForHTTPTestCondition(t, func() bool {
+		req = httptest.NewRequest(http.MethodGet, "/api/creation-tasks?ids=sub2-gemini-edit-task", nil)
+		req.Header.Set("Authorization", "Bearer "+sessionKey)
+		res = httptest.NewRecorder()
+		app.Handler().ServeHTTP(res, req)
+		if res.Code != http.StatusOK {
+			t.Fatalf("list gemini edit task status = %d body = %s", res.Code, res.Body.String())
+		}
+		var listed map[string]any
+		if err := json.Unmarshal(res.Body.Bytes(), &listed); err != nil {
+			t.Fatalf("list gemini edit task json: %v", err)
+		}
+		items := util.AsMapSlice(listed["items"])
+		return len(items) == 1 && items[0]["status"] == service.TaskStatusSuccess
+	})
+
+	if received["model"] != util.ImageModelGeminiFlashPreview || received["resolution"] != "2K" || received["n"] != float64(2) {
+		t.Fatalf("gemini edit gateway body = %#v", received)
+	}
+	urls := util.AsStringSlice(received["image_urls"])
+	if len(urls) != 1 || !strings.HasPrefix(urls[0], "data:image/png;base64,") {
+		t.Fatalf("gemini edit image_urls = %#v", received["image_urls"])
+	}
+	if _, ok := received["quality"]; ok {
+		t.Fatalf("gemini edit should omit unsupported quality: %#v", received)
 	}
 }
 

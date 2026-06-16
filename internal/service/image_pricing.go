@@ -207,9 +207,18 @@ var gptImage2OfficialBasePriceUSD = map[string]float64{
 
 var geminiFlashImageBasePriceUSD = map[string]float64{
 	"default": 0.0375,
+	"0.5K":    0.0375,
 	"1K":      0.0375,
 	"2K":      0.05,
 	"4K":      0.075,
+}
+
+var geminiFlashOfficialImageBasePriceUSD = map[string]float64{
+	"default": 0.067,
+	"0.5K":    0.067,
+	"1K":      0.067,
+	"2K":      0.101,
+	"4K":      0.151,
 }
 
 var geminiProImageBasePriceUSD = map[string]float64{
@@ -217,6 +226,13 @@ var geminiProImageBasePriceUSD = map[string]float64{
 	"1K":      0.05,
 	"2K":      0.05,
 	"4K":      0.0625,
+}
+
+var geminiProOfficialImageBasePriceUSD = map[string]float64{
+	"default": 0.134,
+	"1K":      0.134,
+	"2K":      0.134,
+	"4K":      0.24,
 }
 
 func EstimateImageBillingAmount(model string, count int, sizeOrResolution, quality string) int {
@@ -247,8 +263,8 @@ func estimateImageUnitPriceUSD(model, sizeOrResolution, quality string) (float64
 		}
 		return gptImage2BasePriceUSD[key], true
 	case util.ImageModelGPTOfficial:
-		size := imagePriceSizeKey(sizeOrResolution)
-		q := normalizeImagePriceQuality(quality)
+		size := imagePriceOfficialSizeKey(sizeOrResolution)
+		q := imagePriceOfficialQualityKey(sizeOrResolution, quality)
 		if price, ok := gptImage2OfficialBasePriceUSD[size+"@"+q]; ok {
 			return price, true
 		}
@@ -256,18 +272,48 @@ func estimateImageUnitPriceUSD(model, sizeOrResolution, quality string) (float64
 			return price, true
 		}
 		return gptImage2OfficialBasePriceUSD["default"], true
-	case util.ImageModelGeminiFlashPreview, util.ImageModelGeminiFlashPreviewOfficial:
+	case util.ImageModelGeminiFlashPreview:
 		return imageResolutionTierPrice(geminiFlashImageBasePriceUSD, sizeOrResolution), true
-	case util.ImageModelGeminiProPreview, util.ImageModelGeminiProPreviewOfficial:
+	case util.ImageModelGeminiFlashPreviewOfficial:
+		return imageResolutionTierPrice(geminiFlashOfficialImageBasePriceUSD, sizeOrResolution), true
+	case util.ImageModelGeminiProPreview:
 		return imageResolutionTierPrice(geminiProImageBasePriceUSD, sizeOrResolution), true
+	case util.ImageModelGeminiProPreviewOfficial:
+		return imageResolutionTierPrice(geminiProOfficialImageBasePriceUSD, sizeOrResolution), true
 	default:
 		return 0, false
 	}
 }
 
+func imagePriceOfficialSizeKey(sizeOrResolution string) string {
+	switch strings.TrimSpace(sizeOrResolution) {
+	case "1K":
+		return "1024x1024"
+	case "2K":
+		return "2048x2048"
+	case "4K":
+		return "3840x2160"
+	default:
+		return imagePriceSizeKey(sizeOrResolution)
+	}
+}
+
+func imagePriceOfficialQualityKey(sizeOrResolution, quality string) string {
+	q := normalizeImagePriceQuality(quality)
+	if q != "auto" {
+		return q
+	}
+	switch strings.TrimSpace(sizeOrResolution) {
+	case "1K", "2K", "4K":
+		return "medium"
+	default:
+		return q
+	}
+}
+
 func imageResolutionTierPrice(prices map[string]float64, sizeOrResolution string) float64 {
 	key := strings.TrimSpace(sizeOrResolution)
-	if key != "1K" && key != "2K" && key != "4K" {
+	if key != "0.5K" && key != "1K" && key != "2K" && key != "4K" {
 		key = "default"
 	}
 	return prices[key]

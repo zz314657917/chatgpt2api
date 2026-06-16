@@ -271,6 +271,48 @@ func TestImageTaskServiceExternalBillingUsesTaskStatusCostOverride(t *testing.T)
 	}
 }
 
+func TestImageTaskServiceExternalBillingUsesCreditsCostOverrideForOfficial2K(t *testing.T) {
+	handler := func(context.Context, Identity, map[string]any) (map[string]any, error) {
+		return map[string]any{
+			"external_billing_consumed_amount": 0.086816,
+			"external_billing_amount_unit":     imageTaskAmountUnitAPIMartCost,
+			"data": []map[string]any{
+				{"url": "https://example.test/image.png"},
+			},
+		}, nil
+	}
+	svc := newTestImageTaskService(t, handler, handler, handler, func() int { return 30 })
+	billing := &recordingExternalTaskBilling{}
+	svc.SetExternalBilling(billing)
+	identity := Identity{ID: "sub2api:42", OwnerID: "sub2api:42", Role: AuthRoleUser, Provider: AuthProviderSub2API}
+
+	_, err := svc.submit(context.Background(), identity, "official-2k-credits-cost", "generate", map[string]any{
+		"prompt":           "draw",
+		"model":            util.ImageModelGPTOfficial,
+		"size":             "auto",
+		"image_resolution": "2k",
+		"quality":          "auto",
+		"output_format":    "png",
+		"base_url":         "https://base.test",
+	})
+	if err != nil {
+		t.Fatalf("submit() error = %v", err)
+	}
+	waitForTaskStatus(t, svc, identity, "official-2k-credits-cost", TaskStatusSuccess)
+
+	if len(billing.reserveAmounts) != 2 || billing.reserveAmounts[0] != 0.721 || billing.reserveAmounts[1] < 0.000982 || billing.reserveAmounts[1] > 0.000983 {
+		t.Fatalf("external reserve amounts = %#v, want [0.721 ~0.000983]", billing.reserveAmounts)
+	}
+	if len(billing.commitAmounts) != 2 || billing.commitAmounts[0] != 0.721 || billing.commitAmounts[1] < 0.000982 || billing.commitAmounts[1] > 0.000983 {
+		t.Fatalf("external commit amounts = %#v, want [0.721 ~0.000983]", billing.commitAmounts)
+	}
+	got := svc.ListTasks(identity, []string{"official-2k-credits-cost"})
+	item := got["items"].([]map[string]any)[0]
+	if util.ToInt(item["billing_consumed_amount"], -1) != 730 {
+		t.Fatalf("local consumed amount = %#v, want 730 in %#v", item["billing_consumed_amount"], item)
+	}
+}
+
 func TestImageTaskServiceAutoImageModelUsesResolvedBridgeCostModel(t *testing.T) {
 	handler := func(context.Context, Identity, map[string]any) (map[string]any, error) {
 		return map[string]any{
@@ -671,6 +713,18 @@ func TestImageTaskBillingUnitAmountResolutionOverridesRequestedSize(t *testing.T
 	})
 	if got != 152 {
 		t.Fatalf("imageTaskBillingUnitAmount() = %d, want 152", got)
+	}
+}
+
+func TestImageTaskBillingUnitAmountOfficialResolutionAutoUsesMediumTier(t *testing.T) {
+	got := imageTaskBillingUnitAmount(map[string]any{
+		"model":            util.ImageModelGPTOfficial,
+		"requested_size":   "16:9",
+		"image_resolution": "2k",
+		"quality":          "auto",
+	})
+	if got != 721 {
+		t.Fatalf("imageTaskBillingUnitAmount() = %d, want 721", got)
 	}
 }
 
