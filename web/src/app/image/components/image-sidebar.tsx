@@ -74,8 +74,8 @@ export function ImageSidebar({
                     "group relative w-full rounded-lg border text-left transition",
                     hideActionButtons ? "px-3 py-2" : "px-2.5 py-1.5",
                     active
-                      ? "border-transparent bg-[#e9ebef] text-[#18181b]"
-                      : "border-transparent text-[#45515e] hover:bg-black/[0.04]",
+                      ? "border-transparent bg-[#e9ebef] text-[#18181b] dark:bg-muted/70 dark:text-foreground"
+                      : "border-transparent text-[#45515e] hover:bg-black/[0.04] dark:text-muted-foreground dark:hover:bg-muted/45 dark:hover:text-foreground",
                   )}
                 >
                   <button
@@ -106,7 +106,7 @@ export function ImageSidebar({
                     <button
                       type="button"
                       onClick={() => void onDeleteConversation(conversation.id)}
-                      className="absolute top-1/2 right-1 inline-flex size-7 -translate-y-1/2 items-center justify-center rounded-md text-stone-400 opacity-0 transition hover:bg-stone-100 hover:text-rose-500 group-hover:opacity-100 focus-visible:opacity-100"
+                      className="absolute top-1/2 right-1 inline-flex size-7 -translate-y-1/2 items-center justify-center rounded-md text-stone-400 opacity-0 transition hover:bg-stone-100 hover:text-rose-500 group-hover:opacity-100 focus-visible:opacity-100 dark:text-muted-foreground dark:hover:bg-muted dark:hover:text-rose-300"
                       aria-label="删除会话"
                     >
                       <Trash2 className="size-4" />
