@@ -80,7 +80,6 @@ import {
   fetchManagedImages,
   fetchProfile,
   fetchTeamWorkspace,
-  formatImageDisplayPriceCNY,
   IMAGE_CREATION_MODEL_OPTIONS,
   IMAGE_MODEL_ROUTE_DETAILS,
   imageReferenceInputLimit,
@@ -1759,7 +1758,6 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     parsedCount,
   ]);
   const estimatedBillingUnits = estimatedImageBilling.units;
-  const estimatedImagePriceLabel = composerMode === "chat" ? "" : formatImageDisplayPriceCNY(estimatedImageBilling.price);
   const billingBlocked = !hasEnoughBilling(session, estimatedBillingUnits);
   const deleteConfirmTitle = deleteConfirm?.type === "all" ? "清空历史记录" : deleteConfirm?.type === "one" ? "删除对话" : "";
   const deleteConfirmDescription =
@@ -4748,7 +4746,6 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                 imageOutputCompression={imageOutputCompression}
                 imageQuality={imageQuality}
                 highResolutionHint={highResolutionHint}
-                estimatedImagePriceLabel={estimatedImagePriceLabel}
                 billingBlocked={billingBlocked}
                 referenceImages={referenceImages}
                 mentionAssets={visibleAssets}
