@@ -27,6 +27,7 @@ import {
   fetchManagedImageCollections,
   fetchManagedImages,
   fetchTeamWorkspace,
+  imageReferenceInputLimit,
   MANAGED_IMAGE_UNCLASSIFIED_COLLECTION_ID,
   supportsImageOutputCompression,
   supportsImageOutputControls,
@@ -316,6 +317,10 @@ function canvasBlockedData(blockedBy: string, blockedByName: string, message: st
     last_run_error_detail: message,
     updated_at: new Date().toISOString(),
   };
+}
+
+function referenceImageLimitMessage(limit: number) {
+  return `当前图片模型最多支持 ${limit} 张参考图`;
 }
 
 function generatorInputImages(canvas: SmartCanvasDocument, generator: SmartCanvasItem) {
@@ -2152,6 +2157,16 @@ export function useSmartCanvasController() {
       return false;
     }
     const current = canvasRef.current;
+    if (current && generator.type === "image_generation") {
+      const existingRefs = generatorInputImages(current, generator);
+      const nextRefs = dedupeCanvasImageRefs([...existingRefs, ...normalizedRefs]);
+      const { images } = splitMaskImageRefs(nextRefs);
+      const referenceLimit = imageReferenceInputLimit(generatorImageModel(generator));
+      if (images.length > referenceLimit) {
+        toast.error(referenceImageLimitMessage(referenceLimit));
+        return false;
+      }
+    }
     const imageInputs = current?.edges
       .filter((edge) => edge.target === generator.id)
       .map((edge) => current.nodes.find((node) => node.id === edge.source))
@@ -3470,6 +3485,21 @@ export function useSmartCanvasController() {
       toast.error(message);
       return;
     }
+    if (loopMode === "repeat") {
+      const { images: editSourceImages } = splitMaskImageRefs(sourceImages);
+      const referenceLimit = imageReferenceInputLimit(generatorImageModel(generator));
+      if (editSourceImages.length > referenceLimit) {
+        const message = `${referenceImageLimitMessage(referenceLimit)}，请减少连接到循环的图片后再生成`;
+        updateCanvas((doc) => ({
+          ...doc,
+          nodes: doc.nodes.map((item) => item.id === loop.id || item.id === generator.id
+            ? { ...item, data: { ...item.data, ...canvasBlockedData("image", "参考图", message) } }
+            : item),
+        }), true, "循环阻断");
+        toast.error(message);
+        return;
+      }
+    }
     const iterations = loopMode === "images" ? sourceImages.slice(0, 10).map((image) => [image]) : [sourceImages];
     const total = loopMode === "images" ? iterations.length : loopCount;
     const startedAt = new Date().toISOString();
@@ -3768,6 +3798,20 @@ export function useSmartCanvasController() {
     }
     const inputRefs = generatorInputImages(current, generator);
     const { images: editInputRefs, masks: maskInputRefs } = splitMaskImageRefs(inputRefs);
+    if (generator.type === "image_generation") {
+      const referenceLimit = imageReferenceInputLimit(generatorImageModel(generator));
+      if (editInputRefs.length > referenceLimit) {
+        const message = `${referenceImageLimitMessage(referenceLimit)}，请减少连接到图片生成节点的图片后再生成`;
+        updateCanvas((doc) => ({
+          ...doc,
+          nodes: doc.nodes.map((item) => item.id === generator.id
+            ? { ...item, data: { ...item.data, ...canvasBlockedData("image", "参考图", message) } }
+            : item),
+        }), true, "图片生成阻断");
+        toast.error(message);
+        return;
+      }
+    }
     const startedAt = new Date().toISOString();
     const placeholderOutput = generator.type === "video_generation" ? { videos: [] } : { images: [] };
     const placeholderModel = generator.type === "video_generation"

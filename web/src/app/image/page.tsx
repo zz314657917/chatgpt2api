@@ -83,6 +83,7 @@ import {
   formatImageDisplayPriceCNY,
   IMAGE_CREATION_MODEL_OPTIONS,
   IMAGE_MODEL_ROUTE_DETAILS,
+  imageReferenceInputLimit,
   isChatModel,
   isImageCreationModel,
   isImageModel,
@@ -1138,6 +1139,10 @@ function imageBillingEstimate(model: ImageModel, count: number, sizeOrResolution
   };
 }
 
+function referenceImageLimitMessage(limit: number) {
+  return `当前图片模型最多支持 ${limit} 张参考图`;
+}
+
 function deriveTurnStatus(turn: ImageTurn): Pick<ImageTurn, "status" | "error"> {
   const loadingCounts = getImageTurnLoadingCounts(turn);
   const failedCount = turn.images.filter((image) => image.status === "error").length;
@@ -1596,6 +1601,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     () => pickMenuModel(imageCreationModelOptions, imageModel, DEFAULT_IMAGE_MODEL),
     [imageCreationModelOptions, imageModel],
   );
+  const imageReferenceLimit = imageReferenceInputLimit(effectiveImageModel);
   const composerModel = composerMode === "chat" ? effectiveChatModel : effectiveImageModel;
   const composerModelOptions = composerMode === "chat" ? chatModelOptions : imageCreationModelOptions;
   const imageSize = useMemo(
@@ -1642,6 +1648,15 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
   const editingDraftOutputControls = editingTurnDraft
     ? supportsImageOutputControls(editingTurnDraft.model)
     : false;
+  const editingDraftReferenceLimit =
+    editingTurnDraft && editingTurnDraft.mode !== "chat"
+      ? imageReferenceInputLimit(editingTurnDraft.model)
+      : 0;
+  const editingDraftReferenceLimitReached = Boolean(
+    editingTurnDraft &&
+      editingTurnDraft.mode !== "chat" &&
+      editingTurnDraft.referenceImages.length >= editingDraftReferenceLimit,
+  );
   const editingDraftActiveAspectRatio = editingDraftEffectiveSizeSelection
     ? getActiveImageAspectRatio({
         aspectRatio: editingDraftEffectiveSizeSelection.aspectRatio,
@@ -2808,15 +2823,24 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     if (files.length === 0) {
       return;
     }
+    const availableSlots = Math.max(0, imageReferenceLimit - referenceImages.length);
+    if (availableSlots <= 0) {
+      toast.error(referenceImageLimitMessage(imageReferenceLimit));
+      return;
+    }
     promptApplyRequestIdRef.current += 1;
 
-    const toastId = files.length > 1 ? toast.loading(`正在压缩 ${files.length} 张参考图`) : null;
+    const acceptedFiles = files.slice(0, availableSlots);
+    const toastId = acceptedFiles.length > 1 ? toast.loading(`正在压缩 ${acceptedFiles.length} 张参考图`) : null;
     try {
       const previews = await Promise.all(
-        files.map(buildStoredReferenceImageFromFile),
+        acceptedFiles.map(buildStoredReferenceImageFromFile),
       );
 
       setReferenceImages((prev) => [...prev, ...previews]);
+      if (files.length > acceptedFiles.length) {
+        toast.warning(`${referenceImageLimitMessage(imageReferenceLimit)}，已忽略多余图片`);
+      }
       if (toastId) {
         toast.dismiss(toastId);
       }
@@ -2830,7 +2854,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
       const message = error instanceof Error ? error.message : "读取参考图失败";
       toast.error(message);
     }
-  }, []);
+  }, [imageReferenceLimit, referenceImages.length]);
 
   const handleReferenceImageChange = useCallback(
     async (files: File[]) => {
@@ -2858,11 +2882,17 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     images: StoredReferenceImage[],
     options: { clearPrompt?: boolean } = {},
   ) => {
+    const availableSlots = Math.max(0, imageReferenceLimit - referenceImages.length);
+    if (availableSlots <= 0) {
+      toast.error(referenceImageLimitMessage(imageReferenceLimit));
+      return;
+    }
+    const acceptedImages = images.slice(0, availableSlots);
     setSelectedConversationId(conversationId);
     switchComposerToImageMode();
     setReferenceImages((prev) => [
       ...prev,
-      ...images.map((image) => ({
+      ...acceptedImages.map((image) => ({
         ...image,
         source: "conversation" as const,
         clientReferenceId: createId(),
@@ -2871,22 +2901,31 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         uploadError: undefined,
       })),
     ]);
+    if (images.length > acceptedImages.length) {
+      toast.warning(`${referenceImageLimitMessage(imageReferenceLimit)}，已忽略多余图片`);
+    }
     if (options.clearPrompt !== false) {
       setImagePrompt("");
     }
     textareaRef.current?.focus();
-  }, [switchComposerToImageMode]);
+  }, [imageReferenceLimit, referenceImages.length, switchComposerToImageMode]);
 
   const appendLibraryReferenceImages = useCallback((images: StoredReferenceImage[]) => {
     if (images.length === 0) {
       return;
     }
+    const availableSlots = Math.max(0, imageReferenceLimit - referenceImages.length);
+    if (availableSlots <= 0) {
+      toast.error(referenceImageLimitMessage(imageReferenceLimit));
+      return;
+    }
+    const acceptedImages = images.slice(0, availableSlots);
     promptApplyRequestIdRef.current += 1;
     setSelectedConversationId(null);
     switchComposerToImageMode();
     setReferenceImages((prev) => [
       ...prev,
-      ...images.map((image) => ({
+      ...acceptedImages.map((image) => ({
         ...image,
         source: image.source || "upload" as const,
         clientReferenceId: createId(),
@@ -2895,8 +2934,11 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         uploadError: undefined,
       })),
     ]);
+    if (images.length > acceptedImages.length) {
+      toast.warning(`${referenceImageLimitMessage(imageReferenceLimit)}，已忽略多余图片`);
+    }
     textareaRef.current?.focus();
-  }, [switchComposerToImageMode]);
+  }, [imageReferenceLimit, referenceImages.length, switchComposerToImageMode]);
 
   const handleManagedImageReference = useCallback(async (asset: ManagedImageSummary) => {
     const toastId = toast.loading("正在读取素材库图片...");
@@ -3145,10 +3187,24 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     if (files.length === 0) {
       return;
     }
-    const toastId = files.length > 1 ? toast.loading(`正在压缩 ${files.length} 张参考图`) : null;
+    const draft = editingTurnDraft;
+    if (!draft || draft.mode === "chat") {
+      return;
+    }
+    const referenceLimit = imageReferenceInputLimit(draft.model);
+    const remainingSlots = Math.max(0, referenceLimit - draft.referenceImages.length);
+    if (remainingSlots <= 0) {
+      toast.error(referenceImageLimitMessage(referenceLimit));
+      if (editFileInputRef.current) {
+        editFileInputRef.current.value = "";
+      }
+      return;
+    }
+    const acceptedFiles = files.slice(0, remainingSlots);
+    const toastId = acceptedFiles.length > 1 ? toast.loading(`正在压缩 ${acceptedFiles.length} 张参考图`) : null;
     try {
       const previews = await Promise.all(
-        files.map(buildStoredReferenceImageFromFile),
+        acceptedFiles.map(buildStoredReferenceImageFromFile),
       );
       setEditingTurnDraft((current) =>
         current
@@ -3164,6 +3220,9 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
       if (editFileInputRef.current) {
         editFileInputRef.current.value = "";
       }
+      if (files.length > acceptedFiles.length) {
+        toast.warning(`${referenceImageLimitMessage(referenceLimit)}，已忽略多余图片`);
+      }
     } catch (error) {
       if (toastId) {
         toast.dismiss(toastId);
@@ -3171,7 +3230,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
       const message = error instanceof Error ? error.message : "读取参考图失败";
       toast.error(message);
     }
-  }, []);
+  }, [editingTurnDraft]);
 
   const handleRemoveEditReferenceImage = useCallback((index: number) => {
     setEditingTurnDraft((current) =>
@@ -3291,6 +3350,10 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                 ? "正在读取参考图并准备上传"
                 : "正在创建图片生成任务",
         });
+        const activeReferenceLimit = imageReferenceInputLimit(activeTurn.model);
+        if (usesReferenceImages(activeTurn.mode) && activeTurn.referenceImages.length > activeReferenceLimit) {
+          throw new Error(`${referenceImageLimitMessage(activeReferenceLimit)}，请移除多余图片后再生成`);
+        }
         const referenceImageIds = usesReferenceImages(activeTurn.mode)
           ? await ensureReferenceUploads(conversationId, snapshot, activeTurn)
           : [];
@@ -3916,6 +3979,11 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
             ? draft.model
             : imageCreationModelOptions[0]?.value || DEFAULT_IMAGE_MODEL;
       const referenceImages = usesReferenceImages(mode) ? draft.referenceImages : [];
+      const draftReferenceLimit = imageReferenceInputLimit(effectiveDraftModel);
+      if (usesReferenceImages(mode) && referenceImages.length > draftReferenceLimit) {
+        toast.error(`${referenceImageLimitMessage(draftReferenceLimit)}，请移除多余图片后再保存`);
+        return;
+      }
       const rawDraftSizeSelection = {
         mode: draft.sizeMode,
         aspectRatio: draft.aspectRatio,
@@ -4245,12 +4313,21 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                       }}
                     />
                     <div className="flex items-center justify-between gap-3">
-                      <div className="text-sm font-medium text-stone-700">参考图</div>
+                      <div className="flex min-w-0 flex-col">
+                        <div className="text-sm font-medium text-stone-700">参考图</div>
+                        <div className={cn(
+                          "text-xs",
+                          editingTurnDraft.referenceImages.length > editingDraftReferenceLimit ? "text-red-600" : "text-stone-500",
+                        )}>
+                          {editingTurnDraft.referenceImages.length} / {editingDraftReferenceLimit}
+                        </div>
+                      </div>
                       <Button
                         type="button"
                         variant="outline"
                         size="sm"
                         className="rounded-full border-stone-200 bg-white"
+                        disabled={editingDraftReferenceLimitReached}
                         onClick={() => editFileInputRef.current?.click()}
                       >
                         <ImagePlus className="size-4" />
