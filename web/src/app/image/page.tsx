@@ -7,16 +7,15 @@ import { toast } from "sonner";
 
 import { ImageComposer } from "@/app/image/components/image-composer";
 import type { ImageLightboxItem } from "@/app/image/components/image-results";
+import { ImageRatioPicker } from "@/components/image-ratio-picker";
 import {
   CUSTOM_IMAGE_ASPECT_RATIO,
   DEFAULT_IMAGE_CUSTOM_HEIGHT,
   DEFAULT_IMAGE_CUSTOM_RATIO,
   DEFAULT_IMAGE_CUSTOM_WIDTH,
-  IMAGE_ASPECT_RATIO_OPTIONS,
   IMAGE_QUALITY_OPTIONS,
   IMAGE_RESOLUTION_OPTIONS,
   IMAGE_SIZE_MODE_OPTIONS,
-  PIXEL_ICON_SIZE_OPTIONS,
   buildImageSize,
   formatImageSizeDisplay,
   getActiveImageAspectRatio,
@@ -39,6 +38,7 @@ import {
 import { IMAGE_PROMPT_PRESETS, type ImagePromptPreset } from "@/app/image/image-presets";
 import { consumeSimilarImageIntent } from "@/app/image/similar-image-intent";
 import { ImageOutputControls } from "@/components/image-output-controls";
+import { DEFAULT_IMAGE_RATIO_PICKER_OPTIONS, imageRatioPickerValueLabel } from "@/lib/image-ratio-picker-options";
 import { ManagedImageAssetDock } from "@/components/managed-image-asset-dock";
 import { useMobileNav } from "@/components/mobile-nav-context";
 import { Button } from "@/components/ui/button";
@@ -57,8 +57,6 @@ import {
   SelectContent,
   SelectGroup,
   SelectItem,
-  SelectLabel,
-  SelectSeparator,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
@@ -179,7 +177,6 @@ const REFERENCE_IMAGE_JPEG_QUALITY = 0.86;
 const IMAGE_ASSET_PAGE_SIZE = 50;
 const IMAGE_ASSET_SIDEBAR_STORAGE_PREFIX = "image-composer-asset-sidebar";
 const activeConversationQueueIds = new Set<string>();
-const EMPTY_IMAGE_ASPECT_RATIO_SELECT_VALUE = "__empty_aspect_ratio__";
 const MISSING_RECOVERABLE_TASK_ID_ERROR = "页面刷新或任务中断，未找到可恢复的任务 ID";
 const HIDDEN_IMAGE_MODEL_VALUES = new Set(["codex-gpt-image-2"]);
 
@@ -1539,6 +1536,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
   const [lightboxIndex, setLightboxIndex] = useState(0);
   const [deleteConfirm, setDeleteConfirm] = useState<{ type: "one"; id: string } | { type: "all" } | null>(null);
   const [editingTurnDraft, setEditingTurnDraft] = useState<EditingTurnDraft | null>(null);
+  const [editingAspectRatioPickerOpen, setEditingAspectRatioPickerOpen] = useState(false);
   const [progressByTurnKey, setProgressByTurnKey] = useState<Record<string, ImageTurnProgress>>(
     getImageTurnProgressSnapshot,
   );
@@ -4492,54 +4490,30 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                           <>
                             <label className="flex flex-col gap-2 text-sm font-medium text-stone-700">
                               画幅/尺寸
-                              <Select
-                                value={editingTurnDraft.aspectRatio || EMPTY_IMAGE_ASPECT_RATIO_SELECT_VALUE}
+                              <ImageRatioPicker
+                                label="画幅/尺寸"
+                                value={editingTurnDraft.aspectRatio}
+                                valueLabel={
+                                  editingTurnDraft.aspectRatio === CUSTOM_IMAGE_ASPECT_RATIO
+                                    ? editingTurnDraft.customRatio.trim() || "自定义比例"
+                                    : imageRatioPickerValueLabel(DEFAULT_IMAGE_RATIO_PICKER_OPTIONS, editingTurnDraft.aspectRatio, "Auto")
+                                }
+                                options={DEFAULT_IMAGE_RATIO_PICKER_OPTIONS}
+                                open={editingAspectRatioPickerOpen}
+                                onOpenChange={setEditingAspectRatioPickerOpen}
                                 onValueChange={(value) =>
                                   setEditingTurnDraft((current) =>
-                                    current && (value === EMPTY_IMAGE_ASPECT_RATIO_SELECT_VALUE || isImageAspectRatio(value))
+                                    current && isImageAspectRatio(value)
                                       ? {
                                           ...current,
-                                          aspectRatio:
-                                            value === EMPTY_IMAGE_ASPECT_RATIO_SELECT_VALUE
-                                              ? ""
-                                              : value,
+                                          aspectRatio: value,
                                           resolution: isPixelIconSize(value) ? "auto" : current.resolution,
                                         }
                                       : current,
                                   )
                                 }
-                              >
-                                <SelectTrigger>
-                                  <SelectValue />
-                                </SelectTrigger>
-                                <SelectContent>
-                                  <SelectGroup>
-                                    <SelectLabel>常用画幅</SelectLabel>
-                                    {IMAGE_ASPECT_RATIO_OPTIONS.filter((option) => option.value !== CUSTOM_IMAGE_ASPECT_RATIO).map((option) => (
-                                      <SelectItem
-                                        key={option.label}
-                                        value={option.value || EMPTY_IMAGE_ASPECT_RATIO_SELECT_VALUE}
-                                      >
-                                        {option.label}
-                                      </SelectItem>
-                                    ))}
-                                  </SelectGroup>
-                                  <SelectSeparator />
-                                  <SelectGroup>
-                                    <SelectLabel>像素图标尺寸</SelectLabel>
-                                    {PIXEL_ICON_SIZE_OPTIONS.map((option) => (
-                                      <SelectItem key={option.label} value={option.value}>
-                                        {option.label}
-                                      </SelectItem>
-                                    ))}
-                                  </SelectGroup>
-                                  <SelectSeparator />
-                                  <SelectGroup>
-                                    <SelectLabel>自定义</SelectLabel>
-                                    <SelectItem value={CUSTOM_IMAGE_ASPECT_RATIO}>自定义比例</SelectItem>
-                                  </SelectGroup>
-                                </SelectContent>
-                              </Select>
+                                triggerClassName="w-full"
+                              />
                             </label>
                             {editingDraftResolutionControlsVisible ? (
                               <label className="flex flex-col gap-2 text-sm font-medium text-stone-700">
