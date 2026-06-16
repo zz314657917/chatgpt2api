@@ -256,9 +256,9 @@ func estimateImageUnitPriceUSD(model, sizeOrResolution, quality string) (float64
 			return price, true
 		}
 		return gptImage2OfficialBasePriceUSD["default"], true
-	case util.ImageModelGeminiFlash:
+	case util.ImageModelGeminiFlashPreview, util.ImageModelGeminiFlashPreviewOfficial:
 		return imageResolutionTierPrice(geminiFlashImageBasePriceUSD, sizeOrResolution), true
-	case util.ImageModelGeminiPro:
+	case util.ImageModelGeminiProPreview, util.ImageModelGeminiProPreviewOfficial:
 		return imageResolutionTierPrice(geminiProImageBasePriceUSD, sizeOrResolution), true
 	default:
 		return 0, false

@@ -3,7 +3,16 @@ package util
 import "testing"
 
 func TestImageGenerationModelSetExcludesTextModels(t *testing.T) {
-	for _, model := range []string{ImageModelAuto, ImageModelGPT, ImageModelGPTOfficial, ImageModelCodex, ImageModelGeminiFlash, ImageModelGeminiPro} {
+	for _, model := range []string{
+		ImageModelAuto,
+		ImageModelGPT,
+		ImageModelGPTOfficial,
+		ImageModelCodex,
+		ImageModelGeminiProPreview,
+		ImageModelGeminiProPreviewOfficial,
+		ImageModelGeminiFlashPreview,
+		ImageModelGeminiFlashPreviewOfficial,
+	} {
 		if !IsImageGenerationModel(model) {
 			t.Fatalf("IsImageGenerationModel(%q) = false, want true", model)
 		}
@@ -26,7 +35,12 @@ func TestResponsesImageToolModelsIncludeTextModels(t *testing.T) {
 			t.Fatalf("IsResponsesImageToolModel(%q) = false, want true", model)
 		}
 	}
-	for _, model := range []string{ImageModelGeminiFlash, ImageModelGeminiPro} {
+	for _, model := range []string{
+		ImageModelGeminiProPreview,
+		ImageModelGeminiProPreviewOfficial,
+		ImageModelGeminiFlashPreview,
+		ImageModelGeminiFlashPreviewOfficial,
+	} {
 		if IsResponsesImageToolModel(model) {
 			t.Fatalf("IsResponsesImageToolModel(%q) = true, want false for /v1/responses image_generation", model)
 		}
@@ -41,8 +55,10 @@ func TestModelListIncludesTextAndImageModels(t *testing.T) {
 		ImageModelGPT,
 		ImageModelGPTOfficial,
 		ImageModelCodex,
-		ImageModelGeminiFlash,
-		ImageModelGeminiPro,
+		ImageModelGeminiProPreview,
+		ImageModelGeminiProPreviewOfficial,
+		ImageModelGeminiFlashPreview,
+		ImageModelGeminiFlashPreviewOfficial,
 		ImageModelAuto,
 		ImageModelGPT55,
 		ImageModelGPT54,
@@ -68,8 +84,10 @@ func TestModelListIncludesTextAndImageModels(t *testing.T) {
 		ImageModelGPT,
 		ImageModelGPTOfficial,
 		ImageModelCodex,
-		ImageModelGeminiFlash,
-		ImageModelGeminiPro,
+		ImageModelGeminiProPreview,
+		ImageModelGeminiProPreviewOfficial,
+		ImageModelGeminiFlashPreview,
+		ImageModelGeminiFlashPreviewOfficial,
 		ImageModelGPT55,
 		ImageModelGPT54,
 		ImageModelGPT54Mini,
