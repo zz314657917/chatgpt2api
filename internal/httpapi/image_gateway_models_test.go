@@ -20,7 +20,7 @@ func TestImageGatewayModelsMidjourneyPayloadPassesSettingsAndReferences(t *testi
 		"size":   "16:9",
 		"n":      2,
 		"midjourney_settings": map[string]any{
-			"version": "7",
+			"version": "6.1",
 			"speed":   "relax",
 			"stylize": 100,
 			"chaos":   12,
@@ -42,7 +42,7 @@ func TestImageGatewayModelsMidjourneyPayloadPassesSettingsAndReferences(t *testi
 		t.Fatalf("midjourney payload basics = %#v", payload)
 	}
 	for key, want := range map[string]any{
-		"version": "7",
+		"version": "6.1",
 		"speed":   "relax",
 		"stylize": 100,
 		"chaos":   12,
@@ -60,6 +60,23 @@ func TestImageGatewayModelsMidjourneyPayloadPassesSettingsAndReferences(t *testi
 	urls := util.AsStringSlice(payload["image_urls"])
 	if len(urls) != 1 || !strings.HasPrefix(urls[0], "data:image/png;base64,") {
 		t.Fatalf("midjourney image_urls = %#v", payload["image_urls"])
+	}
+}
+
+func TestImageGatewayModelsMidjourneyPayloadDropsUnsupportedStop(t *testing.T) {
+	payload, err := sub2APIImageGatewayJSONPayload(map[string]any{
+		"prompt": "draw a product poster",
+		"model":  util.ImageModelMidjourney,
+		"midjourney_settings": map[string]any{
+			"version": "8.1",
+			"stop":    80,
+		},
+	})
+	if err != nil {
+		t.Fatalf("midjourney payload error = %v", err)
+	}
+	if _, ok := payload["stop"]; ok {
+		t.Fatalf("midjourney v8.1 should not forward stop: %#v", payload)
 	}
 }
 
@@ -81,11 +98,13 @@ func TestImageGatewayModelsMidjourneyPayloadUsesDefaultSettings(t *testing.T) {
 		"niji":    false,
 		"raw":     false,
 		"tile":    false,
-		"stop":    100,
 	} {
 		if payload[key] != want {
 			t.Fatalf("midjourney default %s = %#v, want %#v in %#v", key, payload[key], want, payload)
 		}
+	}
+	if _, ok := payload["stop"]; ok {
+		t.Fatalf("midjourney default v8.1 should not forward stop: %#v", payload)
 	}
 }
 

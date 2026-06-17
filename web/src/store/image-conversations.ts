@@ -10,6 +10,7 @@ import {
   isImageModel,
   isImageOutputFormat,
   isImageQuality,
+  midjourneyVersionSupportsStop,
   supportsImageOutputCompression,
   type ImageModel,
   type MidjourneySettingsPayload,
@@ -324,6 +325,9 @@ function normalizeMidjourneySettings(value: unknown): MidjourneySettingsPayload 
     }
   }
   for (const key of ["stylize", "chaos", "weird", "stop"] as const) {
+    if (key === "stop" && !midjourneyVersionSupportsStop(out.version)) {
+      continue;
+    }
     const numberValue = Number(source[key]);
     if (Number.isFinite(numberValue)) {
       out[key] = Math.round(numberValue);
