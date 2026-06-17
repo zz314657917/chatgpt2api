@@ -94,8 +94,34 @@ func TestSub2APIImagePayloadNormalizesDecimalRatio(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sub2APIImageGatewayJSONPayload() error = %v", err)
 	}
-	if officialPayload["size"] != "5:7" {
-		t.Fatalf("official size = %#v, want 5:7", officialPayload["size"])
+	if officialPayload["size"] != "auto" {
+		t.Fatalf("official size = %#v, want auto", officialPayload["size"])
+	}
+}
+
+func TestSub2APIOfficialImageSizePreservesSupportedRatios(t *testing.T) {
+	tests := []struct {
+		size string
+		want string
+	}{
+		{size: "21:9", want: "21:9"},
+		{size: "7:3", want: "21:9"},
+		{size: "9:21", want: "9:21"},
+		{size: "3:7", want: "9:21"},
+		{size: "1881x836", want: "1881x836"},
+		{size: "5:7", want: "auto"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.size, func(t *testing.T) {
+			payload, err := sub2APIImageGatewayJSONPayload(map[string]any{"prompt": "draw", "model": util.ImageModelGPTOfficial, "size": tt.size})
+			if err != nil {
+				t.Fatalf("sub2APIImageGatewayJSONPayload() error = %v", err)
+			}
+			if got := payload["size"]; got != tt.want {
+				t.Fatalf("size = %#v, want %s", got, tt.want)
+			}
+		})
 	}
 }
 

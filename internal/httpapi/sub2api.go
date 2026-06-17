@@ -799,15 +799,50 @@ func sub2APIOfficialImageSize(payload map[string]any) string {
 		if _, ok := sub2APIOfficialImageSizes[normalized]; ok {
 			return normalized
 		}
-		if sub2APIImageRatioSize(normalized) {
+		if size, ok := sub2APIOfficialEquivalentImageRatio(normalized); ok {
+			return size
+		}
+		if sub2APIImageDimensionSize(normalized) {
 			return normalized
 		}
 		return "auto"
 	}
 }
 
+func sub2APIOfficialEquivalentImageRatio(size string) (string, bool) {
+	match := regexp.MustCompile(`^(\d+):(\d+)$`).FindStringSubmatch(strings.ToLower(strings.TrimSpace(size)))
+	if len(match) != 3 {
+		return "", false
+	}
+	width := util.ToInt(match[1], 0)
+	height := util.ToInt(match[2], 0)
+	if width <= 0 || height <= 0 {
+		return "", false
+	}
+	for supported := range sub2APIOfficialImageSizes {
+		supportedMatch := regexp.MustCompile(`^(\d+):(\d+)$`).FindStringSubmatch(supported)
+		if len(supportedMatch) != 3 {
+			continue
+		}
+		supportedWidth := util.ToInt(supportedMatch[1], 0)
+		supportedHeight := util.ToInt(supportedMatch[2], 0)
+		if supportedWidth > 0 && supportedHeight > 0 && width*supportedHeight == height*supportedWidth {
+			return supported, true
+		}
+	}
+	return "", false
+}
+
 func sub2APIImageRatioSize(size string) bool {
 	match := regexp.MustCompile(`^(\d+):(\d+)$`).FindStringSubmatch(strings.ToLower(strings.TrimSpace(size)))
+	if len(match) != 3 {
+		return false
+	}
+	return util.ToInt(match[1], 0) > 0 && util.ToInt(match[2], 0) > 0
+}
+
+func sub2APIImageDimensionSize(size string) bool {
+	match := regexp.MustCompile(`^(\d+)x(\d+)$`).FindStringSubmatch(strings.ToLower(strings.TrimSpace(size)))
 	if len(match) != 3 {
 		return false
 	}
