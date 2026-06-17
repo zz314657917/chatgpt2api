@@ -35,6 +35,7 @@ import {
 
 import { ImageOutputControls } from "@/components/image-output-controls";
 import { ImageRatioPicker } from "@/components/image-ratio-picker";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Textarea } from "@/components/ui/textarea";
@@ -60,12 +61,14 @@ import {
 } from "@/lib/image-parameters";
 import {
   IMAGE_MODEL_ROUTE_DETAILS,
+  MIDJOURNEY_IMAGE_MODEL,
   isOfficialImageModel,
   supportsImageQuality,
   supportsImageOutputControls,
   supportsImageResolutionPresets,
   supportsStructuredImageParameters,
   type ImageModel,
+  type MidjourneySettingsPayload,
   type ManagedImageSummary,
 } from "@/lib/api";
 import { DEFAULT_IMAGE_RATIO_PICKER_OPTIONS, imageRatioPickerValueLabel } from "@/lib/image-ratio-picker-options";
@@ -90,6 +93,7 @@ type ImageComposerProps = {
   imageOutputFormat: ImageOutputFormat;
   imageOutputCompression: string;
   imageQuality: ImageQuality;
+  midjourneySettings: MidjourneySettingsPayload;
   highResolutionHint?: ReactNode;
   billingBlocked: boolean;
   referenceImages: Array<{ name: string; dataUrl: string }>;
@@ -109,6 +113,7 @@ type ImageComposerProps = {
   onImageOutputFormatChange: (value: ImageOutputFormat) => void;
   onImageOutputCompressionChange: (value: string) => void;
   onImageQualityChange: (value: ImageQuality) => void;
+  onMidjourneySettingsChange: (settings: MidjourneySettingsPayload) => void;
   onSubmit: () => void | Promise<void>;
   onReferenceImageChange: (files: File[]) => void | Promise<void>;
   onImageResultDrop: (imageIds: string[]) => void | Promise<void>;
@@ -192,6 +197,38 @@ type ImageSettingsMenuOption<Value extends string> = {
 };
 
 const IMAGE_QUALITY_SETTINGS_OPTIONS = IMAGE_QUALITY_OPTIONS satisfies ReadonlyArray<ImageSettingsMenuOption<ImageQuality>>;
+const MIDJOURNEY_VERSION_OPTIONS = [
+  { value: "8.1", label: "V8.1" },
+  { value: "7", label: "V7" },
+  { value: "6.1", label: "V6.1" },
+  { value: "5.2", label: "V5.2" },
+  { value: "5.1", label: "V5.1" },
+  { value: "niji 7", label: "Niji 7" },
+  { value: "niji 6", label: "Niji 6" },
+] satisfies ReadonlyArray<ImageSettingsMenuOption<string>>;
+const MIDJOURNEY_SPEED_OPTIONS = [
+  { value: "relax", label: "Relax" },
+  { value: "fast", label: "Fast" },
+  { value: "turbo", label: "Turbo" },
+] satisfies ReadonlyArray<ImageSettingsMenuOption<string>>;
+const MIDJOURNEY_QUALITY_OPTIONS = [
+  { value: "0.25", label: "0.25" },
+  { value: "0.5", label: "0.5" },
+  { value: "1", label: "1" },
+  { value: "2", label: "2" },
+] satisfies ReadonlyArray<ImageSettingsMenuOption<string>>;
+
+function midjourneyVersionLabel(value?: string) {
+  return MIDJOURNEY_VERSION_OPTIONS.find((option) => option.value === value)?.label || value || "V8.1";
+}
+
+function midjourneySpeedLabel(value?: string) {
+  return MIDJOURNEY_SPEED_OPTIONS.find((option) => option.value === value)?.label || value || "Relax";
+}
+
+function midjourneyQualityLabel(value?: string) {
+  return MIDJOURNEY_QUALITY_OPTIONS.find((option) => option.value === value)?.label || value || "1";
+}
 
 function ImageSettingsPopoverMenu<Value extends string>({
   label,
@@ -340,6 +377,7 @@ export function ImageComposer({
   imageOutputFormat,
   imageOutputCompression,
   imageQuality,
+  midjourneySettings,
   highResolutionHint,
   billingBlocked,
   referenceImages,
@@ -359,6 +397,7 @@ export function ImageComposer({
   onImageOutputFormatChange,
   onImageOutputCompressionChange,
   onImageQualityChange,
+  onMidjourneySettingsChange,
   onSubmit,
   onReferenceImageChange,
   onImageResultDrop,
@@ -372,6 +411,9 @@ export function ImageComposer({
   const [isAspectRatioMenuOpen, setIsAspectRatioMenuOpen] = useState(false);
   const [isResolutionMenuOpen, setIsResolutionMenuOpen] = useState(false);
   const [isQualityMenuOpen, setIsQualityMenuOpen] = useState(false);
+  const [isMidjourneyVersionMenuOpen, setIsMidjourneyVersionMenuOpen] = useState(false);
+  const [isMidjourneySpeedMenuOpen, setIsMidjourneySpeedMenuOpen] = useState(false);
+  const [isMidjourneyQualityMenuOpen, setIsMidjourneyQualityMenuOpen] = useState(false);
   const [isImageSettingsOpen, setIsImageSettingsOpen] = useState(false);
   const [isAssetMentionOpen, setIsAssetMentionOpen] = useState(false);
   const [promptAreaHeight, setPromptAreaHeight] = useState(PROMPT_AREA_DEFAULT_HEIGHT);
@@ -407,6 +449,21 @@ export function ImageComposer({
   const outputControlsSupported = supportsImageOutputControls(imageModel);
   const imageQualitySupported = supportsImageQuality(imageModel);
   const imageQualityLabel = IMAGE_QUALITY_OPTIONS.find((option) => option.value === imageQuality)?.label || "自动";
+  const midjourneyModel = imageModel === MIDJOURNEY_IMAGE_MODEL;
+  const updateMidjourneySettings = (patch: MidjourneySettingsPayload) => {
+    onMidjourneySettingsChange({ ...midjourneySettings, ...patch });
+  };
+  const updateMidjourneyNumberSetting = (
+    key: "stylize" | "chaos" | "weird" | "stop",
+    value: string,
+    min: number,
+    max: number,
+  ) => {
+    const parsed = Math.round(Number(value));
+    updateMidjourneySettings({
+      [key]: Number.isFinite(parsed) ? Math.min(max, Math.max(min, parsed)) : undefined,
+    });
+  };
   const availableImageSizeModeOptions = structuredImageParameters
     ? IMAGE_SIZE_MODE_OPTIONS
     : IMAGE_SIZE_MODE_OPTIONS.filter((option) => option.value !== "custom");
@@ -530,6 +587,9 @@ export function ImageComposer({
       setIsImageSettingsOpen(false);
       setIsAspectRatioMenuOpen(false);
       setIsResolutionMenuOpen(false);
+      setIsMidjourneyVersionMenuOpen(false);
+      setIsMidjourneySpeedMenuOpen(false);
+      setIsMidjourneyQualityMenuOpen(false);
     }
   }, [composerMode]);
 
@@ -1246,6 +1306,111 @@ export function ImageComposer({
                                 ? "常规图片通道会提交分辨率预设，画幅仍作为构图偏好；实际像素以上游返回为准。"
                                 : "当前图片通道只会把比例作为构图偏好，实际像素以上游返回为准；格式由后端保存结果时处理。"}
                           </p>
+                        ) : null}
+                        {midjourneyModel ? (
+                          <div className="col-span-2 grid grid-cols-2 gap-2 rounded-xl border border-[#dbe7ff] bg-[#f8fbff] p-2 dark:border-sky-900/60 dark:bg-sky-950/20 sm:col-span-3 sm:grid-cols-3">
+                            <div className="col-span-2 flex min-w-0 items-center justify-between gap-2 px-1 sm:col-span-3">
+                              <span className="text-[11px] font-semibold text-[#18181b] dark:text-foreground">
+                                Midjourney 参数
+                              </span>
+                              <span className="text-[10px] text-[#8e8e93] dark:text-muted-foreground">
+                                参考图最多 4 张
+                              </span>
+                            </div>
+                            <div className={imageSettingsFieldClass}>
+                              <span className="shrink-0 font-medium text-[#45515e] dark:text-muted-foreground">版本</span>
+                              <ImageSettingsPopoverMenu
+                                label="Midjourney 版本"
+                                value={midjourneySettings.version || "8.1"}
+                                valueLabel={midjourneyVersionLabel(midjourneySettings.version)}
+                                options={MIDJOURNEY_VERSION_OPTIONS}
+                                open={isMidjourneyVersionMenuOpen}
+                                onOpenChange={(open) => {
+                                  setIsMidjourneyVersionMenuOpen(open);
+                                  if (open) {
+                                    setIsMidjourneySpeedMenuOpen(false);
+                                    setIsMidjourneyQualityMenuOpen(false);
+                                  }
+                                }}
+                                onValueChange={(version) => updateMidjourneySettings({ version, niji: version.startsWith("niji") })}
+                              />
+                            </div>
+                            <div className={imageSettingsFieldClass}>
+                              <span className="shrink-0 font-medium text-[#45515e] dark:text-muted-foreground">速度</span>
+                              <ImageSettingsPopoverMenu
+                                label="Midjourney 速度"
+                                value={midjourneySettings.speed || "relax"}
+                                valueLabel={midjourneySpeedLabel(midjourneySettings.speed)}
+                                options={MIDJOURNEY_SPEED_OPTIONS}
+                                open={isMidjourneySpeedMenuOpen}
+                                onOpenChange={(open) => {
+                                  setIsMidjourneySpeedMenuOpen(open);
+                                  if (open) {
+                                    setIsMidjourneyVersionMenuOpen(false);
+                                    setIsMidjourneyQualityMenuOpen(false);
+                                  }
+                                }}
+                                onValueChange={(speed) => updateMidjourneySettings({ speed })}
+                              />
+                            </div>
+                            <div className={imageSettingsFieldClass}>
+                              <span className="shrink-0 font-medium text-[#45515e] dark:text-muted-foreground">画质</span>
+                              <ImageSettingsPopoverMenu
+                                label="Midjourney 画质"
+                                value={midjourneySettings.quality || "1"}
+                                valueLabel={midjourneyQualityLabel(midjourneySettings.quality)}
+                                options={MIDJOURNEY_QUALITY_OPTIONS}
+                                open={isMidjourneyQualityMenuOpen}
+                                onOpenChange={(open) => {
+                                  setIsMidjourneyQualityMenuOpen(open);
+                                  if (open) {
+                                    setIsMidjourneyVersionMenuOpen(false);
+                                    setIsMidjourneySpeedMenuOpen(false);
+                                  }
+                                }}
+                                onValueChange={(quality) => updateMidjourneySettings({ quality })}
+                              />
+                            </div>
+                            {[
+                              { key: "stylize" as const, label: "风格化", min: 0, max: 1000, fallback: 100 },
+                              { key: "chaos" as const, label: "混乱", min: 0, max: 100, fallback: 0 },
+                              { key: "weird" as const, label: "怪异", min: 0, max: 3000, fallback: 0 },
+                              { key: "stop" as const, label: "停止", min: 10, max: 100, fallback: 100 },
+                            ].map((item) => (
+                              <label key={item.key} className={imageSettingsFieldClass}>
+                                <span className="shrink-0 font-medium text-[#45515e] dark:text-muted-foreground">{item.label}</span>
+                                <Input
+                                  type="number"
+                                  inputMode="numeric"
+                                  min={item.min}
+                                  max={item.max}
+                                  step="1"
+                                  value={midjourneySettings[item.key] ?? item.fallback}
+                                  onChange={(event) => updateMidjourneyNumberSetting(item.key, event.target.value, item.min, item.max)}
+                                  className="h-7 w-[4rem] border-0 bg-transparent px-0 text-right text-xs font-semibold text-[#18181b] shadow-none focus-visible:ring-0 dark:text-foreground"
+                                />
+                              </label>
+                            ))}
+                            {[
+                              { key: "niji" as const, label: "Niji" },
+                              { key: "raw" as const, label: "Raw" },
+                              { key: "tile" as const, label: "平铺" },
+                            ].map((item) => (
+                              <label
+                                key={item.key}
+                                className="flex min-h-8 min-w-0 items-center gap-2 rounded-xl border border-[#e5e7eb] bg-white px-3 py-1 text-[11px] dark:border-border dark:bg-background/70"
+                              >
+                                <Checkbox
+                                  checked={midjourneySettings[item.key] === true}
+                                  onCheckedChange={(checked) => updateMidjourneySettings({ [item.key]: checked === true })}
+                                  className="size-4"
+                                />
+                                <span className="min-w-0 truncate font-medium text-[#45515e] dark:text-muted-foreground">
+                                  {item.label}
+                                </span>
+                              </label>
+                            ))}
+                          </div>
                         ) : null}
                         {outputControlsSupported ? (
                           <ImageOutputControls

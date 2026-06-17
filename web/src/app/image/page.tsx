@@ -80,6 +80,7 @@ import {
   fetchTeamWorkspace,
   IMAGE_CREATION_MODEL_OPTIONS,
   IMAGE_MODEL_ROUTE_DETAILS,
+  MIDJOURNEY_IMAGE_MODEL,
   imageReferenceInputLimit,
   isChatModel,
   isImageCreationModel,
@@ -96,6 +97,7 @@ import {
   uploadCreationTaskReferenceImage,
   updateManagedImageVisibility,
   type ImageModel,
+  type MidjourneySettingsPayload,
   type CreationTask,
   type CreationTaskMessage,
   type FallbackReferenceImage,
@@ -168,9 +170,23 @@ const IMAGE_CUSTOM_HEIGHT_STORAGE_KEY = "chatgpt2api:image_last_custom_height";
 const IMAGE_OUTPUT_FORMAT_STORAGE_KEY = "chatgpt2api:image_last_output_format";
 const IMAGE_OUTPUT_COMPRESSION_STORAGE_KEY = "chatgpt2api:image_last_output_compression";
 const IMAGE_QUALITY_STORAGE_KEY = "chatgpt2api:image_last_quality";
+const MIDJOURNEY_SETTINGS_STORAGE_KEY = "chatgpt2api:image_midjourney_settings";
 const QUOTA_REFRESH_EVENT = "chatgpt2api:quota-refresh";
 const DEFAULT_IMAGE_OUTPUT_FORMAT: ImageOutputFormat = "png";
 const DEFAULT_IMAGE_QUALITY: ImageQuality = "auto";
+const DEFAULT_MIDJOURNEY_SETTINGS: Required<Pick<MidjourneySettingsPayload, "version" | "speed" | "stylize" | "chaos" | "weird" | "quality">> &
+  Pick<MidjourneySettingsPayload, "niji" | "raw" | "tile" | "stop"> = {
+    version: "8.1",
+    speed: "relax",
+    stylize: 100,
+    chaos: 0,
+    weird: 0,
+    quality: "1",
+    niji: false,
+    raw: false,
+    tile: false,
+    stop: 100,
+  };
 const AI_BACKGROUND_REMOVAL_PROMPT = "AI 抠图：自动识别图片中的主要主体，移除背景并输出透明背景 PNG。保持主体形状、纹理、颜色和像素细节，避免新增或重绘无关内容。注意：这是 AI 编辑，可能会重绘图片内容。";
 const REFERENCE_IMAGE_MAX_SIDE = 2048;
 const REFERENCE_IMAGE_JPEG_QUALITY = 0.86;
@@ -199,6 +215,7 @@ type EditingTurnDraft = {
   outputFormat: ImageOutputFormat;
   outputCompression: string;
   quality: ImageQuality;
+  midjourneySettings?: MidjourneySettingsPayload;
   visibility: ImageVisibility;
   referenceImages: StoredReferenceImage[];
 };
@@ -1128,11 +1145,60 @@ function hasEnoughBilling(session: NonNullable<ReturnType<typeof useAuthGuard>["
 }
 
 function imageBillingEstimate(model: ImageModel, count: number, sizeOrResolution: string, quality: ImageQuality = DEFAULT_IMAGE_QUALITY) {
+  if (model === MIDJOURNEY_IMAGE_MODEL) {
+    return { price: null, units: 0 };
+  }
   const estimatedPrice = estimateImageDisplayPriceUSD(model, count, sizeOrResolution, quality);
   return {
     price: estimatedPrice,
     units: estimateImageBillingUnits(model, count, sizeOrResolution, quality),
   };
+}
+
+function clampIntegerSetting(value: unknown, fallback: number, min: number, max: number) {
+  const parsed = Math.round(Number(value));
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  return Math.min(max, Math.max(min, parsed));
+}
+
+function normalizeMidjourneySettings(value: unknown): MidjourneySettingsPayload {
+  const source = value && typeof value === "object" ? value as Record<string, unknown> : {};
+  const version = typeof source.version === "string" && source.version.trim() ? source.version.trim() : DEFAULT_MIDJOURNEY_SETTINGS.version;
+  const speed = typeof source.speed === "string" && source.speed.trim() ? source.speed.trim() : DEFAULT_MIDJOURNEY_SETTINGS.speed;
+  const quality = typeof source.quality === "string" && source.quality.trim() ? source.quality.trim() : DEFAULT_MIDJOURNEY_SETTINGS.quality;
+  return {
+    version,
+    speed,
+    stylize: clampIntegerSetting(source.stylize, DEFAULT_MIDJOURNEY_SETTINGS.stylize, 0, 1000),
+    chaos: clampIntegerSetting(source.chaos, DEFAULT_MIDJOURNEY_SETTINGS.chaos, 0, 100),
+    weird: clampIntegerSetting(source.weird, DEFAULT_MIDJOURNEY_SETTINGS.weird, 0, 3000),
+    quality,
+    niji: source.niji === true || version.toLowerCase().startsWith("niji"),
+    raw: source.raw === true,
+    tile: source.tile === true,
+    stop: clampIntegerSetting(source.stop, DEFAULT_MIDJOURNEY_SETTINGS.stop || 100, 10, 100),
+  };
+}
+
+function getStoredMidjourneySettings() {
+  if (typeof window === "undefined") {
+    return normalizeMidjourneySettings(DEFAULT_MIDJOURNEY_SETTINGS);
+  }
+  try {
+    const raw = window.localStorage.getItem(MIDJOURNEY_SETTINGS_STORAGE_KEY);
+    return normalizeMidjourneySettings(raw ? JSON.parse(raw) : DEFAULT_MIDJOURNEY_SETTINGS);
+  } catch {
+    return normalizeMidjourneySettings(DEFAULT_MIDJOURNEY_SETTINGS);
+  }
+}
+
+function midjourneyExtraBody(model: ImageModel, settings?: MidjourneySettingsPayload) {
+  if (model !== MIDJOURNEY_IMAGE_MODEL) {
+    return undefined;
+  }
+  return { midjourney_settings: normalizeMidjourneySettings(settings || DEFAULT_MIDJOURNEY_SETTINGS) };
 }
 
 function referenceImageLimitMessage(limit: number) {
@@ -1525,6 +1591,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
   const [imageOutputFormat, setImageOutputFormat] = useState<ImageOutputFormat>(getStoredImageOutputFormat);
   const [imageOutputCompression, setImageOutputCompression] = useState(getStoredImageOutputCompression);
   const [imageQuality, setImageQuality] = useState<ImageQuality>(getStoredImageQuality);
+  const [midjourneySettings, setMidjourneySettings] = useState<MidjourneySettingsPayload>(getStoredMidjourneySettings);
   const [defaultImageVisibility, setDefaultImageVisibility] = useState<ImageVisibility>("private");
   const [referenceImages, setReferenceImages] = useState<StoredReferenceImage[]>([]);
   const [conversations, setConversations] = useState<ImageConversation[]>([]);
@@ -2129,6 +2196,13 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     }
     window.localStorage.setItem(IMAGE_QUALITY_STORAGE_KEY, imageQuality);
   }, [imageQuality]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    window.localStorage.setItem(MIDJOURNEY_SETTINGS_STORAGE_KEY, JSON.stringify(normalizeMidjourneySettings(midjourneySettings)));
+  }, [midjourneySettings]);
 
   useEffect(() => {
     if (selectedConversationId && !conversations.some((conversation) => conversation.id === selectedConversationId)) {
@@ -3174,6 +3248,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
           ? ""
           : String(targetTurn.outputCompression),
       quality: targetTurn.quality || DEFAULT_IMAGE_QUALITY,
+      midjourneySettings: targetTurn.midjourneySettings,
       visibility: targetTurn.visibility || "private",
       referenceImages: targetTurn.mode === "chat" ? [] : targetTurn.referenceImages,
     });
@@ -3374,6 +3449,10 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
             : imageOutputCompressionForModel(activeTurn.model, taskOutputFormat, activeTurn.outputCompression);
         const taskImageResolution = imageResolutionPresetForModel(activeTurn.model, activeTurnSizeRequest.selection);
         const fallbackReferenceImage = activeTurn.mode === "chat" ? undefined : getFallbackReferenceImage(snapshot, activeTurn.id);
+        const activeTurnMidjourneyBody = activeTurn.mode === "chat" ? undefined : midjourneyExtraBody(activeTurn.model, activeTurn.midjourneySettings);
+        const activeTurnExtraBody = {
+          ...activeTurnMidjourneyBody,
+        };
         const pendingTaskGroups = activeTurn.images.reduce<Array<{ taskId: string; count: number }>>(
           (groups, image, imageIndex) => {
             if (image.status !== "loading") {
@@ -3421,6 +3500,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
               conversationId,
               fallbackReferenceImage,
               publicImageUrls,
+              activeTurnExtraBody,
             );
           }
           return createImageGenerationTask(
@@ -3438,6 +3518,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
             activeTurn.background ? { background: activeTurn.background } : undefined,
             conversationId,
             fallbackReferenceImage,
+            activeTurnExtraBody,
           );
         };
         updateTurnProgress(conversationId, activeTurn.id, {
@@ -4021,6 +4102,8 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
           ? undefined
           : imageOutputCompressionForModel(draft.model, draftOutputFormat, draft.outputCompression);
       const draftImageResolution = imageResolutionPresetForModel(effectiveDraftModel, draftSizeRequest?.selection);
+      const draftMidjourneySettings =
+        mode === "chat" ? undefined : midjourneyExtraBody(effectiveDraftModel, draft.midjourneySettings)?.midjourney_settings;
       if (mode !== "chat" && isHighResolutionImageRequest(draftImageSize, draftImageResolution)) {
         if (regenerate) {
           toast.message(`${formatImageRequestTargetLabel(draftImageSize, draftImageResolution)} 属于高分辨率任务，会直接提交给上游判断。`);
@@ -4052,6 +4135,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
               quality: imageQualityForModel(effectiveDraftModel, draft.quality),
               outputFormat: draftOutputFormat,
               outputCompression: draftOutputCompression,
+              midjourneySettings: draftMidjourneySettings,
               background: undefined,
               visibility: mode === "chat" ? "private" : draft.visibility,
             };
@@ -4160,6 +4244,8 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
           : imageOutputCompressionForModel(effectiveModel, effectiveOutputFormat, imageOutputCompression);
       const effectiveImageResolution = imageResolutionPresetForModel(effectiveModel, currentImageSizeRequest?.selection);
       const effectiveImageQuality = imageQualityForModel(effectiveModel, imageQuality);
+      const effectiveMidjourneySettings =
+        effectiveImageMode === "chat" ? undefined : midjourneyExtraBody(effectiveModel, midjourneySettings)?.midjourney_settings;
       const isHighResolutionRequest =
         effectiveImageMode !== "chat" &&
         isHighResolutionImageRequest(currentImageSize, effectiveImageResolution);
@@ -4184,6 +4270,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         quality: effectiveImageQuality,
         outputFormat: effectiveOutputFormat,
         outputCompression: effectiveImageMode === "chat" ? undefined : effectiveOutputCompression,
+        midjourneySettings: effectiveMidjourneySettings,
         background: undefined,
         visibility: effectiveImageMode === "chat" ? "private" : defaultImageVisibility,
         images: Array.from({ length: requestedCount }, (_, index): StoredImage => {
@@ -4719,6 +4806,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                 imageOutputFormat={imageOutputFormat}
                 imageOutputCompression={imageOutputCompression}
                 imageQuality={imageQuality}
+                midjourneySettings={midjourneySettings}
                 highResolutionHint={highResolutionHint}
                 billingBlocked={billingBlocked}
                 referenceImages={referenceImages}
@@ -4738,6 +4826,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                 onImageOutputFormatChange={setImageOutputFormat}
                 onImageOutputCompressionChange={setImageOutputCompression}
                 onImageQualityChange={setImageQuality}
+                onMidjourneySettingsChange={(settings) => setMidjourneySettings(normalizeMidjourneySettings(settings))}
                 onSubmit={handleSubmit}
                 onReferenceImageChange={handleReferenceImageChange}
                 onImageResultDrop={handleImageResultDrop}

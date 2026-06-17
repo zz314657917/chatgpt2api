@@ -12,6 +12,7 @@ import {
   isImageQuality,
   supportsImageOutputCompression,
   type ImageModel,
+  type MidjourneySettingsPayload,
   type ImageOutputFormat,
   type ImageQuality,
   type ImageVisibility,
@@ -82,6 +83,7 @@ export type ImageTurn = {
   background?: string;
   moderation?: string;
   partialImages?: number;
+  midjourneySettings?: MidjourneySettingsPayload;
   visibility?: ImageVisibility;
   images: StoredImage[];
   createdAt: string;
@@ -310,6 +312,31 @@ function normalizeOutputCompression(value: unknown): number | undefined {
   return Math.min(100, Math.round(numeric));
 }
 
+function normalizeMidjourneySettings(value: unknown): MidjourneySettingsPayload | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const source = value as Record<string, unknown>;
+  const out: MidjourneySettingsPayload = {};
+  for (const key of ["version", "speed", "quality"] as const) {
+    if (typeof source[key] === "string" && source[key].trim()) {
+      out[key] = source[key].trim();
+    }
+  }
+  for (const key of ["stylize", "chaos", "weird", "stop"] as const) {
+    const numberValue = Number(source[key]);
+    if (Number.isFinite(numberValue)) {
+      out[key] = Math.round(numberValue);
+    }
+  }
+  for (const key of ["niji", "raw", "tile"] as const) {
+    if (source[key] === true) {
+      out[key] = true;
+    }
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
 function normalizePositiveInt(value: unknown): number | undefined {
   if (value === undefined || value === null || String(value).trim() === "") {
     return undefined;
@@ -414,6 +441,7 @@ function normalizeTurn(turn: ImageTurn & Record<string, unknown>): ImageTurn {
     background: typeof turn.background === "string" && turn.background ? turn.background : undefined,
     moderation: typeof turn.moderation === "string" && turn.moderation ? turn.moderation : undefined,
     partialImages: normalizePositiveInt(turn.partialImages),
+    midjourneySettings: normalizeMidjourneySettings(turn.midjourneySettings),
     visibility,
     images,
     createdAt: String(turn.createdAt || new Date().toISOString()),

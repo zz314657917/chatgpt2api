@@ -599,6 +599,8 @@ func addBuiltInCanvasImageModels(items []canvasModelOption) []canvasModelOption 
 		util.ImageModelGeminiProPreviewOfficial,
 		util.ImageModelGeminiFlashPreview,
 		util.ImageModelGeminiFlashPreviewOfficial,
+		util.ImageModelMidjourney,
+		util.ImageModelGrokImagine,
 	} {
 		if _, ok := seen[id]; !ok {
 			seen[id] = newCanvasModelOption(id, canvasModelDisplayName(id), false)
@@ -843,7 +845,9 @@ func canvasModelCapabilitiesForModelList(id string, allowVideo bool) []string {
 		util.ImageModelGeminiProPreview,
 		util.ImageModelGeminiProPreviewOfficial,
 		util.ImageModelGeminiFlashPreview,
-		util.ImageModelGeminiFlashPreviewOfficial:
+		util.ImageModelGeminiFlashPreviewOfficial,
+		util.ImageModelMidjourney,
+		util.ImageModelGrokImagine:
 		return []string{"image"}
 	default:
 		if canvasModelLooksLikeImage(id) {
@@ -901,7 +905,9 @@ func canvasModelCapabilities(value any, id string) []string {
 		util.ImageModelGeminiProPreview,
 		util.ImageModelGeminiProPreviewOfficial,
 		util.ImageModelGeminiFlashPreview,
-		util.ImageModelGeminiFlashPreviewOfficial:
+		util.ImageModelGeminiFlashPreviewOfficial,
+		util.ImageModelMidjourney,
+		util.ImageModelGrokImagine:
 		return []string{"image"}
 	default:
 		if canvasModelLooksLikeVideo(id) {

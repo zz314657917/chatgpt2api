@@ -3851,7 +3851,7 @@ func TestCanvasModelsUseSub2APIGatewayForBoundUser(t *testing.T) {
 		t.Fatalf("canvas models json: %v", err)
 	}
 	items := util.AsMapSlice(payload["items"])
-	if len(items) != 8 {
+	if len(items) != 10 {
 		t.Fatalf("canvas models items = %#v", items)
 	}
 	ids := map[string]string{}
@@ -3869,6 +3869,8 @@ func TestCanvasModelsUseSub2APIGatewayForBoundUser(t *testing.T) {
 		ids[util.ImageModelGeminiProPreviewOfficial] != "image" ||
 		ids[util.ImageModelGeminiFlashPreview] != "image" ||
 		ids[util.ImageModelGeminiFlashPreviewOfficial] != "image" ||
+		ids[util.ImageModelMidjourney] != "image" ||
+		ids[util.ImageModelGrokImagine] != "image" ||
 		ids["sora-2"] != "video" {
 		t.Fatalf("canvas model kinds = %#v", ids)
 	}
@@ -3879,6 +3881,8 @@ func TestCanvasModelsUseSub2APIGatewayForBoundUser(t *testing.T) {
 		fmt.Sprint(capabilities[util.ImageModelGeminiProPreviewOfficial]) != "[image]" ||
 		fmt.Sprint(capabilities[util.ImageModelGeminiFlashPreview]) != "[image]" ||
 		fmt.Sprint(capabilities[util.ImageModelGeminiFlashPreviewOfficial]) != "[image]" ||
+		fmt.Sprint(capabilities[util.ImageModelMidjourney]) != "[image]" ||
+		fmt.Sprint(capabilities[util.ImageModelGrokImagine]) != "[image]" ||
 		fmt.Sprint(capabilities["sora-2"]) != "[video]" {
 		t.Fatalf("canvas model capabilities = %#v", capabilities)
 	}
@@ -3889,6 +3893,8 @@ func TestCanvasModelsUseSub2APIGatewayForBoundUser(t *testing.T) {
 		!enabled[util.ImageModelGeminiProPreviewOfficial] ||
 		!enabled[util.ImageModelGeminiFlashPreview] ||
 		!enabled[util.ImageModelGeminiFlashPreviewOfficial] ||
+		!enabled[util.ImageModelMidjourney] ||
+		!enabled[util.ImageModelGrokImagine] ||
 		enabled["sora-2"] {
 		t.Fatalf("canvas model enabled flags = %#v", enabled)
 	}
@@ -3954,7 +3960,7 @@ func TestCanvasModelsFallbackToSub2APIModelsForBoundUser(t *testing.T) {
 		t.Fatalf("canvas models json: %v", err)
 	}
 	items := util.AsMapSlice(payload["items"])
-	if len(items) != 7 {
+	if len(items) != 9 {
 		t.Fatalf("canvas models items = %#v", items)
 	}
 	ids := map[string]string{}
@@ -3967,7 +3973,9 @@ func TestCanvasModelsFallbackToSub2APIModelsForBoundUser(t *testing.T) {
 		ids[util.ImageModelGeminiProPreview] != "image" ||
 		ids[util.ImageModelGeminiProPreviewOfficial] != "image" ||
 		ids[util.ImageModelGeminiFlashPreview] != "image" ||
-		ids[util.ImageModelGeminiFlashPreviewOfficial] != "image" {
+		ids[util.ImageModelGeminiFlashPreviewOfficial] != "image" ||
+		ids[util.ImageModelMidjourney] != "image" ||
+		ids[util.ImageModelGrokImagine] != "image" {
 		t.Fatalf("canvas model kinds = %#v", ids)
 	}
 }
@@ -5441,7 +5449,6 @@ func TestTextAssetCollectionsEndpointTeamManagerWrite(t *testing.T) {
 		t.Fatalf("member list team text collections = %#v", list)
 	}
 }
-
 
 func TestManagedImageFilesRequireOwnerOrPublicAccess(t *testing.T) {
 	app := newTestApp(t)
