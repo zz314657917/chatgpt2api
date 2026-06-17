@@ -93,6 +93,79 @@ func TestTextAssetServiceValidationAndPagination(t *testing.T) {
 	}
 }
 
+func TestTextAssetServiceCollectionsAssignFilterRenameAndDelete(t *testing.T) {
+	service := NewTextAssetService(newTestStorageBackend(t))
+	scope := TextAssetAccessScope{OwnerID: "user-alice", OwnerName: "Alice"}
+	other := TextAssetAccessScope{OwnerID: "user-bob", OwnerName: "Bob"}
+
+	first, err := service.Create(map[string]any{"name": "A", "content": "alpha"}, scope)
+	if err != nil {
+		t.Fatalf("Create(first) error = %v", err)
+	}
+	second, err := service.Create(map[string]any{"name": "B", "content": "beta"}, scope)
+	if err != nil {
+		t.Fatalf("Create(second) error = %v", err)
+	}
+	collection, err := service.CreateTextAssetCollection("角色", scope)
+	if err != nil {
+		t.Fatalf("CreateTextAssetCollection() error = %v", err)
+	}
+	if collection.ID == "" || collection.Name != "角色" || collection.OwnerID != "user-alice" {
+		t.Fatalf("CreateTextAssetCollection() = %#v", collection)
+	}
+	if _, err := service.CreateTextAssetCollection("角色", scope); err == nil {
+		t.Fatalf("CreateTextAssetCollection(duplicate) error = nil")
+	}
+	if _, err := service.UpdateTextAssetCollectionItems(collection.ID, []string{first["id"].(string), "missing"}, other); err == nil {
+		t.Fatalf("UpdateTextAssetCollectionItems(other owner) error = nil")
+	}
+	result, err := service.UpdateTextAssetCollectionItems(collection.ID, []string{first["id"].(string)}, scope)
+	if err != nil {
+		t.Fatalf("UpdateTextAssetCollectionItems() error = %v", err)
+	}
+	if result["updated"] != 1 || result["collection_name"] != "角色" {
+		t.Fatalf("UpdateTextAssetCollectionItems() = %#v", result)
+	}
+	filtered := service.List(TextAssetListOptions{CollectionID: collection.ID}, scope)
+	if len(filtered.Items) != 1 || filtered.Items[0]["id"] != first["id"] || filtered.Items[0]["collection_name"] != "角色" {
+		t.Fatalf("List(collection) = %#v", filtered)
+	}
+	unclassified := service.List(TextAssetListOptions{CollectionID: TextAssetCollectionUnclassifiedID}, scope)
+	if len(unclassified.Items) != 1 || unclassified.Items[0]["id"] != second["id"] {
+		t.Fatalf("List(unclassified) = %#v", unclassified)
+	}
+	collections := service.ListTextAssetCollectionsResult(scope)
+	if len(collections.Items) != 1 || collections.Items[0].TextsCount != 1 || collections.UnclassifiedCount != 1 {
+		t.Fatalf("ListTextAssetCollectionsResult() = %#v", collections)
+	}
+	renamed, err := service.RenameTextAssetCollection(collection.ID, "场景", scope)
+	if err != nil {
+		t.Fatalf("RenameTextAssetCollection() error = %v", err)
+	}
+	if renamed.Name != "场景" || renamed.TextsCount != 1 {
+		t.Fatalf("RenameTextAssetCollection() = %#v", renamed)
+	}
+	filtered = service.List(TextAssetListOptions{CollectionID: collection.ID}, scope)
+	if len(filtered.Items) != 1 || filtered.Items[0]["collection_name"] != "场景" {
+		t.Fatalf("List(after rename) = %#v", filtered)
+	}
+	deleted, err := service.DeleteTextAssetCollection(collection.ID, scope)
+	if err != nil {
+		t.Fatalf("DeleteTextAssetCollection() error = %v", err)
+	}
+	if deleted["deleted"] != true || deleted["cleared"] != 1 {
+		t.Fatalf("DeleteTextAssetCollection() = %#v", deleted)
+	}
+	filtered = service.List(TextAssetListOptions{CollectionID: collection.ID}, scope)
+	if len(filtered.Items) != 0 {
+		t.Fatalf("List(deleted collection) = %#v", filtered)
+	}
+	unclassified = service.List(TextAssetListOptions{CollectionID: TextAssetCollectionUnclassifiedID}, scope)
+	if len(unclassified.Items) != 2 {
+		t.Fatalf("List(unclassified after delete) = %#v", unclassified)
+	}
+}
+
 func TestTextAssetServiceTeamReadAndManagerWrite(t *testing.T) {
 	service := NewTextAssetService(newTestStorageBackend(t))
 	member := TextAssetAccessScope{TeamID: "team-1", TeamName: "Design Team"}
@@ -120,6 +193,40 @@ func TestTextAssetServiceTeamReadAndManagerWrite(t *testing.T) {
 	}
 	if _, err := service.Update(item["id"].(string), map[string]any{"content": "已更新"}, manager); err != nil {
 		t.Fatalf("Update(team manager) error = %v", err)
+	}
+}
+
+func TestTextAssetServiceTeamCollectionsRequireManager(t *testing.T) {
+	service := NewTextAssetService(newTestStorageBackend(t))
+	member := TextAssetAccessScope{TeamID: "team-1", TeamName: "Design Team"}
+	manager := TextAssetAccessScope{TeamID: "team-1", TeamName: "Design Team", TeamManager: true}
+	otherTeam := TextAssetAccessScope{TeamID: "team-2", TeamName: "Other Team", TeamManager: true}
+
+	if _, err := service.CreateTextAssetCollection("团队分类", member); err == nil {
+		t.Fatalf("CreateTextAssetCollection(member) error = nil")
+	}
+	collection, err := service.CreateTextAssetCollection("团队分类", manager)
+	if err != nil {
+		t.Fatalf("CreateTextAssetCollection(manager) error = %v", err)
+	}
+	item, err := service.Create(map[string]any{"name": "团队素材", "content": "团队文本"}, manager)
+	if err != nil {
+		t.Fatalf("Create(team item) error = %v", err)
+	}
+	if _, err := service.UpdateTextAssetCollectionItems(collection.ID, []string{item["id"].(string)}, member); err == nil {
+		t.Fatalf("UpdateTextAssetCollectionItems(member) error = nil")
+	}
+	if _, err := service.UpdateTextAssetCollectionItems(collection.ID, []string{item["id"].(string)}, manager); err != nil {
+		t.Fatalf("UpdateTextAssetCollectionItems(manager) error = %v", err)
+	}
+	if got := service.List(TextAssetListOptions{CollectionID: collection.ID}, member); len(got.Items) != 1 {
+		t.Fatalf("member List(collection) items = %#v", got.Items)
+	}
+	if got := service.List(TextAssetListOptions{CollectionID: collection.ID}, otherTeam); len(got.Items) != 0 {
+		t.Fatalf("other team List(collection) items = %#v", got.Items)
+	}
+	if _, err := service.RenameTextAssetCollection(collection.ID, "其他团队改名", otherTeam); err == nil {
+		t.Fatalf("RenameTextAssetCollection(other team) error = nil")
 	}
 }
 

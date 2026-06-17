@@ -156,6 +156,10 @@ func TestTextAssetPermissionsAreDefaultAndSubtree(t *testing.T) {
 		{"POST", "/api/text-assets"},
 		{"PATCH", "/api/text-assets/ta_123"},
 		{"DELETE", "/api/text-assets/ta_123"},
+		{"GET", "/api/text-asset-collections"},
+		{"POST", "/api/text-asset-collections"},
+		{"PATCH", "/api/text-asset-collections/items"},
+		{"DELETE", "/api/text-asset-collections/tcol_123"},
 	} {
 		if !HasAPIPermission(defaults, tc.method, tc.path) {
 			t.Fatalf("missing default text asset permission for %s %s in %#v", tc.method, tc.path, defaults.APIPermissions)
@@ -183,6 +187,10 @@ func TestMergeDefaultManagedRoleAddsTextAssetPermissions(t *testing.T) {
 		{"POST", "/api/text-assets"},
 		{"PATCH", "/api/text-assets/ta_123"},
 		{"DELETE", "/api/text-assets/ta_123"},
+		{"GET", "/api/text-asset-collections"},
+		{"POST", "/api/text-asset-collections"},
+		{"PATCH", "/api/text-asset-collections/items"},
+		{"DELETE", "/api/text-asset-collections/tcol_123"},
 	} {
 		if !HasAPIPermission(permissions, tc.method, tc.path) {
 			t.Fatalf("merged default role missing text asset permission for %s %s in %#v", tc.method, tc.path, roles[0].APIPermissions)

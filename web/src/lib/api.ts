@@ -751,6 +751,8 @@ export type ManagedTextAsset = {
   name: string;
   content: string;
   preview: string;
+  collection_id?: string;
+  collection_name?: string;
   owner_name?: string;
   owner_id?: string;
   library_scope: "personal" | "team" | string;
@@ -766,6 +768,7 @@ export type ManagedTextAssetListFilters = {
   page_size?: number;
   cursor?: string;
   search?: string;
+  collection_id?: string;
 };
 
 export type ManagedTextAssetListResult = {
@@ -804,9 +807,27 @@ export type ManagedImageCollection = {
 };
 
 export const MANAGED_IMAGE_UNCLASSIFIED_COLLECTION_ID = "__unclassified__";
+export const MANAGED_TEXT_ASSET_UNCLASSIFIED_COLLECTION_ID = MANAGED_IMAGE_UNCLASSIFIED_COLLECTION_ID;
 
 export type ManagedImageCollectionsResult = {
   items: ManagedImageCollection[];
+  unclassified_count: number;
+};
+
+export type ManagedTextAssetCollection = {
+  id: string;
+  name: string;
+  library_scope: "personal" | "team" | string;
+  owner_id?: string;
+  team_id?: string;
+  team_name?: string;
+  created_at: string;
+  updated_at: string;
+  texts_count: number;
+};
+
+export type ManagedTextAssetCollectionsResult = {
+  items: ManagedTextAssetCollection[];
   unclassified_count: number;
 };
 
@@ -2634,6 +2655,70 @@ export async function deleteManagedTextAsset(
     { method: "DELETE" },
   );
 }
+
+export async function fetchManagedTextAssetCollections(filters: { scope?: ManagedTextAssetListScope; team_id?: string } = {}) {
+  const params = new URLSearchParams();
+  if (filters.scope) params.set("scope", filters.scope);
+  if (filters.team_id) params.set("team_id", filters.team_id);
+  const data = await httpRequest<{ items?: ManagedTextAssetCollection[] | null; unclassified_count?: number | string | null }>(
+    `/api/text-asset-collections${params.toString() ? `?${params.toString()}` : ""}`,
+  );
+  const unclassifiedCount = Number(data.unclassified_count);
+  return {
+    items: Array.isArray(data.items) ? data.items : [],
+    unclassified_count: Number.isFinite(unclassifiedCount) ? Math.max(0, unclassifiedCount) : 0,
+  };
+}
+
+export async function createManagedTextAssetCollection(name: string, options: { scope?: ManagedTextAssetListScope; team_id?: string } = {}) {
+  return httpRequest<{ item: ManagedTextAssetCollection; items?: ManagedTextAssetCollection[] | null; unclassified_count?: number | string | null }>(
+    "/api/text-asset-collections",
+    {
+      method: "POST",
+      body: { name, ...(options.scope ? { scope: options.scope } : {}), ...(options.team_id ? { team_id: options.team_id } : {}) },
+    },
+  );
+}
+
+export async function renameManagedTextAssetCollection(id: string, name: string, options: { scope?: ManagedTextAssetListScope; team_id?: string } = {}) {
+  return httpRequest<{ item: ManagedTextAssetCollection; items?: ManagedTextAssetCollection[] | null; unclassified_count?: number | string | null }>(
+    `/api/text-asset-collections/${encodeURIComponent(id)}`,
+    {
+      method: "PATCH",
+      body: { name, ...(options.scope ? { scope: options.scope } : {}), ...(options.team_id ? { team_id: options.team_id } : {}) },
+    },
+  );
+}
+
+export async function deleteManagedTextAssetCollection(id: string, options: { scope?: ManagedTextAssetListScope; team_id?: string } = {}) {
+  const params = new URLSearchParams();
+  if (options.scope) params.set("scope", options.scope);
+  if (options.team_id) params.set("team_id", options.team_id);
+  return httpRequest<{ deleted: boolean; collection_id: string; cleared: number; items?: ManagedTextAssetCollection[] | null; unclassified_count?: number | string | null }>(
+    `/api/text-asset-collections/${encodeURIComponent(id)}${params.toString() ? `?${params.toString()}` : ""}`,
+    { method: "DELETE" },
+  );
+}
+
+export async function updateManagedTextAssetCollectionItems(
+  collectionId: string,
+  ids: string[],
+  options: { scope?: ManagedTextAssetListScope; team_id?: string } = {},
+) {
+  return httpRequest<{
+    updated: number;
+    missing: number;
+    ids: string[];
+    collection_id: string;
+    collection_name?: string;
+    items?: ManagedTextAssetCollection[] | null;
+    unclassified_count?: number | string | null;
+  }>("/api/text-asset-collections/items", {
+    method: "PATCH",
+    body: { collection_id: collectionId, ids, ...(options.scope ? { scope: options.scope } : {}), ...(options.team_id ? { team_id: options.team_id } : {}) },
+  });
+}
+
 
 export async function fetchManagedImageDetail(
   path: string,

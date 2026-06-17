@@ -1,7 +1,7 @@
 "use client";
 
 import { forwardRef, useCallback, useEffect, useMemo, useRef, useState, type HTMLAttributes } from "react";
-import { Check, Copy, Download, Eye, Folder, FolderPlus, Globe2, ImageIcon, ImagePlus, Info, LoaderCircle, Lock, MoreHorizontal, Pencil, RefreshCw, Search, Send, SlidersHorizontal, Sparkles, Tag, Trash2, Users, X } from "lucide-react";
+import { Check, Copy, Download, Eye, FileText, Folder, FolderPlus, ImageIcon, ImagePlus, Info, LoaderCircle, MoreHorizontal, Pencil, RefreshCw, Search, Send, SlidersHorizontal, Sparkles, Tag, Trash2, Type, Users, X } from "lucide-react";
 import { VirtuosoGrid, type VirtuosoGridHandle } from "react-virtuoso";
 import { useLocation, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
@@ -27,26 +27,38 @@ import {
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
 import {
+  createManagedTextAssetCollection,
   deleteManagedImages,
+  createManagedTextAsset,
   createManagedImageCollection,
   deleteManagedImageCollection,
+  deleteManagedTextAssetCollection,
+  deleteManagedTextAsset,
   fetchManagedImageDownloadURL,
   fetchManagedImageCollections,
   fetchManagedImageDetail,
   fetchManagedImages,
   fetchManagedImageTags,
+  fetchManagedTextAssetCollections,
+  fetchManagedTextAssets,
   fetchTeamWorkspace,
   moveManagedImagesToTeamLibrary,
   MANAGED_IMAGE_UNCLASSIFIED_COLLECTION_ID,
+  MANAGED_TEXT_ASSET_UNCLASSIFIED_COLLECTION_ID,
   renameManagedImageCollection,
+  renameManagedTextAssetCollection,
   updateManagedImageCollectionItems,
   updateManagedImageTags,
-  updateManagedImageVisibility,
-  type ImageVisibility,
+  updateManagedTextAssetCollectionItems,
+  updateManagedTextAsset,
   type ManagedImageCollection,
   type ManagedImageDetail,
   type ManagedImageSummary,
+  type ManagedTextAsset,
+  type ManagedTextAssetCollection,
+  type ManagedTextAssetListScope,
   type TeamImageStorageSummary,
   type TeamSummary,
 } from "@/lib/api";
@@ -93,7 +105,7 @@ function managedImageDetailCacheKey(item: ManagedImageSummary, scope?: ImageGall
 }
 
 function managedImageDetailCacheKeys(item: ManagedImageSummary) {
-  return ["mine", "team", "public", "all"].map((scope) => managedImageDetailCacheKey(item, scope as ImageGalleryView));
+  return ["mine", "team", "all"].map((scope) => managedImageDetailCacheKey(item, scope as ImageGalleryView));
 }
 
 function buildManagedImageDownloadName(item: ManagedImageSummary, index: number) {
@@ -183,10 +195,6 @@ type TagEditTarget = {
   item: ManagedImageSummary;
 };
 
-type PublishImageTarget = {
-  items: ManagedImageSummary[];
-};
-
 type MoveTeamTarget = {
   items: ManagedImageSummary[];
 };
@@ -204,17 +212,35 @@ type CollectionAssignTarget = {
   collectionId: string;
 };
 
-type PublishRecipeOptions = {
-  sharePromptParameters: boolean;
-  shareReferenceImages: boolean;
-};
-
-type ImageVisibilityFilter = "all" | ImageVisibility;
+type ImageVisibilityFilter = "all" | "private";
 type ImageFormatFilter = "all" | "png" | "jpg" | "webp" | "gif" | "other";
 type ImageOrientationFilter = "all" | "landscape" | "portrait" | "square" | "unknown";
 type ImageResolutionFilter = "all" | "1080p" | "2k" | "4k" | "unknown";
 type ImageAspectRatioFilter = "all" | "1:1" | "4:3" | "3:4" | "16:9" | "9:16" | "other" | "unknown";
 type AutoRefreshMenuScope = "mobile" | "desktop";
+type AssetLibraryKind = "image" | "text";
+type TextAssetScope = ManagedTextAssetListScope;
+
+type TextAssetEditorTarget =
+  | { mode: "create" }
+  | { mode: "edit"; item: ManagedTextAsset };
+
+type DeleteTextAssetTarget = {
+  item: ManagedTextAsset;
+};
+
+type TextAssetCollectionEditTarget =
+  | { mode: "create" }
+  | { mode: "rename"; collection: ManagedTextAssetCollection };
+
+type TextAssetCollectionDeleteTarget = {
+  collection: ManagedTextAssetCollection;
+};
+
+type TextAssetCollectionAssignTarget = {
+  item: ManagedTextAsset;
+  collectionId: string;
+};
 
 const IMAGE_RESOLUTION_FILTERS: Array<{ value: ImageResolutionFilter; label: string }> = [
   { value: "all", label: "全部分辨率" },
@@ -245,6 +271,34 @@ function imageOwnerLabel(item: ManagedImageSummary) {
 
 function canManageTeamImages(team?: TeamSummary | null) {
   return team?.member_role === "owner" || team?.member_role === "manager";
+}
+
+function canManageTeamTextAssets(team?: TeamSummary | null) {
+  return team?.member_role === "owner" || team?.member_role === "manager";
+}
+
+function textAssetOwnerLabel(item: ManagedTextAsset) {
+  return item.owner_name?.trim() || item.team_name?.trim() || "未知用户";
+}
+
+function formatTextAssetTime(value?: string) {
+  if (!value) {
+    return "未知时间";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  return date.toLocaleString("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function textAssetScopeLabel(scope: TextAssetScope) {
+  return scope === "team" ? "团队" : "个人";
 }
 
 function formatStorageBytes(bytes?: number) {
@@ -389,23 +443,7 @@ function imageVisibilityFilterLabel(visibility: ImageVisibilityFilter) {
   if (visibility === "all") {
     return "全部状态";
   }
-  return imageVisibilityLabel(visibility);
-}
-
-function imageVisibilityLabel(visibility: ImageVisibility) {
-  return visibility === "public" ? "已公开" : "私有";
-}
-
-function imageVisibilityPillClass(visibility: ImageVisibility) {
-  return visibility === "public"
-    ? "bg-[#e8f2ff] text-[#1456f0] ring-1 ring-[#bfdbfe]"
-    : "bg-[#181e25]/82 text-white ring-1 ring-white/20";
-}
-
-function imageVisibilityActionClass(visibility: ImageVisibility) {
-  return visibility === "public"
-    ? "bg-white/95 text-[#1456f0] hover:bg-[#e8f2ff]"
-    : "bg-white/95 text-stone-800 hover:bg-stone-100";
+  return "私有";
 }
 
 function blurFocusedElementInContainer(container: HTMLElement) {
@@ -416,6 +454,8 @@ function blurFocusedElementInContainer(container: HTMLElement) {
 }
 
 const IMAGE_MANAGER_PAGE_SIZE = 50;
+const TEXT_ASSET_PAGE_SIZE = 50;
+const TEXT_ASSET_MAX_CONTENT_LENGTH = 20000;
 const AUTO_REFRESH_INTERVAL_OPTIONS = [5, 10, 15, 30] as const;
 
 type ImageAutoRefreshInterval = (typeof AUTO_REFRESH_INTERVAL_OPTIONS)[number];
@@ -424,19 +464,27 @@ function ImageManagerContent({
   cacheScope,
   canDeleteImages,
   canGenerateSimilar,
-  canUpdateImageVisibility,
   canEditImageTags,
   canMoveImagesToTeam,
   canManageCollections,
+  canViewTextAssets,
+  canCreateTextAssets,
+  canUpdateTextAssets,
+  canDeleteTextAssets,
+  canManageTextAssetCollections,
   isAdmin,
 }: {
   cacheScope: string;
   canDeleteImages: boolean;
   canGenerateSimilar: boolean;
-  canUpdateImageVisibility: boolean;
   canEditImageTags: boolean;
   canMoveImagesToTeam: boolean;
   canManageCollections: boolean;
+  canViewTextAssets: boolean;
+  canCreateTextAssets: boolean;
+  canUpdateTextAssets: boolean;
+  canDeleteTextAssets: boolean;
+  canManageTextAssetCollections: boolean;
   isAdmin: boolean;
 }) {
   const navigate = useNavigate();
@@ -444,9 +492,34 @@ function ImageManagerContent({
   const { clearPanel, closeDrawer, openDrawer, setPanel } = useMobileNav();
   const activeLoadRef = useRef<AbortController | null>(null);
   const autoRefreshAbortRef = useRef<AbortController | null>(null);
+  const textAssetLoadRef = useRef<AbortController | null>(null);
   const imageGridRef = useRef<VirtuosoGridHandle | null>(null);
   const imageGridScrollerRef = useRef<HTMLElement | null>(null);
+  const [assetKind, setAssetKind] = useState<AssetLibraryKind>("image");
   const [galleryView, setGalleryView] = useState<ImageGalleryView>("mine");
+  const [textAssetScope, setTextAssetScope] = useState<TextAssetScope>("mine");
+  const [textAssetSearch, setTextAssetSearch] = useState("");
+  const [textAssets, setTextAssets] = useState<ManagedTextAsset[]>([]);
+  const [textAssetNextCursor, setTextAssetNextCursor] = useState("");
+  const [textAssetHasMore, setTextAssetHasMore] = useState(false);
+  const [isTextAssetLoading, setIsTextAssetLoading] = useState(false);
+  const [isTextAssetLoadingMore, setIsTextAssetLoadingMore] = useState(false);
+  const [textAssetLoadError, setTextAssetLoadError] = useState("");
+  const [focusedTextAssetId, setFocusedTextAssetId] = useState<string | null>(null);
+  const [textAssetEditorTarget, setTextAssetEditorTarget] = useState<TextAssetEditorTarget | null>(null);
+  const [textAssetNameInput, setTextAssetNameInput] = useState("");
+  const [textAssetContentInput, setTextAssetContentInput] = useState("");
+  const [isTextAssetSaving, setIsTextAssetSaving] = useState(false);
+  const [deleteTextAssetTarget, setDeleteTextAssetTarget] = useState<DeleteTextAssetTarget | null>(null);
+  const [isTextAssetDeleting, setIsTextAssetDeleting] = useState(false);
+  const [textAssetCollections, setTextAssetCollections] = useState<ManagedTextAssetCollection[]>([]);
+  const [textAssetUnclassifiedCount, setTextAssetUnclassifiedCount] = useState(0);
+  const [selectedTextAssetCollectionId, setSelectedTextAssetCollectionId] = useState("");
+  const [textAssetCollectionEditTarget, setTextAssetCollectionEditTarget] = useState<TextAssetCollectionEditTarget | null>(null);
+  const [textAssetCollectionNameInput, setTextAssetCollectionNameInput] = useState("");
+  const [textAssetCollectionDeleteTarget, setTextAssetCollectionDeleteTarget] = useState<TextAssetCollectionDeleteTarget | null>(null);
+  const [textAssetCollectionAssignTarget, setTextAssetCollectionAssignTarget] = useState<TextAssetCollectionAssignTarget | null>(null);
+  const [textAssetCollectionMutating, setTextAssetCollectionMutating] = useState(false);
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
   const [selectedImageIds, setSelectedImageIds] = useState<Record<string, boolean>>({});
@@ -457,11 +530,6 @@ function ImageManagerContent({
   const [allImageTags, setAllImageTags] = useState<string[]>([]);
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [tagMutatingPath, setTagMutatingPath] = useState<string | null>(null);
-  const [publishTarget, setPublishTarget] = useState<PublishImageTarget | null>(null);
-  const [publishRecipeOptions, setPublishRecipeOptions] = useState<PublishRecipeOptions>({
-    sharePromptParameters: false,
-    shareReferenceImages: false,
-  });
   const [teamImagesTarget, setTeamImagesTarget] = useState<MoveTeamTarget | null>(null);
   const [collections, setCollections] = useState<ManagedImageCollection[]>([]);
   const [unclassifiedCount, setUnclassifiedCount] = useState(0);
@@ -475,7 +543,6 @@ function ImageManagerContent({
   const [teamStorage, setTeamStorage] = useState<TeamImageStorageSummary | null>(null);
   const [isMovingToTeam, setIsMovingToTeam] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
-  const [visibilityMutatingPath, setVisibilityMutatingPath] = useState<string | null>(null);
   const [focusedImagePath, setFocusedImagePath] = useState<string | null>(null);
   const [lightboxIndex, setLightboxIndex] = useState(0);
   const [lightboxOpen, setLightboxOpen] = useState(false);
@@ -485,6 +552,7 @@ function ImageManagerContent({
   const [autoRefreshInterval, setAutoRefreshInterval] = useState<ImageAutoRefreshInterval>(30);
   const [autoRefreshSecondsRemaining, setAutoRefreshSecondsRemaining] = useState(autoRefreshInterval);
   const [isMobileFiltersOpen, setIsMobileFiltersOpen] = useState(false);
+  const initialQueryAppliedRef = useRef(false);
   const [searchKeyword, setSearchKeyword] = useState("");
   const [visibilityFilter, setVisibilityFilter] = useState<ImageVisibilityFilter>("all");
   const [formatFilter, setFormatFilter] = useState<ImageFormatFilter>("all");
@@ -590,14 +658,6 @@ function ImageManagerContent({
     () => items.filter((item) => selectedImageIds[managedImageKey(item)]),
     [items, selectedImageIds],
   );
-  const selectedPrivateItems = useMemo(
-    () => selectedItems.filter((item) => item.visibility !== "public"),
-    [selectedItems],
-  );
-  const selectedPublicItems = useMemo(
-    () => selectedItems.filter((item) => item.visibility === "public"),
-    [selectedItems],
-  );
   const focusedItem = useMemo(() => {
     if (focusedImagePath) {
       const focused = items.find((item) => managedImageKey(item) === focusedImagePath);
@@ -610,19 +670,40 @@ function ImageManagerContent({
   const focusedDetail = focusedItem ? detailItemsByPath[managedImageDetailCacheKey(focusedItem, galleryView)] : undefined;
   const hasTeamLibrary = Boolean(activeTeam?.id);
   const teamManager = canManageTeamImages(activeTeam);
+  const teamTextManager = canManageTeamTextAssets(activeTeam);
+  const canMutateTextAssets = textAssetScope === "mine" || Boolean(textAssetScope === "team" && teamTextManager && activeTeam?.id);
+  const canCreateTextAssetInScope = canCreateTextAssets && canMutateTextAssets;
+  const canUpdateTextAssetInScope = canUpdateTextAssets && canMutateTextAssets;
+  const canDeleteTextAssetInScope = canDeleteTextAssets && canMutateTextAssets;
+  const canMutateTextAssetCollections = canManageTextAssetCollections && canMutateTextAssets;
+  const focusedTextAsset = useMemo(() => {
+    if (focusedTextAssetId) {
+      const focused = textAssets.find((item) => item.id === focusedTextAssetId);
+      if (focused) {
+        return focused;
+      }
+    }
+    return textAssets[0] || null;
+  }, [focusedTextAssetId, textAssets]);
   const canMutateCollections = canManageCollections && (galleryView === "mine" || Boolean(galleryView === "team" && teamManager && activeTeam?.id));
   const selectedRealCollection = selectedCollectionId && selectedCollectionId !== MANAGED_IMAGE_UNCLASSIFIED_COLLECTION_ID;
   const collectionReadOnlyHint = canMutateCollections
     ? "一张图只能属于一个素材集，调整归类会替换原素材集。"
-    : galleryView === "public"
-      ? "公共素材库只读，可查看和引用，不能修改素材集。"
-      : galleryView === "team"
+    : galleryView === "team"
         ? "团队普通成员可查看素材集，归类修改需要 owner 或 manager 权限。"
         : "";
   const selectedCount = selectedItems.length;
   const allSelected = items.length > 0 && selectedCount === items.length;
-  const libraryViewLabel = galleryView === "team" ? "团队" : galleryView === "all" ? "全部" : galleryView === "public" ? "公共" : "个人";
+  const libraryViewLabel = galleryView === "team" ? "团队" : galleryView === "all" ? "全部" : "个人";
   const imageCountLabel = hasMoreItems ? `已加载 ${items.length} 张` : `当前 ${items.length} 张`;
+  const textAssetCountLabel = textAssetHasMore ? `已加载 ${textAssets.length} 条` : `当前 ${textAssets.length} 条`;
+  const activeLibraryScopeLabel = assetKind === "text" ? textAssetScopeLabel(textAssetScope) : libraryViewLabel;
+  const activeLibraryCountLabel = assetKind === "text" ? textAssetCountLabel : imageCountLabel;
+  const selectedTextAssetCollectionLabel = !selectedTextAssetCollectionId
+    ? "全部文本"
+    : selectedTextAssetCollectionId === MANAGED_TEXT_ASSET_UNCLASSIFIED_COLLECTION_ID
+      ? "未归类"
+      : textAssetCollections.find((item) => item.id === selectedTextAssetCollectionId)?.name || "未命名";
   const selectedCollectionLabel = !selectedCollectionId
     ? "全部素材"
     : selectedCollectionId === MANAGED_IMAGE_UNCLASSIFIED_COLLECTION_ID
@@ -630,10 +711,28 @@ function ImageManagerContent({
       : collections.find((item) => item.id === selectedCollectionId)?.name || "未命名";
   const libraryHintText = galleryView === "team" && teamStorage
     ? `容量 ${formatStorageBytes(teamStorage.used_bytes)} / ${formatStorageBytes(teamStorage.limit_bytes)}，剩余 ${formatStorageBytes(teamStorage.remaining_bytes)}。`
-    : galleryView === "public"
-      ? "公共素材库展示已公开的图片，可直接引用。"
-      : `仅保留最近 ${imageRetentionDays} 天，过期图片会自动清理。`;
-  const isMutatingImages = downloadingKey !== null || isDeleting || isMovingToTeam || visibilityMutatingPath !== null || tagMutatingPath !== null || collectionMutating;
+    : `仅保留最近 ${imageRetentionDays} 天，过期图片会自动清理。`;
+  const textAssetHintText = textAssetScope === "team"
+    ? teamTextManager
+      ? "团队文本素材由 owner 或 manager 维护，团队成员可复用。"
+      : "团队文本素材可查看，维护需要 owner 或 manager 权限。"
+    : "个人文本素材可在画布和社媒运营中复用。";
+  const textAssetCollectionHintText = canMutateTextAssetCollections
+    ? "一条文本素材只能属于一个素材集，调整归类会替换原素材集。"
+    : textAssetScope === "team"
+      ? "团队普通成员可查看文本素材集，归类修改需要 owner 或 manager 权限。"
+      : "";
+  const isMutatingImages = downloadingKey !== null || isDeleting || isMovingToTeam || tagMutatingPath !== null || collectionMutating;
+  const isMutatingTextAssets = isTextAssetSaving || isTextAssetDeleting || textAssetCollectionMutating;
+  const textAssetCollectionFilterMatchesItem = useCallback((item: Pick<ManagedTextAsset, "collection_id">) => {
+    if (!selectedTextAssetCollectionId) {
+      return true;
+    }
+    if (selectedTextAssetCollectionId === MANAGED_TEXT_ASSET_UNCLASSIFIED_COLLECTION_ID) {
+      return !item.collection_id;
+    }
+    return item.collection_id === selectedTextAssetCollectionId;
+  }, [selectedTextAssetCollectionId]);
   const collectionFilterMatchesItem = useCallback((item: Pick<ManagedImageSummary, "collection_id">) => {
     if (!selectedCollectionId) {
       return true;
@@ -651,6 +750,16 @@ function ImageManagerContent({
     setNextCursor("");
     setHasMoreItems(false);
   }, []);
+  const clearLoadedTextAssetsForQueryChange = useCallback(() => {
+    setTextAssets([]);
+    setTextAssetNextCursor("");
+    setTextAssetHasMore(false);
+    setFocusedTextAssetId(null);
+  }, []);
+  const clearTextAssetCollectionFilter = useCallback(() => {
+    setSelectedTextAssetCollectionId("");
+    clearLoadedTextAssetsForQueryChange();
+  }, [clearLoadedTextAssetsForQueryChange]);
   const buildImageListFilters = useCallback((cursor = "") => ({
     scope: galleryView,
     team_id: galleryView === "team" ? activeTeam?.id || "" : "",
@@ -717,6 +826,36 @@ function ImageManagerContent({
     }
   }, [activeTeam?.id, galleryView]);
 
+  useEffect(() => {
+    if (textAssetScope === "team" && !activeTeam?.id) {
+      setTextAssetScope("mine");
+      clearTextAssetCollectionFilter();
+    }
+  }, [activeTeam?.id, clearTextAssetCollectionFilter, textAssetScope]);
+
+  useEffect(() => {
+    if (initialQueryAppliedRef.current) {
+      return;
+    }
+    const params = new URLSearchParams(location.search);
+    const queryCollectionId = params.get("collection_id")?.trim() || "";
+    if (!queryCollectionId) {
+      initialQueryAppliedRef.current = true;
+      return;
+    }
+    const queryScope = params.get("scope")?.trim();
+    const nextGalleryView: ImageGalleryView = queryScope === "team" && activeTeam?.id ? "team" : "mine";
+    if (queryScope === "team" && !activeTeam?.id) {
+      return;
+    }
+    initialQueryAppliedRef.current = true;
+    setGalleryView(nextGalleryView);
+    setSelectedCollectionId(queryCollectionId);
+    setSelectedImageIds({});
+    clearLoadedItemsForQueryChange();
+    setLoadError("");
+  }, [activeTeam?.id, clearLoadedItemsForQueryChange, location.search]);
+
   const openImagePreview = useCallback((_item: ManagedImageSummary, index: number) => {
     setLightboxIndex(index);
     setLightboxOpen(true);
@@ -762,12 +901,12 @@ function ImageManagerContent({
 
   const openCollectionEditor = useCallback((target: CollectionEditTarget) => {
     if (!canMutateCollections) {
-      toast.error(galleryView === "public" ? "公共素材库不允许修改素材集" : "当前账号没有素材集管理权限");
+      toast.error("当前账号没有素材集管理权限");
       return;
     }
     setCollectionEditTarget(target);
     setCollectionNameInput(target.mode === "rename" ? target.collection.name : "");
-  }, [canMutateCollections, galleryView]);
+  }, [canMutateCollections]);
 
   const handleSaveCollection = async () => {
     if (!canMutateCollections || !collectionEditTarget || collectionMutating) {
@@ -865,7 +1004,7 @@ function ImageManagerContent({
 
   const openCollectionAssign = (targetItems: ManagedImageSummary[], collectionId = "") => {
     if (!canMutateCollections) {
-      toast.error(galleryView === "public" ? "公共素材库不允许修改素材集" : "当前账号没有素材集管理权限");
+      toast.error("当前账号没有素材集管理权限");
       return;
     }
     if (targetItems.length === 0) {
@@ -1114,6 +1253,118 @@ function ImageManagerContent({
     }
   }, [buildImageListFilters, currentCacheKey, hasMoreItems, isLoading, isLoadingMore, nextCursor]);
 
+  const textAssetScopeOptions = useCallback((): { scope: TextAssetScope; team_id?: string } => ({
+    scope: textAssetScope,
+    ...(textAssetScope === "team" ? { team_id: activeTeam?.id || "" } : {}),
+  }), [activeTeam?.id, textAssetScope]);
+
+  const loadTextAssetCollections = useCallback(async () => {
+    if (!canViewTextAssets) {
+      setTextAssetCollections([]);
+      setTextAssetUnclassifiedCount(0);
+      return;
+    }
+    if (textAssetScope === "team" && !activeTeam?.id) {
+      setTextAssetCollections([]);
+      setTextAssetUnclassifiedCount(0);
+      return;
+    }
+    try {
+      const data = await fetchManagedTextAssetCollections(textAssetScopeOptions());
+      setTextAssetCollections(data.items);
+      setTextAssetUnclassifiedCount(data.unclassified_count);
+      if (
+        selectedTextAssetCollectionId &&
+        selectedTextAssetCollectionId !== MANAGED_TEXT_ASSET_UNCLASSIFIED_COLLECTION_ID &&
+        !data.items.some((item) => item.id === selectedTextAssetCollectionId)
+      ) {
+        setSelectedTextAssetCollectionId("");
+        clearLoadedTextAssetsForQueryChange();
+      }
+    } catch {
+      setTextAssetCollections([]);
+      setTextAssetUnclassifiedCount(0);
+      if (selectedTextAssetCollectionId) {
+        setSelectedTextAssetCollectionId("");
+        clearLoadedTextAssetsForQueryChange();
+      }
+    }
+  }, [activeTeam?.id, canViewTextAssets, clearLoadedTextAssetsForQueryChange, selectedTextAssetCollectionId, textAssetScope, textAssetScopeOptions]);
+
+  const loadTextAssets = useCallback(async (
+    options: { append?: boolean; cursor?: string; force?: boolean } = {},
+  ) => {
+    if (!canViewTextAssets) {
+      setTextAssets([]);
+      setTextAssetNextCursor("");
+      setTextAssetHasMore(false);
+      setTextAssetLoadError("当前账号没有查看文本素材权限");
+      return;
+    }
+    if (textAssetScope === "team" && !activeTeam?.id) {
+      setTextAssets([]);
+      setTextAssetNextCursor("");
+      setTextAssetHasMore(false);
+      setTextAssetLoadError("");
+      return;
+    }
+
+    const append = options.append === true;
+    textAssetLoadRef.current?.abort();
+    const controller = new AbortController();
+    textAssetLoadRef.current = controller;
+    if (append) {
+      setIsTextAssetLoadingMore(true);
+    } else {
+      setIsTextAssetLoading(true);
+      setTextAssetLoadError("");
+      if (options.force) {
+        setTextAssets([]);
+      }
+    }
+
+    try {
+      const result = await fetchManagedTextAssets({
+        scope: textAssetScope,
+        team_id: textAssetScope === "team" ? activeTeam?.id || "" : "",
+        search: textAssetSearch.trim(),
+        collection_id: selectedTextAssetCollectionId,
+        page_size: TEXT_ASSET_PAGE_SIZE,
+        cursor: options.cursor || "",
+      }, { signal: controller.signal });
+      setTextAssets((current) => {
+        if (!append) {
+          return result.items;
+        }
+        const seen = new Set(current.map((item) => item.id));
+        return [...current, ...result.items.filter((item) => !seen.has(item.id))];
+      });
+      setTextAssetNextCursor(result.next_cursor);
+      setTextAssetHasMore(result.has_more);
+      setTextAssetLoadError("");
+    } catch (error) {
+      if (controller.signal.aborted || isRequestCanceled(error)) {
+        return;
+      }
+      const message = error instanceof Error ? error.message : "加载文本素材失败";
+      setTextAssetLoadError(message);
+      toast.error(message);
+    } finally {
+      if (textAssetLoadRef.current === controller) {
+        textAssetLoadRef.current = null;
+      }
+      setIsTextAssetLoading(false);
+      setIsTextAssetLoadingMore(false);
+    }
+  }, [activeTeam?.id, canViewTextAssets, selectedTextAssetCollectionId, textAssetScope, textAssetSearch]);
+
+  const loadMoreTextAssets = useCallback(async () => {
+    if (isTextAssetLoading || isTextAssetLoadingMore || !textAssetHasMore || !textAssetNextCursor) {
+      return;
+    }
+    await loadTextAssets({ append: true, cursor: textAssetNextCursor });
+  }, [isTextAssetLoading, isTextAssetLoadingMore, loadTextAssets, textAssetHasMore, textAssetNextCursor]);
+
   const handleGalleryViewChange = useCallback((view: ImageGalleryView) => {
     if (view === galleryView) {
       return;
@@ -1125,6 +1376,28 @@ function ImageManagerContent({
     setLoadError("");
   }, [clearLoadedItemsForQueryChange, galleryView]);
 
+  const handleAssetKindChange = useCallback((kind: AssetLibraryKind) => {
+    setAssetKind(kind);
+    setIsImageActionsOpen(false);
+    setIsMobileFiltersOpen(false);
+    closeDrawer();
+  }, [closeDrawer]);
+
+  const handleTextAssetScopeChange = useCallback((scope: TextAssetScope) => {
+    if (scope === textAssetScope) {
+      return;
+    }
+    setTextAssetScope(scope);
+    setSelectedTextAssetCollectionId("");
+    clearLoadedTextAssetsForQueryChange();
+    setTextAssetLoadError("");
+  }, [clearLoadedTextAssetsForQueryChange, textAssetScope]);
+
+  const updateTextAssetCollectionFilter = useCallback((collectionId: string) => {
+    setSelectedTextAssetCollectionId(collectionId);
+    clearLoadedTextAssetsForQueryChange();
+  }, [clearLoadedTextAssetsForQueryChange]);
+
   const updateCollectionFilter = useCallback((collectionId: string) => {
     setSelectedCollectionId(collectionId);
     setSelectedImageIds({});
@@ -1135,6 +1408,11 @@ function ImageManagerContent({
     setSearchKeyword(value);
     setSelectedImageIds({});
     clearLoadedItemsForQueryChange();
+  };
+
+  const updateTextAssetSearch = (value: string) => {
+    setTextAssetSearch(value);
+    clearLoadedTextAssetsForQueryChange();
   };
 
   const updateVisibilityFilter = (value: ImageVisibilityFilter) => {
@@ -1190,6 +1468,11 @@ function ImageManagerContent({
     setSelectedTags([]);
     setSelectedImageIds({});
     clearLoadedItemsForQueryChange();
+  };
+
+  const clearTextAssetSearch = () => {
+    setTextAssetSearch("");
+    clearLoadedTextAssetsForQueryChange();
   };
 
   const toggleAutoRefresh = () => {
@@ -1309,7 +1592,233 @@ function ImageManagerContent({
       outputCompression: detail.share_prompt_parameters ? detail.output_compression : undefined,
     });
     navigate(location.search.includes("ui_mode=embedded") ? "/image?ui_mode=embedded" : "/image");
-    toast.success(sourceImageUrls[0] === detail.url ? "已使用公开图准备同款生成" : "已带入公开的原始参考图和生成参数");
+    toast.success(sourceImageUrls[0] === detail.url ? "已使用当前图准备同款生成" : "已带入原始参考图和生成参数");
+  };
+
+  const openTextAssetCollectionEditor = useCallback((target: TextAssetCollectionEditTarget) => {
+    if (!canMutateTextAssetCollections) {
+      toast.error(textAssetScope === "team" ? "团队文本素材集需要 owner 或 manager 维护" : "当前账号没有文本素材集管理权限");
+      return;
+    }
+    setTextAssetCollectionEditTarget(target);
+    setTextAssetCollectionNameInput(target.mode === "rename" ? target.collection.name : "");
+  }, [canMutateTextAssetCollections, textAssetScope]);
+
+  const handleSaveTextAssetCollection = async () => {
+    if (!canMutateTextAssetCollections || !textAssetCollectionEditTarget || textAssetCollectionMutating) {
+      return;
+    }
+    const name = textAssetCollectionNameInput.trim();
+    if (!name) {
+      toast.error("请输入文本素材集名称");
+      return;
+    }
+    setTextAssetCollectionMutating(true);
+    try {
+      const options = textAssetScopeOptions();
+      const data = textAssetCollectionEditTarget.mode === "create"
+        ? await createManagedTextAssetCollection(name, options)
+        : await renameManagedTextAssetCollection(textAssetCollectionEditTarget.collection.id, name, options);
+      const nextCollectionsResult = Array.isArray(data.items)
+        ? { items: data.items, unclassified_count: Number(data.unclassified_count) || 0 }
+        : await fetchManagedTextAssetCollections(options);
+      setTextAssetCollections(nextCollectionsResult.items);
+      setTextAssetUnclassifiedCount(nextCollectionsResult.unclassified_count);
+      if (textAssetCollectionEditTarget.mode === "create") {
+        setSelectedTextAssetCollectionId(data.item.id);
+        clearLoadedTextAssetsForQueryChange();
+      } else {
+        setTextAssets((current) => current.map((item) => item.collection_id === data.item.id ? { ...item, collection_name: data.item.name } : item));
+      }
+      setTextAssetCollectionEditTarget(null);
+      setTextAssetCollectionNameInput("");
+      toast.success(textAssetCollectionEditTarget.mode === "create" ? "文本素材集已创建" : "文本素材集已重命名");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "保存文本素材集失败");
+    } finally {
+      setTextAssetCollectionMutating(false);
+    }
+  };
+
+  const handleDeleteTextAssetCollection = async () => {
+    if (!canMutateTextAssetCollections || !textAssetCollectionDeleteTarget || textAssetCollectionMutating) {
+      return;
+    }
+    const collection = textAssetCollectionDeleteTarget.collection;
+    setTextAssetCollectionMutating(true);
+    try {
+      const options = textAssetScopeOptions();
+      const data = await deleteManagedTextAssetCollection(collection.id, options);
+      const nextCollectionsResult = Array.isArray(data.items)
+        ? { items: data.items, unclassified_count: Number(data.unclassified_count) || 0 }
+        : await fetchManagedTextAssetCollections(options);
+      setTextAssetCollections(nextCollectionsResult.items);
+      setTextAssetUnclassifiedCount(nextCollectionsResult.unclassified_count);
+      if (selectedTextAssetCollectionId === collection.id) {
+        setSelectedTextAssetCollectionId("");
+        clearLoadedTextAssetsForQueryChange();
+      } else {
+        setTextAssets((current) => current.map((item) => item.collection_id === collection.id ? { ...item, collection_id: "", collection_name: "" } : item));
+      }
+      setTextAssetCollectionDeleteTarget(null);
+      toast.success(data.cleared > 0 ? `文本素材集已删除，已移出 ${data.cleared} 条文本` : "文本素材集已删除");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "删除文本素材集失败");
+    } finally {
+      setTextAssetCollectionMutating(false);
+    }
+  };
+
+  const openTextAssetCollectionAssign = (item: ManagedTextAsset, collectionId = "") => {
+    if (!canMutateTextAssetCollections) {
+      toast.error(textAssetScope === "team" ? "团队文本素材集需要 owner 或 manager 维护" : "当前账号没有文本素材集管理权限");
+      return;
+    }
+    if (collectionId && textAssetCollections.length === 0) {
+      toast.error("当前没有可用文本素材集");
+      return;
+    }
+    setTextAssetCollectionAssignTarget({ item, collectionId });
+  };
+
+  const handleConfirmAssignTextAssetCollection = async () => {
+    if (!canMutateTextAssetCollections || !textAssetCollectionAssignTarget || textAssetCollectionMutating) {
+      return;
+    }
+    const collection = textAssetCollections.find((item) => item.id === textAssetCollectionAssignTarget.collectionId);
+    if (textAssetCollectionAssignTarget.collectionId && !collection) {
+      toast.error("请选择文本素材集");
+      return;
+    }
+    const id = textAssetCollectionAssignTarget.item.id;
+    setTextAssetCollectionMutating(true);
+    try {
+      const data = await updateManagedTextAssetCollectionItems(textAssetCollectionAssignTarget.collectionId, [id], textAssetScopeOptions());
+      const collectionID = data.collection_id || "";
+      const collectionName = data.collection_name || collection?.name || "";
+      const updatedIDs = new Set(data.ids || [id]);
+      const nextCollectionsResult = Array.isArray(data.items)
+        ? { items: data.items, unclassified_count: Number(data.unclassified_count) || 0 }
+        : await fetchManagedTextAssetCollections(textAssetScopeOptions());
+      setTextAssetCollections(nextCollectionsResult.items);
+      setTextAssetUnclassifiedCount(nextCollectionsResult.unclassified_count);
+      setTextAssets((current) => current
+        .map((item) => updatedIDs.has(item.id) ? { ...item, collection_id: collectionID, collection_name: collectionName } : item)
+        .filter(textAssetCollectionFilterMatchesItem));
+      setTextAssetCollectionAssignTarget(null);
+      toast.success(collectionID ? `已加入文本素材集「${collectionName}」` : "已从文本素材集移出");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "更新文本素材集归类失败");
+    } finally {
+      setTextAssetCollectionMutating(false);
+    }
+  };
+
+  const openTextAssetEditor = useCallback((target: TextAssetEditorTarget) => {
+    if (target.mode === "create" && !canCreateTextAssetInScope) {
+      toast.error(textAssetScope === "team" ? "团队文本素材需要 owner 或 manager 维护" : "当前账号没有创建文本素材权限");
+      return;
+    }
+    if (target.mode === "edit" && !canUpdateTextAssetInScope) {
+      toast.error(textAssetScope === "team" ? "团队文本素材需要 owner 或 manager 维护" : "当前账号没有编辑文本素材权限");
+      return;
+    }
+    setTextAssetEditorTarget(target);
+    setTextAssetNameInput(target.mode === "edit" ? target.item.name : "");
+    setTextAssetContentInput(target.mode === "edit" ? target.item.content : "");
+  }, [canCreateTextAssetInScope, canUpdateTextAssetInScope, textAssetScope]);
+
+  const handleSaveTextAsset = async () => {
+    if (!textAssetEditorTarget || isTextAssetSaving) {
+      return;
+    }
+    const isCreate = textAssetEditorTarget.mode === "create";
+    if (isCreate && !canCreateTextAssetInScope) {
+      return;
+    }
+    if (!isCreate && !canUpdateTextAssetInScope) {
+      return;
+    }
+    const content = textAssetContentInput;
+    if (!content.trim()) {
+      toast.error("请输入文本素材内容");
+      return;
+    }
+    if (Array.from(content).length > TEXT_ASSET_MAX_CONTENT_LENGTH) {
+      toast.error(`文本素材最多 ${TEXT_ASSET_MAX_CONTENT_LENGTH.toLocaleString("zh-CN")} 字符`);
+      return;
+    }
+
+    setIsTextAssetSaving(true);
+    try {
+      const payload = {
+        name: textAssetNameInput.trim() || undefined,
+        content,
+        ...(isCreate && selectedTextAssetCollectionId && selectedTextAssetCollectionId !== MANAGED_TEXT_ASSET_UNCLASSIFIED_COLLECTION_ID
+          ? { collection_id: selectedTextAssetCollectionId }
+          : {}),
+      };
+      const options = textAssetScopeOptions();
+      const item = isCreate
+        ? await createManagedTextAsset(payload, options)
+        : await updateManagedTextAsset(textAssetEditorTarget.item.id, payload, options);
+      setTextAssets((current) => {
+        const withoutExisting = current.filter((existing) => existing.id !== item.id);
+        if (isCreate) {
+          return [item, ...withoutExisting];
+        }
+        return current.some((existing) => existing.id === item.id)
+          ? current.map((existing) => existing.id === item.id ? item : existing)
+          : [item, ...current];
+      });
+      setFocusedTextAssetId(item.id);
+      await loadTextAssets({ force: true });
+      setFocusedTextAssetId(item.id);
+      setTextAssetEditorTarget(null);
+      setTextAssetNameInput("");
+      setTextAssetContentInput("");
+      toast.success(isCreate ? "文本素材已创建" : "文本素材已保存");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : (isCreate ? "创建文本素材失败" : "保存文本素材失败"));
+    } finally {
+      setIsTextAssetSaving(false);
+    }
+  };
+
+  const copyTextAssetContent = async (item: ManagedTextAsset) => {
+    try {
+      await navigator.clipboard.writeText(item.content);
+      toast.success("文本素材已复制");
+    } catch {
+      toast.error("复制文本素材失败");
+    }
+  };
+
+  const openDeleteTextAssetConfirm = (item: ManagedTextAsset) => {
+    if (!canDeleteTextAssetInScope) {
+      toast.error(textAssetScope === "team" ? "团队文本素材需要 owner 或 manager 维护" : "当前账号没有删除文本素材权限");
+      return;
+    }
+    setDeleteTextAssetTarget({ item });
+  };
+
+  const handleConfirmDeleteTextAsset = async () => {
+    if (!deleteTextAssetTarget || isTextAssetDeleting || !canDeleteTextAssetInScope) {
+      return;
+    }
+    const id = deleteTextAssetTarget.item.id;
+    setIsTextAssetDeleting(true);
+    try {
+      await deleteManagedTextAsset(id, textAssetScopeOptions());
+      setTextAssets((current) => current.filter((item) => item.id !== id));
+      setFocusedTextAssetId((current) => (current === id ? null : current));
+      setDeleteTextAssetTarget(null);
+      toast.success("文本素材已删除");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "删除文本素材失败");
+    } finally {
+      setIsTextAssetDeleting(false);
+    }
   };
 
   const openDeleteConfirm = (targetItems: ManagedImageSummary[]) => {
@@ -1416,157 +1925,6 @@ function ImageManagerContent({
     }
   };
 
-  const openPublishConfirm = (targetItems: ManagedImageSummary[]) => {
-    const pendingItems = targetItems.filter((item) => item.visibility !== "public");
-    if (pendingItems.length === 0) {
-      return;
-    }
-    setPublishRecipeOptions({ sharePromptParameters: false, shareReferenceImages: false });
-    setPublishTarget({ items: pendingItems });
-  };
-
-  const handleVisibilityChange = async (
-    item: ManagedImageSummary,
-    visibility: ImageVisibility,
-    options: PublishRecipeOptions = { sharePromptParameters: false, shareReferenceImages: false },
-  ) => {
-    const canMutateScope = galleryView === "mine" || Boolean(galleryView === "team" && teamManager && activeTeam?.id);
-    if (!canUpdateImageVisibility || !canMutateScope || visibilityMutatingPath) {
-      return;
-    }
-    const previousVisibility = item.visibility;
-    if (previousVisibility === visibility) {
-      return;
-    }
-    if (visibility === "public" && !publishTarget) {
-      openPublishConfirm([item]);
-      return;
-    }
-    setVisibilityMutatingPath(item.path);
-    try {
-      const scopeOptions = galleryView === "team" && activeTeam?.id ? { scope: "team" as const, team_id: activeTeam.id } : {};
-      const data = await updateManagedImageVisibility(item.path, visibility, { ...options, ...scopeOptions });
-      const updated = {
-        ...data.item,
-        path: item.path,
-        visibility: data.item.visibility || visibility,
-      };
-      clearImageManagerCache();
-      setDetailItemsByPath((current) => {
-        const next = { ...current };
-        managedImageDetailCacheKeys(item).forEach((key) => {
-          delete next[key];
-        });
-        return next;
-      });
-      setItems((current) => {
-        const next = current.map((currentItem) =>
-          currentItem.path === item.path
-            ? {
-                ...currentItem,
-                ...updated,
-              }
-            : currentItem,
-        );
-        updateImageManagerCache(currentCacheKey, next, nextCursor, hasMoreItems, imageRetentionDays);
-        return next;
-      });
-      toast.success(visibility === "public" ? "已公开到公共素材库" : "已取消公开");
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "更新公开状态失败");
-    } finally {
-      setVisibilityMutatingPath(null);
-    }
-  };
-
-  const handleBulkVisibilityChange = async (
-    targetItems: ManagedImageSummary[],
-    visibility: ImageVisibility,
-    options: PublishRecipeOptions = { sharePromptParameters: false, shareReferenceImages: false },
-  ) => {
-    const canMutateScope = galleryView === "mine" || Boolean(galleryView === "team" && teamManager && activeTeam?.id);
-    if (!canUpdateImageVisibility || !canMutateScope || visibilityMutatingPath) {
-      return;
-    }
-    const pendingItems = targetItems.filter((item) => item.visibility !== visibility);
-    if (pendingItems.length === 0) {
-      return;
-    }
-    if (visibility === "public" && !publishTarget) {
-      openPublishConfirm(pendingItems);
-      return;
-    }
-
-    setVisibilityMutatingPath(`bulk:${visibility}`);
-    try {
-      const results = await Promise.allSettled(
-        pendingItems.map(async (item) => {
-          const scopeOptions = galleryView === "team" && activeTeam?.id ? { scope: "team" as const, team_id: activeTeam.id } : {};
-          const data = await updateManagedImageVisibility(item.path, visibility, { ...options, ...scopeOptions });
-          return {
-            ...data.item,
-            path: item.path,
-            visibility: data.item.visibility || visibility,
-          };
-        }),
-      );
-      const updates = results.flatMap((result) => (result.status === "fulfilled" ? [result.value] : []));
-      const failedCount = results.length - updates.length;
-
-      if (updates.length > 0) {
-        const updatesByPath = new Map(updates.map((item) => [item.path, item]));
-        clearImageManagerCache();
-        setDetailItemsByPath((current) => {
-          const next = { ...current };
-          updates.forEach((item) => {
-            managedImageDetailCacheKeys({ path: item.path } as ManagedImageSummary).forEach((key) => {
-              delete next[key];
-            });
-          });
-          return next;
-        });
-        setItems((current) => {
-          const next = current.map((currentItem) => {
-            const updated = updatesByPath.get(currentItem.path);
-            return updated ? { ...currentItem, ...updated } : currentItem;
-          });
-          updateImageManagerCache(currentCacheKey, next, nextCursor, hasMoreItems, imageRetentionDays);
-          return next;
-        });
-      }
-
-      if (failedCount > 0) {
-        toast.error(`已更新 ${updates.length} 张图片，${failedCount} 张失败`);
-        return;
-      }
-      toast.success(visibility === "public" ? `已公开 ${updates.length} 张图片` : `已设为私有 ${updates.length} 张图片`);
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "批量更新公开状态失败");
-    } finally {
-      setVisibilityMutatingPath(null);
-    }
-  };
-
-  const handleConfirmPublish = async () => {
-    if (!publishTarget || visibilityMutatingPath) {
-      return;
-    }
-    const targetItems = publishTarget.items;
-    const options = {
-      sharePromptParameters: publishRecipeOptions.sharePromptParameters,
-      shareReferenceImages: publishRecipeOptions.sharePromptParameters && publishRecipeOptions.shareReferenceImages,
-    };
-    try {
-      if (targetItems.length === 1) {
-        await handleVisibilityChange(targetItems[0], "public", options);
-        return;
-      }
-      await handleBulkVisibilityChange(targetItems, "public", options);
-    } finally {
-      setPublishTarget(null);
-    }
-  };
-
   const openTagEditor = (item: ManagedImageSummary) => {
     if (!canEditImageTags || (galleryView === "team" && !teamManager)) {
       return;
@@ -1615,6 +1973,14 @@ function ImageManagerContent({
   useEffect(() => {
     void loadImages();
   }, [loadImages]);
+
+  useEffect(() => {
+    if (assetKind !== "text") {
+      return;
+    }
+    void loadTextAssetCollections();
+    void loadTextAssets();
+  }, [assetKind, loadTextAssetCollections, loadTextAssets]);
 
   useEffect(() => {
     if (!focusedItem || focusedDetail) {
@@ -1678,6 +2044,7 @@ function ImageManagerContent({
     return () => {
       activeLoadRef.current?.abort();
       autoRefreshAbortRef.current?.abort();
+      textAssetLoadRef.current?.abort();
     };
   }, []);
 
@@ -1722,6 +2089,29 @@ function ImageManagerContent({
     </div>
   );
 
+  const renderTextAssetSearch = () => (
+    <div className="relative min-w-0">
+      <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
+      <Input
+        value={textAssetSearch}
+        onChange={(event) => updateTextAssetSearch(event.target.value)}
+        placeholder="搜索文本素材名称或内容"
+        className="h-10 rounded-lg pr-9 pl-9"
+      />
+      {textAssetSearch ? (
+        <button
+          type="button"
+          className="absolute top-1/2 right-2 inline-flex size-6 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground transition hover:bg-muted hover:text-foreground"
+          onClick={clearTextAssetSearch}
+          aria-label="清空搜索"
+          title="清空搜索"
+        >
+          <X className="size-3.5" />
+        </button>
+      ) : null}
+    </div>
+  );
+
   const renderFilterControls = () => (
     <>
       <Select value={visibilityFilter} onValueChange={(value) => updateVisibilityFilter(value as ImageVisibilityFilter)}>
@@ -1731,7 +2121,6 @@ function ImageManagerContent({
         <SelectContent>
           <SelectGroup>
             <SelectItem value="all">全部状态</SelectItem>
-            <SelectItem value="public">已公开</SelectItem>
             <SelectItem value="private">私有</SelectItem>
           </SelectGroup>
         </SelectContent>
@@ -1925,15 +2314,48 @@ function ImageManagerContent({
 
   const renderLibraryControls = useCallback((compact = false, closeAfterSelect = false) => (
     <>
-      <div className={cn("flex shrink-0 min-w-0 flex-col justify-start gap-1 overflow-hidden", compact ? "" : "h-[64px]")}>
+      <div className={cn("flex shrink-0 min-w-0 flex-col justify-start gap-2 overflow-hidden", compact ? "" : "min-h-[112px]")}>
         <div className="inline-flex h-10 w-full shrink-0 items-center rounded-lg border border-border bg-muted/50 p-1">
           {[
-            { value: "mine" as const, label: "个人", icon: ImageIcon },
-            ...(hasTeamLibrary ? [{ value: "team" as const, label: "团队", icon: Users }] : []),
-            { value: "public" as const, label: "公共", icon: Globe2 },
+            { value: "image" as const, label: "图片", icon: ImageIcon },
+            { value: "text" as const, label: "文本", icon: FileText },
           ].map((option) => {
             const Icon = option.icon;
-            const active = galleryView === option.value;
+            const active = assetKind === option.value;
+            return (
+              <button
+                key={option.value}
+                type="button"
+                className={cn(
+                  "inline-flex h-8 min-w-0 flex-1 basis-0 items-center justify-center gap-1.5 overflow-hidden whitespace-nowrap rounded-md px-3 text-sm font-medium leading-none transition",
+                  active ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
+                )}
+                onClick={() => {
+                  handleAssetKindChange(option.value);
+                  if (closeAfterSelect) {
+                    closeDrawer();
+                  }
+                }}
+                aria-pressed={active}
+              >
+                <Icon className="size-4 shrink-0" />
+                <span className="truncate">{option.label}</span>
+              </button>
+            );
+          })}
+        </div>
+        <div className="inline-flex h-10 w-full shrink-0 items-center rounded-lg border border-border bg-muted/50 p-1">
+          {(assetKind === "text"
+            ? [
+                { value: "mine" as const, label: "个人", icon: Type },
+                ...(hasTeamLibrary ? [{ value: "team" as const, label: "团队", icon: Users }] : []),
+              ]
+            : [
+                { value: "mine" as const, label: "个人", icon: ImageIcon },
+                ...(hasTeamLibrary ? [{ value: "team" as const, label: "团队", icon: Users }] : []),
+              ]).map((option) => {
+            const Icon = option.icon;
+            const active = assetKind === "text" ? textAssetScope === option.value : galleryView === option.value;
             return (
               <button
                 key={option.value}
@@ -1944,7 +2366,11 @@ function ImageManagerContent({
                     : "text-muted-foreground hover:text-foreground"
                 }`}
                 onClick={() => {
-                  handleGalleryViewChange(option.value);
+                  if (assetKind === "text") {
+                    handleTextAssetScopeChange(option.value as TextAssetScope);
+                  } else {
+                    handleGalleryViewChange(option.value as ImageGalleryView);
+                  }
                   if (closeAfterSelect) {
                     closeDrawer();
                   }
@@ -1958,12 +2384,13 @@ function ImageManagerContent({
           })}
         </div>
         <div className="flex h-5 shrink-0 min-w-0 items-center gap-x-2 overflow-hidden text-sm leading-5 text-muted-foreground">
-          <ImageIcon className="size-4 shrink-0" />
-          <span className="shrink-0">{libraryViewLabel}</span>
-          <span className="min-w-0 truncate">{imageCountLabel}</span>
+          {assetKind === "text" ? <FileText className="size-4 shrink-0" /> : <ImageIcon className="size-4 shrink-0" />}
+          <span className="shrink-0">{activeLibraryScopeLabel}</span>
+          <span className="min-w-0 truncate">{activeLibraryCountLabel}</span>
         </div>
       </div>
 
+      {assetKind === "image" ? (
       <div className="flex min-w-0 flex-col gap-2 rounded-xl border border-border bg-background/70 p-2">
         <div className="flex items-center justify-between gap-2">
           <div className="inline-flex min-w-0 items-center gap-1.5 text-sm font-medium text-foreground">
@@ -2080,28 +2507,158 @@ function ImageManagerContent({
           </div>
         ) : null}
       </div>
+      ) : (
+        <div className="flex min-w-0 flex-col gap-2 rounded-xl border border-border bg-background/70 p-2">
+          <div className="flex items-center justify-between gap-2">
+            <div className="inline-flex min-w-0 items-center gap-1.5 text-sm font-medium text-foreground">
+              <Folder className="size-4 text-muted-foreground" />
+              <span>文本素材集</span>
+            </div>
+            {canMutateTextAssetCollections ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-7 shrink-0 rounded-lg px-2 text-xs"
+                onClick={() => openTextAssetCollectionEditor({ mode: "create" })}
+              >
+                <FolderPlus className="size-3.5" />
+                新建
+              </Button>
+            ) : null}
+          </div>
+          <div className={cn("flex flex-col gap-1 overflow-y-auto pr-1", compact ? "max-h-[42dvh]" : "max-h-44")}>
+            <button
+              type="button"
+              className={cn(
+                "flex h-9 min-w-0 items-center justify-between gap-2 rounded-lg px-2 text-left text-sm transition",
+                !selectedTextAssetCollectionId
+                  ? "bg-[#eef4ff] text-[#1456f0] dark:bg-sky-950/30 dark:text-sky-300"
+                  : "text-muted-foreground hover:bg-muted hover:text-foreground",
+              )}
+              onClick={() => {
+                updateTextAssetCollectionFilter("");
+                if (closeAfterSelect) {
+                  closeDrawer();
+                }
+              }}
+            >
+              <span className="min-w-0 truncate">全部文本</span>
+              <span className="shrink-0 rounded-full bg-background px-2 py-0.5 text-[11px] text-muted-foreground">{textAssets.length}</span>
+            </button>
+            <button
+              type="button"
+              className={cn(
+                "flex h-9 min-w-0 items-center justify-between gap-2 rounded-lg px-2 text-left text-sm transition",
+                selectedTextAssetCollectionId === MANAGED_TEXT_ASSET_UNCLASSIFIED_COLLECTION_ID
+                  ? "bg-[#eef4ff] text-[#1456f0] dark:bg-sky-950/30 dark:text-sky-300"
+                  : "text-muted-foreground hover:bg-muted hover:text-foreground",
+              )}
+              onClick={() => {
+                updateTextAssetCollectionFilter(MANAGED_TEXT_ASSET_UNCLASSIFIED_COLLECTION_ID);
+                if (closeAfterSelect) {
+                  closeDrawer();
+                }
+              }}
+            >
+              <span className="min-w-0 truncate">未归类</span>
+              <span className="shrink-0 rounded-full bg-background px-2 py-0.5 text-[11px] text-muted-foreground">{textAssetUnclassifiedCount}</span>
+            </button>
+            {textAssetCollections.length > 0 ? textAssetCollections.map((collection) => {
+              const active = selectedTextAssetCollectionId === collection.id;
+              return (
+                <div
+                  key={collection.id}
+                  className={cn(
+                    "group flex min-w-0 items-center gap-1 rounded-lg transition",
+                    active ? "bg-[#eef4ff] text-[#1456f0] dark:bg-sky-950/30 dark:text-sky-300" : "text-muted-foreground hover:bg-muted hover:text-foreground",
+                  )}
+                >
+                  <button
+                    type="button"
+                    className="flex h-9 min-w-0 flex-1 items-center justify-between gap-2 px-2 text-left text-sm"
+                    onClick={() => {
+                      updateTextAssetCollectionFilter(collection.id);
+                      if (closeAfterSelect) {
+                        closeDrawer();
+                      }
+                    }}
+                    title={collection.name}
+                  >
+                    <span className="min-w-0 truncate">{collection.name}</span>
+                    <span className="shrink-0 rounded-full bg-background px-2 py-0.5 text-[11px] text-muted-foreground">{collection.texts_count}</span>
+                  </button>
+                  {canMutateTextAssetCollections && active ? (
+                    <div className="flex shrink-0 items-center pr-1">
+                      <button
+                        type="button"
+                        className="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition hover:bg-background hover:text-foreground"
+                        onClick={() => openTextAssetCollectionEditor({ mode: "rename", collection })}
+                        title="重命名文本素材集"
+                        aria-label="重命名文本素材集"
+                      >
+                        <Pencil className="size-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        className="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition hover:bg-rose-50 hover:text-rose-600"
+                        onClick={() => setTextAssetCollectionDeleteTarget({ collection })}
+                        title="删除文本素材集"
+                        aria-label="删除文本素材集"
+                      >
+                        <Trash2 className="size-3.5" />
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
+              );
+            }) : (
+              <div className="rounded-lg border border-dashed border-border px-3 py-2 text-xs text-muted-foreground">
+                {canMutateTextAssetCollections ? "暂无文本素材集，可先新建提示词、商品文案或运营素材分组。" : "暂无文本素材集"}
+              </div>
+            )}
+          </div>
+          {textAssetCollectionHintText ? (
+            <div className="rounded-lg border border-dashed border-border px-3 py-2 text-xs leading-5 text-muted-foreground">
+              {textAssetCollectionHintText}
+            </div>
+          ) : null}
+        </div>
+      )}
     </>
   ), [
+    activeLibraryCountLabel,
+    activeLibraryScopeLabel,
+    assetKind,
     canMutateCollections,
+    canMutateTextAssetCollections,
     closeDrawer,
     collectionReadOnlyHint,
     collections,
     galleryView,
+    handleAssetKindChange,
     handleGalleryViewChange,
+    handleTextAssetScopeChange,
     hasTeamLibrary,
-    imageCountLabel,
     items.length,
-    libraryViewLabel,
     openCollectionEditor,
+    openTextAssetCollectionEditor,
     selectedCollectionId,
+    selectedTextAssetCollectionId,
+    textAssetCollectionHintText,
+    textAssetCollections,
+    textAssetScope,
+    textAssetUnclassifiedCount,
+    textAssets.length,
     unclassifiedCount,
     updateCollectionFilter,
+    updateTextAssetCollectionFilter,
   ]);
 
   const mobileLibraryPanel = useMemo(
     () => ({
       title: "素材库",
-      description: `${libraryViewLabel} · ${imageCountLabel}`,
+      description: `${activeLibraryScopeLabel} · ${activeLibraryCountLabel}`,
       content: (
         <div className="h-[min(56dvh,520px)] min-h-[220px] overflow-y-auto pr-1">
           <div className="grid gap-3">
@@ -2110,7 +2667,7 @@ function ImageManagerContent({
         </div>
       ),
     }),
-    [imageCountLabel, libraryViewLabel, renderLibraryControls],
+    [activeLibraryCountLabel, activeLibraryScopeLabel, renderLibraryControls],
   );
 
   useEffect(() => {
@@ -2124,6 +2681,7 @@ function ImageManagerContent({
         <aside className="hidden min-w-0 flex-col gap-3 rounded-[18px] border border-border bg-background/80 p-3 shadow-[0_6px_20px_rgba(15,23,42,0.04)] sm:p-4 lg:sticky lg:top-4 lg:flex lg:self-start">
           {renderLibraryControls()}
 
+          {assetKind === "image" ? (
           <div className="flex min-w-0 flex-col gap-2">
             <div className="flex items-center justify-between gap-2">
               <div className="text-sm font-medium text-foreground">筛选项</div>
@@ -2220,6 +2778,51 @@ function ImageManagerContent({
               </div>
             </div>
           </div>
+          ) : (
+            <div className="flex min-w-0 flex-col gap-2">
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-sm font-medium text-foreground">文本筛选</div>
+                {textAssetSearch ? (
+                  <button
+                    type="button"
+                    className="inline-flex h-7 shrink-0 items-center gap-1 rounded-full px-2 text-xs text-muted-foreground transition hover:bg-muted hover:text-foreground"
+                    onClick={clearTextAssetSearch}
+                  >
+                    <X className="size-3.5" />
+                    清空
+                  </button>
+                ) : null}
+              </div>
+              {renderTextAssetSearch()}
+              <div className="flex min-w-0 gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="h-10 min-w-0 flex-1 rounded-lg"
+                  disabled={isTextAssetLoading || isMutatingTextAssets}
+                  onClick={() => void loadTextAssets({ force: true })}
+                >
+                  <RefreshCw className={cn("size-4", isTextAssetLoading && "animate-spin")} />
+                  刷新
+                </Button>
+                {canCreateTextAssetInScope ? (
+                  <Button
+                    type="button"
+                    className="h-10 min-w-0 flex-1 rounded-lg"
+                    disabled={isMutatingTextAssets}
+                    onClick={() => openTextAssetEditor({ mode: "create" })}
+                  >
+                    <Type className="size-4" />
+                    新建
+                  </Button>
+                ) : null}
+              </div>
+              <div className="flex min-h-9 min-w-0 items-center gap-1.5 rounded-xl border border-border bg-background/60 px-3 py-2 text-xs leading-5 text-muted-foreground">
+                <Info className="size-3.5 shrink-0" />
+                <span className="min-w-0">{textAssetHintText}</span>
+              </div>
+            </div>
+          )}
 
         </aside>
 
@@ -2233,41 +2836,54 @@ function ImageManagerContent({
             >
               <Folder className="size-4 shrink-0 text-muted-foreground" />
               <span className="min-w-0 flex-1 truncate">
-                {libraryViewLabel} · {selectedCollectionLabel}
+                {assetKind === "text" ? `${textAssetScopeLabel(textAssetScope)} · ${selectedTextAssetCollectionLabel}` : `${libraryViewLabel} · ${selectedCollectionLabel}`}
               </span>
-              <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">{items.length}</span>
+              <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">{assetKind === "text" ? textAssets.length : items.length}</span>
             </button>
-            <Button
-              type="button"
-              variant="outline"
-              size="icon"
-              className={cn(
-                "size-10 rounded-full",
-                hasActiveFilters && "border-[#bfdbfe] bg-[#eef4ff] text-[#1456f0] dark:border-sky-900/70 dark:bg-sky-950/30 dark:text-sky-300",
-              )}
-              onClick={() => setIsMobileFiltersOpen(true)}
-              aria-label="打开筛选"
-              title="筛选"
-            >
-              <SlidersHorizontal className="size-4" />
-            </Button>
+            {assetKind === "image" ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                className={cn(
+                  "size-10 rounded-full",
+                  hasActiveFilters && "border-[#bfdbfe] bg-[#eef4ff] text-[#1456f0] dark:border-sky-900/70 dark:bg-sky-950/30 dark:text-sky-300",
+                )}
+                onClick={() => setIsMobileFiltersOpen(true)}
+                aria-label="打开筛选"
+                title="筛选"
+              >
+                <SlidersHorizontal className="size-4" />
+              </Button>
+            ) : null}
             <Button
               type="button"
               variant="outline"
               size="icon"
               className="size-10 rounded-full"
-              disabled={isLoading || isMutatingImages}
-              onClick={() => void loadImages({ force: true })}
+              disabled={assetKind === "text" ? isTextAssetLoading || isMutatingTextAssets : isLoading || isMutatingImages}
+              onClick={() => void (assetKind === "text" ? loadTextAssets({ force: true }) : loadImages({ force: true }))}
               aria-label="刷新素材库"
               title="刷新素材库"
             >
-              <RefreshCw className={cn("size-4", isLoading && "animate-spin")} />
+              <RefreshCw className={cn("size-4", (assetKind === "text" ? isTextAssetLoading : isLoading) && "animate-spin")} />
             </Button>
           </div>
           <div className="flex items-center gap-2">
-            <div className="min-w-0 flex-1">{renderSearchFilter("搜索图片")}</div>
+            <div className="min-w-0 flex-1">{assetKind === "text" ? renderTextAssetSearch() : renderSearchFilter("搜索图片")}</div>
+            {assetKind === "text" && canCreateTextAssetInScope ? (
+              <Button
+                type="button"
+                className="h-10 shrink-0 rounded-full px-3"
+                disabled={isMutatingTextAssets}
+                onClick={() => openTextAssetEditor({ mode: "create" })}
+              >
+                <Type className="size-4" />
+                新建
+              </Button>
+            ) : null}
           </div>
-          {activeFilterLabels.length > 0 ? (
+          {assetKind === "image" && activeFilterLabels.length > 0 ? (
             <div className="hide-scrollbar flex gap-1.5 overflow-x-auto">
               {activeFilterLabels.map((label) => (
                 <span key={label} className="shrink-0 rounded-full bg-muted px-2.5 py-1 text-[11px] font-medium text-muted-foreground">
@@ -2280,6 +2896,7 @@ function ImageManagerContent({
             </div>
           ) : null}
         </div>
+        {assetKind === "image" ? (
         <Popover open={isImageActionsOpen} onOpenChange={setIsImageActionsOpen}>
           <div className="fixed right-4 bottom-[calc(env(safe-area-inset-bottom)+1rem)] z-40 sm:right-6 sm:bottom-6">
             <PopoverTrigger asChild>
@@ -2317,38 +2934,6 @@ function ImageManagerContent({
                   <Check className="size-4" />
                   {allSelected ? "取消全选" : "全选"}
                 </Button>
-                {(galleryView === "mine" || (galleryView === "team" && teamManager)) && canUpdateImageVisibility ? (
-                  <>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      className="h-10 justify-start rounded-lg px-3 text-sm"
-                      disabled={selectedPrivateItems.length === 0 || isMutatingImages}
-                      onClick={() => void handleBulkVisibilityChange(selectedPrivateItems, "public")}
-                    >
-                      {visibilityMutatingPath === "bulk:public" ? (
-                        <LoaderCircle className="size-4 animate-spin" />
-                      ) : (
-                        <Globe2 className="size-4" />
-                      )}
-                      公开已选 ({selectedPrivateItems.length})
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      className="h-10 justify-start rounded-lg px-3 text-sm"
-                      disabled={selectedPublicItems.length === 0 || isMutatingImages}
-                      onClick={() => void handleBulkVisibilityChange(selectedPublicItems, "private")}
-                    >
-                      {visibilityMutatingPath === "bulk:private" ? (
-                        <LoaderCircle className="size-4 animate-spin" />
-                      ) : (
-                        <Lock className="size-4" />
-                      )}
-                      设为私有 ({selectedPublicItems.length})
-                    </Button>
-                  </>
-                ) : null}
                 {galleryView === "mine" && hasTeamLibrary && canMoveImagesToTeam ? (
                   <Button
                     type="button"
@@ -2453,9 +3038,10 @@ function ImageManagerContent({
             </PopoverContent>
           </div>
         </Popover>
+        ) : null}
 
         <div className="h-[calc(100dvh-11rem)] min-h-[420px] overflow-hidden rounded-[20px] sm:min-h-[520px] lg:h-[calc(100dvh-14rem)]">
-          {showImageLoadingState ? (
+          {assetKind === "image" && showImageLoadingState ? (
             <div className="flex h-full flex-col items-center justify-center gap-3 px-6 py-14 text-center">
               <div className="rounded-[16px] bg-[#edf4ff] p-4 text-[#1456f0] ring-1 ring-blue-100">
                 <LoaderCircle className="size-7 animate-spin" />
@@ -2466,7 +3052,7 @@ function ImageManagerContent({
             </div>
           ) : null}
 
-          {showImageErrorState ? (
+          {assetKind === "image" && showImageErrorState ? (
             <div className="flex h-full flex-col items-center justify-center gap-3 px-6 py-14 text-center">
               <div className="rounded-[16px] bg-rose-50 p-4 text-rose-600 ring-1 ring-rose-100">
                 <ImageIcon className="size-7" />
@@ -2482,7 +3068,7 @@ function ImageManagerContent({
             </div>
           ) : null}
 
-          {items.length > 0 ? (
+          {assetKind === "image" && items.length > 0 ? (
             <VirtuosoGrid
               ref={imageGridRef}
               data={items}
@@ -2506,8 +3092,6 @@ function ImageManagerContent({
                 const sizeLabel = formatImageFileSize(item.size);
                 const imageMeta = [dimensions, ratioLabel, megapixelsLabel, sizeLabel].filter(Boolean).join(" | ");
                 const ownerLabel = imageOwnerLabel(item);
-                const canToggleVisibility = (galleryView === "mine" || (galleryView === "team" && teamManager)) && canUpdateImageVisibility;
-                const showVisibilityStatus = galleryView === "mine" || galleryView === "team" || (isAdmin && (galleryView === "public" || galleryView === "all"));
                 return (
                   <figure
                     className={cn(
@@ -2588,7 +3172,7 @@ function ImageManagerContent({
                       >
                         <Eye className="size-3.5" />
                       </button>
-                      {(galleryView === "public" || galleryView === "all") && item.visibility === "public" && canGenerateSimilar ? (
+                      {canGenerateSimilar ? (
                         <button
                           type="button"
                           onClick={(event) => {
@@ -2597,12 +3181,12 @@ function ImageManagerContent({
                           }}
                           className="inline-flex size-7 items-center justify-center rounded-full bg-white/95 text-[#1456f0] shadow-sm transition hover:bg-[#e8f2ff]"
                           aria-label="同款生成"
-                          title="同款生成：优先使用公开的原始提示词、参考图和生成参数；没有公开原始参考图时使用当前公开图"
+                          title="同款生成"
                         >
                           <Sparkles className="size-3.5" />
                         </button>
                       ) : null}
-                      {galleryView !== "public" && canEditImageTags && (galleryView !== "team" || teamManager) ? (
+                      {canEditImageTags && (galleryView !== "team" || teamManager) ? (
                         <button
                           type="button"
                           onClick={(event) => {
@@ -2682,37 +3266,6 @@ function ImageManagerContent({
                       >
                         <span className="min-w-0 truncate">{ownerLabel}</span>
                       </div>
-                      {showVisibilityStatus ? (
-                        <div className="flex shrink-0 items-center gap-1">
-                          {canToggleVisibility ? (
-                            <button
-                              type="button"
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                event.currentTarget.blur();
-                                void handleVisibilityChange(item, item.visibility === "public" ? "private" : "public");
-                              }}
-                              disabled={visibilityMutatingPath !== null || isDeleting}
-                              className={`inline-flex h-7 items-center gap-1.5 rounded-full px-2.5 text-[11px] font-medium shadow-sm transition disabled:cursor-not-allowed disabled:opacity-70 ${
-                                focused ? "opacity-100" : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
-                              } ${imageVisibilityActionClass(item.visibility)}`}
-                            >
-                              {visibilityMutatingPath === item.path ? (
-                                <LoaderCircle className="size-3 animate-spin" />
-                              ) : item.visibility === "public" ? (
-                                <Lock className="size-3" />
-                              ) : (
-                                <Globe2 className="size-3" />
-                              )}
-                              {item.visibility === "public" ? "取消公开" : "公开"}
-                            </button>
-                          ) : null}
-                          <div className={`pointer-events-none inline-flex h-7 items-center gap-1 rounded-full px-2 text-[11px] font-medium shadow-sm backdrop-blur-sm ${imageVisibilityPillClass(item.visibility)}`}>
-                            {item.visibility === "public" ? <Globe2 className="size-3" /> : <Lock className="size-3" />}
-                            {imageVisibilityLabel(item.visibility)}
-                          </div>
-                        </div>
-                      ) : null}
                     </div>
                     <div
                       className={`pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/60 via-black/25 to-transparent px-2.5 pt-8 pb-11 transition duration-150 ${
@@ -2747,7 +3300,7 @@ function ImageManagerContent({
             />
           ) : null}
 
-          {showImageEmptyState ? (
+          {assetKind === "image" && showImageEmptyState ? (
             <div className="flex h-full flex-col items-center justify-center gap-4 px-6 py-14 text-center">
               <div className="space-y-1">
                 <p className="text-sm font-medium text-foreground">暂无图片</p>
@@ -2758,11 +3311,205 @@ function ImageManagerContent({
                       ? "图片生成成功后会自动进入个人素材库。"
                       : galleryView === "team"
                         ? "团队素材库暂无图片，可从个人素材库移动图片到团队空间。"
-                      : galleryView === "all"
-                        ? "暂无可管理图片。"
-                        : "公共素材库暂无公开图片。"}
+                        : "暂无可管理图片。"}
                 </p>
               </div>
+            </div>
+          ) : null}
+          {assetKind === "text" && isTextAssetLoading && textAssets.length === 0 ? (
+            <div className="flex h-full flex-col items-center justify-center gap-3 px-6 py-14 text-center">
+              <div className="rounded-[16px] bg-[#edf4ff] p-4 text-[#1456f0] ring-1 ring-blue-100">
+                <LoaderCircle className="size-7 animate-spin" />
+              </div>
+              <div className="space-y-1">
+                <p className="text-sm font-medium text-foreground">正在加载文本素材</p>
+              </div>
+            </div>
+          ) : null}
+          {assetKind === "text" && textAssetLoadError && textAssets.length === 0 ? (
+            <div className="flex h-full flex-col items-center justify-center gap-3 px-6 py-14 text-center">
+              <div className="rounded-[16px] bg-rose-50 p-4 text-rose-600 ring-1 ring-rose-100">
+                <FileText className="size-7" />
+              </div>
+              <div className="space-y-1">
+                <p className="text-sm font-medium text-foreground">文本素材加载失败</p>
+                <p className="max-w-[32rem] text-sm leading-6 text-muted-foreground">{textAssetLoadError}</p>
+              </div>
+              <Button variant="outline" className="h-9 rounded-lg px-3" onClick={() => void loadTextAssets({ force: true })}>
+                <RefreshCw className="size-4" />
+                重试
+              </Button>
+            </div>
+          ) : null}
+          {assetKind === "text" && textAssets.length > 0 ? (
+            <div className="h-full overflow-y-auto p-1">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+                {textAssets.map((item) => {
+                  const active = focusedTextAsset?.id === item.id;
+                  return (
+                    <article
+                      key={item.id}
+                      className={cn(
+                        "group min-h-48 rounded-[18px] border bg-background p-4 text-left shadow-[0_6px_20px_rgba(15,23,42,0.04)] transition hover:border-[#1456f0]/40 hover:shadow-[0_10px_28px_rgba(15,23,42,0.08)]",
+                        active && "border-[#1456f0] ring-2 ring-[#1456f0]/15",
+                      )}
+                    >
+                      <div
+                        role="button"
+                        tabIndex={0}
+                        className="grid h-full w-full min-w-0 cursor-pointer gap-3 text-left"
+                        onClick={() => setFocusedTextAssetId(item.id)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" || event.key === " ") {
+                            event.preventDefault();
+                            setFocusedTextAssetId(item.id);
+                          }
+                        }}
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="line-clamp-2 text-sm font-semibold leading-5 text-foreground">{item.name || "文本素材"}</div>
+                            <div className="mt-1 flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
+                              <FileText className="size-3.5 shrink-0" />
+                              <span className="truncate">{textAssetOwnerLabel(item)}</span>
+                            </div>
+                          </div>
+                          <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
+                            {formatTextAssetTime(item.updated_at)}
+                          </span>
+                        </div>
+                        <div className="line-clamp-6 whitespace-pre-wrap text-xs leading-5 text-muted-foreground">
+                          {item.preview || item.content}
+                        </div>
+                        <div className="flex items-center justify-between gap-2 pt-1">
+                          <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                            <span className="text-[11px] text-muted-foreground">{Array.from(item.content || "").length.toLocaleString("zh-CN")} 字符</span>
+                            <span className="inline-flex max-w-[9rem] items-center rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
+                              <span className="truncate">{item.collection_name || "未归类"}</span>
+                            </span>
+                          </div>
+                          <div className="flex shrink-0 items-center gap-1 opacity-100 transition sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100">
+                            <Button
+                              type="button"
+                              size="icon"
+                              variant="ghost"
+                              className="size-7 rounded-lg"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                void copyTextAssetContent(item);
+                              }}
+                              title="复制文本"
+                              aria-label="复制文本"
+                            >
+                              <Copy className="size-3.5" />
+                            </Button>
+                            {canMutateTextAssetCollections ? (
+                              <Button
+                                type="button"
+                                size="icon"
+                                variant="ghost"
+                                className="size-7 rounded-lg"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  openTextAssetCollectionAssign(item, textAssetCollections[0]?.id || "");
+                                }}
+                                title="加入文本素材集"
+                                aria-label="加入文本素材集"
+                                disabled={textAssetCollections.length === 0}
+                              >
+                                <Folder className="size-3.5" />
+                              </Button>
+                            ) : null}
+                            {canMutateTextAssetCollections && item.collection_id ? (
+                              <Button
+                                type="button"
+                                size="icon"
+                                variant="ghost"
+                                className="size-7 rounded-lg"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  openTextAssetCollectionAssign(item, "");
+                                }}
+                                title="移出文本素材集"
+                                aria-label="移出文本素材集"
+                              >
+                                <X className="size-3.5" />
+                              </Button>
+                            ) : null}
+                            {canUpdateTextAssetInScope ? (
+                              <Button
+                                type="button"
+                                size="icon"
+                                variant="ghost"
+                                className="size-7 rounded-lg"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  openTextAssetEditor({ mode: "edit", item });
+                                }}
+                                title="编辑文本素材"
+                                aria-label="编辑文本素材"
+                              >
+                                <Pencil className="size-3.5" />
+                              </Button>
+                            ) : null}
+                            {canDeleteTextAssetInScope ? (
+                              <Button
+                                type="button"
+                                size="icon"
+                                variant="ghost"
+                                className="size-7 rounded-lg text-rose-600 hover:bg-rose-50 hover:text-rose-700"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  openDeleteTextAssetConfirm(item);
+                                }}
+                                title="删除文本素材"
+                                aria-label="删除文本素材"
+                              >
+                                <Trash2 className="size-3.5" />
+                              </Button>
+                            ) : null}
+                          </div>
+                        </div>
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+              {textAssetHasMore ? (
+                <div className="flex justify-center py-5">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="h-10 rounded-lg"
+                    onClick={() => void loadMoreTextAssets()}
+                    disabled={isTextAssetLoadingMore}
+                  >
+                    {isTextAssetLoadingMore ? <LoaderCircle className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
+                    加载更多文本
+                  </Button>
+                </div>
+              ) : textAssets.length > TEXT_ASSET_PAGE_SIZE ? (
+                <div className="py-4 text-center text-xs text-muted-foreground">已显示全部文本素材</div>
+              ) : null}
+            </div>
+          ) : null}
+          {assetKind === "text" && !isTextAssetLoading && !textAssetLoadError && textAssets.length === 0 ? (
+            <div className="flex h-full flex-col items-center justify-center gap-4 px-6 py-14 text-center">
+              <div className="rounded-[16px] bg-muted p-4 text-muted-foreground">
+                <FileText className="size-7" />
+              </div>
+              <div className="space-y-1">
+                <p className="text-sm font-medium text-foreground">暂无文本素材</p>
+                <p className="max-w-[32rem] text-sm leading-6 text-muted-foreground">
+                  {textAssetSearch ? "调整关键词后再试。" : canCreateTextAssetInScope ? "可以先新建一条常用提示词、商品文案或运营素材。" : "当前范围还没有可查看的文本素材。"}
+                </p>
+              </div>
+              {canCreateTextAssetInScope ? (
+                <Button className="h-10 rounded-lg" onClick={() => openTextAssetEditor({ mode: "create" })}>
+                  <Type className="size-4" />
+                  新建文本素材
+                </Button>
+              ) : null}
             </div>
           ) : null}
         </div>
@@ -2771,9 +3518,11 @@ function ImageManagerContent({
           <div className="flex items-center justify-between gap-2">
             <div className="min-w-0">
               <div className="text-sm font-semibold text-foreground">素材详情</div>
-              <div className="truncate text-xs text-muted-foreground">{focusedItem?.name || "选择一张素材查看详情"}</div>
+              <div className="truncate text-xs text-muted-foreground">
+                {assetKind === "text" ? focusedTextAsset?.name || "选择一条文本素材查看详情" : focusedItem?.name || "选择一张素材查看详情"}
+              </div>
             </div>
-            {focusedItem ? (
+            {assetKind === "image" && focusedItem ? (
               <Button
                 type="button"
                 variant="ghost"
@@ -2791,7 +3540,7 @@ function ImageManagerContent({
             ) : null}
           </div>
 
-          {focusedItem ? (
+          {assetKind === "image" && focusedItem ? (
             <>
               <AuthenticatedImage
                 src={managedImagePreviewSource(focusedItem)}
@@ -2800,13 +3549,6 @@ function ImageManagerContent({
                 placeholderClassName="aspect-square rounded-xl bg-muted"
               />
               <div className="space-y-2 text-xs">
-                <div className="flex items-center justify-between gap-3">
-                  <span className="text-muted-foreground">状态</span>
-                  <span className={cn("inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-medium", imageVisibilityPillClass(focusedItem.visibility))}>
-                    {focusedItem.visibility === "public" ? <Globe2 className="size-3" /> : <Lock className="size-3" />}
-                    {imageVisibilityLabel(focusedItem.visibility)}
-                  </span>
-                </div>
                 <div className="flex items-center justify-between gap-3">
                   <span className="text-muted-foreground">素材集</span>
                   <span className="min-w-0 truncate font-medium text-foreground">{focusedItem.collection_name || "未归类"}</span>
@@ -2821,7 +3563,7 @@ function ImageManagerContent({
                 </div>
                 <div className="flex items-center justify-between gap-3">
                   <span className="text-muted-foreground">模型</span>
-                  <span className="min-w-0 truncate font-medium text-foreground">{focusedDetail?.model || "未公开"}</span>
+                  <span className="min-w-0 truncate font-medium text-foreground">{focusedDetail?.model || "未记录"}</span>
                 </div>
                 {focusedDetail?.professional_mode || focusedDetail?.pro_studio?.enabled ? (
                   <div className="flex items-start justify-between gap-3">
@@ -2880,11 +3622,80 @@ function ImageManagerContent({
                 </Button>
               </div>
             </>
+          ) : assetKind === "text" && focusedTextAsset ? (
+            <>
+              <div className="rounded-xl border border-border bg-muted/35 p-4">
+                <div className="flex items-start gap-3">
+                  <div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-[#eef4ff] text-[#1456f0]">
+                    <FileText className="size-5" />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="text-sm font-semibold leading-5 text-foreground">{focusedTextAsset.name || "文本素材"}</div>
+                    <div className="mt-1 text-xs text-muted-foreground">{textAssetOwnerLabel(focusedTextAsset)}</div>
+                  </div>
+                </div>
+              </div>
+              <div className="space-y-2 text-xs">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-muted-foreground">范围</span>
+                  <span className="font-medium text-foreground">{focusedTextAsset.library_scope === "team" ? "团队素材" : "个人素材"}</span>
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-muted-foreground">素材集</span>
+                  <span className="min-w-0 truncate font-medium text-foreground">{focusedTextAsset.collection_name || "未归类"}</span>
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-muted-foreground">更新时间</span>
+                  <span className="font-medium text-foreground">{formatTextAssetTime(focusedTextAsset.updated_at)}</span>
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-muted-foreground">字符数</span>
+                  <span className="font-medium text-foreground">{Array.from(focusedTextAsset.content || "").length.toLocaleString("zh-CN")}</span>
+                </div>
+              </div>
+              <div className="max-h-[42vh] overflow-y-auto whitespace-pre-wrap rounded-xl border border-border bg-muted/40 p-3 text-xs leading-5 text-muted-foreground">
+                {focusedTextAsset.content}
+              </div>
+              <div className="rounded-xl border border-dashed border-border p-3 text-xs leading-5 text-muted-foreground">
+                {textAssetHintText}
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <Button type="button" variant="outline" className="h-9 rounded-lg text-xs" onClick={() => void copyTextAssetContent(focusedTextAsset)}>
+                  <Copy className="size-3.5" />
+                  复制全文
+                </Button>
+                {canUpdateTextAssetInScope ? (
+                  <Button type="button" variant="outline" className="h-9 rounded-lg text-xs" onClick={() => openTextAssetEditor({ mode: "edit", item: focusedTextAsset })}>
+                    <Pencil className="size-3.5" />
+                    编辑
+                  </Button>
+                ) : null}
+                {canMutateTextAssetCollections ? (
+                  <Button type="button" variant="outline" className="col-span-2 h-9 rounded-lg text-xs" onClick={() => openTextAssetCollectionAssign(focusedTextAsset, focusedTextAsset.collection_id || textAssetCollections[0]?.id || "")} disabled={textAssetCollections.length === 0} title={textAssetCollections.length === 0 ? "先新建文本素材集后再归类" : "一条文本素材只能属于一个素材集"}>
+                    <Folder className="size-3.5" />
+                    {focusedTextAsset.collection_id ? "调整文本素材集" : "加入文本素材集"}
+                  </Button>
+                ) : null}
+                {canMutateTextAssetCollections && focusedTextAsset.collection_id ? (
+                  <Button type="button" variant="outline" className="col-span-2 h-9 rounded-lg text-xs" onClick={() => openTextAssetCollectionAssign(focusedTextAsset, "")}>
+                    <X className="size-3.5" />
+                    移出文本素材集
+                  </Button>
+                ) : null}
+                {canDeleteTextAssetInScope ? (
+                  <Button type="button" variant="outline" className="col-span-2 h-9 rounded-lg text-xs text-rose-600 hover:text-rose-700" onClick={() => openDeleteTextAssetConfirm(focusedTextAsset)}>
+                    <Trash2 className="size-3.5" />
+                    删除文本素材
+                  </Button>
+                ) : null}
+              </div>
+            </>
           ) : (
             <div className="rounded-xl border border-dashed border-border p-4 text-center text-xs text-muted-foreground">当前素材库暂无可查看素材</div>
           )}
         </aside>
       </div>
+      {assetKind === "image" ? (
       <MobileBottomDrawer
         open={isMobileFiltersOpen}
         onOpenChange={setIsMobileFiltersOpen}
@@ -2913,6 +3724,8 @@ function ImageManagerContent({
           </Button>
         </div>
       </MobileBottomDrawer>
+      ) : null}
+      {assetKind === "image" ? (
       <ImageLightbox
         images={lightboxImages}
         currentIndex={lightboxIndex}
@@ -2921,6 +3734,229 @@ function ImageManagerContent({
         onIndexChange={setLightboxIndex}
         resolveDownloadSource={resolveLightboxDownloadSource}
       />
+      ) : null}
+      {textAssetEditorTarget ? (
+        <Dialog open onOpenChange={(open) => (!open && !isTextAssetSaving ? setTextAssetEditorTarget(null) : null)}>
+          <DialogContent showCloseButton={false} className="w-[min(92vw,640px)] rounded-2xl p-6">
+            <DialogHeader className="gap-2">
+              <DialogTitle>{textAssetEditorTarget.mode === "create" ? "新建文本素材" : "编辑文本素材"}</DialogTitle>
+              <DialogDescription className="text-sm leading-6">
+                保存后可在素材库、无限画布和社媒运营中复用。
+              </DialogDescription>
+            </DialogHeader>
+            <div className="grid gap-3 py-1">
+              <label className="grid gap-1.5">
+                <span className="text-xs font-medium text-muted-foreground">名称</span>
+                <Input
+                  value={textAssetNameInput}
+                  onChange={(event) => setTextAssetNameInput(event.target.value)}
+                  maxLength={80}
+                  placeholder="留空会使用正文第一行"
+                  className="h-10 rounded-xl"
+                  disabled={isTextAssetSaving}
+                />
+              </label>
+              <label className="grid gap-1.5">
+                <span className="text-xs font-medium text-muted-foreground">内容</span>
+                <Textarea
+                  value={textAssetContentInput}
+                  onChange={(event) => setTextAssetContentInput(event.target.value)}
+                  maxLength={TEXT_ASSET_MAX_CONTENT_LENGTH}
+                  placeholder="输入提示词、商品文案、运营素材或其他可复用文本。"
+                  className="min-h-56 rounded-xl"
+                  disabled={isTextAssetSaving}
+                />
+              </label>
+              <div className="text-right text-xs text-muted-foreground">
+                {Array.from(textAssetContentInput).length.toLocaleString("zh-CN")} / {TEXT_ASSET_MAX_CONTENT_LENGTH.toLocaleString("zh-CN")}
+              </div>
+            </div>
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                className="h-10 rounded-xl border-stone-200 bg-white px-5 text-stone-700 hover:bg-stone-50"
+                onClick={() => setTextAssetEditorTarget(null)}
+                disabled={isTextAssetSaving}
+              >
+                取消
+              </Button>
+              <Button
+                type="button"
+                className="h-10 rounded-xl px-5"
+                onClick={() => void handleSaveTextAsset()}
+                disabled={isTextAssetSaving || !textAssetContentInput.trim()}
+              >
+                {isTextAssetSaving ? <LoaderCircle className="size-4 animate-spin" /> : <FileText className="size-4" />}
+                保存
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      ) : null}
+      {textAssetCollectionEditTarget ? (
+        <Dialog open onOpenChange={(open) => (!open && !textAssetCollectionMutating ? setTextAssetCollectionEditTarget(null) : null)}>
+          <DialogContent showCloseButton={false} className="rounded-2xl p-6">
+            <DialogHeader className="gap-2">
+              <DialogTitle>{textAssetCollectionEditTarget.mode === "create" ? "新建文本素材集" : "重命名文本素材集"}</DialogTitle>
+              <DialogDescription className="text-sm leading-6">
+                文本素材集用于把提示词、商品文案或运营文本按项目和用途组织起来。
+              </DialogDescription>
+            </DialogHeader>
+            <Input
+              value={textAssetCollectionNameInput}
+              onChange={(event) => setTextAssetCollectionNameInput(event.target.value)}
+              placeholder="例如：提示词、商品文案、社媒脚本"
+              className="h-10 rounded-xl"
+              disabled={textAssetCollectionMutating}
+              autoFocus
+            />
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                className="h-10 rounded-xl border-stone-200 bg-white px-5 text-stone-700 hover:bg-stone-50"
+                onClick={() => setTextAssetCollectionEditTarget(null)}
+                disabled={textAssetCollectionMutating}
+              >
+                取消
+              </Button>
+              <Button
+                type="button"
+                className="h-10 rounded-xl px-5"
+                onClick={() => void handleSaveTextAssetCollection()}
+                disabled={textAssetCollectionMutating}
+              >
+                {textAssetCollectionMutating ? <LoaderCircle className="size-4 animate-spin" /> : <Folder className="size-4" />}
+                保存
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      ) : null}
+      {textAssetCollectionDeleteTarget ? (
+        <Dialog open onOpenChange={(open) => (!open && !textAssetCollectionMutating ? setTextAssetCollectionDeleteTarget(null) : null)}>
+          <DialogContent showCloseButton={false} className="rounded-2xl p-6">
+            <DialogHeader className="gap-2">
+              <DialogTitle>删除文本素材集</DialogTitle>
+              <DialogDescription className="text-sm leading-6">
+                删除「{textAssetCollectionDeleteTarget.collection.name}」只会移除文本归类，不会删除文本素材。
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                className="h-10 rounded-xl border-stone-200 bg-white px-5 text-stone-700 hover:bg-stone-50"
+                onClick={() => setTextAssetCollectionDeleteTarget(null)}
+                disabled={textAssetCollectionMutating}
+              >
+                取消
+              </Button>
+              <Button
+                type="button"
+                className="h-10 rounded-xl bg-rose-600 px-5 text-white hover:bg-rose-700"
+                onClick={() => void handleDeleteTextAssetCollection()}
+                disabled={textAssetCollectionMutating}
+              >
+                {textAssetCollectionMutating ? <LoaderCircle className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
+                删除
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      ) : null}
+      {textAssetCollectionAssignTarget ? (
+        <Dialog open onOpenChange={(open) => (!open && !textAssetCollectionMutating ? setTextAssetCollectionAssignTarget(null) : null)}>
+          <DialogContent showCloseButton={false} className="rounded-2xl p-6">
+            <DialogHeader className="gap-2">
+              <DialogTitle>{textAssetCollectionAssignTarget.collectionId ? "加入文本素材集" : "移出文本素材集"}</DialogTitle>
+              <DialogDescription className="text-sm leading-6">
+                当前文本素材：{textAssetCollectionAssignTarget.item.name || "文本素材"}。归类变更不会修改正文内容。
+              </DialogDescription>
+            </DialogHeader>
+            {textAssetCollectionAssignTarget.collectionId ? (
+              <Select
+                value={textAssetCollectionAssignTarget.collectionId}
+                onValueChange={(value) => setTextAssetCollectionAssignTarget((current) => current ? { ...current, collectionId: value } : current)}
+                disabled={textAssetCollectionMutating}
+              >
+                <SelectTrigger className="h-10 rounded-xl">
+                  <SelectValue placeholder="选择文本素材集" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    {textAssetCollections.map((collection) => (
+                      <SelectItem key={collection.id} value={collection.id}>
+                        {collection.name}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+            ) : (
+              <div className="rounded-xl border border-dashed border-border p-3 text-sm text-muted-foreground">
+                确认把这条文本素材从当前文本素材集中移出。
+              </div>
+            )}
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                className="h-10 rounded-xl border-stone-200 bg-white px-5 text-stone-700 hover:bg-stone-50"
+                onClick={() => setTextAssetCollectionAssignTarget(null)}
+                disabled={textAssetCollectionMutating}
+              >
+                取消
+              </Button>
+              <Button
+                type="button"
+                className="h-10 rounded-xl px-5"
+                onClick={() => void handleConfirmAssignTextAssetCollection()}
+                disabled={textAssetCollectionMutating || (textAssetCollectionAssignTarget.collectionId !== "" && textAssetCollections.length === 0)}
+              >
+                {textAssetCollectionMutating ? <LoaderCircle className="size-4 animate-spin" /> : <Folder className="size-4" />}
+                确认
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      ) : null}
+      {deleteTextAssetTarget ? (
+        <Dialog open onOpenChange={(open) => (!open && !isTextAssetDeleting ? setDeleteTextAssetTarget(null) : null)}>
+          <DialogContent showCloseButton={false} className="rounded-2xl p-6">
+            <DialogHeader className="gap-2">
+              <DialogTitle>删除文本素材</DialogTitle>
+              <DialogDescription className="text-sm leading-6">
+                确认删除「{deleteTextAssetTarget.item.name || "文本素材"}」吗？删除后无法恢复。
+              </DialogDescription>
+            </DialogHeader>
+            <div className="max-h-36 overflow-y-auto whitespace-pre-wrap rounded-xl border border-dashed border-border p-3 text-xs leading-5 text-muted-foreground">
+              {deleteTextAssetTarget.item.preview || deleteTextAssetTarget.item.content}
+            </div>
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                className="h-10 rounded-xl border-stone-200 bg-white px-5 text-stone-700 hover:bg-stone-50"
+                onClick={() => setDeleteTextAssetTarget(null)}
+                disabled={isTextAssetDeleting}
+              >
+                取消
+              </Button>
+              <Button
+                type="button"
+                className="h-10 rounded-xl bg-rose-600 px-5 text-white hover:bg-rose-700"
+                onClick={() => void handleConfirmDeleteTextAsset()}
+                disabled={isTextAssetDeleting}
+              >
+                {isTextAssetDeleting ? <LoaderCircle className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
+                确认删除
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      ) : null}
       {teamImagesTarget ? (
         <Dialog open onOpenChange={(open) => (!open && !isMovingToTeam ? setTeamImagesTarget(null) : null)}>
           <DialogContent showCloseButton={false} className="rounded-2xl p-6">
@@ -2968,73 +4004,6 @@ function ImageManagerContent({
               >
                 {isMovingToTeam ? <LoaderCircle className="size-4 animate-spin" /> : <Send className="size-4" />}
                 移动
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
-      ) : null}
-      {publishTarget ? (
-        <Dialog open onOpenChange={(open) => (!open && !visibilityMutatingPath ? setPublishTarget(null) : null)}>
-          <DialogContent showCloseButton={false} className="rounded-2xl p-6">
-            <DialogHeader className="gap-2">
-              <DialogTitle>公开图片</DialogTitle>
-              <DialogDescription className="text-sm leading-6">
-                将 {publishTarget.items.length} 张图片加入公共素材库。
-              </DialogDescription>
-            </DialogHeader>
-            <div className="grid gap-3 py-1">
-              <label className="flex items-start gap-3 rounded-xl border border-stone-200 bg-white px-3 py-3 text-sm">
-                <Checkbox
-                  className="mt-0.5"
-                  checked={publishRecipeOptions.sharePromptParameters}
-                  onCheckedChange={(checked) =>
-                    setPublishRecipeOptions({
-                      sharePromptParameters: checked === true,
-                      shareReferenceImages: checked === true ? publishRecipeOptions.shareReferenceImages : false,
-                    })
-                  }
-                />
-                <span className="min-w-0">
-                  <span className="block font-medium text-stone-900">公开原始提示词和生成参数</span>
-                  <span className="mt-0.5 block text-xs leading-5 text-stone-500">公共素材库会展示可复用的 prompt、模型、尺寸和输出设置。</span>
-                </span>
-              </label>
-              <label className="flex items-start gap-3 rounded-xl border border-stone-200 bg-white px-3 py-3 text-sm">
-                <Checkbox
-                  className="mt-0.5"
-                  checked={publishRecipeOptions.shareReferenceImages}
-                  disabled={!publishRecipeOptions.sharePromptParameters}
-                  onCheckedChange={(checked) =>
-                    setPublishRecipeOptions((current) => ({
-                      ...current,
-                      shareReferenceImages: checked === true,
-                    }))
-                  }
-                />
-                <span className="min-w-0">
-                  <span className="block font-medium text-stone-900">公开原始参考图用于同款生成</span>
-                  <span className="mt-0.5 block text-xs leading-5 text-stone-500">其他用户复用时可以读取这些参考图；不勾选时会改用公开成品图。</span>
-                </span>
-              </label>
-            </div>
-            <DialogFooter>
-              <Button
-                type="button"
-                variant="outline"
-                className="h-10 rounded-xl border-stone-200 bg-white px-5 text-stone-700 hover:bg-stone-50"
-                onClick={() => setPublishTarget(null)}
-                disabled={visibilityMutatingPath !== null}
-              >
-                取消
-              </Button>
-              <Button
-                type="button"
-                className="h-10 rounded-xl px-5"
-                onClick={() => void handleConfirmPublish()}
-                disabled={visibilityMutatingPath !== null}
-              >
-                {visibilityMutatingPath ? <LoaderCircle className="size-4 animate-spin" /> : <Globe2 className="size-4" />}
-                公开
               </Button>
             </DialogFooter>
           </DialogContent>
@@ -3218,7 +4187,7 @@ function ImageManagerContent({
             <DialogHeader className="gap-2">
               <DialogTitle>{collectionAssignTarget.collectionId ? "加入素材集" : "移出素材集"}</DialogTitle>
               <DialogDescription className="text-sm leading-6">
-                本次处理 {collectionAssignTarget.items.length} 张图片。一张图只能属于一个素材集，归类变更不会影响公开状态、标签或原图文件。
+                本次处理 {collectionAssignTarget.items.length} 张图片。一张图只能属于一个素材集，归类变更不会影响标签或原图文件。
               </DialogDescription>
             </DialogHeader>
             {collectionAssignTarget.collectionId ? (
@@ -3279,22 +4248,33 @@ export default function ImageManagerPage() {
   }
   const canDeleteImages = hasAPIPermission(session, "DELETE", "/api/images");
   const canGenerateSimilar = canAccessPath(session, "/image") && hasAPIPermission(session, "POST", "/api/creation-tasks");
-  const canUpdateImageVisibility = hasAPIPermission(session, "PATCH", "/api/images/visibility");
   const canEditImageTags = hasAPIPermission(session, "PATCH", "/api/images/tags");
   const canMoveImagesToTeam = hasAPIPermission(session, "PATCH", "/api/images/library-scope");
   const canManageCollections =
     hasAPIPermission(session, "POST", "/api/image-collections") &&
     hasAPIPermission(session, "PATCH", "/api/image-collections") &&
     hasAPIPermission(session, "DELETE", "/api/image-collections");
+  const canViewTextAssets = hasAPIPermission(session, "GET", "/api/text-assets");
+  const canCreateTextAssets = hasAPIPermission(session, "POST", "/api/text-assets");
+  const canUpdateTextAssets = hasAPIPermission(session, "PATCH", "/api/text-assets");
+  const canDeleteTextAssets = hasAPIPermission(session, "DELETE", "/api/text-assets");
+  const canManageTextAssetCollections =
+    hasAPIPermission(session, "POST", "/api/text-asset-collections") &&
+    hasAPIPermission(session, "PATCH", "/api/text-asset-collections") &&
+    hasAPIPermission(session, "DELETE", "/api/text-asset-collections");
   return (
     <ImageManagerContent
       cacheScope={imageManagerCacheScope(session)}
       canDeleteImages={canDeleteImages}
       canGenerateSimilar={canGenerateSimilar}
-      canUpdateImageVisibility={canUpdateImageVisibility}
       canEditImageTags={canEditImageTags}
       canMoveImagesToTeam={canMoveImagesToTeam}
       canManageCollections={canManageCollections}
+      canViewTextAssets={canViewTextAssets}
+      canCreateTextAssets={canCreateTextAssets}
+      canUpdateTextAssets={canUpdateTextAssets}
+      canDeleteTextAssets={canDeleteTextAssets}
+      canManageTextAssetCollections={canManageTextAssetCollections}
       isAdmin={session.role === "admin"}
     />
   );
