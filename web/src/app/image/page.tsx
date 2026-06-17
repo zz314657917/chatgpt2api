@@ -86,6 +86,7 @@ import {
   isImageCreationModel,
   isImageModel,
   isOfficialImageModel,
+  midjourneyVersionSupportsStop,
   modelIDLooksImageCapable,
   MANAGED_IMAGE_UNCLASSIFIED_COLLECTION_ID,
   supportsImageOutputCompression,
@@ -175,7 +176,7 @@ const QUOTA_REFRESH_EVENT = "chatgpt2api:quota-refresh";
 const DEFAULT_IMAGE_OUTPUT_FORMAT: ImageOutputFormat = "png";
 const DEFAULT_IMAGE_QUALITY: ImageQuality = "auto";
 const DEFAULT_MIDJOURNEY_SETTINGS: Required<Pick<MidjourneySettingsPayload, "version" | "speed" | "stylize" | "chaos" | "weird" | "quality">> &
-  Pick<MidjourneySettingsPayload, "niji" | "raw" | "tile" | "stop"> = {
+  Pick<MidjourneySettingsPayload, "niji" | "raw" | "tile"> = {
     version: "8.1",
     speed: "relax",
     stylize: 100,
@@ -185,7 +186,6 @@ const DEFAULT_MIDJOURNEY_SETTINGS: Required<Pick<MidjourneySettingsPayload, "ver
     niji: false,
     raw: false,
     tile: false,
-    stop: 100,
   };
 const AI_BACKGROUND_REMOVAL_PROMPT = "AI 抠图：自动识别图片中的主要主体，移除背景并输出透明背景 PNG。保持主体形状、纹理、颜色和像素细节，避免新增或重绘无关内容。注意：这是 AI 编辑，可能会重绘图片内容。";
 const REFERENCE_IMAGE_MAX_SIDE = 2048;
@@ -1168,7 +1168,7 @@ function normalizeMidjourneySettings(value: unknown): MidjourneySettingsPayload 
   const version = typeof source.version === "string" && source.version.trim() ? source.version.trim() : DEFAULT_MIDJOURNEY_SETTINGS.version;
   const speed = typeof source.speed === "string" && source.speed.trim() ? source.speed.trim() : DEFAULT_MIDJOURNEY_SETTINGS.speed;
   const quality = typeof source.quality === "string" && source.quality.trim() ? source.quality.trim() : DEFAULT_MIDJOURNEY_SETTINGS.quality;
-  return {
+  const out: MidjourneySettingsPayload = {
     version,
     speed,
     stylize: clampIntegerSetting(source.stylize, DEFAULT_MIDJOURNEY_SETTINGS.stylize, 0, 1000),
@@ -1178,8 +1178,11 @@ function normalizeMidjourneySettings(value: unknown): MidjourneySettingsPayload 
     niji: source.niji === true || version.toLowerCase().startsWith("niji"),
     raw: source.raw === true,
     tile: source.tile === true,
-    stop: clampIntegerSetting(source.stop, DEFAULT_MIDJOURNEY_SETTINGS.stop || 100, 10, 100),
   };
+  if (midjourneyVersionSupportsStop(version)) {
+    out.stop = clampIntegerSetting(source.stop, 100, 10, 100);
+  }
+  return out;
 }
 
 function getStoredMidjourneySettings() {

@@ -63,6 +63,7 @@ import {
   IMAGE_MODEL_ROUTE_DETAILS,
   MIDJOURNEY_IMAGE_MODEL,
   isOfficialImageModel,
+  midjourneyVersionSupportsStop,
   supportsImageQuality,
   supportsImageOutputControls,
   supportsImageResolutionPresets,
@@ -450,8 +451,15 @@ export function ImageComposer({
   const imageQualitySupported = supportsImageQuality(imageModel);
   const imageQualityLabel = IMAGE_QUALITY_OPTIONS.find((option) => option.value === imageQuality)?.label || "自动";
   const midjourneyModel = imageModel === MIDJOURNEY_IMAGE_MODEL;
+  const midjourneyStopSupported = midjourneyVersionSupportsStop(midjourneySettings.version);
   const updateMidjourneySettings = (patch: MidjourneySettingsPayload) => {
-    onMidjourneySettingsChange({ ...midjourneySettings, ...patch });
+    const nextSettings = { ...midjourneySettings, ...patch };
+    for (const key of Object.keys(nextSettings) as Array<keyof MidjourneySettingsPayload>) {
+      if (nextSettings[key] === undefined) {
+        delete nextSettings[key];
+      }
+    }
+    onMidjourneySettingsChange(nextSettings);
   };
   const updateMidjourneyNumberSetting = (
     key: "stylize" | "chaos" | "weird" | "stop",
@@ -1332,7 +1340,17 @@ export function ImageComposer({
                                     setIsMidjourneyQualityMenuOpen(false);
                                   }
                                 }}
-                                onValueChange={(version) => updateMidjourneySettings({ version, niji: version.startsWith("niji") })}
+                                onValueChange={(version) => {
+                                  const nextSettings: MidjourneySettingsPayload = {
+                                    ...midjourneySettings,
+                                    version,
+                                    niji: version.startsWith("niji"),
+                                  };
+                                  if (!midjourneyVersionSupportsStop(version)) {
+                                    delete nextSettings.stop;
+                                  }
+                                  onMidjourneySettingsChange(nextSettings);
+                                }}
                               />
                             </div>
                             <div className={imageSettingsFieldClass}>
@@ -1375,7 +1393,7 @@ export function ImageComposer({
                               { key: "stylize" as const, label: "风格化", min: 0, max: 1000, fallback: 100 },
                               { key: "chaos" as const, label: "混乱", min: 0, max: 100, fallback: 0 },
                               { key: "weird" as const, label: "怪异", min: 0, max: 3000, fallback: 0 },
-                              { key: "stop" as const, label: "停止", min: 10, max: 100, fallback: 100 },
+                              ...(midjourneyStopSupported ? [{ key: "stop" as const, label: "停止", min: 10, max: 100, fallback: 100 }] : []),
                             ].map((item) => (
                               <label key={item.key} className={imageSettingsFieldClass}>
                                 <span className="shrink-0 font-medium text-[#45515e] dark:text-muted-foreground">{item.label}</span>

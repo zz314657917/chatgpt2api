@@ -73,6 +73,15 @@ export type MidjourneySettingsPayload = {
   tile?: boolean;
   stop?: number;
 };
+
+export function midjourneyVersionSupportsStop(version?: string) {
+  const normalized = String(version || "")
+    .trim()
+    .toLowerCase()
+    .replace(/^v/, "");
+  return ["5", "5.1", "5.2", "6", "6.1"].includes(normalized);
+}
+
 const IMAGE_PRICE_ESTIMATE_MULTIPLIER = 1.2;
 const IMAGE_PRICE_ESTIMATE_USD_CNY_RATE = 7;
 const IMAGE_BILLING_UNIT_SCALE = 1000;

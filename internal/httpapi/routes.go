@@ -1799,7 +1799,6 @@ func normalizeMidjourneySettings(value any, withDefaults ...bool) map[string]any
 		{key: "stylize", min: 0, max: 1000, def: 100},
 		{key: "chaos", min: 0, max: 100, def: 0},
 		{key: "weird", min: 0, max: 3000, def: 0},
-		{key: "stop", min: 10, max: 100, def: 100},
 	} {
 		if _, ok := raw[rule.key]; !ok {
 			if includeDefaults {
@@ -1816,6 +1815,20 @@ func normalizeMidjourneySettings(value any, withDefaults ...bool) map[string]any
 		}
 		out[rule.key] = value
 	}
+	if midjourneyVersionSupportsStop(util.Clean(out["version"])) {
+		if _, ok := raw["stop"]; ok {
+			value := util.ToInt(raw["stop"], -1)
+			if value < 10 {
+				value = 10
+			}
+			if value > 100 {
+				value = 100
+			}
+			out["stop"] = value
+		}
+	} else {
+		delete(out, "stop")
+	}
 	for _, key := range []string{"niji", "raw", "tile"} {
 		if _, ok := raw[key]; ok {
 			out[key] = util.ToBool(raw[key])
@@ -1827,6 +1840,15 @@ func normalizeMidjourneySettings(value any, withDefaults ...bool) map[string]any
 		return nil
 	}
 	return out
+}
+
+func midjourneyVersionSupportsStop(version string) bool {
+	switch strings.TrimPrefix(strings.ToLower(strings.TrimSpace(version)), "v") {
+	case "5", "5.1", "5.2", "6", "6.1":
+		return true
+	default:
+		return false
+	}
 }
 
 func validateImageReferenceLimit(body map[string]any, images []protocol.UploadedImage) error {
