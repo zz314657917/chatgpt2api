@@ -223,6 +223,25 @@ func (a *App) callSub2APIChatCompletionsWithBody(ctx context.Context, body map[s
 }
 
 func (a *App) callSub2APIImageGenerations(ctx context.Context, identity service.Identity, payload map[string]any, binding service.Sub2APIBinding) (map[string]any, error) {
+	if sub2APIUsesMidjourneyGateway(payload) {
+		return a.callSub2APIImageBatchesWithBinding(ctx, identity, payload, binding, func(ctx context.Context, batchPayload map[string]any) (map[string]any, error) {
+			body, err := sub2APIMidjourneyImageGatewayPayload(batchPayload)
+			if err != nil {
+				return nil, err
+			}
+			return a.postSub2APIJSON(ctx, binding, "midjourney/generations", body)
+		})
+	}
+	if sub2APIUsesGrokImagineGateway(payload) && sub2APIGrokImaginePayloadNeedsEdit(payload) {
+		return a.callSub2APIImageBatchesWithBinding(ctx, identity, payload, binding, func(ctx context.Context, batchPayload map[string]any) (map[string]any, error) {
+			body, err := sub2APIGrokImagineImageGatewayPayload(batchPayload, true)
+			if err != nil {
+				return nil, err
+			}
+			body["response_format"] = "b64_json"
+			return a.postSub2APIJSON(ctx, binding, "images/edits", body)
+		})
+	}
 	return a.callSub2APIImageBatchesWithBinding(ctx, identity, payload, binding, func(ctx context.Context, batchPayload map[string]any) (map[string]any, error) {
 		body, err := sub2APIImageGatewayJSONPayload(batchPayload)
 		if err != nil {
@@ -234,6 +253,25 @@ func (a *App) callSub2APIImageGenerations(ctx context.Context, identity service.
 }
 
 func (a *App) callSub2APIImageEdits(ctx context.Context, identity service.Identity, payload map[string]any, binding service.Sub2APIBinding) (map[string]any, error) {
+	if sub2APIUsesMidjourneyGateway(payload) {
+		return a.callSub2APIImageBatchesWithBinding(ctx, identity, payload, binding, func(ctx context.Context, batchPayload map[string]any) (map[string]any, error) {
+			body, err := sub2APIMidjourneyImageGatewayPayload(batchPayload)
+			if err != nil {
+				return nil, err
+			}
+			return a.postSub2APIJSON(ctx, binding, "midjourney/generations", body)
+		})
+	}
+	if sub2APIUsesGrokImagineGateway(payload) {
+		return a.callSub2APIImageBatchesWithBinding(ctx, identity, payload, binding, func(ctx context.Context, batchPayload map[string]any) (map[string]any, error) {
+			body, err := sub2APIGrokImagineImageGatewayPayload(batchPayload, true)
+			if err != nil {
+				return nil, err
+			}
+			body["response_format"] = "b64_json"
+			return a.postSub2APIJSON(ctx, binding, "images/edits", body)
+		})
+	}
 	if sub2APIUsesImageGenerationsJSONGateway(payload) {
 		return a.callSub2APIImageBatchesWithBinding(ctx, identity, payload, binding, func(ctx context.Context, batchPayload map[string]any) (map[string]any, error) {
 			body, err := sub2APIImageGatewayJSONPayload(batchPayload)
@@ -544,6 +582,12 @@ func sub2APIAcquireBatchSlots(ctx context.Context, acquire protocol.ImageOutputS
 }
 
 func sub2APIImageGatewayJSONPayload(payload map[string]any) (map[string]any, error) {
+	if sub2APIUsesMidjourneyGateway(payload) {
+		return sub2APIMidjourneyImageGatewayPayload(payload)
+	}
+	if sub2APIUsesGrokImagineGateway(payload) {
+		return sub2APIGrokImagineImageGatewayPayload(payload, sub2APIGrokImaginePayloadNeedsEdit(payload))
+	}
 	if sub2APIUsesOfficialImageGateway(payload) {
 		return sub2APIOfficialImageGatewayPayload(payload)
 	}
@@ -554,7 +598,7 @@ func sub2APIImageGatewayJSONPayload(payload map[string]any) (map[string]any, err
 }
 
 func sub2APIUsesImageGenerationsJSONGateway(payload map[string]any) bool {
-	return sub2APIUsesOfficialImageGateway(payload) || sub2APIUsesGeminiImageGateway(payload)
+	return sub2APIUsesOfficialImageGateway(payload) || sub2APIUsesGeminiImageGateway(payload) || sub2APIUsesMidjourneyGateway(payload) || sub2APIUsesGrokImagineGateway(payload)
 }
 
 func sub2APIUsesOfficialImageGateway(payload map[string]any) bool {
@@ -571,6 +615,14 @@ func sub2APIUsesGeminiImageGateway(payload map[string]any) bool {
 	default:
 		return false
 	}
+}
+
+func sub2APIUsesMidjourneyGateway(payload map[string]any) bool {
+	return sub2APIImageModel(payload["model"]) == util.ImageModelMidjourney
+}
+
+func sub2APIUsesGrokImagineGateway(payload map[string]any) bool {
+	return sub2APIImageModel(payload["model"]) == util.ImageModelGrokImagine
 }
 
 func sub2APIImageJSONPayload(payload map[string]any) map[string]any {
@@ -644,6 +696,181 @@ func sub2APIGeminiImageGatewayPayload(payload map[string]any) map[string]any {
 		}
 	}
 	return out
+}
+
+func sub2APIMidjourneyImageGatewayPayload(payload map[string]any) (map[string]any, error) {
+	out := map[string]any{
+		"model":  util.ImageModelMidjourney,
+		"prompt": util.Clean(payload["prompt"]),
+		"n":      sub2APIMidjourneyImagePayloadCount(payload),
+	}
+	if size := sub2APIMidjourneyImageSize(payload); size != "" {
+		out["size"] = size
+	}
+	if urls := sub2APIMidjourneyImageURLs(payload); len(urls) > 0 {
+		if len(urls) > sub2APIMidjourneyReferenceLimit {
+			return nil, sub2APIMidjourneyReferenceLimitError()
+		}
+		out["image_urls"] = urls
+	}
+	settings := normalizeMidjourneySettings(payload["midjourney_settings"], true)
+	for _, key := range []string{"version", "speed", "quality", "stylize", "chaos", "weird", "stop", "niji", "raw", "tile"} {
+		if value, ok := settings[key]; ok {
+			out[key] = value
+		}
+	}
+	for key, value := range out {
+		if value == "" {
+			delete(out, key)
+		}
+	}
+	return out, nil
+}
+
+const sub2APIMidjourneyReferenceLimit = 4
+
+const sub2APIGrokImagineReferenceLimit = 1
+
+func sub2APIGrokImagineImageGatewayPayload(payload map[string]any, edit bool) (map[string]any, error) {
+	out := map[string]any{
+		"model":  sub2APIGrokImagineUpstreamModel(edit),
+		"prompt": util.Clean(payload["prompt"]),
+		"n":      sub2APIGrokImagineImagePayloadCount(payload),
+	}
+	if size := sub2APIGrokImagineImageSize(payload); size != "" {
+		out["size"] = size
+	}
+	urls := sub2APIGrokImagineImageURLs(payload)
+	if edit {
+		if len(urls) == 0 {
+			return nil, protocol.HTTPError{Status: http.StatusBadRequest, Message: "Grok Imagine 参考图不能为空"}
+		}
+		if len(urls) > sub2APIGrokImagineReferenceLimit {
+			return nil, sub2APIGrokImagineReferenceLimitError()
+		}
+		out["image_urls"] = urls
+	}
+	for key, value := range out {
+		if value == "" {
+			delete(out, key)
+		}
+	}
+	return out, nil
+}
+
+func sub2APIGrokImagineUpstreamModel(edit bool) string {
+	if edit {
+		return "grok-imagine-1.5-edit-apimart"
+	}
+	return "grok-imagine-1.5-apimart"
+}
+
+func sub2APIGrokImagineImagePayloadCount(payload map[string]any) int {
+	count := util.ToInt(payload["n"], 1)
+	if count < 1 {
+		return 1
+	}
+	if count > sub2APIImageBatchLimit {
+		return sub2APIImageBatchLimit
+	}
+	return count
+}
+
+func sub2APIGrokImagineImageSize(payload map[string]any) string {
+	size := firstNonEmpty(util.Clean(payload["size"]), util.Clean(payload["requested_size"]))
+	size = protocol.NormalizeImageGenerationSize(size)
+	normalized := strings.ToLower(strings.TrimSpace(size))
+	if normalized == "" || normalized == "auto" {
+		return "1:1"
+	}
+	return normalized
+}
+
+func sub2APIGrokImagineImageURLs(payload map[string]any) []string {
+	urls := make([]string, 0, sub2APIGrokImagineReferenceLimit)
+	appendURL := func(value string) {
+		if value = strings.TrimSpace(value); value != "" {
+			urls = append(urls, value)
+		}
+	}
+	for _, url := range util.AsStringSlice(payload["official_public_image_urls"]) {
+		appendURL(url)
+	}
+	for _, url := range util.AsStringSlice(payload["image_urls"]) {
+		appendURL(url)
+	}
+	appendURL(util.Clean(payload["image_url"]))
+	for _, image := range uploadedImagesFromPayload(payload["images"]) {
+		appendURL(sub2APIUploadedImageDataURL(image))
+	}
+	return dedupe(urls)
+}
+
+func sub2APIGrokImaginePayloadNeedsEdit(payload map[string]any) bool {
+	return len(sub2APIGrokImagineImageURLs(payload)) > 0 ||
+		len(util.AsStringSlice(payload["reference_image_ids"])) > 0 ||
+		payload["image"] != nil
+}
+
+func sub2APIGrokImagineReferenceLimitError() error {
+	return protocol.HTTPError{Status: http.StatusBadRequest, Message: "Grok Imagine 参考图最多支持 1 张"}
+}
+
+func sub2APIMidjourneyImagePayloadCount(payload map[string]any) int {
+	count := util.ToInt(payload["n"], 1)
+	if count < 1 {
+		return 1
+	}
+	if count > sub2APIImageBatchLimit {
+		return sub2APIImageBatchLimit
+	}
+	return count
+}
+
+func sub2APIMidjourneyImageSize(payload map[string]any) string {
+	size := firstNonEmpty(util.Clean(payload["size"]), util.Clean(payload["requested_size"]))
+	size = protocol.NormalizeImageGenerationSize(size)
+	normalized := strings.ToLower(strings.TrimSpace(size))
+	if normalized == "" || normalized == "auto" {
+		return ""
+	}
+	if sub2APIImageRatioSize(normalized) {
+		return normalized
+	}
+	switch normalized {
+	case "1024x1024", "2048x2048":
+		return "1:1"
+	case "1536x864", "2048x1152":
+		return "16:9"
+	case "864x1536", "1152x2048":
+		return "9:16"
+	default:
+		return normalized
+	}
+}
+
+func sub2APIMidjourneyImageURLs(payload map[string]any) []string {
+	urls := make([]string, 0, sub2APIMidjourneyReferenceLimit)
+	appendURL := func(value string) {
+		if value = strings.TrimSpace(value); value != "" {
+			urls = append(urls, value)
+		}
+	}
+	for _, url := range util.AsStringSlice(payload["official_public_image_urls"]) {
+		appendURL(url)
+	}
+	for _, url := range util.AsStringSlice(payload["image_urls"]) {
+		appendURL(url)
+	}
+	appendURL(util.Clean(payload["image_url"]))
+	for _, image := range uploadedImagesFromPayload(payload["images"]) {
+		appendURL(sub2APIUploadedImageDataURL(image))
+	}
+	return dedupe(urls)
+}
+
+func sub2APIMidjourneyReferenceLimitError() error {
+	return protocol.HTTPError{Status: http.StatusBadRequest, Message: "Midjourney 参考图最多支持 4 张"}
 }
 
 func sub2APIOfficialImageGatewayPayload(payload map[string]any) (map[string]any, error) {

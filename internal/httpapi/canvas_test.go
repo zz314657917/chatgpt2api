@@ -53,6 +53,8 @@ func TestAddBuiltInCanvasImageModelsIncludesOfficialRoute(t *testing.T) {
 		util.ImageModelGeminiProPreviewOfficial:   true,
 		util.ImageModelGeminiFlashPreview:         true,
 		util.ImageModelGeminiFlashPreviewOfficial: true,
+		util.ImageModelMidjourney:                 true,
+		util.ImageModelGrokImagine:                true,
 		util.ImageModelCodex:                      false,
 		"gpt-image-1.5":                           true,
 	})
@@ -61,8 +63,12 @@ func TestAddBuiltInCanvasImageModelsIncludesOfficialRoute(t *testing.T) {
 	assertCanvasModelCapabilities(t, items, util.ImageModelGeminiProPreviewOfficial, "image")
 	assertCanvasModelCapabilities(t, items, util.ImageModelGeminiFlashPreview, "image")
 	assertCanvasModelCapabilities(t, items, util.ImageModelGeminiFlashPreviewOfficial, "image")
+	assertCanvasModelCapabilities(t, items, util.ImageModelMidjourney, "image")
+	assertCanvasModelCapabilities(t, items, util.ImageModelGrokImagine, "image")
 	assertCanvasModelName(t, items, util.ImageModelGeminiProPreview, util.ImageModelGeminiProPreview)
 	assertCanvasModelName(t, items, util.ImageModelGeminiFlashPreview, util.ImageModelGeminiFlashPreview)
+	assertCanvasModelName(t, items, util.ImageModelMidjourney, util.ImageModelMidjourney)
+	assertCanvasModelName(t, items, util.ImageModelGrokImagine, util.ImageModelGrokImagine)
 }
 
 func TestCanvasModelOptionsDoNotExposeVideoWithoutSub2APIBinding(t *testing.T) {

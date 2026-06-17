@@ -2362,6 +2362,9 @@ func mergeImageTaskMetadata(payload map[string]any, metadata map[string]any) {
 	if settings := util.StringMap(metadata["official_settings"]); len(settings) > 0 {
 		payload["official_settings"] = settings
 	}
+	if settings := util.StringMap(metadata["midjourney_settings"]); len(settings) > 0 {
+		payload["midjourney_settings"] = settings
+	}
 	if compression, ok := NormalizeImageOutputCompressionValue(metadata["raw_output_compression"]); ok {
 		payload["raw_output_compression"] = compression
 	}
@@ -2445,6 +2448,9 @@ func mergePublicImageToolTaskFields(target, source map[string]any) {
 	}
 	if settings := util.StringMap(source["official_settings"]); len(settings) > 0 {
 		target["official_settings"] = settings
+	}
+	if settings := util.StringMap(source["midjourney_settings"]); len(settings) > 0 {
+		target["midjourney_settings"] = settings
 	}
 	if value := util.ToInt(source["partial_images"], 0); value > 0 {
 		target["partial_images"] = value

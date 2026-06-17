@@ -1237,7 +1237,6 @@ func (a *App) handleTextAssetCollectionItems(w http.ResponseWriter, r *http.Requ
 	util.WriteJSON(w, http.StatusOK, result)
 }
 
-
 func (a *App) handleImageTags(w http.ResponseWriter, r *http.Request) {
 	identity, ok := a.requireIdentity(w, r, "")
 	if !ok {
@@ -2303,6 +2302,20 @@ func (a *App) jsonImageEditUploads(ctx context.Context, body map[string]any, ide
 		}
 		return images, nil
 	}
+	if (sub2APIImageModel(body["model"]) == util.ImageModelMidjourney || sub2APIImageModel(body["model"]) == util.ImageModelGrokImagine) && len(publicURLs) > 0 {
+		for _, rawURL := range urls {
+			if isPublicJSONImageURL(rawURL) {
+				images = append(images, protocol.UploadedImage{})
+				continue
+			}
+			image, err := uploadedImageFromJSONImageURL(ctx, rawURL)
+			if err != nil {
+				return nil, err
+			}
+			images = append(images, image)
+		}
+		return images, nil
+	}
 	for _, rawURL := range urls {
 		image, err := uploadedImageFromJSONImageURL(ctx, rawURL)
 		if err != nil {
@@ -2316,18 +2329,24 @@ func (a *App) jsonImageEditUploads(ctx context.Context, body map[string]any, ide
 func publicJSONImageURLs(urls []string) []string {
 	out := make([]string, 0, len(urls))
 	for _, rawURL := range urls {
-		parsed, err := url.Parse(strings.TrimSpace(rawURL))
-		if err != nil {
-			continue
-		}
-		switch strings.ToLower(parsed.Scheme) {
-		case "http", "https":
-			if parsed.Host != "" {
-				out = append(out, rawURL)
-			}
+		if isPublicJSONImageURL(rawURL) {
+			out = append(out, rawURL)
 		}
 	}
 	return dedupe(out)
+}
+
+func isPublicJSONImageURL(rawURL string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return false
+	}
+	switch strings.ToLower(parsed.Scheme) {
+	case "http", "https":
+		return parsed.Host != ""
+	default:
+		return false
+	}
 }
 
 func jsonImageURLReferences(body map[string]any) ([]string, error) {
@@ -2660,6 +2679,13 @@ func readMultipartImageBody(r *http.Request) (map[string]any, []protocol.Uploade
 			return nil, nil, fmt.Errorf("invalid official_settings")
 		}
 		body["official_settings"] = settings
+	}
+	if rawSettings := strings.TrimSpace(firstForm(r.MultipartForm, "midjourney_settings")); rawSettings != "" {
+		var settings any
+		if err := json.Unmarshal([]byte(rawSettings), &settings); err != nil {
+			return nil, nil, fmt.Errorf("invalid midjourney_settings")
+		}
+		body["midjourney_settings"] = settings
 	}
 	var images []protocol.UploadedImage
 	for _, field := range []string{"image", "image[]"} {

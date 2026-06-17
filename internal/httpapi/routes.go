@@ -1602,6 +1602,10 @@ func (a *App) handleCreationTasks(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		model := firstNonEmpty(util.Clean(body["model"]), util.ImageModelAuto)
+		if err := validateImageReferenceLimit(body, nil); err != nil {
+			util.WriteError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		n := util.ToInt(body["n"], 1)
 		task, err := a.tasks.SubmitGenerationWithOptions(r.Context(), identity, util.Clean(body["client_task_id"]), util.Clean(body["prompt"]), model, util.Clean(body["size"]), util.Clean(body["quality"]), a.resolveImageBaseURL(r), n, body["messages"], imageTaskRequestMetadata(body), imageOutputOptionsFromBody(body), imageGenerationToolOptionsFromBody(model, n, body), util.Clean(body["visibility"]))
 		if err != nil {
@@ -1659,6 +1663,10 @@ func (a *App) handleCreationTasks(w http.ResponseWriter, r *http.Request) {
 		}
 		service.NormalizeProStudioRequest(body)
 		if err := service.ValidateProStudioRequest(body); err != nil {
+			util.WriteError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if err := validateImageReferenceLimit(body, images); err != nil {
 			util.WriteError(w, http.StatusBadRequest, err.Error())
 			return
 		}
@@ -1742,6 +1750,9 @@ func imageTaskRequestMetadata(body map[string]any) map[string]any {
 			metadata["official_settings"] = settings
 		}
 	}
+	if settings := normalizeMidjourneySettings(body["midjourney_settings"], sub2APIImageModel(body["model"]) == util.ImageModelMidjourney); len(settings) > 0 {
+		metadata["midjourney_settings"] = settings
+	}
 	if publicImageURLs := util.AsStringSlice(body["official_public_image_urls"]); len(publicImageURLs) > 0 {
 		metadata["official_public_image_urls"] = publicImageURLs
 	}
@@ -1757,6 +1768,88 @@ func imageTaskRequestMetadata(body map[string]any) map[string]any {
 		}
 	}
 	return metadata
+}
+
+func normalizeMidjourneySettings(value any, withDefaults ...bool) map[string]any {
+	raw := util.StringMap(value)
+	includeDefaults := len(withDefaults) > 0 && withDefaults[0]
+	if len(raw) == 0 && !includeDefaults {
+		return nil
+	}
+	out := map[string]any{}
+	textDefaults := map[string]string{
+		"version": "8.1",
+		"speed":   "relax",
+		"quality": "1",
+	}
+	for _, key := range []string{"version", "speed", "quality"} {
+		text := strings.TrimSpace(util.Clean(raw[key]))
+		if text == "" && includeDefaults {
+			text = textDefaults[key]
+		}
+		if text != "" {
+			out[key] = text
+		}
+	}
+	for _, rule := range []struct {
+		key      string
+		min, max int
+		def      int
+	}{
+		{key: "stylize", min: 0, max: 1000, def: 100},
+		{key: "chaos", min: 0, max: 100, def: 0},
+		{key: "weird", min: 0, max: 3000, def: 0},
+		{key: "stop", min: 10, max: 100, def: 100},
+	} {
+		if _, ok := raw[rule.key]; !ok {
+			if includeDefaults {
+				out[rule.key] = rule.def
+			}
+			continue
+		}
+		value := util.ToInt(raw[rule.key], -1)
+		if value < rule.min {
+			value = rule.min
+		}
+		if value > rule.max {
+			value = rule.max
+		}
+		out[rule.key] = value
+	}
+	for _, key := range []string{"niji", "raw", "tile"} {
+		if _, ok := raw[key]; ok {
+			out[key] = util.ToBool(raw[key])
+		} else if includeDefaults {
+			out[key] = false
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func validateImageReferenceLimit(body map[string]any, images []protocol.UploadedImage) error {
+	model := sub2APIImageModel(body["model"])
+	if model != util.ImageModelMidjourney && model != util.ImageModelGrokImagine {
+		return nil
+	}
+	payload := map[string]any{
+		"official_public_image_urls": body["official_public_image_urls"],
+		"image_urls":                 body["image_urls"],
+		"image_url":                  body["image_url"],
+		"images":                     images,
+	}
+	if model == util.ImageModelGrokImagine {
+		if len(sub2APIGrokImagineImageURLs(payload)) > sub2APIGrokImagineReferenceLimit {
+			return sub2APIGrokImagineReferenceLimitError()
+		}
+		return nil
+	}
+	if len(sub2APIMidjourneyImageURLs(payload)) > sub2APIMidjourneyReferenceLimit {
+		return sub2APIMidjourneyReferenceLimitError()
+	}
+	return nil
 }
 
 func imageOutputOptionsFromBody(body map[string]any) service.ImageOutputOptions {
