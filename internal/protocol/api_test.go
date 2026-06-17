@@ -1162,6 +1162,8 @@ func TestNormalizeImageGenerationSizeTiers(t *testing.T) {
 	}{
 		{size: "", want: ""},
 		{size: "16:9", want: "16:9"},
+		{size: "21:9", want: "21:9"},
+		{size: "9:21", want: "9:21"},
 		{size: "1080p", want: "1080x1080"},
 		{size: " 2K ", want: "2048x2048"},
 		{size: "4k", want: "2880x2880"},

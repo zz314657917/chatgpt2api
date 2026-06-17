@@ -1619,6 +1619,9 @@ func normalizeImageGenerationRatio(size string) string {
 	normalized := strings.ToLower(strings.TrimSpace(size))
 	normalized = strings.ReplaceAll(normalized, " ", "")
 	normalized = strings.ReplaceAll(normalized, "×", "x")
+	if _, ok := imageGenerationKnownRatioSizes[normalized]; ok {
+		return normalized
+	}
 	match := regexp.MustCompile(`^(\d+(?:\.\d+)?)([:x])(\d+(?:\.\d+)?)$`).FindStringSubmatch(normalized)
 	if len(match) != 4 {
 		return ""
@@ -1643,6 +1646,25 @@ func normalizeImageGenerationRatio(size string) string {
 	width.Div(width, divisor)
 	height.Div(height, divisor)
 	return width.String() + ":" + height.String()
+}
+
+var imageGenerationKnownRatioSizes = map[string]struct{}{
+	"auto": {},
+	"1:1":  {},
+	"3:2":  {},
+	"2:3":  {},
+	"4:3":  {},
+	"3:4":  {},
+	"5:4":  {},
+	"4:5":  {},
+	"16:9": {},
+	"9:16": {},
+	"2:1":  {},
+	"1:2":  {},
+	"3:1":  {},
+	"1:3":  {},
+	"21:9": {},
+	"9:21": {},
 }
 
 func decimalRatioComponent(value string) (*big.Int, *big.Int, bool) {
