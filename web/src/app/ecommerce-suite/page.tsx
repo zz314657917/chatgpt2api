@@ -1891,7 +1891,6 @@ export default function EcommerceSuitePage() {
                 <div className="flex items-center justify-between gap-3">
                   <div>
                     <div className="text-sm font-semibold text-foreground">投放定向</div>
-                    <div className="text-xs text-muted-foreground">用于分析和每张图片的提示词</div>
                   </div>
                 </div>
                 <div className="grid grid-cols-3 gap-3 max-sm:grid-cols-1">
@@ -1935,7 +1934,7 @@ export default function EcommerceSuitePage() {
                     </Select>
                   </label>
                 </div>
-                <div className="grid grid-cols-2 gap-3 max-sm:grid-cols-1">
+                <div className="grid grid-cols-3 gap-3 max-sm:grid-cols-1">
                   <label className="grid gap-1.5">
                     <span className="text-xs font-medium text-muted-foreground">分析模型</span>
                     <Select value={selectedProject.chatModel} onValueChange={(value) => updateSelectedProject({ chatModel: value })}>
