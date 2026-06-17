@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 	"unicode/utf8"
 
 	"chatgpt2api/internal/storage"
@@ -12,13 +13,15 @@ import (
 )
 
 const (
-	textAssetsDocumentName   = "text_assets/index.json"
-	TextAssetKind            = "text"
-	TextAssetMaxContentLen   = 20000
-	textAssetMaxNameLen      = 80
-	textAssetPreviewLen      = 160
-	defaultTextAssetPageSize = 50
-	maxTextAssetPageSize     = 100
+	textAssetsDocumentName            = "text_assets/index.json"
+	textAssetCollectionsDocumentName  = "text_asset_collections/index.json"
+	TextAssetKind                     = "text"
+	TextAssetMaxContentLen            = 20000
+	TextAssetCollectionUnclassifiedID = ImageCollectionUnclassifiedID
+	textAssetMaxNameLen               = 80
+	textAssetPreviewLen               = 160
+	defaultTextAssetPageSize          = 50
+	maxTextAssetPageSize              = 100
 )
 
 type TextAssetAccessScope struct {
@@ -30,9 +33,10 @@ type TextAssetAccessScope struct {
 }
 
 type TextAssetListOptions struct {
-	PageSize int
-	Cursor   string
-	Search   string
+	PageSize     int
+	Cursor       string
+	Search       string
+	CollectionID string
 }
 
 type TextAssetListResult struct {
@@ -48,18 +52,43 @@ type textAssetDocument struct {
 	Items     []textAssetItem `json:"items"`
 }
 
-type textAssetItem struct {
+type TextAssetCollection struct {
 	ID           string `json:"id"`
-	Kind         string `json:"kind"`
 	Name         string `json:"name"`
-	Content      string `json:"content"`
-	OwnerID      string `json:"owner_id,omitempty"`
-	OwnerName    string `json:"owner_name,omitempty"`
 	LibraryScope string `json:"library_scope"`
+	OwnerID      string `json:"owner_id,omitempty"`
 	TeamID       string `json:"team_id,omitempty"`
 	TeamName     string `json:"team_name,omitempty"`
 	CreatedAt    string `json:"created_at"`
 	UpdatedAt    string `json:"updated_at"`
+	TextsCount   int    `json:"texts_count"`
+}
+
+type TextAssetCollectionsResult struct {
+	Items             []TextAssetCollection `json:"items"`
+	UnclassifiedCount int                   `json:"unclassified_count"`
+}
+
+type textAssetCollectionDocument struct {
+	Version   int                   `json:"version"`
+	UpdatedAt string                `json:"updated_at"`
+	Items     []TextAssetCollection `json:"items"`
+}
+
+type textAssetItem struct {
+	ID             string `json:"id"`
+	Kind           string `json:"kind"`
+	Name           string `json:"name"`
+	Content        string `json:"content"`
+	CollectionID   string `json:"collection_id,omitempty"`
+	CollectionName string `json:"collection_name,omitempty"`
+	OwnerID        string `json:"owner_id,omitempty"`
+	OwnerName      string `json:"owner_name,omitempty"`
+	LibraryScope   string `json:"library_scope"`
+	TeamID         string `json:"team_id,omitempty"`
+	TeamName       string `json:"team_name,omitempty"`
+	CreatedAt      string `json:"created_at"`
+	UpdatedAt      string `json:"updated_at"`
 }
 
 type TextAssetService struct {
@@ -78,6 +107,7 @@ func (s *TextAssetService) List(options TextAssetListOptions, scope TextAssetAcc
 	pageSize := normalizeTextAssetPageSize(options.PageSize)
 	cursor := strings.TrimSpace(options.Cursor)
 	keyword := strings.ToLower(strings.TrimSpace(options.Search))
+	collectionID := normalizeImageCollectionID(options.CollectionID)
 	items := s.loadLocked()
 	sortTextAssets(items)
 
@@ -85,7 +115,7 @@ func (s *TextAssetService) List(options TextAssetListOptions, scope TextAssetAcc
 	started := cursor == ""
 	lastIncludedID := ""
 	for _, item := range items {
-		if !textAssetMatchesScope(item, scope) || !textAssetMatchesSearch(item, keyword) {
+		if !textAssetMatchesScope(item, scope) || !textAssetMatchesSearch(item, keyword) || !textAssetMatchesCollection(item, collectionID) {
 			continue
 		}
 		if !started {
@@ -111,6 +141,7 @@ func (s *TextAssetService) Create(body map[string]any, scope TextAssetAccessScop
 	}
 	content := util.Clean(body["content"])
 	name := util.Clean(body["name"])
+	collectionID := normalizeImageCollectionID(util.Clean(body["collection_id"]))
 	normalizedName, normalizedContent, err := normalizeTextAssetNameContent(name, content)
 	if err != nil {
 		return nil, err
@@ -119,17 +150,30 @@ func (s *TextAssetService) Create(body map[string]any, scope TextAssetAccessScop
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	collectionName := ""
+	if collectionID == TextAssetCollectionUnclassifiedID {
+		collectionID = ""
+	} else if collectionID != "" {
+		collection, ok := s.textAssetCollectionByIDLocked(collectionID, scope)
+		if !ok {
+			return nil, errors.New("collection not found")
+		}
+		collectionName = collection.Name
+	}
+
 	now := util.NowISO()
 	item := textAssetItem{
-		ID:           "ta_" + util.NewHex(24),
-		Kind:         TextAssetKind,
-		Name:         normalizedName,
-		Content:      normalizedContent,
-		LibraryScope: ImageLibraryScopePersonal,
-		OwnerID:      scope.OwnerID,
-		OwnerName:    scope.OwnerName,
-		CreatedAt:    now,
-		UpdatedAt:    now,
+		ID:             "ta_" + util.NewHex(24),
+		Kind:           TextAssetKind,
+		Name:           normalizedName,
+		Content:        normalizedContent,
+		CollectionID:   collectionID,
+		CollectionName: collectionName,
+		LibraryScope:   ImageLibraryScopePersonal,
+		OwnerID:        scope.OwnerID,
+		OwnerName:      scope.OwnerName,
+		CreatedAt:      now,
+		UpdatedAt:      now,
 	}
 	if scope.TeamID != "" {
 		item.LibraryScope = ImageLibraryScopeTeam
@@ -164,6 +208,23 @@ func (s *TextAssetService) Update(id string, body map[string]any, scope TextAsse
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	collectionID := ""
+	collectionName := ""
+	updateCollection := false
+	if _, ok := body["collection_id"]; ok {
+		updateCollection = true
+		collectionID = normalizeImageCollectionID(util.Clean(body["collection_id"]))
+		if collectionID == TextAssetCollectionUnclassifiedID {
+			collectionID = ""
+		} else if collectionID != "" {
+			collection, ok := s.textAssetCollectionByIDLocked(collectionID, scope)
+			if !ok {
+				return nil, errors.New("collection not found")
+			}
+			collectionName = collection.Name
+		}
+	}
+
 	items := s.loadLocked()
 	for index, item := range items {
 		if item.ID != id || !textAssetMatchesScope(item, scope) {
@@ -171,6 +232,10 @@ func (s *TextAssetService) Update(id string, body map[string]any, scope TextAsse
 		}
 		item.Name = normalizedName
 		item.Content = normalizedContent
+		if updateCollection {
+			item.CollectionID = collectionID
+			item.CollectionName = collectionName
+		}
 		item.UpdatedAt = util.NowISO()
 		items[index] = item
 		sortTextAssets(items)
@@ -210,6 +275,204 @@ func (s *TextAssetService) Delete(id string, scope TextAssetAccessScope) (bool, 
 	return true, nil
 }
 
+func (s *TextAssetService) ListTextAssetCollections(scope TextAssetAccessScope) []TextAssetCollection {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.listTextAssetCollectionsLocked(scope)
+}
+
+func (s *TextAssetService) ListTextAssetCollectionsResult(scope TextAssetAccessScope) TextAssetCollectionsResult {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return TextAssetCollectionsResult{
+		Items:             s.listTextAssetCollectionsLocked(scope),
+		UnclassifiedCount: s.unclassifiedTextAssetCountLocked(scope),
+	}
+}
+
+func (s *TextAssetService) CreateTextAssetCollection(name string, scope TextAssetAccessScope) (TextAssetCollection, error) {
+	if err := ensureTextAssetWritableScope(scope); err != nil {
+		return TextAssetCollection{}, err
+	}
+	name = normalizeImageCollectionName(name)
+	if name == "" {
+		return TextAssetCollection{}, errors.New("collection name is required")
+	}
+	collection, err := newTextAssetCollectionForScope(name, scope)
+	if err != nil {
+		return TextAssetCollection{}, err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	collections := s.loadTextAssetCollectionsLocked()
+	for _, existing := range collections {
+		if textAssetCollectionMatchesScope(existing, scope) && strings.EqualFold(existing.Name, collection.Name) {
+			return TextAssetCollection{}, errors.New("collection name already exists")
+		}
+	}
+	collections = append(collections, collection)
+	if err := s.saveTextAssetCollectionsLocked(collections); err != nil {
+		return TextAssetCollection{}, err
+	}
+	return collection, nil
+}
+
+func (s *TextAssetService) RenameTextAssetCollection(id, name string, scope TextAssetAccessScope) (TextAssetCollection, error) {
+	if err := ensureTextAssetWritableScope(scope); err != nil {
+		return TextAssetCollection{}, err
+	}
+	id = normalizeImageCollectionID(id)
+	name = normalizeImageCollectionName(name)
+	if id == "" {
+		return TextAssetCollection{}, errors.New("collection id is required")
+	}
+	if name == "" {
+		return TextAssetCollection{}, errors.New("collection name is required")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	collections := s.loadTextAssetCollectionsLocked()
+	index := -1
+	for i, collection := range collections {
+		if collection.ID == id && textAssetCollectionMatchesScope(collection, scope) {
+			index = i
+			break
+		}
+	}
+	if index < 0 {
+		return TextAssetCollection{}, errors.New("collection not found")
+	}
+	for _, existing := range collections {
+		if existing.ID != id && textAssetCollectionMatchesScope(existing, scope) && strings.EqualFold(existing.Name, name) {
+			return TextAssetCollection{}, errors.New("collection name already exists")
+		}
+	}
+	collections[index].Name = name
+	collections[index].UpdatedAt = util.NowISO()
+	if err := s.saveTextAssetCollectionsLocked(collections); err != nil {
+		return TextAssetCollection{}, err
+	}
+	if err := s.renameTextAssetCollectionOnAssetsLocked(id, name, scope); err != nil {
+		return TextAssetCollection{}, err
+	}
+	collections[index].TextsCount = s.textAssetCollectionCountsLocked(scope)[id]
+	return collections[index], nil
+}
+
+func (s *TextAssetService) DeleteTextAssetCollection(id string, scope TextAssetAccessScope) (map[string]any, error) {
+	if err := ensureTextAssetWritableScope(scope); err != nil {
+		return nil, err
+	}
+	id = normalizeImageCollectionID(id)
+	if id == "" {
+		return nil, errors.New("collection id is required")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	collections := s.loadTextAssetCollectionsLocked()
+	next := make([]TextAssetCollection, 0, len(collections))
+	deleted := false
+	for _, collection := range collections {
+		if collection.ID == id && textAssetCollectionMatchesScope(collection, scope) {
+			deleted = true
+			continue
+		}
+		next = append(next, collection)
+	}
+	if !deleted {
+		return nil, errors.New("collection not found")
+	}
+	if err := s.saveTextAssetCollectionsLocked(next); err != nil {
+		return nil, err
+	}
+	cleared, err := s.clearTextAssetCollectionOnAssetsLocked(id, scope)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"deleted": true, "collection_id": id, "cleared": cleared}, nil
+}
+
+func (s *TextAssetService) UpdateTextAssetCollectionItems(collectionID string, ids []string, scope TextAssetAccessScope) (map[string]any, error) {
+	if err := ensureTextAssetWritableScope(scope); err != nil {
+		return nil, err
+	}
+	collectionID = normalizeImageCollectionID(collectionID)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	collectionName := ""
+	if collectionID == TextAssetCollectionUnclassifiedID {
+		collectionID = ""
+	} else if collectionID != "" {
+		collection, ok := s.textAssetCollectionByIDLocked(collectionID, scope)
+		if !ok {
+			return nil, errors.New("collection not found")
+		}
+		collectionName = collection.Name
+	}
+	if len(ids) == 0 {
+		return nil, errors.New("ids is required")
+	}
+	seen := make(map[string]struct{}, len(ids))
+	targetIDs := make(map[string]struct{}, len(ids))
+	for _, value := range ids {
+		id := util.Clean(value)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		targetIDs[id] = struct{}{}
+	}
+	if len(targetIDs) == 0 {
+		return nil, errors.New("ids is required")
+	}
+
+	items := s.loadLocked()
+	updated := 0
+	missing := 0
+	updatedIDs := make([]string, 0, len(targetIDs))
+	for index, item := range items {
+		if _, ok := targetIDs[item.ID]; !ok {
+			continue
+		}
+		delete(targetIDs, item.ID)
+		if !textAssetMatchesScope(item, scope) {
+			missing++
+			continue
+		}
+		item.CollectionID = collectionID
+		item.CollectionName = collectionName
+		item.UpdatedAt = util.NowISO()
+		items[index] = item
+		updated++
+		updatedIDs = append(updatedIDs, item.ID)
+	}
+	missing += len(targetIDs)
+	if updated > 0 {
+		sortTextAssets(items)
+		if err := s.saveLocked(items); err != nil {
+			return nil, err
+		}
+	}
+	return map[string]any{
+		"updated":         updated,
+		"missing":         missing,
+		"ids":             updatedIDs,
+		"collection_id":   collectionID,
+		"collection_name": collectionName,
+	}, nil
+}
+
 func (s *TextAssetService) loadLocked() []textAssetItem {
 	raw := util.StringMap(loadStoredJSON(s.store, textAssetsDocumentName))
 	rawItems := util.AsMapSlice(raw["items"])
@@ -232,6 +495,56 @@ func (s *TextAssetService) saveLocked(items []textAssetItem) error {
 	})
 }
 
+func (s *TextAssetService) loadTextAssetCollectionsLocked() []TextAssetCollection {
+	raw := util.StringMap(loadStoredJSON(s.store, textAssetCollectionsDocumentName))
+	rawItems := util.AsMapSlice(raw["items"])
+	if len(rawItems) == 0 {
+		rawItems = util.AsMapSlice(raw)
+	}
+	items := make([]TextAssetCollection, 0, len(rawItems))
+	seen := map[string]struct{}{}
+	for _, rawItem := range rawItems {
+		item := normalizeTextAssetCollection(rawItem)
+		if item.ID == "" {
+			continue
+		}
+		if _, ok := seen[item.ID]; ok {
+			continue
+		}
+		seen[item.ID] = struct{}{}
+		items = append(items, item)
+	}
+	return items
+}
+
+func (s *TextAssetService) saveTextAssetCollectionsLocked(items []TextAssetCollection) error {
+	now := util.NowISO()
+	out := make([]TextAssetCollection, 0, len(items))
+	seen := map[string]struct{}{}
+	for _, item := range items {
+		item = normalizeTextAssetCollection(structToMapTextAssetCollection(item))
+		if item.ID == "" {
+			continue
+		}
+		if item.CreatedAt == "" {
+			item.CreatedAt = now
+		}
+		if item.UpdatedAt == "" {
+			item.UpdatedAt = now
+		}
+		if _, ok := seen[item.ID]; ok {
+			continue
+		}
+		seen[item.ID] = struct{}{}
+		out = append(out, item)
+	}
+	return saveStoredJSON(s.store, textAssetCollectionsDocumentName, textAssetCollectionDocument{
+		Version:   1,
+		UpdatedAt: now,
+		Items:     out,
+	})
+}
+
 func normalizeStoredTextAsset(raw map[string]any) (textAssetItem, bool) {
 	id := util.Clean(raw["id"])
 	content := util.Clean(raw["content"])
@@ -248,23 +561,203 @@ func normalizeStoredTextAsset(raw map[string]any) (textAssetItem, bool) {
 	}
 	createdAt := firstNonEmptyString(util.Clean(raw["created_at"]), util.Clean(raw["updated_at"]), util.NowISO())
 	item := textAssetItem{
-		ID:           id,
-		Kind:         TextAssetKind,
-		Name:         name,
-		Content:      content,
-		OwnerID:      util.Clean(raw["owner_id"]),
-		OwnerName:    util.Clean(raw["owner_name"]),
-		LibraryScope: scope,
-		TeamID:       teamID,
-		TeamName:     util.Clean(raw["team_name"]),
-		CreatedAt:    createdAt,
-		UpdatedAt:    firstNonEmptyString(util.Clean(raw["updated_at"]), createdAt),
+		ID:             id,
+		Kind:           TextAssetKind,
+		Name:           name,
+		Content:        content,
+		CollectionID:   normalizeImageCollectionID(util.Clean(raw["collection_id"])),
+		CollectionName: normalizeImageCollectionName(util.Clean(raw["collection_name"])),
+		OwnerID:        util.Clean(raw["owner_id"]),
+		OwnerName:      util.Clean(raw["owner_name"]),
+		LibraryScope:   scope,
+		TeamID:         teamID,
+		TeamName:       util.Clean(raw["team_name"]),
+		CreatedAt:      createdAt,
+		UpdatedAt:      firstNonEmptyString(util.Clean(raw["updated_at"]), createdAt),
 	}
 	if item.LibraryScope == ImageLibraryScopeTeam {
 		item.OwnerID = ""
 		item.OwnerName = ""
 	}
 	return item, true
+}
+
+func newTextAssetCollectionForScope(name string, scope TextAssetAccessScope) (TextAssetCollection, error) {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	collection := TextAssetCollection{
+		ID:        "tcol_" + util.SHA1Short(util.NewUUID()+":"+name, 20),
+		Name:      name,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	if scope.TeamID != "" {
+		collection.LibraryScope = ImageLibraryScopeTeam
+		collection.TeamID = strings.TrimSpace(scope.TeamID)
+		collection.TeamName = strings.TrimSpace(scope.TeamName)
+		return collection, nil
+	}
+	if scope.OwnerID != "" {
+		collection.LibraryScope = ImageLibraryScopePersonal
+		collection.OwnerID = strings.TrimSpace(scope.OwnerID)
+		return collection, nil
+	}
+	return TextAssetCollection{}, errors.New("collection scope is required")
+}
+
+func normalizeTextAssetCollection(raw map[string]any) TextAssetCollection {
+	scope := normalizeImageLibraryScope(util.Clean(raw["library_scope"]))
+	teamID := util.Clean(raw["team_id"])
+	if scope != ImageLibraryScopeTeam || teamID == "" {
+		scope = ImageLibraryScopePersonal
+		teamID = ""
+	}
+	return TextAssetCollection{
+		ID:           normalizeImageCollectionID(util.Clean(raw["id"])),
+		Name:         normalizeImageCollectionName(util.Clean(raw["name"])),
+		LibraryScope: scope,
+		OwnerID:      util.Clean(raw["owner_id"]),
+		TeamID:       teamID,
+		TeamName:     util.Clean(raw["team_name"]),
+		CreatedAt:    util.Clean(raw["created_at"]),
+		UpdatedAt:    util.Clean(raw["updated_at"]),
+		TextsCount:   util.ToInt(raw["texts_count"], 0),
+	}
+}
+
+func structToMapTextAssetCollection(item TextAssetCollection) map[string]any {
+	return map[string]any{
+		"id":            item.ID,
+		"name":          item.Name,
+		"library_scope": item.LibraryScope,
+		"owner_id":      item.OwnerID,
+		"team_id":       item.TeamID,
+		"team_name":     item.TeamName,
+		"created_at":    item.CreatedAt,
+		"updated_at":    item.UpdatedAt,
+		"texts_count":   item.TextsCount,
+	}
+}
+
+func textAssetCollectionMatchesScope(collection TextAssetCollection, scope TextAssetAccessScope) bool {
+	if scope.TeamID != "" {
+		return collection.LibraryScope == ImageLibraryScopeTeam && collection.TeamID == scope.TeamID
+	}
+	return scope.OwnerID != "" && collection.LibraryScope == ImageLibraryScopePersonal && collection.OwnerID == scope.OwnerID
+}
+
+func (s *TextAssetService) textAssetCollectionByIDLocked(id string, scope TextAssetAccessScope) (TextAssetCollection, bool) {
+	id = normalizeImageCollectionID(id)
+	if id == "" {
+		return TextAssetCollection{}, false
+	}
+	for _, collection := range s.loadTextAssetCollectionsLocked() {
+		if collection.ID == id && textAssetCollectionMatchesScope(collection, scope) {
+			return collection, true
+		}
+	}
+	return TextAssetCollection{}, false
+}
+
+func (s *TextAssetService) textAssetCollectionCountsLocked(scope TextAssetAccessScope) map[string]int {
+	counts := map[string]int{}
+	for _, item := range s.loadLocked() {
+		if textAssetMatchesScope(item, scope) && item.CollectionID != "" {
+			counts[item.CollectionID]++
+		}
+	}
+	return counts
+}
+
+func (s *TextAssetService) unclassifiedTextAssetCountLocked(scope TextAssetAccessScope) int {
+	count := 0
+	for _, item := range s.loadLocked() {
+		if textAssetMatchesScope(item, scope) && item.CollectionID == "" {
+			count++
+		}
+	}
+	return count
+}
+
+func (s *TextAssetService) listTextAssetCollectionsLocked(scope TextAssetAccessScope) []TextAssetCollection {
+	collections := s.loadTextAssetCollectionsLocked()
+	counts := s.textAssetCollectionCountsLocked(scope)
+	byID := make(map[string]TextAssetCollection, len(collections)+len(counts))
+	for _, collection := range collections {
+		if !textAssetCollectionMatchesScope(collection, scope) {
+			continue
+		}
+		collection.TextsCount = counts[collection.ID]
+		byID[collection.ID] = collection
+	}
+	for _, item := range s.loadLocked() {
+		if !textAssetMatchesScope(item, scope) || item.CollectionID == "" {
+			continue
+		}
+		if _, ok := byID[item.CollectionID]; ok {
+			continue
+		}
+		collection := TextAssetCollection{
+			ID:           item.CollectionID,
+			Name:         firstNonEmptyString(item.CollectionName, "素材集"),
+			LibraryScope: normalizeImageLibraryScope(item.LibraryScope),
+			OwnerID:      item.OwnerID,
+			TeamID:       item.TeamID,
+			TeamName:     item.TeamName,
+			TextsCount:   counts[item.CollectionID],
+		}
+		byID[collection.ID] = collection
+	}
+	result := make([]TextAssetCollection, 0, len(byID))
+	for _, collection := range byID {
+		result = append(result, collection)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].TextsCount != result[j].TextsCount {
+			return result[i].TextsCount > result[j].TextsCount
+		}
+		return strings.ToLower(result[i].Name) < strings.ToLower(result[j].Name)
+	})
+	return result
+}
+
+func (s *TextAssetService) renameTextAssetCollectionOnAssetsLocked(collectionID, name string, scope TextAssetAccessScope) error {
+	items := s.loadLocked()
+	changed := false
+	for index, item := range items {
+		if item.CollectionID != collectionID || !textAssetMatchesScope(item, scope) {
+			continue
+		}
+		item.CollectionName = name
+		item.UpdatedAt = util.NowISO()
+		items[index] = item
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+	return s.saveLocked(items)
+}
+
+func (s *TextAssetService) clearTextAssetCollectionOnAssetsLocked(collectionID string, scope TextAssetAccessScope) (int, error) {
+	items := s.loadLocked()
+	cleared := 0
+	for index, item := range items {
+		if item.CollectionID != collectionID || !textAssetMatchesScope(item, scope) {
+			continue
+		}
+		item.CollectionID = ""
+		item.CollectionName = ""
+		item.UpdatedAt = util.NowISO()
+		items[index] = item
+		cleared++
+	}
+	if cleared == 0 {
+		return 0, nil
+	}
+	if err := s.saveLocked(items); err != nil {
+		return cleared, err
+	}
+	return cleared, nil
 }
 
 func ensureTextAssetWritableScope(scope TextAssetAccessScope) error {
@@ -294,6 +787,16 @@ func textAssetMatchesSearch(item textAssetItem, keyword string) bool {
 	return strings.Contains(strings.ToLower(item.Name), keyword) || strings.Contains(strings.ToLower(item.Content), keyword)
 }
 
+func textAssetMatchesCollection(item textAssetItem, collectionID string) bool {
+	if collectionID == "" {
+		return true
+	}
+	if collectionID == TextAssetCollectionUnclassifiedID {
+		return item.CollectionID == ""
+	}
+	return item.CollectionID == collectionID
+}
+
 func textAssetPayload(item textAssetItem) map[string]any {
 	value := map[string]any{
 		"id":            item.ID,
@@ -304,6 +807,12 @@ func textAssetPayload(item textAssetItem) map[string]any {
 		"library_scope": item.LibraryScope,
 		"created_at":    item.CreatedAt,
 		"updated_at":    item.UpdatedAt,
+	}
+	if item.CollectionID != "" {
+		value["collection_id"] = item.CollectionID
+	}
+	if item.CollectionName != "" {
+		value["collection_name"] = item.CollectionName
 	}
 	if item.OwnerID != "" {
 		value["owner_id"] = item.OwnerID
