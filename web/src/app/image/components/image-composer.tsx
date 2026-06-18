@@ -1304,7 +1304,7 @@ export function ImageComposer({
                         ) : null}
                         {modelSettingsSupported ? (
                           <div className="col-span-2 flex min-w-0 items-center justify-between gap-2 rounded-xl border border-[#dbe7ff] bg-[#f8fbff] px-3 py-2 dark:border-sky-900/60 dark:bg-sky-950/20 sm:col-span-3">
-                            <span className="text-[11px] font-semibold text-[#18181b] dark:text-foreground">模型参数</span>
+                            <span className="text-[11px] font-semibold text-[#18181b] dark:text-foreground">模型</span>
                             <ImageModelSettingsButton
                               model={imageModel}
                               value={imageModelSettingsValue}

@@ -5886,12 +5886,12 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                         ) : null}
                         {editingDraftModelSettingsSupported ? (
                           <div className="flex flex-col gap-2 text-sm font-medium text-stone-700">
-                            模型参数
+                            模型
                             <ImageModelSettingsButton
                               model={editingTurnDraft.model}
                               value={editingDraftModelSettingsValue}
                               onChange={handleEditingDraftModelSettingsChange}
-                              className="h-10 w-full justify-between rounded-xl"
+                              className="h-10 w-full rounded-xl"
                             />
                           </div>
                         ) : null}
