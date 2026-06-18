@@ -51,6 +51,7 @@ import {
   normalizeImageOutputFormat,
   type ImageQuality,
 } from "@/lib/image-parameters";
+import { imageModelSettingsToTaskFields, type ImageModelSettingsState } from "@/lib/image-model-settings";
 import { getCachedAuthSession } from "@/lib/session";
 import { useAuthGuard } from "@/lib/use-auth-guard";
 
@@ -150,7 +151,7 @@ const DEFAULT_ANGLE_CONTROL_VALUES: SmartCanvasAngleControlValues = { horizontal
 const DETAIL_ENHANCE_PROMPT = "请对这张图片进行细节增强和高清修复，提升清晰度、纹理细节、边缘锐度和整体质感，同时严格保留原始构图、主体、颜色关系和风格，不新增无关元素。";
 const AI_BACKGROUND_REMOVAL_PROMPT = "AI 抠图：自动识别图片中的主要主体，移除背景并输出透明背景 PNG。保持主体形状、纹理、颜色和像素细节，避免新增或重绘无关内容。注意：这是 AI 编辑，可能会重绘图片内容。";
 
-type SmartCanvasAssetLibraryScope = "mine" | "team" | "public";
+type SmartCanvasAssetLibraryScope = "mine" | "team";
 
 type SmartCanvasNodeClipboard = {
   nodes: SmartCanvasItem[];
@@ -205,7 +206,7 @@ function userPresetScope() {
 }
 
 function sourceImageVisibility(item?: SmartCanvasItem | null): ImageVisibility {
-  return item?.data?.visibility === "public" ? "public" : "private";
+  return "private";
 }
 
 function imageToolLabel(type: SmartCanvasImageToolType) {
@@ -558,7 +559,7 @@ function generatorImageCount(generator: SmartCanvasItem) {
 }
 
 function generatorImageVisibility(generator: SmartCanvasItem): ImageVisibility {
-  return generator.type === "image_generation" ? "private" : generator.data?.visibility === "public" ? "public" : "private";
+  return "private";
 }
 
 function generatorProStudioState(generator: SmartCanvasItem): ProStudioState {
@@ -592,6 +593,18 @@ function proStudioExtraBody(payload?: ProStudioImagePayload): Record<string, unk
     ...(payload.resolution ? { resolution: payload.resolution } : {}),
     ...(payload.mask_url ? { mask_url: payload.mask_url } : {}),
   };
+}
+
+function generatorImageModelTaskFields(generator: SmartCanvasItem, maskUrl?: string) {
+  const settings = (generator.data?.image_model_settings || {}) as ImageModelSettingsState;
+  const mergedSettings = maskUrl
+    ? {
+        ...settings,
+        officialImage: { ...settings.officialImage, inputImageMask: maskUrl },
+        geminiPro: { ...settings.geminiPro, inputImageMask: maskUrl },
+      }
+    : settings;
+  return imageModelSettingsToTaskFields(generatorImageModel(generator), mergedSettings);
 }
 
 function llmInputText(canvas: SmartCanvasDocument, node: SmartCanvasItem) {
@@ -1011,10 +1024,6 @@ export function useSmartCanvasController() {
   const [assetNextCursor, setAssetNextCursor] = useState("");
   const [hasMoreAssets, setHasMoreAssets] = useState(false);
   const [assetsLoaded, setAssetsLoaded] = useState(false);
-  const [publicAssets, setPublicAssets] = useState<ManagedImageSummary[]>([]);
-  const [publicAssetNextCursor, setPublicAssetNextCursor] = useState("");
-  const [hasMorePublicAssets, setHasMorePublicAssets] = useState(false);
-  const [publicAssetsLoaded, setPublicAssetsLoaded] = useState(false);
   const [activeTeam, setActiveTeam] = useState<TeamSummary | null>(null);
   const [teamAssets, setTeamAssets] = useState<ManagedImageSummary[]>([]);
   const [teamAssetNextCursor, setTeamAssetNextCursor] = useState("");
@@ -1024,12 +1033,10 @@ export function useSmartCanvasController() {
   const [assetCollections, setAssetCollections] = useState<Record<SmartCanvasAssetLibraryScope, ManagedImageCollection[]>>({
     mine: [],
     team: [],
-    public: [],
   });
   const [assetUnclassifiedCounts, setAssetUnclassifiedCounts] = useState<Record<SmartCanvasAssetLibraryScope, number>>({
     mine: 0,
     team: 0,
-    public: 0,
   });
   const [activeAssetCollectionId, setActiveAssetCollectionId] = useState("");
   const [assetSidebarActivated, setAssetSidebarActivated] = useState(false);
@@ -1095,7 +1102,6 @@ export function useSmartCanvasController() {
   const nodeClipboardRef = useRef<SmartCanvasNodeClipboard | null>(null);
   const nodePasteOffsetRef = useRef(0);
   const assetsLoadingRequestRef = useRef(false);
-  const publicAssetsLoadingRequestRef = useRef(false);
   const teamAssetsLoadingRequestRef = useRef(false);
 
   const selectedItem = useMemo(
@@ -1106,12 +1112,11 @@ export function useSmartCanvasController() {
   const selectedImageToolDisabledReason = useMemo(() => imageToolUnavailableReason(selectedItem), [selectedItem]);
   const activeAssetCollections = useMemo(() => assetCollections[assetLibraryScope] || [], [assetCollections, assetLibraryScope]);
   const activeAssetUnclassifiedCount = assetUnclassifiedCounts[assetLibraryScope] || 0;
-  const mentionItems = useMemo(() => mentionCandidateImages(canvas, [...assets, ...teamAssets, ...publicAssets]), [assets, canvas, publicAssets, teamAssets]);
+  const mentionItems = useMemo(() => mentionCandidateImages(canvas, [...assets, ...teamAssets]), [assets, canvas, teamAssets]);
   const assetLibraryTabs = useMemo(() => [
     { id: "mine", label: "个人", count: assets.length },
     ...(activeTeam?.id ? [{ id: "team", label: "团队", count: teamAssets.length }] : []),
-    { id: "public", label: "公共", count: publicAssets.length },
-  ], [activeTeam?.id, assets.length, publicAssets.length, teamAssets.length]);
+  ], [activeTeam?.id, assets.length, teamAssets.length]);
   const angleControlPrompt = useMemo(() => buildAngleControlPrompt(angleControlValues), [angleControlValues]);
   const angleControlResultItem = useMemo(() => {
     if (!angleControlResultItemId) {
@@ -1329,26 +1334,6 @@ export function useSmartCanvasController() {
     }
   }, [activeAssetCollectionId, assetNextCursor, hasMoreAssets, loadingAssets, loadingMoreAssets]);
 
-  const loadPublicAssets = useCallback(async () => {
-    if (publicAssetsLoadingRequestRef.current) {
-      return;
-    }
-    publicAssetsLoadingRequestRef.current = true;
-    setLoadingPublicAssets(true);
-    try {
-      const result = await fetchManagedImages({ scope: "public", page_size: CANVAS_ASSET_PAGE_SIZE, collection_id: activeAssetCollectionId });
-      setPublicAssets(result.items);
-      setPublicAssetNextCursor(result.next_cursor);
-      setHasMorePublicAssets(result.has_more);
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "加载公共素材库失败");
-    } finally {
-      setPublicAssetsLoaded(true);
-      publicAssetsLoadingRequestRef.current = false;
-      setLoadingPublicAssets(false);
-    }
-  }, [activeAssetCollectionId]);
-
   const loadTeamAssets = useCallback(async () => {
     if (teamAssetsLoadingRequestRef.current) {
       return;
@@ -1402,31 +1387,6 @@ export function useSmartCanvasController() {
     }
   }, [activeAssetCollectionId, activeTeam?.id, hasMoreTeamAssets, loadingMorePublicAssets, loadingPublicAssets, teamAssetNextCursor]);
 
-  const loadMorePublicAssets = useCallback(async () => {
-    if (loadingPublicAssets || loadingMorePublicAssets || !hasMorePublicAssets || !publicAssetNextCursor) {
-      return;
-    }
-    setLoadingMorePublicAssets(true);
-    try {
-      const result = await fetchManagedImages({
-        scope: "public",
-        page_size: CANVAS_ASSET_PAGE_SIZE,
-        cursor: publicAssetNextCursor,
-        collection_id: activeAssetCollectionId,
-      });
-      setPublicAssets((current) => {
-        const seen = new Set(current.map((asset) => asset.path));
-        return [...current, ...result.items.filter((asset) => !seen.has(asset.path))];
-      });
-      setPublicAssetNextCursor(result.next_cursor);
-      setHasMorePublicAssets(result.has_more);
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "加载更多公共图片失败");
-    } finally {
-      setLoadingMorePublicAssets(false);
-    }
-  }, [activeAssetCollectionId, hasMorePublicAssets, loadingMorePublicAssets, loadingPublicAssets, publicAssetNextCursor]);
-
   const loadAssetCollections = useCallback(async (scope: SmartCanvasAssetLibraryScope) => {
     if (scope === "team" && !activeTeam?.id) {
       setAssetCollections((current) => ({ ...current, team: [] }));
@@ -1446,12 +1406,6 @@ export function useSmartCanvasController() {
   }, [activeTeam?.id]);
 
   useEffect(() => {
-    if (assetSidebarActivated && assetLibraryScope === "public" && !publicAssetsLoaded && !loadingPublicAssets) {
-      void loadPublicAssets();
-    }
-  }, [assetLibraryScope, assetSidebarActivated, loadPublicAssets, loadingPublicAssets, publicAssetsLoaded]);
-
-  useEffect(() => {
     if (assetSidebarActivated && assetLibraryScope === "team" && activeTeam?.id && !teamAssetsLoaded && !loadingPublicAssets) {
       void loadTeamAssets();
     }
@@ -1464,7 +1418,7 @@ export function useSmartCanvasController() {
   }, [assetLibraryScope, assetSidebarActivated, loadAssetCollections]);
 
   const selectAssetLibraryScope = useCallback((scope: string) => {
-    if (scope === "mine" || scope === "public" || (scope === "team" && activeTeam?.id)) {
+    if (scope === "mine" || (scope === "team" && activeTeam?.id)) {
       setAssetLibraryScope(scope);
       setActiveAssetCollectionId("");
     }
@@ -1475,25 +1429,17 @@ export function useSmartCanvasController() {
   }, []);
 
   const refreshAssetLibrary = useCallback(() => {
-    if (assetLibraryScope === "public") {
-      return loadPublicAssets();
-    }
     if (assetLibraryScope === "team") {
       return loadTeamAssets();
     }
     return loadAssets();
-  }, [assetLibraryScope, loadAssets, loadPublicAssets, loadTeamAssets]);
+  }, [assetLibraryScope, loadAssets, loadTeamAssets]);
 
   useEffect(() => {
     if (!assetSidebarActivated) {
       return;
     }
-    if (assetLibraryScope === "public") {
-      setPublicAssetsLoaded(false);
-      setPublicAssets([]);
-      setPublicAssetNextCursor("");
-      setHasMorePublicAssets(false);
-    } else if (assetLibraryScope === "team") {
+    if (assetLibraryScope === "team") {
       setTeamAssetsLoaded(false);
       setTeamAssets([]);
       setTeamAssetNextCursor("");
@@ -1508,12 +1454,6 @@ export function useSmartCanvasController() {
   }, [activeAssetCollectionId, assetSidebarActivated, assetLibraryScope, refreshAssetLibrary]);
 
   const ensureAssetLibraryLoaded = useCallback(() => {
-    if (assetLibraryScope === "public") {
-      if (!publicAssetsLoaded && !loadingPublicAssets && !publicAssetsLoadingRequestRef.current) {
-        void loadPublicAssets();
-      }
-      return;
-    }
     if (assetLibraryScope === "team") {
       if (!teamAssetsLoaded && !loadingPublicAssets && !teamAssetsLoadingRequestRef.current) {
         void loadTeamAssets();
@@ -1523,7 +1463,7 @@ export function useSmartCanvasController() {
     if (!assetsLoaded && !loadingAssets && !assetsLoadingRequestRef.current) {
       void loadAssets();
     }
-  }, [assetLibraryScope, assetsLoaded, loadAssets, loadPublicAssets, loadTeamAssets, loadingAssets, loadingPublicAssets, publicAssetsLoaded, teamAssetsLoaded]);
+  }, [assetLibraryScope, assetsLoaded, loadAssets, loadTeamAssets, loadingAssets, loadingPublicAssets, teamAssetsLoaded]);
 
   const activateAssetSidebar = useCallback(() => {
     setAssetSidebarActivated(true);
@@ -1538,14 +1478,11 @@ export function useSmartCanvasController() {
   }, [ensureAssetLibraryLoaded]);
 
   const loadMoreAssetLibrary = useCallback(() => {
-    if (assetLibraryScope === "public") {
-      return loadMorePublicAssets();
-    }
     if (assetLibraryScope === "team") {
       return loadMoreTeamAssets();
     }
     return loadMoreAssets();
-  }, [assetLibraryScope, loadMoreAssets, loadMorePublicAssets, loadMoreTeamAssets]);
+  }, [assetLibraryScope, loadMoreAssets, loadMoreTeamAssets]);
 
   const reloadCanvases = useCallback(async () => {
     try {
@@ -2488,7 +2425,7 @@ export function useSmartCanvasController() {
     }
     updatePendingImageUploadNode(pending.nodeId, {
       images: refs,
-      visibility: refs.some((ref) => ref.visibility === "public") ? "public" : "private",
+      visibility: "private",
       upload_progress: 100,
       upload_status: undefined,
       status: undefined,
@@ -3655,11 +3592,12 @@ export function useSmartCanvasController() {
               : "";
             const publicImageUrls = publicCanvasImageUrls(editIterationImages);
             const proPayload = generatorProStudioPayload(generator, submittedPrompt, publicImageUrls, inputImageMask);
+            const modelFields = proPayload ? undefined : generatorImageModelTaskFields(generator, inputImageMask);
             task = await createImageEditTask(
               uniqueTaskId("smart-canvas-loop"),
               files,
               proPayload?.prompt || submittedPrompt,
-              generator.data?.model || "auto",
+              generatorImageModel(generator),
               generatorImageSize(generator, true),
               generatorImageQuality(generator),
               taskCount,
@@ -3668,20 +3606,21 @@ export function useSmartCanvasController() {
               generatorImageResolution(generator, true),
               generatorOutputFormat(generator),
               generatorOutputCompression(generator),
-              inputImageMask ? { inputImageMask } : undefined,
+              proPayload ? inputImageMask ? { inputImageMask } : undefined : modelFields?.toolOptions,
               undefined,
               undefined,
               publicImageUrls,
-              proStudioExtraBody(proPayload),
+              proPayload ? proStudioExtraBody(proPayload) : modelFields?.extraBody,
             );
           } else if (maskIterationImages.length > 0) {
             throw new Error("蒙版需要和原图一起作为输入");
           } else {
             const proPayload = generatorProStudioPayload(generator, submittedPrompt);
+            const modelFields = proPayload ? undefined : generatorImageModelTaskFields(generator);
             task = await createImageGenerationTask(
               uniqueTaskId("smart-canvas-loop"),
               proPayload?.prompt || submittedPrompt,
-              generator.data?.model || "auto",
+              generatorImageModel(generator),
               generatorImageSize(generator),
               generatorImageQuality(generator),
               taskCount,
@@ -3690,10 +3629,10 @@ export function useSmartCanvasController() {
               generatorImageResolution(generator),
               generatorOutputFormat(generator),
               generatorOutputCompression(generator),
+              proPayload ? undefined : modelFields?.toolOptions,
               undefined,
               undefined,
-              undefined,
-              proStudioExtraBody(proPayload),
+              proPayload ? proStudioExtraBody(proPayload) : modelFields?.extraBody,
             );
           }
           taskIds.push(task.id);
@@ -3926,6 +3865,7 @@ export function useSmartCanvasController() {
           : "";
         const publicImageUrls = publicCanvasImageUrls(editInputRefs);
         const proPayload = generatorProStudioPayload(generator, submittedPrompt, publicImageUrls, inputImageMask);
+        const modelFields = proPayload ? undefined : generatorImageModelTaskFields(generator, inputImageMask);
         task = await createImageEditTask(
           clientTaskId,
           files,
@@ -3939,16 +3879,17 @@ export function useSmartCanvasController() {
           generatorImageResolution(generator, true),
           generatorOutputFormat(generator),
           generatorOutputCompression(generator),
-          inputImageMask ? { inputImageMask } : undefined,
+          proPayload ? inputImageMask ? { inputImageMask } : undefined : modelFields?.toolOptions,
           undefined,
           undefined,
           publicImageUrls,
-          proStudioExtraBody(proPayload),
+          proPayload ? proStudioExtraBody(proPayload) : modelFields?.extraBody,
         );
       } else if (maskInputRefs.length > 0) {
         throw new Error("蒙版需要和原图一起作为输入");
       } else {
         const proPayload = generatorProStudioPayload(generator, submittedPrompt);
+        const modelFields = proPayload ? undefined : generatorImageModelTaskFields(generator);
         task = await createImageGenerationTask(
           clientTaskId,
           proPayload?.prompt || submittedPrompt,
@@ -3961,10 +3902,10 @@ export function useSmartCanvasController() {
           generatorImageResolution(generator),
           generatorOutputFormat(generator),
           generatorOutputCompression(generator),
+          proPayload ? undefined : modelFields?.toolOptions,
           undefined,
           undefined,
-          undefined,
-          proStudioExtraBody(proPayload),
+          proPayload ? proStudioExtraBody(proPayload) : modelFields?.extraBody,
         );
       }
       const output = creationTaskToOutput(task);
@@ -4551,7 +4492,7 @@ export function useSmartCanvasController() {
     canvas,
     models,
     activeTeam,
-    assets: assetLibraryScope === "public" ? publicAssets : assetLibraryScope === "team" ? teamAssets : assets,
+    assets: assetLibraryScope === "team" ? teamAssets : assets,
     assetSidebarActivated,
     assetLibraryScope,
     assetLibraryTabs,
@@ -4571,9 +4512,9 @@ export function useSmartCanvasController() {
     saving,
     running,
     uploading,
-    loadingAssets: assetLibraryScope === "public" || assetLibraryScope === "team" ? loadingPublicAssets : loadingAssets,
-    loadingMoreAssets: assetLibraryScope === "public" || assetLibraryScope === "team" ? loadingMorePublicAssets : loadingMoreAssets,
-    hasMoreAssets: assetLibraryScope === "public" ? hasMorePublicAssets : assetLibraryScope === "team" ? hasMoreTeamAssets : hasMoreAssets,
+    loadingAssets: assetLibraryScope === "team" ? loadingPublicAssets : loadingAssets,
+    loadingMoreAssets: assetLibraryScope === "team" ? loadingMorePublicAssets : loadingMoreAssets,
+    hasMoreAssets: assetLibraryScope === "team" ? hasMoreTeamAssets : hasMoreAssets,
     draggingImages,
     mentionOpen,
     mentionItems,

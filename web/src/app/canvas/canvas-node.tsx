@@ -47,8 +47,10 @@ import {
 } from "lucide-react";
 
 import { AuthenticatedImage } from "@/components/authenticated-image";
+import { ImageModelSettingsButton } from "@/components/image-model-settings-button";
 import { ImageOutputControls } from "@/components/image-output-controls";
 import { ImageRatioPicker } from "@/components/image-ratio-picker";
+import { ModelProviderOptionLabel } from "@/components/model-provider-icon";
 import { ProStudioBadge } from "@/components/pro-studio/pro-studio-badge";
 import { ProStudioPanel } from "@/components/pro-studio/pro-studio-panel";
 import { Badge } from "@/components/ui/badge";
@@ -58,7 +60,7 @@ import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import type { CanvasImageRef, CanvasModelOption, CanvasVideoRef, CreationTask, ImageVisibility, ManagedTextAsset, ManagedTextAssetListScope, TeamSummary } from "@/lib/api";
+import type { CanvasImageRef, CanvasModelOption, CanvasVideoRef, CreationTask, ManagedTextAsset, ManagedTextAssetListScope, TeamSummary } from "@/lib/api";
 import { createManagedTextAsset, fetchManagedTextAssets, supportsImageOutputControls, supportsImageQuality } from "@/lib/api";
 import {
   buildTimestampedImageDownloadName,
@@ -77,6 +79,7 @@ import {
   type ImageAspectRatio,
   type ImageResolution,
 } from "@/lib/image-parameters";
+import { imageModelHasSettings } from "@/lib/image-model-settings";
 import { OFFICIAL_IMAGE_MODEL, normalizeProStudioState, type ProStudioState } from "@/lib/pro-studio";
 import type { ImageRatioPickerOption } from "@/lib/image-ratio-picker-options";
 import { cn } from "@/lib/utils";
@@ -3789,7 +3792,9 @@ function LlmNodeBody({
           </SelectTrigger>
           <SelectContent>
             {availableModels.map((model) => (
-              <SelectItem key={model.id} value={model.id}>{model.name || model.id}</SelectItem>
+              <SelectItem key={model.id} value={model.id} textValue={model.name || model.id}>
+                <ModelProviderOptionLabel model={model.id} label={model.name || model.id} />
+              </SelectItem>
             ))}
           </SelectContent>
         </Select>
@@ -4235,7 +4240,6 @@ function GeneratorNodeBody({
         onChange={(next) => onUpdateData({
           professional_mode: next.enabled,
           pro_studio_state: next,
-          model: next.enabled ? OFFICIAL_IMAGE_MODEL : item.data?.model || "auto",
           size: next.enabled ? next.settings.size : item.data?.size,
           image_resolution: next.enabled ? next.settings.resolution : item.data?.image_resolution,
           quality: next.enabled ? next.settings.quality : item.data?.quality,
@@ -4249,27 +4253,35 @@ function GeneratorNodeBody({
         labelClassName={cn("text-[11px] font-bold", canvasSubtleTextClass)}
         compact
       />
-      <div className="grid grid-cols-[76px_1fr] gap-2">
-        <Select value="api" disabled>
-          <SelectTrigger className={canvasSelectClass}>
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="api">生成</SelectItem>
-          </SelectContent>
-        </Select>
+      <div className="flex min-w-0 gap-2">
         <Select value={activeImageModel} onValueChange={(model) => onUpdateData({ model })} disabled={proStudioEnabled}>
-          <SelectTrigger className={canvasSelectClass}>
+          <SelectTrigger className={cn(canvasSelectClass, "min-w-0 flex-1")}>
             <SelectValue placeholder="模型" />
           </SelectTrigger>
           <SelectContent>
             {proStudioEnabled
-              ? <SelectItem value={OFFICIAL_IMAGE_MODEL}>{OFFICIAL_IMAGE_MODEL}</SelectItem>
+              ? (
+                  <SelectItem value={OFFICIAL_IMAGE_MODEL} textValue={OFFICIAL_IMAGE_MODEL}>
+                    <ModelProviderOptionLabel model={OFFICIAL_IMAGE_MODEL} label={OFFICIAL_IMAGE_MODEL} />
+                  </SelectItem>
+                )
               : models.map((model) => (
-                  <SelectItem key={model.id} value={model.id}>{model.name || model.id}</SelectItem>
+                  <SelectItem key={model.id} value={model.id} textValue={model.name || model.id}>
+                    <ModelProviderOptionLabel model={model.id} label={model.name || model.id} />
+                  </SelectItem>
                 ))}
           </SelectContent>
         </Select>
+        {!proStudioEnabled && imageModelHasSettings(activeImageModel) ? (
+          <ImageModelSettingsButton
+            model={activeImageModel}
+            value={item.data?.image_model_settings}
+            onChange={(settings) => onUpdateData({ image_model_settings: settings })}
+            className={cn("h-9 shrink-0 rounded-xl border px-2 text-xs", canvasFieldClass)}
+            contentClassName="z-[80]"
+            buttonLabel="参数"
+          />
+        ) : null}
       </div>
       {!proStudioEnabled ? <div className="grid grid-cols-2 gap-2">
         <Select
@@ -4558,7 +4570,9 @@ function VideoGeneratorNodeBody({
           </SelectTrigger>
           <SelectContent>
             {models.map((model) => (
-              <SelectItem key={model.id} value={model.id}>{model.name || model.id}</SelectItem>
+              <SelectItem key={model.id} value={model.id} textValue={model.name || model.id}>
+                <ModelProviderOptionLabel model={model.id} label={model.name || model.id} />
+              </SelectItem>
             ))}
           </SelectContent>
         </Select>
@@ -4633,15 +4647,9 @@ function VideoGeneratorNodeBody({
         >
           音频
         </Button>
-        <Select value={String(item.data?.visibility || "private")} onValueChange={(visibility) => onUpdateData({ visibility: visibility as ImageVisibility })}>
-          <SelectTrigger className={canvasSelectClass}>
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="private">私有</SelectItem>
-            <SelectItem value="public">公开</SelectItem>
-          </SelectContent>
-        </Select>
+        <div className={cn(canvasSelectClass, "inline-flex items-center justify-center text-xs font-bold")}>
+          私有
+        </div>
       </div>
 
       {outputVideos.length > 0 ? <CanvasVideoStrip videos={outputVideos} limit={1} /> : null}
