@@ -578,7 +578,7 @@ func TestImageServiceScopesImagesByOwner(t *testing.T) {
 	}
 }
 
-func TestImageServicePublicVisibility(t *testing.T) {
+func TestImageServicePublicVisibilityDisabled(t *testing.T) {
 	root := t.TempDir()
 	config := testImageConfig{root: root}
 	aliceRel := "2026/04/29/alice.png"
@@ -597,24 +597,27 @@ func TestImageServicePublicVisibility(t *testing.T) {
 	service.RecordGeneratedImages([]string{aliceRel}, "linuxdo:123", "alice", ImageVisibilityPublic)
 	service.RecordGeneratedImages([]string{bobRel}, "linuxdo:456", "bob", ImageVisibilityPrivate)
 
-	public := service.ListImages("http://127.0.0.1:8000", "", "", ImageAccessScope{Public: true})
-	publicItems := public["items"].([]map[string]any)
-	if len(publicItems) != 1 || publicItems[0]["path"] != aliceRel {
-		t.Fatalf("public ListImages() = %#v", public)
-	}
-	if publicItems[0]["visibility"] != ImageVisibilityPublic || publicItems[0]["owner_name"] != "alice" || publicItems[0]["published_at"] == "" {
-		t.Fatalf("public metadata = %#v", publicItems[0])
+	publicList := service.ListImages("http://127.0.0.1:8000", "", "", ImageAccessScope{Public: true})
+	if publicItems := publicList["items"].([]map[string]any); len(publicItems) != 0 {
+		t.Fatalf("legacy public list scope should stay empty: %#v", publicList)
 	}
 
 	if _, err := service.UpdateImageVisibility(aliceRel, ImageVisibilityPrivate, ImageAccessScope{OwnerID: "linuxdo:456"}); err == nil {
 		t.Fatal("UpdateImageVisibility(other owner) error = nil")
 	}
+	if _, err := service.UpdateImageVisibility(aliceRel, ImageVisibilityPublic, ImageAccessScope{OwnerID: "linuxdo:123"}); err == nil {
+		t.Fatal("UpdateImageVisibility(public) error = nil")
+	}
 	if _, err := service.UpdateImageVisibility("http://127.0.0.1:8000/images/"+aliceRel, ImageVisibilityPrivate, ImageAccessScope{OwnerID: "linuxdo:123"}); err != nil {
 		t.Fatalf("UpdateImageVisibility(owner private) error = %v", err)
 	}
-	public = service.ListImages("http://127.0.0.1:8000", "", "", ImageAccessScope{Public: true})
-	if items := public["items"].([]map[string]any); len(items) != 0 {
-		t.Fatalf("private image should leave public gallery: %#v", public)
+	if _, err := service.ImageDetail("http://127.0.0.1:8000", bobRel, ImageAccessScope{Public: true}); err == nil {
+		t.Fatal("public scope ImageDetail() error = nil")
+	}
+	ownerList := service.ListImages("http://127.0.0.1:8000", "", "", ImageAccessScope{OwnerID: "linuxdo:123"})
+	ownerItems := ownerList["items"].([]map[string]any)
+	if len(ownerItems) != 1 || ownerItems[0]["path"] != aliceRel {
+		t.Fatalf("owner scoped images = %#v", ownerList)
 	}
 }
 
@@ -691,7 +694,7 @@ func TestImageServiceListImagesReturnsGenerationReuseMetadata(t *testing.T) {
 		ShareReferences:   true,
 	})
 
-	list := service.ListImages("http://127.0.0.1:8000", "", "", ImageAccessScope{Public: true})
+	list := service.ListImages("http://127.0.0.1:8000", "", "", ImageAccessScope{OwnerID: "linuxdo:123"})
 	items := list["items"].([]map[string]any)
 	if len(items) != 1 {
 		t.Fatalf("ListImages() = %#v", list)
@@ -700,7 +703,10 @@ func TestImageServiceListImagesReturnsGenerationReuseMetadata(t *testing.T) {
 	if item["prompt"] != nil || item["reference_image_urls"] != nil || item["model"] != nil {
 		t.Fatalf("list item exposed reusable metadata = %#v", item)
 	}
-	item, err := service.ImageDetail("http://127.0.0.1:8000", rel, ImageAccessScope{Public: true})
+	if _, err := service.ImageDetail("http://127.0.0.1:8000", rel, ImageAccessScope{Public: true}); err == nil {
+		t.Fatal("public scope ImageDetail() error = nil")
+	}
+	item, err := service.ImageDetail("http://127.0.0.1:8000", rel, ImageAccessScope{OwnerID: "linuxdo:123"})
 	if err != nil {
 		t.Fatalf("ImageDetail() error = %v", err)
 	}
@@ -793,12 +799,15 @@ func TestImageServiceImageDetailReturnsProStudioMetadata(t *testing.T) {
 		SharePromptParams: true,
 	})
 
-	list := service.ListImages("http://127.0.0.1:8000", "", "", ImageAccessScope{Public: true})
+	list := service.ListImages("http://127.0.0.1:8000", "", "", ImageAccessScope{OwnerID: "linuxdo:123"})
 	items := list["items"].([]map[string]any)
 	if len(items) != 1 || items[0]["professional_mode"] != nil || items[0]["official_settings"] != nil {
 		t.Fatalf("list item should stay lightweight = %#v", list)
 	}
-	detail, err := service.ImageDetail("http://127.0.0.1:8000", rel, ImageAccessScope{Public: true})
+	if _, err := service.ImageDetail("http://127.0.0.1:8000", rel, ImageAccessScope{Public: true}); err == nil {
+		t.Fatal("public scope ImageDetail() error = nil")
+	}
+	detail, err := service.ImageDetail("http://127.0.0.1:8000", rel, ImageAccessScope{OwnerID: "linuxdo:123"})
 	if err != nil {
 		t.Fatalf("ImageDetail() error = %v", err)
 	}
@@ -1001,7 +1010,7 @@ func TestImageServiceDeleteImagesDeletesObjectStorageImage(t *testing.T) {
 	}
 }
 
-func TestImageServicePublicListHidesUnsharedGenerationMetadata(t *testing.T) {
+func TestImageServicePublicListDisabledForGenerationMetadata(t *testing.T) {
 	root := t.TempDir()
 	config := testImageConfig{root: root}
 	rel := "2026/04/29/unshared.png"
@@ -1023,11 +1032,8 @@ func TestImageServicePublicListHidesUnsharedGenerationMetadata(t *testing.T) {
 
 	publicList := service.ListImages("http://127.0.0.1:8000", "", "", ImageAccessScope{Public: true})
 	publicItems := publicList["items"].([]map[string]any)
-	if len(publicItems) != 1 {
+	if len(publicItems) != 0 {
 		t.Fatalf("public ListImages() = %#v", publicList)
-	}
-	if publicItems[0]["prompt"] != nil || publicItems[0]["reference_image_urls"] != nil || publicItems[0]["url"] != nil || publicItems[0]["object_url"] != nil || publicItems[0]["object_key"] != nil || publicItems[0]["storage_backend"] != nil {
-		t.Fatalf("public item exposed unshared metadata = %#v", publicItems[0])
 	}
 
 	ownerList := service.ListImages("http://127.0.0.1:8000", "", "", ImageAccessScope{OwnerID: "linuxdo:123"})

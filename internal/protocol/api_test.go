@@ -1429,6 +1429,29 @@ func TestResponseImageGenerationRequestPreservesOfficialToolOptions(t *testing.T
 	}
 }
 
+func TestResponseImageGenerationRequestAcceptsMaskURLAlias(t *testing.T) {
+	maskURL := "data:image/png;base64," + base64.StdEncoding.EncodeToString([]byte("mask"))
+	body := map[string]any{
+		"model": "gpt-5.5",
+		"input": "生成封面",
+		"tools": []any{
+			map[string]any{
+				"type":     "image_generation",
+				"model":    "gpt-image-2",
+				"mask_url": maskURL,
+			},
+		},
+	}
+
+	request, _, err := ResponseImageGenerationRequest(body, "admin", nil)
+	if err != nil {
+		t.Fatalf("ResponseImageGenerationRequest() error = %v", err)
+	}
+	if request.InputImageMask != maskURL {
+		t.Fatalf("InputImageMask = %q, want mask_url alias", request.InputImageMask)
+	}
+}
+
 func TestCodexImageModelStillUsesSeparateCodexImageRoute(t *testing.T) {
 	request := ConversationRequest{Model: "codex-gpt-image-2"}
 	if !request.UsesResponsesImageRoute() {

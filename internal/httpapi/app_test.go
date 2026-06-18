@@ -855,6 +855,25 @@ func TestCreationTaskResponseImageRouteIsNotAnAdminTaskResource(t *testing.T) {
 	}
 }
 
+func TestCreationTaskRejectsPublicImageVisibility(t *testing.T) {
+	app := newTestApp(t)
+	defer app.Close()
+
+	_, rawKey, err := app.auth.CreateAPIKey(service.AuthRoleUser, "frontend", service.AuthOwner{})
+	if err != nil {
+		t.Fatalf("CreateAPIKey() error = %v", err)
+	}
+
+	body := `{"client_task_id":"public-visibility-disabled","prompt":"生成封面","model":"gpt-image-2","visibility":"public"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/creation-tasks/image-generations", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+rawKey)
+	res := httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("public visibility creation task status = %d body = %s", res.Code, res.Body.String())
+	}
+}
+
 func TestCreationTaskRejectsBlockedImagePrompt(t *testing.T) {
 	app := newTestApp(t)
 	defer app.Close()
@@ -943,7 +962,7 @@ func TestRecordGeneratedImagesForPayloadStoresReusableRequestMetadata(t *testing
 	app.recordGeneratedImagesForPayload(
 		service.Identity{ID: "admin", Role: service.AuthRoleAdmin, Name: "Admin"},
 		[]string{rel},
-		service.ImageVisibilityPublic,
+		service.ImageVisibilityPrivate,
 		map[string]any{
 			"prompt":             "复用这个提示词",
 			"model":              "gpt-image-2",
@@ -965,7 +984,7 @@ func TestRecordGeneratedImagesForPayloadStoresReusableRequestMetadata(t *testing
 		},
 	)
 
-	detail, err := app.images.ImageDetail("http://127.0.0.1:8000", rel, service.ImageAccessScope{Public: true})
+	detail, err := app.images.ImageDetail("http://127.0.0.1:8000", rel, service.ImageAccessScope{All: true})
 	if err != nil {
 		t.Fatalf("ImageDetail() error = %v", err)
 	}
@@ -1000,7 +1019,7 @@ func TestRecordGeneratedImagesForPayloadStoresReusableRequestMetadata(t *testing
 	app.recordGeneratedImagesForPayload(
 		service.Identity{ID: "admin", Role: service.AuthRoleAdmin, Name: "Admin"},
 		[]string{pngRel},
-		service.ImageVisibilityPublic,
+		service.ImageVisibilityPrivate,
 		map[string]any{
 			"prompt":                  "png compression ignored",
 			"output_format":           "png",
@@ -1008,7 +1027,7 @@ func TestRecordGeneratedImagesForPayloadStoresReusableRequestMetadata(t *testing
 			"share_prompt_parameters": true,
 		},
 	)
-	pngDetail, err := app.images.ImageDetail("http://127.0.0.1:8000", pngRel, service.ImageAccessScope{Public: true})
+	pngDetail, err := app.images.ImageDetail("http://127.0.0.1:8000", pngRel, service.ImageAccessScope{All: true})
 	if err != nil {
 		t.Fatalf("png ImageDetail() error = %v", err)
 	}
@@ -1023,8 +1042,15 @@ func TestRecordGeneratedImagesForPayloadStoresReusableRequestMetadata(t *testing
 	req := httptest.NewRequest(http.MethodGet, parsedReferenceURL.RequestURI(), nil)
 	res := httptest.NewRecorder()
 	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusUnauthorized {
+		t.Fatalf("anonymous reference status/body = %d %q, want 401", res.Code, res.Body.String())
+	}
+	req = httptest.NewRequest(http.MethodGet, parsedReferenceURL.RequestURI(), nil)
+	req.Header.Set("Authorization", adminAuthHeader(t, app))
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
 	if res.Code != http.StatusOK || res.Body.String() != "reference-bytes" {
-		t.Fatalf("public reference status/body = %d %q", res.Code, res.Body.String())
+		t.Fatalf("admin reference status/body = %d %q", res.Code, res.Body.String())
 	}
 	if got := res.Header().Get("Content-Type"); got != "image/png" {
 		t.Fatalf("reference Content-Type = %q, want image/png", got)
@@ -3851,7 +3877,7 @@ func TestCanvasModelsUseSub2APIGatewayForBoundUser(t *testing.T) {
 		t.Fatalf("canvas models json: %v", err)
 	}
 	items := util.AsMapSlice(payload["items"])
-	if len(items) != 8 {
+	if len(items) != 10 {
 		t.Fatalf("canvas models items = %#v", items)
 	}
 	ids := map[string]string{}
@@ -3869,6 +3895,8 @@ func TestCanvasModelsUseSub2APIGatewayForBoundUser(t *testing.T) {
 		ids[util.ImageModelGeminiProPreviewOfficial] != "image" ||
 		ids[util.ImageModelGeminiFlashPreview] != "image" ||
 		ids[util.ImageModelGeminiFlashPreviewOfficial] != "image" ||
+		ids[util.ImageModelMidjourney] != "image" ||
+		ids[util.ImageModelGrokImagine] != "image" ||
 		ids["sora-2"] != "video" {
 		t.Fatalf("canvas model kinds = %#v", ids)
 	}
@@ -3879,6 +3907,8 @@ func TestCanvasModelsUseSub2APIGatewayForBoundUser(t *testing.T) {
 		fmt.Sprint(capabilities[util.ImageModelGeminiProPreviewOfficial]) != "[image]" ||
 		fmt.Sprint(capabilities[util.ImageModelGeminiFlashPreview]) != "[image]" ||
 		fmt.Sprint(capabilities[util.ImageModelGeminiFlashPreviewOfficial]) != "[image]" ||
+		fmt.Sprint(capabilities[util.ImageModelMidjourney]) != "[image]" ||
+		fmt.Sprint(capabilities[util.ImageModelGrokImagine]) != "[image]" ||
 		fmt.Sprint(capabilities["sora-2"]) != "[video]" {
 		t.Fatalf("canvas model capabilities = %#v", capabilities)
 	}
@@ -3889,6 +3919,8 @@ func TestCanvasModelsUseSub2APIGatewayForBoundUser(t *testing.T) {
 		!enabled[util.ImageModelGeminiProPreviewOfficial] ||
 		!enabled[util.ImageModelGeminiFlashPreview] ||
 		!enabled[util.ImageModelGeminiFlashPreviewOfficial] ||
+		!enabled[util.ImageModelMidjourney] ||
+		!enabled[util.ImageModelGrokImagine] ||
 		enabled["sora-2"] {
 		t.Fatalf("canvas model enabled flags = %#v", enabled)
 	}
@@ -3954,7 +3986,7 @@ func TestCanvasModelsFallbackToSub2APIModelsForBoundUser(t *testing.T) {
 		t.Fatalf("canvas models json: %v", err)
 	}
 	items := util.AsMapSlice(payload["items"])
-	if len(items) != 7 {
+	if len(items) != 9 {
 		t.Fatalf("canvas models items = %#v", items)
 	}
 	ids := map[string]string{}
@@ -3967,7 +3999,9 @@ func TestCanvasModelsFallbackToSub2APIModelsForBoundUser(t *testing.T) {
 		ids[util.ImageModelGeminiProPreview] != "image" ||
 		ids[util.ImageModelGeminiProPreviewOfficial] != "image" ||
 		ids[util.ImageModelGeminiFlashPreview] != "image" ||
-		ids[util.ImageModelGeminiFlashPreviewOfficial] != "image" {
+		ids[util.ImageModelGeminiFlashPreviewOfficial] != "image" ||
+		ids[util.ImageModelMidjourney] != "image" ||
+		ids[util.ImageModelGrokImagine] != "image" {
 		t.Fatalf("canvas model kinds = %#v", ids)
 	}
 }
@@ -4668,23 +4702,15 @@ func TestImageManagementIsScopedByOwner(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer "+sessionKey)
 	res = httptest.NewRecorder()
 	app.Handler().ServeHTTP(res, req)
-	if res.Code != http.StatusOK {
+	if res.Code != http.StatusForbidden {
 		t.Fatalf("linuxdo publish image status = %d body = %s", res.Code, res.Body.String())
-	}
-	var visibilityBody map[string]any
-	if err := json.Unmarshal(res.Body.Bytes(), &visibilityBody); err != nil {
-		t.Fatalf("visibility json: %v", err)
-	}
-	updatedItem, _ := visibilityBody["item"].(map[string]any)
-	if updatedItem["visibility"] != service.ImageVisibilityPublic || updatedItem["owner_name"] != owner.Name {
-		t.Fatalf("publish image response = %#v", visibilityBody)
 	}
 
 	req = httptest.NewRequest(http.MethodPatch, "/api/images/visibility", strings.NewReader(`{"path":"`+bobRel+`","visibility":"public"}`))
 	req.Header.Set("Authorization", "Bearer "+sessionKey)
 	res = httptest.NewRecorder()
 	app.Handler().ServeHTTP(res, req)
-	if res.Code != http.StatusNotFound {
+	if res.Code != http.StatusForbidden {
 		t.Fatalf("linuxdo publish other image status = %d body = %s", res.Code, res.Body.String())
 	}
 
@@ -4692,54 +4718,24 @@ func TestImageManagementIsScopedByOwner(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer "+sessionKey)
 	res = httptest.NewRecorder()
 	app.Handler().ServeHTTP(res, req)
-	if res.Code != http.StatusOK {
-		t.Fatalf("public images status = %d body = %s", res.Code, res.Body.String())
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("disabled public image scope status = %d body = %s", res.Code, res.Body.String())
 	}
-	if err := json.Unmarshal(res.Body.Bytes(), &list); err != nil {
-		t.Fatalf("public images json: %v", err)
-	}
-	if items := logItems(list); len(items) != 1 || items[0]["path"] != aliceRel || items[0]["owner_name"] != owner.Name {
-		t.Fatalf("public scoped images = %#v", list)
-	}
-	if items := logItems(list); len(items) == 1 && (items[0]["url"] != nil || items[0]["object_url"] != nil || items[0]["prompt"] != nil || items[0]["reference_image_urls"] != nil) {
-		t.Fatalf("public list item should stay lightweight = %#v", items[0])
+
+	req = httptest.NewRequest(http.MethodPatch, "/api/images/visibility", strings.NewReader(`{"path":"`+aliceRel+`","visibility":"public"}`))
+	req.Header.Set("Authorization", adminAuthHeader(t, app))
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("admin publish image status = %d body = %s", res.Code, res.Body.String())
 	}
 
 	req = httptest.NewRequest(http.MethodPatch, "/api/images/visibility", strings.NewReader(`{"path":"`+aliceRel+`","visibility":"private"}`))
-	req.Header.Set("Authorization", "Bearer "+sessionKey)
-	res = httptest.NewRecorder()
-	app.Handler().ServeHTTP(res, req)
-	if res.Code != http.StatusOK {
-		t.Fatalf("linuxdo unpublish image status = %d body = %s", res.Code, res.Body.String())
-	}
-
-	req = httptest.NewRequest(http.MethodGet, "/api/images?scope=public", nil)
-	req.Header.Set("Authorization", "Bearer "+sessionKey)
-	res = httptest.NewRecorder()
-	app.Handler().ServeHTTP(res, req)
-	if res.Code != http.StatusOK {
-		t.Fatalf("public images after unpublish status = %d body = %s", res.Code, res.Body.String())
-	}
-	if err := json.Unmarshal(res.Body.Bytes(), &list); err != nil {
-		t.Fatalf("public images after unpublish json: %v", err)
-	}
-	if items := logItems(list); len(items) != 0 {
-		t.Fatalf("unpublished image should leave public gallery: %#v", list)
-	}
-
-	req = httptest.NewRequest(http.MethodGet, "/api/images?scope=public", nil)
 	req.Header.Set("Authorization", adminAuthHeader(t, app))
 	res = httptest.NewRecorder()
 	app.Handler().ServeHTTP(res, req)
 	if res.Code != http.StatusOK {
-		t.Fatalf("admin public gallery status = %d body = %s", res.Code, res.Body.String())
-	}
-	if err := json.Unmarshal(res.Body.Bytes(), &list); err != nil {
-		t.Fatalf("admin public gallery json: %v", err)
-	}
-	items = logItems(list)
-	if len(items) != 0 {
-		t.Fatalf("admin public gallery should only include public images, got %#v", list)
+		t.Fatalf("admin set private image status = %d body = %s", res.Code, res.Body.String())
 	}
 
 	req = httptest.NewRequest(http.MethodGet, "/api/images?scope=all", nil)
@@ -4765,7 +4761,7 @@ func TestImageManagementIsScopedByOwner(t *testing.T) {
 		seenPaths[path] = true
 	}
 	if !seenPaths[aliceRel] || !seenPaths[bobRel] || !seenPaths[legacyRel] {
-		t.Fatalf("admin public gallery paths = %#v", items)
+		t.Fatalf("admin all gallery paths = %#v", items)
 	}
 
 	req = httptest.NewRequest(http.MethodDelete, "/api/images", strings.NewReader(`{"paths":["`+bobRel+`","`+aliceRel+`"]}`))
@@ -4992,7 +4988,7 @@ func TestManagedImagesTeamLibraryAccessAndPermissions(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer "+managerKey)
 	res = httptest.NewRecorder()
 	app.Handler().ServeHTTP(res, req)
-	if res.Code != http.StatusOK {
+	if res.Code != http.StatusForbidden {
 		t.Fatalf("manager publish team image status = %d body = %s", res.Code, res.Body.String())
 	}
 
@@ -5442,8 +5438,7 @@ func TestTextAssetCollectionsEndpointTeamManagerWrite(t *testing.T) {
 	}
 }
 
-
-func TestManagedImageFilesRequireOwnerOrPublicAccess(t *testing.T) {
+func TestManagedImageFilesRequireOwnerOrTeamAccess(t *testing.T) {
 	app := newTestApp(t)
 	defer app.Close()
 
@@ -5559,31 +5554,28 @@ func TestManagedImageFilesRequireOwnerOrPublicAccess(t *testing.T) {
 		t.Fatalf("owner private image HEAD body length = %d, want 0", res.Body.Len())
 	}
 
-	if _, err := app.images.UpdateImageVisibility(rel, service.ImageVisibilityPublic, service.ImageAccessScope{OwnerID: owner.ID}); err != nil {
-		t.Fatalf("publish image: %v", err)
-	}
 	req = httptest.NewRequest(http.MethodGet, "/images/"+rel, nil)
 	res = httptest.NewRecorder()
 	app.Handler().ServeHTTP(res, req)
-	if res.Code != http.StatusOK {
-		t.Fatalf("anonymous public image status = %d body = %q", res.Code, res.Body.String())
+	if res.Code != http.StatusUnauthorized {
+		t.Fatalf("anonymous image status after disabled public library = %d body = %q, want 401", res.Code, res.Body.String())
 	}
 
 	req = httptest.NewRequest(http.MethodGet, privateReferencePath, nil)
 	res = httptest.NewRecorder()
 	app.Handler().ServeHTTP(res, req)
 	if res.Code != http.StatusUnauthorized {
-		t.Fatalf("anonymous unshared public reference status = %d body = %q, want 401", res.Code, res.Body.String())
+		t.Fatalf("anonymous reference status after disabled public library = %d body = %q, want 401", res.Code, res.Body.String())
 	}
 
-	if _, err := app.images.UpdateImageVisibility(rel, service.ImageVisibilityPublic, service.ImageAccessScope{OwnerID: owner.ID}, service.ImageVisibilityUpdateOptions{SharePromptParams: true, ShareReferences: true}); err != nil {
-		t.Fatalf("publish reference metadata: %v", err)
+	if _, err := app.images.UpdateImageVisibility(rel, service.ImageVisibilityPublic, service.ImageAccessScope{OwnerID: owner.ID}, service.ImageVisibilityUpdateOptions{SharePromptParams: true, ShareReferences: true}); err == nil {
+		t.Fatal("UpdateImageVisibility(public) error = nil")
 	}
 	req = httptest.NewRequest(http.MethodGet, privateReferencePath, nil)
 	res = httptest.NewRecorder()
 	app.Handler().ServeHTTP(res, req)
-	if res.Code != http.StatusOK || res.Body.String() != "private-reference" {
-		t.Fatalf("anonymous shared public reference status/body = %d %q", res.Code, res.Body.String())
+	if res.Code != http.StatusUnauthorized {
+		t.Fatalf("anonymous reference after rejected public visibility status/body = %d %q, want 401", res.Code, res.Body.String())
 	}
 }
 
@@ -5808,7 +5800,7 @@ func TestManagedImageDetailEndpointReturnsReusableMetadata(t *testing.T) {
 	}
 }
 
-func TestManagedImageThumbnailsRequireOwnerOrPublicAccess(t *testing.T) {
+func TestManagedImageThumbnailsRequireOwnerOrTeamAccess(t *testing.T) {
 	app := newTestApp(t)
 	defer app.Close()
 
@@ -5869,17 +5861,11 @@ func TestManagedImageThumbnailsRequireOwnerOrPublicAccess(t *testing.T) {
 			t.Fatalf("owner private asset cookie %s status = %d body = %q", assetPath, res.Code, res.Body.String())
 		}
 
-		if _, err := app.images.UpdateImageVisibility(rel, service.ImageVisibilityPublic, service.ImageAccessScope{OwnerID: owner.ID}); err != nil {
-			t.Fatalf("publish image: %v", err)
-		}
 		req = httptest.NewRequest(http.MethodGet, assetPath, nil)
 		res = httptest.NewRecorder()
 		app.Handler().ServeHTTP(res, req)
-		if res.Code != http.StatusOK {
-			t.Fatalf("anonymous public asset %s status = %d body = %q", assetPath, res.Code, res.Body.String())
-		}
-		if _, err := app.images.UpdateImageVisibility(rel, service.ImageVisibilityPrivate, service.ImageAccessScope{OwnerID: owner.ID}); err != nil {
-			t.Fatalf("unpublish image: %v", err)
+		if res.Code != http.StatusUnauthorized {
+			t.Fatalf("anonymous asset after disabled public library %s status = %d body = %q, want 401", assetPath, res.Code, res.Body.String())
 		}
 	}
 }
@@ -7844,20 +7830,38 @@ func TestLuoyeIndependentCanvasModelsUseDefaultGroups(t *testing.T) {
 		if r.Header.Get("X-Sub2API-Studio-User-ID") != "42" {
 			t.Fatalf("gateway user header = %q", r.Header.Get("X-Sub2API-Studio-User-ID"))
 		}
-		if r.URL.Path != "/model-catalog" {
-			t.Fatalf("gateway request = %s %s", r.Method, r.URL.Path)
-		}
 		groupID := r.Header.Get("X-Sub2API-Group-ID")
-		groupHeaders = append(groupHeaders, groupID)
-		switch groupID {
-		case "chat-group":
-			util.WriteJSON(w, http.StatusOK, map[string]any{"items": []map[string]any{{"id": "chat-group-model", "name": "Chat Group Model", "capabilities": []string{"chat"}, "enabled": true}}})
-		case "image-group":
-			util.WriteJSON(w, http.StatusOK, map[string]any{"items": []map[string]any{{"id": util.ImageModelGPT, "name": util.ImageModelGPT, "capabilities": []string{"image"}, "enabled": true}}})
-		case "video-group":
-			util.WriteJSON(w, http.StatusOK, map[string]any{"items": []map[string]any{{"id": "video-group-model", "name": "Video Group Model", "capabilities": []string{"video"}, "enabled": true}}})
+		switch r.URL.Path {
+		case "/model-catalog":
+			groupHeaders = append(groupHeaders, groupID)
+			switch groupID {
+			case "chat-group":
+				util.WriteJSON(w, http.StatusOK, map[string]any{"items": []map[string]any{
+					{"id": "chat-group-model", "name": "Chat Group Model", "capabilities": []string{"chat"}, "enabled": true},
+					{"id": util.ImageModelGPT, "name": util.ImageModelGPT, "capabilities": []string{"image"}, "enabled": true},
+					{"id": "video-group-model", "name": "Video Group Model", "capabilities": []string{"video"}, "enabled": true},
+				}})
+			case "image-group":
+				util.WriteJSON(w, http.StatusOK, map[string]any{"items": []map[string]any{
+					{"id": "chat-group-model", "name": "Chat Group Model", "capabilities": []string{"chat"}, "enabled": true},
+					{"id": "glm-4.7", "name": "glm-4.7", "capabilities": []string{"image"}, "enabled": true},
+					{"id": "gpt-4.1", "name": "gpt-4.1", "capabilities": []string{"image"}, "enabled": true},
+					{"id": util.ImageModelGPT, "name": util.ImageModelGPT, "capabilities": []string{"image"}, "enabled": true},
+					{"id": "video-group-model", "name": "Video Group Model", "capabilities": []string{"video"}, "enabled": true},
+				}})
+			case "video-group":
+				util.WriteJSON(w, http.StatusOK, map[string]any{"items": []map[string]any{
+					{"id": "chat-group-model", "name": "Chat Group Model", "capabilities": []string{"chat"}, "enabled": true},
+					{"id": util.ImageModelGPT, "name": util.ImageModelGPT, "capabilities": []string{"image"}, "enabled": true},
+					{"id": "video-group-model", "name": "Video Group Model", "capabilities": []string{"video"}, "enabled": true},
+				}})
+			default:
+				t.Fatalf("unexpected group header %q", groupID)
+			}
+		case "/models":
+			util.WriteJSON(w, http.StatusOK, map[string]any{"data": []map[string]any{}})
 		default:
-			t.Fatalf("unexpected group header %q", groupID)
+			t.Fatalf("gateway request = %s %s", r.Method, r.URL.Path)
 		}
 	}))
 	defer gateway.Close()
@@ -7890,19 +7894,159 @@ func TestLuoyeIndependentCanvasModelsUseDefaultGroups(t *testing.T) {
 		t.Fatalf("canvas models json: %v", err)
 	}
 	ids := map[string]bool{}
+	modelModes := map[string]map[string]bool{}
+	groupModes := map[string][]string{}
 	for _, item := range util.AsMapSlice(body["items"]) {
-		ids[util.Clean(item["id"])] = true
+		id := util.Clean(item["id"])
+		ids[id] = true
+		modes := util.AsStringSlice(item["group_modes"])
+		groupModes[id] = modes
+		if modelModes[id] == nil {
+			modelModes[id] = map[string]bool{}
+		}
+		for _, mode := range modes {
+			modelModes[id][mode] = true
+		}
 	}
 	for _, id := range []string{"chat-group-model", util.ImageModelGPT, util.ImageModelGPTOfficial, "video-group-model"} {
 		if !ids[id] {
 			t.Fatalf("model %q missing from %#v", id, body["items"])
 		}
 	}
+	if !reflect.DeepEqual(groupModes["chat-group-model"], []string{"chat"}) ||
+		!reflect.DeepEqual(groupModes[util.ImageModelGPT], []string{"image"}) ||
+		!reflect.DeepEqual(groupModes["video-group-model"], []string{"video"}) {
+		t.Fatalf("group modes = %#v items=%#v", groupModes, body["items"])
+	}
+	if modelModes["chat-group-model"]["image"] || modelModes["chat-group-model"]["video"] ||
+		modelModes[util.ImageModelGPT]["chat"] || modelModes[util.ImageModelGPT]["video"] ||
+		modelModes["video-group-model"]["chat"] || modelModes["video-group-model"]["image"] {
+		t.Fatalf("model leaked across groups = %#v items=%#v", modelModes, body["items"])
+	}
 	if ids[util.ImageModelGPT55] || ids[util.ImageModelAuto] {
 		t.Fatalf("independent model catalog leaked local chat defaults: %#v", body["items"])
 	}
+	if ids["glm-4.7"] || ids["gpt-4.1"] {
+		t.Fatalf("text-only models leaked into image catalog: %#v", body["items"])
+	}
 	if !reflect.DeepEqual(groupHeaders, []string{"chat-group", "image-group", "video-group"}) {
 		t.Fatalf("group headers = %#v", groupHeaders)
+	}
+}
+
+func TestLuoyeIndependentCanvasModelsSupplementCatalogWithGroupModels(t *testing.T) {
+	requests := []string{}
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Sub2API-Studio-Secret") != "secret" {
+			t.Fatalf("gateway secret header = %q", r.Header.Get("X-Sub2API-Studio-Secret"))
+		}
+		if r.Header.Get("X-Sub2API-Studio-User-ID") != "42" {
+			t.Fatalf("gateway user header = %q", r.Header.Get("X-Sub2API-Studio-User-ID"))
+		}
+		groupID := r.Header.Get("X-Sub2API-Group-ID")
+		requests = append(requests, groupID+":"+r.URL.Path)
+		switch r.URL.Path {
+		case "/model-catalog":
+			switch groupID {
+			case "chat-group":
+				util.WriteJSON(w, http.StatusOK, map[string]any{"items": []map[string]any{
+					{"id": "gpt-5.4", "name": "gpt-5.4", "capabilities": []string{"chat"}, "enabled": true},
+					{"id": "claude-opus-4-6", "name": "claude-opus-4-6", "capabilities": []string{"chat", "image"}, "enabled": true},
+				}})
+			case "image-group":
+				util.WriteJSON(w, http.StatusOK, map[string]any{"items": []map[string]any{
+					{"id": util.ImageModelGPT, "name": util.ImageModelGPT, "capabilities": []string{"image"}, "enabled": true},
+					{"id": "claude-opus-4-6", "name": "claude-opus-4-6", "capabilities": []string{"chat", "image"}, "enabled": true},
+				}})
+			case "video-group":
+				util.WriteJSON(w, http.StatusOK, map[string]any{"items": []map[string]any{}})
+			default:
+				t.Fatalf("unexpected catalog group header %q", groupID)
+			}
+		case "/models":
+			switch groupID {
+			case "chat-group":
+				util.WriteJSON(w, http.StatusOK, map[string]any{"data": []map[string]any{
+					{"id": "claude-sonnet-4-5", "name": "Claude Sonnet 4.5"},
+					{"id": "gpt-image-2"},
+				}})
+			case "image-group":
+				util.WriteJSON(w, http.StatusOK, map[string]any{"data": []map[string]any{
+					{"id": "claude-sonnet-4-5"},
+					{"id": "gpt-image-2"},
+				}})
+			case "video-group":
+				util.WriteJSON(w, http.StatusOK, map[string]any{"data": []map[string]any{}})
+			default:
+				t.Fatalf("unexpected models group header %q", groupID)
+			}
+		default:
+			t.Fatalf("gateway request = %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer gateway.Close()
+
+	bridge := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/internal/redeem":
+			util.WriteJSON(w, http.StatusOK, map[string]any{"code": 0, "data": map[string]any{"user_id": 42, "email": "luoye@example.com", "username": "Luoye User", "default_chat_group": "chat-group", "default_image_group": "image-group", "default_video_group": "video-group", "gateway_base_url": gateway.URL}})
+		case "/internal/user-summary":
+			util.WriteJSON(w, http.StatusOK, map[string]any{"code": 0, "data": map[string]any{"user_id": 42, "balance": 99}})
+		default:
+			t.Fatalf("bridge request = %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer bridge.Close()
+
+	app := newIndependentTestApp(t, bridge.URL+"/internal/redeem", "secret", gateway.URL)
+	defer app.Close()
+	sessionKey := launchIndependentSub2APITestSession(t, app, "launch-token")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/canvas/models", nil)
+	req.Header.Set("Authorization", "Bearer "+sessionKey)
+	res := httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("canvas models status = %d body = %s", res.Code, res.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &body); err != nil {
+		t.Fatalf("canvas models json: %v", err)
+	}
+	kinds := map[string]string{}
+	groupModes := map[string][]string{}
+	for _, item := range util.AsMapSlice(body["items"]) {
+		id := util.Clean(item["id"])
+		kinds[id] = util.Clean(item["kind"])
+		groupModes[id] = util.AsStringSlice(item["group_modes"])
+	}
+	if kinds["claude-sonnet-4-5"] != "text" || !reflect.DeepEqual(groupModes["claude-sonnet-4-5"], []string{"chat"}) {
+		t.Fatalf("claude model missing or misclassified: kinds=%#v group_modes=%#v items=%#v", kinds, groupModes, body["items"])
+	}
+	if kinds["claude-opus-4-6"] != "text" || !reflect.DeepEqual(groupModes["claude-opus-4-6"], []string{"chat"}) {
+		t.Fatalf("mixed-capability claude model missing or misclassified: kinds=%#v group_modes=%#v items=%#v", kinds, groupModes, body["items"])
+	}
+	if kinds[util.ImageModelGPT] != "image" || !reflect.DeepEqual(groupModes[util.ImageModelGPT], []string{"image"}) {
+		t.Fatalf("image model missing or misclassified: kinds=%#v group_modes=%#v items=%#v", kinds, groupModes, body["items"])
+	}
+	for _, item := range util.AsMapSlice(body["items"]) {
+		if util.Clean(item["id"]) == "gpt-image-2" && reflect.DeepEqual(util.AsStringSlice(item["group_modes"]), []string{"chat"}) {
+			t.Fatalf("image model leaked into chat group: %#v", body["items"])
+		}
+		if util.Clean(item["id"]) == "claude-opus-4-6" && reflect.DeepEqual(util.AsStringSlice(item["group_modes"]), []string{"image"}) {
+			t.Fatalf("mixed-capability text model leaked into image group: %#v", body["items"])
+		}
+	}
+	expectedRequests := []string{
+		"chat-group:/model-catalog",
+		"chat-group:/models",
+		"image-group:/model-catalog",
+		"image-group:/models",
+		"video-group:/model-catalog",
+		"video-group:/models",
+	}
+	if !reflect.DeepEqual(requests, expectedRequests) {
+		t.Fatalf("gateway requests = %#v", requests)
 	}
 }
 
@@ -7920,6 +8064,11 @@ func TestLuoyeIndependentChatAutoUsesDefaultGroupCatalogModel(t *testing.T) {
 				t.Fatalf("model catalog group header = %q", r.Header.Get("X-Sub2API-Group-ID"))
 			}
 			util.WriteJSON(w, http.StatusOK, map[string]any{"items": []map[string]any{{"id": "chat-group-model", "name": "Chat Group Model", "capabilities": []string{"chat"}, "enabled": true}}})
+		case "/models":
+			if r.Header.Get("X-Sub2API-Group-ID") != "chat-group" {
+				t.Fatalf("models group header = %q", r.Header.Get("X-Sub2API-Group-ID"))
+			}
+			util.WriteJSON(w, http.StatusOK, map[string]any{"data": []map[string]any{}})
 		case "/chat/completions":
 			chatGroupHeader = r.Header.Get("X-Sub2API-Group-ID")
 			if err := json.NewDecoder(r.Body).Decode(&chatPayload); err != nil {
@@ -7998,6 +8147,8 @@ func TestLuoyeIndependentSocialCopyIsBillable(t *testing.T) {
 		switch r.URL.Path {
 		case "/model-catalog":
 			util.WriteJSON(w, http.StatusOK, map[string]any{"items": []map[string]any{{"id": "chat-group-model", "name": "Chat Group Model", "capabilities": []string{"chat"}, "enabled": true}}})
+		case "/models":
+			util.WriteJSON(w, http.StatusOK, map[string]any{"data": []map[string]any{}})
 		case "/chat/completions":
 			util.WriteJSON(w, http.StatusOK, map[string]any{"created": 123, "choices": []map[string]any{{"message": map[string]any{"content": "copy ok"}}}})
 		default:
@@ -8133,6 +8284,8 @@ func TestLuoyeIndependentCanvasPromptNodeIsBillable(t *testing.T) {
 		switch r.URL.Path {
 		case "/model-catalog":
 			util.WriteJSON(w, http.StatusOK, map[string]any{"items": []map[string]any{{"id": "chat-group-model", "name": "Chat Group Model", "capabilities": []string{"chat"}, "enabled": true}}})
+		case "/models":
+			util.WriteJSON(w, http.StatusOK, map[string]any{"data": []map[string]any{}})
 		case "/chat/completions":
 			util.WriteJSON(w, http.StatusOK, map[string]any{"created": 123, "choices": []map[string]any{{"message": map[string]any{"content": "optimized prompt"}}}})
 		default:

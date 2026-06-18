@@ -762,7 +762,7 @@ func TestImageTaskServiceSubmitsChatTasks(t *testing.T) {
 	}
 	chatHandler := func(ctx context.Context, identity Identity, payload map[string]any) (map[string]any, error) {
 		handlerCalls <- payload
-		return map[string]any{"output_type": "text", "data": []map[string]any{{"text_response": "chat response"}}}, nil
+		return map[string]any{"output_type": "text", "data": []map[string]any{{"text_response": "chat response"}}, "usage": map[string]any{"input_tokens": 4, "output_tokens": 6, "total_tokens": 10}}, nil
 	}
 	svc := newTestImageTaskService(t, imageHandler, imageHandler, chatHandler, func() int { return 30 })
 	identity := Identity{ID: "alice", Name: "Alice", Role: "user"}
@@ -783,6 +783,10 @@ func TestImageTaskServiceSubmitsChatTasks(t *testing.T) {
 	data := item["data"].([]map[string]any)
 	if len(data) != 1 || data[0]["text_response"] != "chat response" {
 		t.Fatalf("text response data = %#v", data)
+	}
+	usage := util.StringMap(item["usage"])
+	if util.ToInt(usage["total_tokens"], 0) != 10 {
+		t.Fatalf("usage = %#v, want total_tokens 10 in %#v", usage, item)
 	}
 	select {
 	case payload := <-handlerCalls:

@@ -165,11 +165,15 @@ func ImageOutputOptionsFromPayload(payload map[string]any) ImageOutputOptions {
 }
 
 func ImageToolOptionsFromPayload(payload map[string]any) ImageToolOptions {
+	inputImageMask := responseImageMask(payload["input_image_mask"])
+	if inputImageMask == "" {
+		inputImageMask = responseImageMask(payload["mask_url"])
+	}
 	options := ImageToolOptions{
 		Background:     util.Clean(payload["background"]),
 		Moderation:     util.Clean(payload["moderation"]),
 		Style:          util.Clean(payload["style"]),
-		InputImageMask: responseImageMask(payload["input_image_mask"]),
+		InputImageMask: inputImageMask,
 	}
 	if partialImages, ok := normalizedPositiveInt(payload["partial_images"]); ok {
 		options.PartialImages = &partialImages
