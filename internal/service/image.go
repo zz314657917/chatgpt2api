@@ -4102,6 +4102,13 @@ func normalizeImageCollectionName(value string) string {
 }
 
 func uploadedImageContentType(data []byte, value string) string {
+	detected := strings.TrimSpace(strings.ToLower(strings.Split(http.DetectContentType(data), ";")[0]))
+	if detected == "image/jpg" {
+		detected = "image/jpeg"
+	}
+	if strings.HasPrefix(detected, "image/") {
+		return detected
+	}
 	switch strings.TrimSpace(strings.ToLower(value)) {
 	case "image/png", "image/jpeg", "image/jpg", "image/gif", "image/webp":
 		if strings.TrimSpace(strings.ToLower(value)) == "image/jpg" {

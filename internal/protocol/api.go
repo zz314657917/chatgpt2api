@@ -1123,7 +1123,8 @@ func ExtractImagesFromMessageContent(content any) []UploadedImage {
 			mime := strings.TrimPrefix(strings.Split(header, ";")[0], "data:")
 			bytes, err := base64.StdEncoding.DecodeString(data)
 			if err == nil {
-				images = append(images, UploadedImage{Data: bytes, Filename: "image.png", ContentType: firstNonEmpty(mime, "image/png")})
+				contentType := normalizedImageContentType(bytes, mime)
+				images = append(images, UploadedImage{Data: bytes, Filename: "image" + imageExtensionForContentType(contentType), ContentType: contentType})
 			}
 		}
 	}
@@ -1139,10 +1140,24 @@ func ExtractImagesFromText(text string) []UploadedImage {
 		}
 		bytes, err := base64.StdEncoding.DecodeString(match[2])
 		if err == nil {
-			images = append(images, UploadedImage{Data: bytes, Filename: "image.png", ContentType: firstNonEmpty(match[1], "image/png")})
+			contentType := normalizedImageContentType(bytes, match[1])
+			images = append(images, UploadedImage{Data: bytes, Filename: "image" + imageExtensionForContentType(contentType), ContentType: contentType})
 		}
 	}
 	return images
+}
+
+func imageExtensionForContentType(contentType string) string {
+	switch strings.ToLower(strings.TrimSpace(contentType)) {
+	case "image/jpeg", "image/jpg":
+		return ".jpg"
+	case "image/gif":
+		return ".gif"
+	case "image/webp":
+		return ".webp"
+	default:
+		return ".png"
+	}
 }
 
 func (e *Engine) HandleResponses(ctx context.Context, body map[string]any) (map[string]any, *StreamResult, error) {
@@ -1503,7 +1518,8 @@ func ExtractResponseImages(input any) []UploadedImage {
 		case "image_generation_call":
 			if result := util.Clean(item["result"]); result != "" {
 				if data, err := base64.StdEncoding.DecodeString(result); err == nil {
-					images = append(images, UploadedImage{Data: data, Filename: "generated.png", ContentType: "image/png"})
+					contentType := normalizedImageContentType(data, "")
+					images = append(images, UploadedImage{Data: data, Filename: "generated" + imageExtensionForContentType(contentType), ContentType: contentType})
 				}
 			}
 		}

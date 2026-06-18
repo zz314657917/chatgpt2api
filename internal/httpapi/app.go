@@ -2579,6 +2579,13 @@ func readLimitedImageURLBytes(reader io.Reader) ([]byte, error) {
 
 func uploadedImageContentTypeForJSON(data []byte, value string) string {
 	value = strings.ToLower(strings.TrimSpace(strings.Split(value, ";")[0]))
+	detected := strings.ToLower(strings.TrimSpace(strings.Split(http.DetectContentType(data), ";")[0]))
+	if detected == "image/jpg" {
+		detected = "image/jpeg"
+	}
+	if strings.HasPrefix(detected, "image/") {
+		return detected
+	}
 	switch value {
 	case "image/png", "image/jpeg", "image/jpg", "image/gif", "image/webp":
 		if value == "image/jpg" {
@@ -2698,9 +2705,10 @@ func readUpload(header *multipart.FileHeader) (protocol.UploadedImage, error) {
 	if contentType == "" {
 		contentType = "image/png"
 	}
+	contentType = uploadedImageContentTypeForJSON(data, contentType)
 	filename := header.Filename
 	if filename == "" {
-		filename = "image.png"
+		filename = "image" + extensionForContentType(contentType)
 	}
 	return protocol.UploadedImage{Data: data, Filename: filename, ContentType: contentType}, nil
 }

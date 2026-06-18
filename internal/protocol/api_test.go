@@ -115,6 +115,38 @@ func TestChatAndResponsesImageParsing(t *testing.T) {
 	}
 }
 
+func TestExtractImagesNormalizeMismatchedDataURLContentType(t *testing.T) {
+	pngURL := testPNGDataURL(t, 1, 1)
+	_, pngData, ok := strings.Cut(pngURL, ",")
+	if !ok {
+		t.Fatalf("test PNG data URL missing comma: %q", pngURL)
+	}
+	pngBytes, err := base64.StdEncoding.DecodeString(pngData)
+	if err != nil {
+		t.Fatalf("DecodeString(png) error = %v", err)
+	}
+	webpBytes, err := encodeImageBytes(pngBytes, ImageOutputOptions{Format: "webp"})
+	if err != nil {
+		t.Fatalf("encodeImageBytes(webp) error = %v", err)
+	}
+	mismatchedURL := "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(webpBytes)
+
+	images := ExtractImagesFromMessageContent([]any{
+		map[string]any{"type": "image_url", "image_url": map[string]any{"url": mismatchedURL}},
+	})
+	if len(images) != 1 {
+		t.Fatalf("ExtractImagesFromMessageContent() returned %d images", len(images))
+	}
+	if images[0].ContentType != "image/webp" || images[0].Filename != "image.webp" {
+		t.Fatalf("message image metadata = %#v, want image/webp image.webp", images[0])
+	}
+
+	responseImage := responsesInputImage(mismatchedURL)
+	if responseImage.ContentType != "image/webp" {
+		t.Fatalf("responsesInputImage content type = %q, want image/webp", responseImage.ContentType)
+	}
+}
+
 func TestImageRequestDefaultsToAutoModel(t *testing.T) {
 	body := map[string]any{
 		"messages": []any{
