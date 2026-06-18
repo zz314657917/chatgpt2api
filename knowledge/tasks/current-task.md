@@ -1,6 +1,6 @@
 # Current Task
 
-最后更新：2026-06-15 13:56 +08:00
+最后更新：2026-06-16 13:10 +08:00
 
 ## 背景
 
@@ -16,9 +16,10 @@ Sub2API 对应桥接提交为 `fe2f80be1 feat: add studio bridge integration`。
 - 多工作台已进入同一默认产品面：
   - `/image`、`/canvas`、`/image-manager`、`/social`、`/ecommerce-suite` 现在都在复用同一套登录态、素材输入、creation-task 输出和钱包扣费底座。
   - 当前续做不能再只按“图片页 + 生产联调”理解，而要把素材库、输出序列化、Output 动作栈和 team usage 一起看。
-- `ecommerce-suite` 与 text assets 已成为新的稳定入口：
+- `ecommerce-suite`、Pro Studio 与 text assets 已成为新的稳定入口：
   - 电商套图工作台不是独立系统，而是基于现有图片任务、素材能力和本地项目状态的前端工作台。
   - text assets 已成为电商工作台与创作结果编排的一部分，说明“创作底座”已经扩展到图片之外的文本资产组织。
+  - `/canvas` 与 `/ecommerce-suite` 现在都已有 production mode，说明普通工作台与生产交付工作台已经并入同一默认产品面。
 - 团队模式 v1 的后续验证重点继续前移到 team usage 收口：
   - 除了 `team_id`、`payer_user_id`、`actor_user_id`，现在还要确认团队页与新工作台默认按同一计费/展示语义工作。
 - UI 继续维持独立用户版语义：
@@ -56,6 +57,9 @@ Sub2API 对应桥接提交为 `fe2f80be1 feat: add studio bridge integration`。
 - 2026-06-15 `/image` 移动端输入框位置微调：底部 composer dock 下压，外层移动端底部 padding 归零，输入框自身保留 `safe-area + 4px`，减少底部空白但不贴住手势区。
 - 2026-06-15 `/canvas` 移动端底部控制继续极简化：底部不再常驻左侧三小按钮和右侧缩放胶囊，改为单个大号“画布工具”按钮；小地图、运行记录、适配画布、上传、添加节点、最近操作、清理空白节点和保存兜底统一放入底部工具抽屉。移动端缩放主要交给双指手势，桌面端缩放工具保持不变。
 - 2026-06-15 `/canvas` 桌面端顶部 More 菜单清理：桌面主工具栏已常驻展示上传、提示词、AI 提示词、循环、组、图片生成、视频、Output、帮助；More 菜单不再重复这些节点入口，仅保留最近操作和清理空白节点等辅助操作。
+- 2026-06-16 Pro Studio 生产模式已进入稳定默认面：`/canvas` 与 `/ecommerce-suite` 都支持 production mode，显示用途、等级、高级 official 设置和 `gpt-image-2-official` 锁模；电商生产模式支持商品主图、电商横幅、详情页竖图、场景图和 SKU 批量图。
+- 2026-06-16 电商生产交付闭环已进入稳定默认面：ZIP 打包下载、文案保存为 text asset、已完成图片归入项目素材集，说明生产模式不再只是参数面板，而是实际交付链路。
+- 2026-06-16 Gemini 图片模型兼容边界已更新：Gemini 图片模型切到 preview 路由，并支持 reference uploads；后续再看模型兼容问题时，应按新 preview/reference 语义排查。
 
 ## 下一步
 
@@ -68,9 +72,10 @@ Sub2API 对应桥接提交为 `fe2f80be1 feat: add studio bridge integration`。
 - 如继续核对团队使用记录，优先用真实团队账号提交一条对话和一条生图，验证团队表价格分别显示类似 `¥0.001` / `¥0.051`，Sub2API 使用记录同步存在对应 commit 记录。
 - 如继续开发，优先补生产联调脚本和 Playwright 最小闭环，而不是继续扩展新功能。
 - 如继续素材库验收，入口链路和 `/image` 素材库 smoke 已通过；下一步优先用有真实图片的登录态浏览器跑 `/image-manager` 新建 `ui` 素材集、批量加入/移出、团队 manager 与普通成员权限、公共图库只读，以及 `/canvas` 从素材集加入画布。
-- 如继续新工作台验收，优先补 `ecommerce-suite` 的最小浏览器闭环：进入工作台、读取示例/项目状态、触发结果进入现有资产/输出链路，并确认团队页 usage 语义没有与旧页面脱节。
+- 如继续新工作台验收，优先补 `ecommerce-suite` 与 Pro Studio 的最小浏览器闭环：进入工作台、切换 production mode、读取示例/项目状态、触发结果进入现有资产/输出链路，并确认团队页 usage 语义没有与旧页面脱节。
 - 如继续会话/余额同步，优先做真实浏览器人工切号测试：Sub2 账号 A -> 落叶 -> Sub2 切账号 B -> 回落叶，应跳 `/login` 后重新 launch，不能静默继续用账号 A。
 - 生产环境仍需人工确认真实支付回调、真实上游创作扣费、网络超时/DB 故障注入和迁移演练；本地验收不触碰真钱支付，也不消耗真实上游模型。
+- 如继续官方生图或 Gemini 兼容验收，优先补 `gpt-image-2-official` 真上游可用性、Gemini reference upload 和电商生产模式下批量任务的真实账号 E2E。
 
 ## 证据入口
 
@@ -182,3 +187,14 @@ Sub2API 对应桥接提交为 `fe2f80be1 feat: add studio bridge integration`。
   - `cd F:/java/chatgpt2api/web && npm.cmd run lint` 通过。
   - `cd F:/java/chatgpt2api/web && npm.cmd run build` 通过。
   - 本地容器已更新并健康：`chatgpt2api` 运行镜像 `chatgpt2api:codex-20260615-225700-more-menu-clean`，`chatgpt2api:local-patched` 指向同一镜像；`http://127.0.0.1:8081/health` 返回 `{"status":"ok","version":"local-canvas-more-menu-clean"}`。
+ - 2026-06-16 Pro Studio / 电商生产交付验证：
+   - `go test ./internal/service -run 'Test(ImageServiceImageDetailReturnsProStudioMetadata|ImageTaskServicePreservesProStudioMetadata|NormalizeProStudioRequest|ValidateProStudioRequest)' -count=1` 通过。
+   - `go test ./internal/httpapi -run 'TestCreationTaskProStudio' -count=1` 通过。
+   - `go test ./internal/service ./internal/httpapi -count=1` 通过。
+   - `cd F:/java/chatgpt2api/web && npm.cmd run lint` 通过。
+   - `cd F:/java/chatgpt2api/web && npm.cmd run build` 通过。
+   - `cd F:/java/chatgpt2api && go test ./...` 通过。
+   - Playwright smoke：`output/playwright/pro-studio-ecommerce-workbench-smoke.mjs`、`output/playwright/ecommerce-production-delivery-smoke.mjs` 通过。
+   - 容器检查：`http://127.0.0.1:8081/health` 返回 `status=ok`，版本 `local-20260616-ecommerce-production-delivery`；`/ecommerce-suite` 返回 200 且包含前端资源入口。
+   - 浏览器验收：`/canvas` 普通模式与生产模式均可打开；`/ecommerce-suite` 生产模式可切换；SKU `8/12` 张预览分别为 `4+4` / `4+4+4`。
+   - 截图证据：`output/playwright/pro-studio-canvas-production-mode.png`、`output/playwright/pro-studio-ecommerce-smoke.png`、`output/playwright/pro-studio-ecommerce-sku-batch-smoke.png`、`output/playwright/pro-studio-ecommerce-workbench-smoke.png`、`output/playwright/ecommerce-production-delivery-smoke.png`。

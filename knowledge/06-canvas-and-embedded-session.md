@@ -2,7 +2,7 @@
 title: Canvas And Embedded Session
 type: architecture
 repo: chatgpt2api
-last_verified: 2026-06-13
+last_verified: 2026-06-17
 ---
 
 # `/canvas`、素材库与嵌入会话恢复专题
@@ -11,7 +11,7 @@ last_verified: 2026-06-13
 
 - 继续做 `/canvas`、`/image`、素材库、Sub2API launch/redeem、独立用户版登录态桥接、生产回跳或团队共享额度联调。
 - 需要快速判断“这是不是纯前端交互问题”还是“同时牵涉任务链路/会话恢复/模型路由”的时候。
-- 需要判断 2026-06-12 之后新增的 asset library、`gpt-image-2` 任务结果序列化、`/canvas` 输出图动作栈或 `ecommerce-suite` 工作台，和现有图片链路是什么关系的时候。
+- 需要判断 2026-06-12 之后新增的 asset library、`gpt-image-2` 任务结果序列化、`/canvas` 输出图动作栈、`ecommerce-suite` 工作台，或 2026-06-16 之后的 Pro Studio / Gemini 生产边界，和现有图片链路是什么关系的时候。
 
 ## 一句话心智
 
@@ -27,6 +27,7 @@ last_verified: 2026-06-13
 - 6 月初新增的视频生成节点仍属于这套前端编排；它不是新后端，只是在现有能力上增加了“受绑定约束的视频工作流”。
 - 2026-06-12 的 `fix(canvas): stack output image actions` 说明 `/canvas` 输出图现在默认支持连续堆叠动作，而不是每次生成都覆盖成单一结果；后续排查“结果回填错乱”时，应先按动作栈语义理解。
 - 2026-06-12 的 `fix(image): serialize gpt-image-2 creation task outputs` 说明 `gpt-image-2` 结果序列化已经成为画布、素材库和 `/image` 共用的稳定后端边界，而不是某个页面的局部格式修复。
+- 2026-06-16 的生产模式推进说明：`/canvas` 也不再只是普通节点工作台；它已经和 Pro Studio official 能力、电商生产交付、ZIP/text asset/素材归档链路共用一套任务底座。
 
 ## embedded session 恢复为什么重要
 
@@ -80,10 +81,19 @@ last_verified: 2026-06-13
 - 当前更合理的理解是：`/image`、`/canvas`、`/image-manager`、`/social`、`/ecommerce-suite` 正在共享同一套“独立用户版登录态 + 资产输入 + creation-task 输出”的产品底座。
 - 因此后续如果某个工作台出现“素材能选但结果不能回填”或“登录态正常但下载/输出异常”，不要只在单页查；应把 creation-task 输出序列化、素材引用和会话恢复一起看。
 
+### 8. Pro Studio / Gemini 已进入 `/canvas` 默认验证面
+
+- `/canvas` 生产模式已经是稳定默认能力，而不是临时实验入口。
+- official 设置、`gpt-image-2-official` 锁模、SKU 批量预览、ZIP 交付和项目素材集归档，都建立在现有 creation-task / 输出序列化 / 素材库链路上。
+- Gemini 图片模型当前按 preview 路由并支持 reference uploads；后续如果画布或工作台出现 Gemini 兼容问题，优先按 preview/reference 语义排查。
+- 因此 `/canvas` 的最小验证不应再只覆盖节点拖拽和结果回填，还应确认生产模式和共享输出链路没有脱节。
+
 ## 常见误判
 
 - 不要把 `/canvas` 误判成 ComfyUI、Infinite-Canvas 代码直搬或新 GPU 调度系统。
 - 不要把 6 月 12 日新增的 `ecommerce-suite` 误判成独立业务后端；它目前仍是基于现有图片任务和本地历史的前端工作台。
+- 不要把 Pro Studio 生产模式误判成只影响 `ecommerce-suite` 的参数壳层；它已经影响 `/canvas`、official route、素材归档和交付闭环。
+- 不要把 Gemini 变更误判成模型文案调整；preview 路由与 reference upload 已经进入真实协议边界。
 - 不要把 embedded session 恢复误判成纯 cookie 小修。
 - 不要把独立用户版的余额/充值/团队空间问题误判成纯展示文案；它们和 launch/redeem、session、创作扣费是同一条产品链路。
 - 不要把“视频节点隐藏”误判成纯 UI 细节；它是受绑定状态约束的产品边界。
@@ -122,6 +132,7 @@ last_verified: 2026-06-13
 4. `git diff --check`
 5. 如本地预览可用，至少补一次 `/canvas` 浏览器回读，并确认视频节点显示/隐藏符合当前绑定状态
 6. 如改动触达 Output、素材库或结果回填，再补一次“素材加入画布 -> 生成/显示输出 -> Output 节点保留动作栈”的最小浏览器回读
+7. 如改动触达 production mode、official 设置或 Gemini reference，再补一次 `/canvas` 生产模式或相关工作台 smoke，确认 preview/reference 与素材归档链路未退化
 
 ### 改 launch / redeem / embedded session
 
@@ -168,3 +179,5 @@ last_verified: 2026-06-13
 - `/canvas` Output 默认按动作栈保留输出图，而不是用最新一次结果覆盖历史动作。
 - `gpt-image-2` creation-task 输出序列化已经进入稳定后端边界；后续如果图片结果、素材入库或画布回填异常，要同时检查协议层和任务序列化，而不是只看前端展示。
 - `ecommerce-suite` 已成为新的普通用户工作台入口之一，但它仍复用现有登录、权限、素材输入和图片任务能力；排障时不应把它和 `/image`、`/canvas` 切开看。
+- `Pro Studio` 生产模式和电商生产交付已进入默认验证面：`/canvas` 与 `/ecommerce-suite` 都应能切换生产模式，SKU `8/12` 张预览保持 `4+4` / `4+4+4`，ZIP/text asset/项目素材集归档不脱离现有任务链路。
+- Gemini 图片模型当前按 preview 路由并支持 reference uploads；后续兼容排查默认先看 preview/reference payload，而不是旧模型入口。
