@@ -41,6 +41,8 @@ export type CommerceSummaryLayout = {
   gap: number;
   background: string;
   showHeader: boolean;
+  resultOrder: string[];
+  selectedResultKeys: string[];
 };
 
 export type CommerceSuiteResult = {
@@ -95,6 +97,8 @@ export const DEFAULT_COMMERCE_SUMMARY_LAYOUT: CommerceSummaryLayout = {
   gap: 28,
   background: "#f6f8fc",
   showHeader: true,
+  resultOrder: [],
+  selectedResultKeys: [],
 };
 
 const commerceSuiteStorage = localforage.createInstance({
@@ -265,6 +269,8 @@ function normalizeSummaryLayout(value: unknown): CommerceSummaryLayout {
     gap: Number.isFinite(gap) ? Math.max(0, Math.min(96, Math.round(gap))) : DEFAULT_COMMERCE_SUMMARY_LAYOUT.gap,
     background: /^#[0-9a-fA-F]{6}$/.test(background) ? background : DEFAULT_COMMERCE_SUMMARY_LAYOUT.background,
     showHeader: typeof input.showHeader === "boolean" ? input.showHeader : DEFAULT_COMMERCE_SUMMARY_LAYOUT.showHeader,
+    resultOrder: Array.isArray(input.resultOrder) ? normalizeStringList(input.resultOrder) : [],
+    selectedResultKeys: Array.isArray(input.selectedResultKeys) ? normalizeStringList(input.selectedResultKeys) : [],
   };
 }
 

@@ -848,7 +848,32 @@ function normalizeSummaryLayoutForCanvas(layout?: CommerceSummaryLayout): Commer
     background: /^#[0-9a-fA-F]{6}$/.test(layout?.background || "")
       ? layout?.background || DEFAULT_COMMERCE_SUMMARY_LAYOUT.background
       : DEFAULT_COMMERCE_SUMMARY_LAYOUT.background,
+    resultOrder: Array.isArray(layout?.resultOrder) ? layout.resultOrder : [],
+    selectedResultKeys: Array.isArray(layout?.selectedResultKeys) ? layout.selectedResultKeys : [],
   };
+}
+
+function orderedSummaryResults(results: CommerceSuiteResult[], layout: CommerceSummaryLayout) {
+  const orderedResults = orderedAllSummaryResults(results, layout);
+  const keys = results.map(resultViewKey);
+  const keySet = new Set(keys);
+  const selectedSet = new Set(layout.selectedResultKeys.filter((key) => keySet.has(key)));
+  const hasCustomSelection = layout.selectedResultKeys.length > 0;
+  return hasCustomSelection
+    ? orderedResults.filter((result) => selectedSet.has(resultViewKey(result)))
+    : orderedResults;
+}
+
+function orderedAllSummaryResults(results: CommerceSuiteResult[], layout: CommerceSummaryLayout) {
+  const resultByKey = new Map(results.map((result) => [resultViewKey(result), result]));
+  const orderedKeys = [
+    ...layout.resultOrder.filter((key) => resultByKey.has(key)),
+    ...results.map(resultViewKey).filter((key) => !layout.resultOrder.includes(key)),
+  ];
+  return orderedKeys.flatMap((key) => {
+    const result = resultByKey.get(key);
+    return result ? [result] : [];
+  });
 }
 
 function summaryPreviewGap(layout: CommerceSummaryLayout) {
@@ -982,12 +1007,15 @@ function summaryGridForCount(count: number, mode: CommerceSummaryLayoutMode) {
 }
 
 async function buildSummaryBlob(project: CommerceSuiteProject) {
-  const successfulResults = project.results.filter((result) => result.status === "success" && !isSummaryCompositeResult(result) && commerceSuiteResultImageSource(result));
+  const layout = normalizeSummaryLayoutForCanvas(project.summaryLayout);
+  const successfulResults = orderedSummaryResults(
+    project.results.filter((result) => result.status === "success" && !isSummaryCompositeResult(result) && commerceSuiteResultImageSource(result)),
+    layout,
+  );
   if (successfulResults.length === 0) {
     throw new Error("还没有可以排版的图片");
   }
 
-  const layout = normalizeSummaryLayoutForCanvas(project.summaryLayout);
   const gap = layout.gap;
   const headerHeight = layout.showHeader ? SUMMARY_HEADER_HEIGHT : 0;
   const { columns, rows } = summaryGridForCount(successfulResults.length, layout.mode);
@@ -1996,6 +2024,50 @@ export default function EcommerceSuitePage() {
     });
   };
 
+  const updateSummaryCustomLayout = async (results: CommerceSuiteResult[], selectedKeys: string[], orderedKeys: string[]) => {
+    const validKeys = new Set(results.map(resultViewKey));
+    const resultOrder = orderedKeys.filter((key) => validKeys.has(key));
+    const selectedResultKeys = selectedKeys.filter((key) => validKeys.has(key));
+    await updateSummaryLayout({ resultOrder, selectedResultKeys });
+  };
+
+  const toggleSummaryResultSelection = async (result: CommerceSuiteResult, checked: boolean) => {
+    const key = resultViewKey(result);
+    const allKeys = compositeSourceResults.map(resultViewKey);
+    const selectedKeys = summaryLayout.selectedResultKeys.length > 0
+      ? summaryLayout.selectedResultKeys.filter((item) => allKeys.includes(item))
+      : allKeys;
+    const nextSelectedKeys = checked
+      ? [...selectedKeys.filter((item) => item !== key), key]
+      : selectedKeys.filter((item) => item !== key);
+    const orderedKeys = summaryLayout.resultOrder.length > 0 ? summaryLayout.resultOrder : allKeys;
+    await updateSummaryCustomLayout(compositeSourceResults, nextSelectedKeys, orderedKeys);
+  };
+
+  const moveSummaryResult = async (result: CommerceSuiteResult, direction: -1 | 1) => {
+    const key = resultViewKey(result);
+    const allKeys = compositeSourceResults.map(resultViewKey);
+    const selectedKeys = summaryLayout.selectedResultKeys.length > 0
+      ? summaryLayout.selectedResultKeys.filter((item) => allKeys.includes(item))
+      : allKeys;
+    const orderedKeys = [
+      ...(summaryLayout.resultOrder.length > 0 ? summaryLayout.resultOrder : allKeys).filter((item) => allKeys.includes(item)),
+      ...allKeys.filter((item) => !summaryLayout.resultOrder.includes(item)),
+    ];
+    const currentIndex = orderedKeys.indexOf(key);
+    const nextIndex = currentIndex + direction;
+    if (currentIndex < 0 || nextIndex < 0 || nextIndex >= orderedKeys.length) {
+      return;
+    }
+    const nextOrderedKeys = [...orderedKeys];
+    [nextOrderedKeys[currentIndex], nextOrderedKeys[nextIndex]] = [nextOrderedKeys[nextIndex], nextOrderedKeys[currentIndex]];
+    await updateSummaryCustomLayout(compositeSourceResults, selectedKeys, nextOrderedKeys);
+  };
+
+  const resetSummaryCustomLayout = async () => {
+    await updateSummaryLayout({ resultOrder: [], selectedResultKeys: [] });
+  };
+
   const downloadSummaryPreview = async () => {
     if (!selectedProject || buildingSummary) return;
     setBuildingSummary(true);
@@ -2015,7 +2087,11 @@ export default function EcommerceSuitePage() {
     if (!project || deliveryAction || generating) {
       return;
     }
-    const successfulResults = project.results.filter((result) => result.status === "success" && !isSummaryCompositeResult(result) && commerceSuiteResultImageSource(result));
+    const layout = normalizeSummaryLayoutForCanvas(project.summaryLayout);
+    const successfulResults = orderedSummaryResults(
+      project.results.filter((result) => result.status === "success" && !isSummaryCompositeResult(result) && commerceSuiteResultImageSource(result)),
+      layout,
+    );
     if (successfulResults.length === 0) {
       toast.error("还没有可以合成的图片");
       return;
@@ -2038,7 +2114,6 @@ export default function EcommerceSuitePage() {
         const uploaded = await uploadCreationTaskReferenceImage(file, `${SUMMARY_COMPOSITE_INTENT}-${index + 1}`, { conversationId: project.id });
         referenceIds.push(uploaded.id);
       }
-      const layout = normalizeSummaryLayoutForCanvas(project.summaryLayout);
       const taskId = createID("commerce-summary-composite");
       const submittedAt = new Date().toISOString();
       const placeholder: CommerceSuiteResult = {
@@ -2141,7 +2216,11 @@ export default function EcommerceSuitePage() {
   const summaryLayout = normalizeSummaryLayoutForCanvas(selectedProject?.summaryLayout);
   const completedImageResults = completedResults.filter((result) => commerceSuiteResultImageSource(result));
   const compositeSourceResults = completedImageResults.filter((result) => !isSummaryCompositeResult(result));
-  const summaryPreviewStyle = summaryPreviewGridStyle(summaryLayout, compositeSourceResults.length);
+  const orderedCompositeSourceResults = orderedAllSummaryResults(compositeSourceResults, summaryLayout);
+  const summarySelectedKeySet = new Set(summaryLayout.selectedResultKeys);
+  const hasCustomSummarySelection = summaryLayout.selectedResultKeys.length > 0;
+  const summaryLayoutResults = orderedSummaryResults(compositeSourceResults, summaryLayout);
+  const summaryPreviewStyle = summaryPreviewGridStyle(summaryLayout, summaryLayoutResults.length);
   const summaryPreviewTileClassName = summaryPreviewTileClass(summaryLayout);
   const summaryPreviewTextClassName = isDarkSummaryBackground(summaryLayout.background)
     ? "text-slate-100"
@@ -3208,8 +3287,8 @@ export default function EcommerceSuitePage() {
                     <div className="text-xs text-muted-foreground">已完成图片会在下面实时排版，下载时直接导出当前拼图</div>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
-                    <Badge variant={compositeSourceResults.length > 0 ? "success" : "secondary"}>
-                      {compositeSourceResults.length} 张参与排版
+                    <Badge variant={summaryLayoutResults.length > 0 ? "success" : "secondary"}>
+                      {summaryLayoutResults.length} 张参与排版
                     </Badge>
                     <Badge variant="outline">{summaryLayoutModeLabel(summaryLayout.mode)}</Badge>
                   </div>
@@ -3309,7 +3388,7 @@ export default function EcommerceSuitePage() {
                         variant="outline"
                         className="h-9 rounded-xl"
                         onClick={() => void downloadSummaryPreview()}
-                        disabled={buildingSummary || compositeSourceResults.length === 0}
+                        disabled={buildingSummary || summaryLayoutResults.length === 0}
                       >
                         {buildingSummary ? <LoaderCircle className="size-4 animate-spin" /> : <Download className="size-4" />}
                         下载拼图
@@ -3317,7 +3396,7 @@ export default function EcommerceSuitePage() {
                       <Button
                         className="h-9 rounded-xl"
                         onClick={() => void submitSummaryCompositeTask()}
-                        disabled={deliveryAction !== "" || generating || compositeSourceResults.length === 0}
+                        disabled={deliveryAction !== "" || generating || summaryLayoutResults.length === 0}
                       >
                         {deliveryAction === "composite" ? <LoaderCircle className="size-4 animate-spin" /> : <WandSparkles className="size-4" />}
                         生成 AI 合成图
@@ -3331,49 +3410,147 @@ export default function EcommerceSuitePage() {
                     生成结果完成后，这里会直接按当前模式排成小块
                   </div>
                 ) : (
-                  <div className="overflow-hidden rounded-xl bg-muted/25">
-                    <div className="max-h-[520px] overflow-auto">
-                      <div className="min-w-0 p-3" style={{ backgroundColor: summaryLayout.background }}>
-                        {summaryLayout.showHeader ? (
-                          <div className="mb-3 flex flex-wrap items-end justify-between gap-2">
-                            <div className="min-w-0">
-                              <div className={cn("truncate text-sm font-semibold", summaryPreviewTextClassName)}>
-                                {selectedProject.title || "电商套图"}
-                              </div>
-                              <div className={cn("mt-0.5 text-xs", summaryPreviewSubTextClassName)}>
-                                {summaryLayoutModeLabel(summaryLayout.mode)} · {compositeSourceResults.length} 张图片
-                              </div>
-                            </div>
-                            <Badge variant="secondary" className="bg-background/85">
-                              实时排版
-                            </Badge>
-                          </div>
-                        ) : null}
-                        <div className={cn(summaryLayout.mode === "horizontal" ? "pb-2" : "")} style={summaryPreviewStyle}>
-                          {compositeSourceResults.map((result, index) => {
-                            const src = commerceSuiteResultImageSource(result);
-                            return (
-                              <div
-                                key={resultViewKey(result)}
+                  <div className="grid gap-3">
+                    <div className="grid gap-2 rounded-xl bg-muted/20 p-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <div className="text-xs font-semibold text-foreground">自定义排列</div>
+                          <div className="text-[11px] text-muted-foreground">勾选参与图片，用上下按钮调整拼图顺序</div>
+                        </div>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-8 rounded-xl"
+                          onClick={() => void resetSummaryCustomLayout()}
+                          disabled={summaryLayout.resultOrder.length === 0 && summaryLayout.selectedResultKeys.length === 0}
+                        >
+                          <RefreshCw className="size-3.5" />
+                          重置
+                        </Button>
+                      </div>
+                      <div className="grid gap-2">
+                        {orderedCompositeSourceResults.map((result, index) => {
+                          const key = resultViewKey(result);
+                          const src = commerceSuiteResultImageSource(result);
+                          const selected = !hasCustomSummarySelection || summarySelectedKeySet.has(key);
+                          return (
+                            <div
+                              key={key}
+                              className={cn(
+                                "grid grid-cols-[auto_56px_minmax(0,1fr)_auto] items-center gap-2 rounded-xl bg-background p-2",
+                                !selected && "opacity-55",
+                              )}
+                            >
+                              <button
+                                type="button"
                                 className={cn(
-                                  "group relative min-w-0 overflow-hidden rounded-lg bg-white/90 shadow-sm",
-                                  summaryPreviewTileClassName,
+                                  "flex size-5 items-center justify-center rounded border transition",
+                                  selected
+                                    ? "border-[#1456f0] bg-[#1456f0] text-white"
+                                    : "border-border bg-muted text-muted-foreground hover:bg-accent",
                                 )}
+                                onClick={() => void toggleSummaryResultSelection(result, !selected)}
+                                aria-label={selected ? "取消参与排版" : "加入排版"}
+                                aria-pressed={selected}
                               >
-                                <AuthenticatedImage
-                                  src={src}
-                                  alt={commerceResultTitle(result)}
-                                  className={cn(
-                                    "h-full w-full bg-white",
-                                    summaryLayout.fit === "contain" ? "object-contain" : "object-cover",
-                                  )}
-                                />
-                                <span className="absolute left-2 top-2 rounded-full bg-background/90 px-2 py-0.5 text-[10px] font-semibold text-foreground shadow-sm">
+                                {selected ? <Check className="size-3.5" /> : null}
+                              </button>
+                              <div className="relative aspect-square overflow-hidden rounded-lg bg-muted">
+                                {src ? (
+                                  <AuthenticatedImage src={src} alt={commerceResultTitle(result)} className="h-full w-full object-cover" />
+                                ) : (
+                                  <span className="flex h-full w-full items-center justify-center text-muted-foreground">
+                                    <Images className="size-4" />
+                                  </span>
+                                )}
+                                <span className="absolute left-1 top-1 rounded-full bg-background/90 px-1.5 py-0.5 text-[10px] font-semibold text-foreground shadow-sm">
                                   {index + 1}
                                 </span>
                               </div>
-                            );
-                          })}
+                              <div className="min-w-0">
+                                <div className="truncate text-xs font-semibold text-foreground">{commerceResultTitle(result)}</div>
+                                <div className="mt-0.5 truncate text-[11px] text-muted-foreground">{commerceResultShortTitle(result)}</div>
+                              </div>
+                              <div className="flex gap-1">
+                                <Button
+                                  variant="outline"
+                                  size="icon"
+                                  className="size-8 rounded-lg"
+                                  onClick={() => void moveSummaryResult(result, -1)}
+                                  disabled={index === 0}
+                                  aria-label="上移"
+                                  title="上移"
+                                >
+                                  <ChevronLeft className="size-3.5 rotate-90" />
+                                </Button>
+                                <Button
+                                  variant="outline"
+                                  size="icon"
+                                  className="size-8 rounded-lg"
+                                  onClick={() => void moveSummaryResult(result, 1)}
+                                  disabled={index === orderedCompositeSourceResults.length - 1}
+                                  aria-label="下移"
+                                  title="下移"
+                                >
+                                  <ChevronRight className="size-3.5 rotate-90" />
+                                </Button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    <div className="overflow-hidden rounded-xl bg-muted/25">
+                      <div className="max-h-[520px] overflow-auto">
+                        <div className="min-w-0 p-3" style={{ backgroundColor: summaryLayout.background }}>
+                          {summaryLayout.showHeader ? (
+                            <div className="mb-3 flex flex-wrap items-end justify-between gap-2">
+                              <div className="min-w-0">
+                                <div className={cn("truncate text-sm font-semibold", summaryPreviewTextClassName)}>
+                                  {selectedProject.title || "电商套图"}
+                                </div>
+                                <div className={cn("mt-0.5 text-xs", summaryPreviewSubTextClassName)}>
+                                  {summaryLayoutModeLabel(summaryLayout.mode)} · {summaryLayoutResults.length} 张图片
+                                </div>
+                              </div>
+                              <Badge variant="secondary" className="bg-background/85">
+                                实时排版
+                              </Badge>
+                            </div>
+                          ) : null}
+                          {summaryLayoutResults.length === 0 ? (
+                            <div className={cn("grid min-h-28 place-items-center rounded-lg border border-dashed border-white/40 text-sm", summaryPreviewSubTextClassName)}>
+                              至少选择一张图片参与排版
+                            </div>
+                          ) : (
+                            <div className={cn(summaryLayout.mode === "horizontal" ? "pb-2" : "")} style={summaryPreviewStyle}>
+                              {summaryLayoutResults.map((result, index) => {
+                                const src = commerceSuiteResultImageSource(result);
+                                return (
+                                  <div
+                                    key={resultViewKey(result)}
+                                    className={cn(
+                                      "group relative min-w-0 overflow-hidden rounded-lg bg-white/90 shadow-sm",
+                                      summaryPreviewTileClassName,
+                                    )}
+                                  >
+                                    <AuthenticatedImage
+                                      src={src}
+                                      alt={commerceResultTitle(result)}
+                                      className={cn(
+                                        "h-full w-full bg-white",
+                                        summaryLayout.fit === "contain" ? "object-contain" : "object-cover",
+                                      )}
+                                    />
+                                    <span className="absolute left-2 top-2 rounded-full bg-background/90 px-2 py-0.5 text-[10px] font-semibold text-foreground shadow-sm">
+                                      {index + 1}
+                                    </span>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
                         </div>
                       </div>
                     </div>
