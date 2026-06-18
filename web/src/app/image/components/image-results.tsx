@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { IMAGE_RESULT_DRAG_MIME, type ImageResultDragPayload } from "@/app/image/image-result-drag";
 import type { ImagePromptPreset } from "@/app/image/image-presets";
 import { fetchManagedImageDetail, IMAGE_MODEL_ROUTE_DETAILS, supportsImageOutputCompression } from "@/lib/api";
+import { displayModelLabel } from "@/lib/model-display";
 import {
   fetchAuthenticatedImageBlob,
   getCachedAuthenticatedImageByteSize,
@@ -601,7 +602,7 @@ export function ImageResults({
                   <div className="flex min-w-0 flex-wrap items-center gap-1.5 text-[11px] leading-5 text-[#45515e]">
                     <span className="rounded-full bg-[#f0f0f0] px-2.5 py-0.5 text-[#45515e]">第 {turnIndex + 1} 轮</span>
                     <span className="rounded-full bg-[#f0f0f0] px-2.5 py-0.5 text-[#45515e]">{getTurnModeLabel(turn)}</span>
-                    <span className="rounded-full bg-[#f0f0f0] px-2.5 py-0.5 text-[#45515e]">{turn.model}</span>
+                    <span className="rounded-full bg-[#f0f0f0] px-2.5 py-0.5 text-[#45515e]">{displayModelLabel(turn.model)}</span>
                     {turn.mode !== "chat" && routeDetail ? (
                       <span className="rounded-full bg-[#eef4ff] px-2.5 py-0.5 text-[#1456f0]">
                         {routeDetail.routeLabel}

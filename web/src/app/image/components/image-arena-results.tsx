@@ -5,6 +5,7 @@ import { CircleStop, Download, Eye, FolderPlus, ImagePlus, LoaderCircle, RotateC
 import { AuthenticatedImage } from "@/components/authenticated-image";
 import { MarkdownMessage } from "@/components/markdown-message";
 import { ModelProviderIcon } from "@/components/model-provider-icon";
+import { displayModelLabel } from "@/lib/model-display";
 import { Button } from "@/components/ui/button";
 import { buildTimestampedImageDownloadName, downloadImageFile } from "@/lib/image-download";
 import { getManagedImagePathFromUrl, getManagedImageThumbnailUrlFromPath, getManagedImageUrlFromPath } from "@/lib/image-path";
@@ -143,6 +144,8 @@ export function ImageArenaResults({
 
             <div className="grid gap-3 lg:grid-cols-2 xl:grid-cols-4">
               {runs.map((run) => {
+                const runModelLabel = displayModelLabel(run.model, run.modelLabel);
+                const runModelIdLabel = displayModelLabel(run.model);
                 const successImages = runSucceededImages(run);
                 const lightboxImages = successImages.map((image, index): ImageLightboxItem => ({
                   id: image.id,
@@ -162,10 +165,10 @@ export function ImageArenaResults({
                   <article key={run.id} className="flex min-h-[220px] flex-col rounded-[22px] border border-[#e5e7eb] bg-white p-3 shadow-sm dark:border-border dark:bg-card">
                     <div className="mb-3 flex items-start justify-between gap-2">
                       <div className="flex min-w-0 items-start gap-2">
-                        <ModelProviderIcon model={run.model} label={run.modelLabel} size="lg" className="mt-0.5" />
+                        <ModelProviderIcon model={run.model} label={runModelLabel} size="lg" className="mt-0.5" />
                         <div className="min-w-0">
-                          <div className="truncate text-sm font-semibold text-[#222222] dark:text-foreground">{run.modelLabel}</div>
-                          <div className="mt-1 truncate text-[11px] text-[#8e8e93]">{run.model}</div>
+                          <div className="truncate text-sm font-semibold text-[#222222] dark:text-foreground">{runModelLabel}</div>
+                          <div className="mt-1 truncate text-[11px] text-[#8e8e93]">{runModelIdLabel}</div>
                         </div>
                       </div>
                       <span className={cn("shrink-0 rounded-full px-2.5 py-1 text-[11px] font-medium", statusClass(run.status))}>
@@ -199,7 +202,7 @@ export function ImageArenaResults({
                               >
                                 <AuthenticatedImage
                                   src={imagePreviewSrc(image)}
-                                  alt={`${run.modelLabel} 结果 ${index + 1}`}
+                                  alt={`${runModelLabel} 结果 ${index + 1}`}
                                   className="aspect-square w-full object-cover transition group-hover:brightness-95"
                                 />
                               </button>
@@ -218,7 +221,7 @@ export function ImageArenaResults({
                                       id: image.id,
                                       src,
                                       path: image.path || getManagedImagePathFromUrl(image.localUrl || image.url || ""),
-                                      fileName: lightboxImages[index]?.fileName || `image-arena-${run.model}-${index + 1}.png`,
+                                      fileName: lightboxImages[index]?.fileName || `image-arena-${runModelIdLabel}-${index + 1}.png`,
                                     })
                                   }
                                 >

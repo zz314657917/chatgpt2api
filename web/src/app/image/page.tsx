@@ -44,6 +44,7 @@ import { ImageModelSettingsPanel } from "@/components/image-model-settings-butto
 import { DEFAULT_IMAGE_RATIO_PICKER_OPTIONS, imageRatioPickerValueLabel } from "@/lib/image-ratio-picker-options";
 import { ManagedImageAssetDock } from "@/components/managed-image-asset-dock";
 import { ModelProviderOptionLabel } from "@/components/model-provider-icon";
+import { displayModelLabel } from "@/lib/model-display";
 import { useMobileNav } from "@/components/mobile-nav-context";
 import { Button } from "@/components/ui/button";
 import {
@@ -1585,7 +1586,7 @@ function getComposerConversationMode(composerMode: ComposerMode, referenceImages
 }
 
 function modelMenuOption(model: CanvasModelOption): ImageModelMenuOption {
-  return { value: model.id, label: model.name || model.id };
+  return { value: model.id, label: displayModelLabel(model.id, model.name || model.id) };
 }
 
 function hasMenuOption(options: readonly ImageModelMenuOption[], value: string) {
@@ -1617,7 +1618,7 @@ function mergeImageModelOptions(
     !HIDDEN_IMAGE_MODEL_VALUES.has(selectedModel) &&
     modelMatchesComposerMode(mode, selectedModel)
   ) {
-    merged.unshift({ value: selectedModel, label: selectedModel });
+    merged.unshift({ value: selectedModel, label: displayModelLabel(selectedModel) });
   }
   return merged;
 }
@@ -4931,7 +4932,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         url: image.url,
         local_url: image.localUrl,
         path: image.path || getManagedImagePathFromUrl(image.localUrl || image.url || "") || undefined,
-        name: `${run.modelLabel} ${image.id}`,
+        name: `${displayModelLabel(run.model, run.modelLabel)} ${image.id}`,
       }))
       .filter((image) => image.url || image.local_url || image.path);
     if (images.length === 0) {
@@ -4940,7 +4941,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     }
     setArenaActionKey(`canvas:${run.id}`);
     try {
-      const canvas = createEmptySmartCanvas(`多智能体 - ${run.modelLabel}`);
+      const canvas = createEmptySmartCanvas(`多智能体 - ${displayModelLabel(run.model, run.modelLabel)}`);
       const promptNode = createPromptNode({ x: 80, y: 120 }, turn.prompt, {
         model: run.model,
         size: turn.size || turn.sizeSelection?.aspectRatio || "1:1",
@@ -4972,7 +4973,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     try {
       const project = createCommerceSuiteProject();
       const updatedAt = new Date().toISOString();
-      project.title = `多智能体 - ${run.modelLabel}`;
+      project.title = `多智能体 - ${displayModelLabel(run.model, run.modelLabel)}`;
       project.analysisText = turn.prompt;
       project.imageModel = run.model;
       project.size = turn.size || turn.sizeSelection?.aspectRatio || "1:1";
@@ -5682,7 +5683,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                         <SelectContent>
                           <SelectGroup>
                             {(editingTurnDraft.mode === "chat" ? chatModelOptions : imageCreationModelOptions).map((option) => (
-                              <SelectItem key={option.value} value={option.value} textValue={option.label}>
+                              <SelectItem key={option.value} value={option.value} textValue={displayModelLabel(option.value, option.label)}>
                                 <ModelProviderOptionLabel model={option.value} label={option.label} />
                               </SelectItem>
                             ))}

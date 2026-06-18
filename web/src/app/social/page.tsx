@@ -75,6 +75,7 @@ import {
   type SocialProject,
 } from "@/lib/api";
 import { getManagedImagePreviewUrlFromPath, getManagedImageUrlFromPath } from "@/lib/image-path";
+import { displayModelLabel } from "@/lib/model-display";
 import { useAppMeta } from "@/lib/use-app-meta";
 import { useAuthGuard } from "@/lib/use-auth-guard";
 import { cn } from "@/lib/utils";
@@ -166,7 +167,7 @@ function normalizeCards(cards: SocialCard[], options: { preserveImages?: boolean
 type SocialModelMenuOption = { value: ImageModel; label: string };
 
 function socialModelOption(model: CanvasModelOption): SocialModelMenuOption {
-  return { value: model.id, label: model.name || model.id };
+  return { value: model.id, label: displayModelLabel(model.id, model.name || model.id) };
 }
 
 function socialModelsByCapability(models: CanvasModelOption[], capability: "chat" | "image") {
@@ -203,11 +204,11 @@ function mergeSocialModelOptions(
       continue;
     }
     seen.add(option.value);
-    merged.push(option);
+    merged.push({ ...option, label: displayModelLabel(option.value, option.label) });
   }
   const canKeepSelectedModel = !(preferRemoteOnly && remoteOptions.length > 0);
   if (canKeepSelectedModel && selectedModel && !seen.has(selectedModel) && canKeepSelectedModelValue(selectedModel)) {
-    merged.unshift({ value: selectedModel, label: selectedModel });
+    merged.unshift({ value: selectedModel, label: displayModelLabel(selectedModel) });
   }
   return merged;
 }
@@ -1389,7 +1390,7 @@ export default function SocialPage() {
                       </SelectTrigger>
                       <SelectContent>
                         {chatModelOptions.map((option) => (
-                          <SelectItem key={option.value} value={option.value} textValue={option.label}>
+                          <SelectItem key={option.value} value={option.value} textValue={displayModelLabel(option.value, option.label)}>
                             <ModelProviderOptionLabel model={option.value} label={option.label} />
                           </SelectItem>
                         ))}
@@ -1404,7 +1405,7 @@ export default function SocialPage() {
                       </SelectTrigger>
                       <SelectContent>
                         {imageModelOptions.map((option) => (
-                          <SelectItem key={option.value} value={option.value} textValue={option.label}>
+                          <SelectItem key={option.value} value={option.value} textValue={displayModelLabel(option.value, option.label)}>
                             <ModelProviderOptionLabel model={option.value} label={option.label} />
                           </SelectItem>
                         ))}

@@ -51,6 +51,7 @@ import { ImageModelSettingsButton } from "@/components/image-model-settings-butt
 import { ImageOutputControls } from "@/components/image-output-controls";
 import { ImageRatioPicker } from "@/components/image-ratio-picker";
 import { ModelProviderOptionLabel } from "@/components/model-provider-icon";
+import { displayModelLabel } from "@/lib/model-display";
 import { ProStudioBadge } from "@/components/pro-studio/pro-studio-badge";
 import { ProStudioPanel } from "@/components/pro-studio/pro-studio-panel";
 import { Badge } from "@/components/ui/badge";
@@ -3792,7 +3793,7 @@ function LlmNodeBody({
           </SelectTrigger>
           <SelectContent>
             {availableModels.map((model) => (
-              <SelectItem key={model.id} value={model.id} textValue={model.name || model.id}>
+              <SelectItem key={model.id} value={model.id} textValue={displayModelLabel(model.id, model.name || model.id)}>
                 <ModelProviderOptionLabel model={model.id} label={model.name || model.id} />
               </SelectItem>
             ))}
@@ -4266,7 +4267,7 @@ function GeneratorNodeBody({
                   </SelectItem>
                 )
               : models.map((model) => (
-                  <SelectItem key={model.id} value={model.id} textValue={model.name || model.id}>
+                  <SelectItem key={model.id} value={model.id} textValue={displayModelLabel(model.id, model.name || model.id)}>
                     <ModelProviderOptionLabel model={model.id} label={model.name || model.id} />
                   </SelectItem>
                 ))}
@@ -4570,7 +4571,7 @@ function VideoGeneratorNodeBody({
           </SelectTrigger>
           <SelectContent>
             {models.map((model) => (
-              <SelectItem key={model.id} value={model.id} textValue={model.name || model.id}>
+              <SelectItem key={model.id} value={model.id} textValue={displayModelLabel(model.id, model.name || model.id)}>
                 <ModelProviderOptionLabel model={model.id} label={model.name || model.id} />
               </SelectItem>
             ))}
@@ -5819,7 +5820,7 @@ function RunRecordCard({ run }: { run: SmartCanvasRunRecord }) {
       <div className="flex items-center justify-between gap-2">
         <div className="min-w-0">
           <div className="truncate text-xs font-semibold text-foreground dark:text-slate-200">{run.prompt || "未命名任务"}</div>
-          <div className={cn("truncate text-[11px]", canvasSubtleTextClass)}>{run.model} · {modeLabel}</div>
+          <div className={cn("truncate text-[11px]", canvasSubtleTextClass)}>{displayModelLabel(run.model)} · {modeLabel}</div>
         </div>
         <StatusBadge status={run.status} />
       </div>

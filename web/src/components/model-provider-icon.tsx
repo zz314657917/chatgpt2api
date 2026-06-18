@@ -1,6 +1,7 @@
 "use client";
 
 import { cn } from "@/lib/utils";
+import { displayModelLabel } from "@/lib/model-display";
 import { ProviderLogoIcon, type ProviderLogoKey } from "./provider-logo-icons";
 
 type ModelProviderIconSize = "sm" | "md" | "lg";
@@ -221,7 +222,7 @@ export function ModelProviderOptionLabel({
   model?: string;
   size?: ModelProviderIconSize;
 }) {
-  const displayLabel = label || model || "";
+  const displayLabel = displayModelLabel(model, label);
 
   return (
     <span className={cn("inline-flex min-w-0 items-center gap-2", className)}>

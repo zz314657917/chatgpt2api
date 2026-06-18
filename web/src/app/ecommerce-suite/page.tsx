@@ -89,6 +89,7 @@ import { imageExtension, downloadImageFile } from "@/lib/image-download";
 import { getManagedImagePreviewUrlFromPath, getManagedImageUrlFromPath } from "@/lib/image-path";
 import { IMAGE_QUALITY_OPTIONS, isImageOutputFormat, isImageQuality } from "@/lib/image-parameters";
 import { imageModelHasSettings, imageModelSettingsToTaskFields } from "@/lib/image-model-settings";
+import { displayModelLabel } from "@/lib/model-display";
 import {
   OFFICIAL_IMAGE_MODEL,
   buildProStudioImagePayload,
@@ -1094,10 +1095,10 @@ function mergeModelOptions(
       continue;
     }
     seen.add(option.value);
-    merged.push(option);
+    merged.push({ ...option, label: displayModelLabel(option.value, option.label) });
   }
   if (selected && !seen.has(selected) && canKeepSelectedModel(selected)) {
-    merged.unshift({ value: selected, label: selected });
+    merged.unshift({ value: selected, label: displayModelLabel(selected) });
   }
   return merged;
 }
@@ -2857,7 +2858,7 @@ export default function EcommerceSuitePage() {
                       </SelectTrigger>
                       <SelectContent>
                         {chatModelOptions.map((option) => (
-                          <SelectItem key={option.value} value={option.value} textValue={option.label}>
+                          <SelectItem key={option.value} value={option.value} textValue={displayModelLabel(option.value, option.label)}>
                             <ModelProviderOptionLabel model={option.value} label={option.label} />
                           </SelectItem>
                         ))}
@@ -2878,7 +2879,7 @@ export default function EcommerceSuitePage() {
                               </SelectItem>
                             )
                           : imageModelOptions.map((option) => (
-                              <SelectItem key={option.value} value={option.value} textValue={option.label}>
+                              <SelectItem key={option.value} value={option.value} textValue={displayModelLabel(option.value, option.label)}>
                                 <ModelProviderOptionLabel model={option.value} label={option.label} />
                               </SelectItem>
                             ))}
