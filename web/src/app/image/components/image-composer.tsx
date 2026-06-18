@@ -32,7 +32,7 @@ import {
   type RefObject,
 } from "react";
 
-import { ImageModelSettingsButton } from "@/components/image-model-settings-button";
+import { ImageModelSettingsPanel } from "@/components/image-model-settings-button";
 import { ImageOutputControls } from "@/components/image-output-controls";
 import { ImageRatioPicker } from "@/components/image-ratio-picker";
 import { ModelProviderIcon } from "@/components/model-provider-icon";
@@ -1303,14 +1303,11 @@ export function ImageComposer({
                           </p>
                         ) : null}
                         {modelSettingsSupported ? (
-                          <div className="col-span-2 flex min-w-0 items-center justify-between gap-2 rounded-xl border border-[#dbe7ff] bg-[#f8fbff] px-3 py-2 dark:border-sky-900/60 dark:bg-sky-950/20 sm:col-span-3">
-                            <span className="text-[11px] font-semibold text-[#18181b] dark:text-foreground">模型</span>
-                            <ImageModelSettingsButton
+                          <div className="col-span-2 rounded-xl border border-[#dbe7ff] bg-[#f8fbff] px-3 py-2 dark:border-sky-900/60 dark:bg-sky-950/20 sm:col-span-3">
+                            <ImageModelSettingsPanel
                               model={imageModel}
                               value={imageModelSettingsValue}
                               onChange={handleImageModelSettingsChange}
-                              compact
-                              className="h-8 rounded-xl"
                             />
                           </div>
                         ) : null}

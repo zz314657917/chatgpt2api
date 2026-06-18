@@ -37,6 +37,14 @@ type ImageModelSettingsButtonProps = {
   buttonLabel?: string;
 };
 
+type ImageModelSettingsPanelProps = {
+  model: ImageModel | string;
+  value?: ImageModelSettingsState;
+  onChange: (settings: ImageModelSettingsState) => void;
+  className?: string;
+  headerClassName?: string;
+};
+
 function settingNumber(value: unknown, fallback: number, min: number, max: number) {
   const parsed = Math.round(Number(value));
   if (!Number.isFinite(parsed)) {
@@ -102,12 +110,7 @@ export function ImageModelSettingsButton({
   if (!imageModelHasSettings(model)) {
     return null;
   }
-  const normalized = normalizeImageModelSettings(model, value);
   const title = titleForModel(model);
-  const referenceLabel = referenceLimitLabel(model);
-  const update = (patch: ImageModelSettingsState | Record<string, unknown>) => {
-    onChange(mergeImageModelSettingsForModel(model, normalized, patch));
-  };
 
   return (
     <Popover>
@@ -131,36 +134,60 @@ export function ImageModelSettingsButton({
         side="bottom"
         className={cn("max-h-[72vh] w-[390px] max-w-[calc(100vw-2rem)] overflow-y-auto p-3", contentClassName)}
       >
-        <div className="mb-2 flex items-center justify-between gap-2">
-          <span className="text-xs font-semibold text-[#18181b] dark:text-foreground">{title}</span>
-          {referenceLabel ? <span className="text-[10px] text-[#8e8e93] dark:text-muted-foreground">{referenceLabel}</span> : null}
-        </div>
-        {model === MIDJOURNEY_IMAGE_MODEL ? (
-          <MidjourneySettingsPanel
-            settings={normalized.midjourney || {}}
-            onChange={(midjourney) => update({ midjourney })}
-          />
-        ) : null}
-        {isGeminiFlashImageModel(model) ? (
-          <GeminiFlashSettingsPanel
-            settings={normalized.geminiFlash || {}}
-            onChange={(geminiFlash) => update({ geminiFlash })}
-          />
-        ) : null}
-        {isOfficialImageModel(model) ? (
-          <OfficialImageSettingsPanel
-            settings={normalized.officialImage || {}}
-            onChange={(officialImage) => update({ officialImage })}
-          />
-        ) : null}
-        {isGeminiProImageModel(model) ? (
-          <GeminiProSettingsPanel
-            settings={normalized.geminiPro || {}}
-            onChange={(geminiPro) => update({ geminiPro })}
-          />
-        ) : null}
+        <ImageModelSettingsPanel model={model} value={value} onChange={onChange} />
       </PopoverContent>
     </Popover>
+  );
+}
+
+export function ImageModelSettingsPanel({
+  model,
+  value,
+  onChange,
+  className,
+  headerClassName,
+}: ImageModelSettingsPanelProps) {
+  if (!imageModelHasSettings(model)) {
+    return null;
+  }
+  const normalized = normalizeImageModelSettings(model, value);
+  const title = titleForModel(model);
+  const referenceLabel = referenceLimitLabel(model);
+  const update = (patch: ImageModelSettingsState | Record<string, unknown>) => {
+    onChange(mergeImageModelSettingsForModel(model, normalized, patch));
+  };
+
+  return (
+    <div className={className}>
+      <div className={cn("mb-2 flex items-center justify-between gap-2", headerClassName)}>
+        <span className="text-xs font-semibold text-[#18181b] dark:text-foreground">{title}</span>
+        {referenceLabel ? <span className="text-[10px] text-[#8e8e93] dark:text-muted-foreground">{referenceLabel}</span> : null}
+      </div>
+      {model === MIDJOURNEY_IMAGE_MODEL ? (
+        <MidjourneySettingsPanel
+          settings={normalized.midjourney || {}}
+          onChange={(midjourney) => update({ midjourney })}
+        />
+      ) : null}
+      {isGeminiFlashImageModel(model) ? (
+        <GeminiFlashSettingsPanel
+          settings={normalized.geminiFlash || {}}
+          onChange={(geminiFlash) => update({ geminiFlash })}
+        />
+      ) : null}
+      {isOfficialImageModel(model) ? (
+        <OfficialImageSettingsPanel
+          settings={normalized.officialImage || {}}
+          onChange={(officialImage) => update({ officialImage })}
+        />
+      ) : null}
+      {isGeminiProImageModel(model) ? (
+        <GeminiProSettingsPanel
+          settings={normalized.geminiPro || {}}
+          onChange={(geminiPro) => update({ geminiPro })}
+        />
+      ) : null}
+    </div>
   );
 }
 

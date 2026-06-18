@@ -40,7 +40,7 @@ import {
 import { IMAGE_PROMPT_PRESETS, type ImagePromptPreset } from "@/app/image/image-presets";
 import { consumeSimilarImageIntent } from "@/app/image/similar-image-intent";
 import { ImageOutputControls } from "@/components/image-output-controls";
-import { ImageModelSettingsButton } from "@/components/image-model-settings-button";
+import { ImageModelSettingsPanel } from "@/components/image-model-settings-button";
 import { DEFAULT_IMAGE_RATIO_PICKER_OPTIONS, imageRatioPickerValueLabel } from "@/lib/image-ratio-picker-options";
 import { ManagedImageAssetDock } from "@/components/managed-image-asset-dock";
 import { ModelProviderOptionLabel } from "@/components/model-provider-icon";
@@ -5885,13 +5885,11 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                           </label>
                         ) : null}
                         {editingDraftModelSettingsSupported ? (
-                          <div className="flex flex-col gap-2 text-sm font-medium text-stone-700">
-                            模型
-                            <ImageModelSettingsButton
+                          <div className="rounded-2xl border border-sky-100 bg-sky-50 px-3 py-2 sm:col-span-2 lg:col-span-4">
+                            <ImageModelSettingsPanel
                               model={editingTurnDraft.model}
                               value={editingDraftModelSettingsValue}
                               onChange={handleEditingDraftModelSettingsChange}
-                              className="h-10 w-full rounded-xl"
                             />
                           </div>
                         ) : null}
