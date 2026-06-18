@@ -50,6 +50,7 @@ const (
 	imageTaskPayerUserIDPayloadKey     = "payer_user_id"
 	imageTaskActorUserIDPayloadKey     = "actor_user_id"
 	imageTaskActorNamePayloadKey       = "actor_name"
+	imageTaskOwnerNamePayloadKey       = "owner_name"
 	imageTaskTeamIDPayloadKey          = "team_id"
 
 	imageTaskExternalAmountUnitBalance = "balance"
@@ -963,6 +964,9 @@ func (s *ImageTaskService) runTask(ctx context.Context, key, mode string, identi
 		if unit := imageTaskNormalizeAmountUnit(util.Clean(result[imageTaskExternalAmountUnitKey])); unit != "" {
 			updates[imageTaskExternalAmountUnitKey] = unit
 		}
+		if usage := imageTaskUsage(result["usage"]); len(usage) > 0 {
+			updates["usage"] = usage
+		}
 		if isMediaTaskMode(mode) {
 			updates["output_statuses"] = finalImageOutputStatuses(taskCount(mode, payload), data, status)
 		}
@@ -1005,6 +1009,9 @@ func (s *ImageTaskService) runTask(ctx context.Context, key, mode string, identi
 	}
 	if unit := imageTaskNormalizeAmountUnit(util.Clean(result[imageTaskExternalAmountUnitKey])); unit != "" {
 		updates[imageTaskExternalAmountUnitKey] = unit
+	}
+	if usage := imageTaskUsage(result["usage"]); len(usage) > 0 {
+		updates["usage"] = usage
 	}
 	s.updateActiveTask(key, updates)
 	s.settleTaskBilling(key)
@@ -1522,6 +1529,9 @@ func (s *ImageTaskService) loadLocked() map[string]map[string]any {
 		if outputType := util.Clean(task["output_type"]); outputType != "" {
 			normalized["output_type"] = outputType
 		}
+		if usage := imageTaskUsage(task["usage"]); len(usage) > 0 {
+			normalized["usage"] = usage
+		}
 		if util.ToBool(task[imageTaskBillingBillablePayloadKey]) {
 			normalized[imageTaskBillingBillablePayloadKey] = true
 		}
@@ -1766,6 +1776,9 @@ func publicTask(task map[string]any) map[string]any {
 	if util.Clean(task["output_type"]) != "" {
 		item["output_type"] = task["output_type"]
 	}
+	if usage := imageTaskUsage(task["usage"]); len(usage) > 0 {
+		item["usage"] = usage
+	}
 	if consumed := util.ToInt(task["billing_consumed_amount"], -1); consumed >= 0 {
 		item["billing_consumed_amount"] = consumed
 	} else if charged := util.ToInt(task[imageTaskBillingChargedAmountKey], 0); charged > 0 {
@@ -1805,8 +1818,12 @@ func mergeTaskContextFields(task map[string]any, payload map[string]any, identit
 	}
 	actor := firstNonEmpty(util.Clean(payload[imageTaskActorUserIDPayloadKey]), billingUserID(identity))
 	payer := firstNonEmpty(util.Clean(payload[imageTaskPayerUserIDPayloadKey]), actor)
+	ownerName := firstNonEmpty(util.Clean(payload[imageTaskOwnerNamePayloadKey]), imageTaskIdentityDisplayName(identity))
 	if teamID := util.Clean(payload[imageTaskTeamIDPayloadKey]); teamID != "" {
 		task[imageTaskTeamIDPayloadKey] = teamID
+	}
+	if ownerName != "" {
+		task[imageTaskOwnerNamePayloadKey] = ownerName
 	}
 	if payer != "" {
 		task[imageTaskPayerUserIDPayloadKey] = payer
@@ -1820,18 +1837,22 @@ func mergeTaskContextFields(task map[string]any, payload map[string]any, identit
 }
 
 func copyStoredTaskContextFields(target map[string]any, source map[string]any) {
-	for _, key := range []string{imageTaskTeamIDPayloadKey, imageTaskPayerUserIDPayloadKey, imageTaskActorUserIDPayloadKey, imageTaskActorNamePayloadKey} {
+	for _, key := range []string{imageTaskTeamIDPayloadKey, imageTaskPayerUserIDPayloadKey, imageTaskActorUserIDPayloadKey, imageTaskActorNamePayloadKey, imageTaskOwnerNamePayloadKey} {
 		if value := util.Clean(source[key]); value != "" {
 			target[key] = value
 		}
 	}
 }
 
+func imageTaskIdentityDisplayName(identity Identity) string {
+	return firstNonEmpty(util.Clean(identity.Name), util.Clean(identity.CredentialName), util.Clean(identity.OwnerID), util.Clean(identity.ID))
+}
+
 func imageTaskVisibility(values ...string) (string, error) {
 	if len(values) == 0 {
 		return ImageVisibilityPrivate, nil
 	}
-	return NormalizeImageVisibility(values[0])
+	return NormalizePrivateImageVisibility(values[0])
 }
 
 func ownerID(identity Identity) string {
@@ -2030,6 +2051,14 @@ func maxImageTaskFloat(left, right float64) float64 {
 	return right
 }
 
+func imageTaskUsage(value any) map[string]any {
+	usage := util.StringMap(value)
+	if len(usage) == 0 {
+		return nil
+	}
+	return util.CopyMap(usage)
+}
+
 func imageTaskBillingSize(payload map[string]any) string {
 	switch NormalizeImageResolutionPreset(util.Clean(payload["image_resolution"])) {
 	case "2k":
@@ -2112,8 +2141,12 @@ func imageTaskUsageLogItem(task map[string]any) map[string]any {
 		return map[string]any{}
 	}
 	mode := util.Clean(task["mode"])
+	userID := firstNonEmpty(util.Clean(task[imageTaskActorUserIDPayloadKey]), util.Clean(task[imageTaskPayerUserIDPayloadKey]), util.Clean(task["owner_id"]))
+	userName := firstNonEmpty(util.Clean(task[imageTaskActorNamePayloadKey]), util.Clean(task[imageTaskOwnerNamePayloadKey]))
 	item := map[string]any{
 		"id":                       util.Clean(task["id"]),
+		"user_id":                  userID,
+		"user_name":                userName,
 		"mode":                     mode,
 		"label":                    imageTaskModeLabel(mode),
 		"model":                    util.Clean(task["model"]),
@@ -2122,6 +2155,9 @@ func imageTaskUsageLogItem(task map[string]any) map[string]any {
 		"updated_at":               util.Clean(task["updated_at"]),
 		"local_consumed_amount":    max(0, util.ToInt(task["billing_consumed_amount"], 0)),
 		"external_consumed_amount": imageTaskFloat(task[imageTaskExternalConsumedAmountKey]),
+	}
+	if errText := util.Clean(task["error"]); errText != "" {
+		item["error"] = errText
 	}
 	if item["external_consumed_amount"] == 0.0 {
 		item["external_consumed_amount"] = imageTaskFloat(task[imageTaskExternalChargedAmountKey])
@@ -2134,6 +2170,12 @@ func imageTaskUsageLogItem(task map[string]any) map[string]any {
 	}
 	if actorName := util.Clean(task[imageTaskActorNamePayloadKey]); actorName != "" {
 		item["actor_name"] = actorName
+	}
+	if actorUserID := util.Clean(task[imageTaskActorUserIDPayloadKey]); actorUserID != "" {
+		item["actor_user_id"] = actorUserID
+	}
+	if ownerName := util.Clean(task[imageTaskOwnerNamePayloadKey]); ownerName != "" {
+		item["owner_name"] = ownerName
 	}
 	return item
 }
@@ -2362,6 +2404,9 @@ func mergeImageTaskMetadata(payload map[string]any, metadata map[string]any) {
 	if settings := util.StringMap(metadata["official_settings"]); len(settings) > 0 {
 		payload["official_settings"] = settings
 	}
+	if settings := util.StringMap(metadata["midjourney_settings"]); len(settings) > 0 {
+		payload["midjourney_settings"] = settings
+	}
 	if compression, ok := NormalizeImageOutputCompressionValue(metadata["raw_output_compression"]); ok {
 		payload["raw_output_compression"] = compression
 	}
@@ -2445,6 +2490,9 @@ func mergePublicImageToolTaskFields(target, source map[string]any) {
 	}
 	if settings := util.StringMap(source["official_settings"]); len(settings) > 0 {
 		target["official_settings"] = settings
+	}
+	if settings := util.StringMap(source["midjourney_settings"]); len(settings) > 0 {
+		target["midjourney_settings"] = settings
 	}
 	if value := util.ToInt(source["partial_images"], 0); value > 0 {
 		target["partial_images"] = value

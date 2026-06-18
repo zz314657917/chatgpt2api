@@ -71,9 +71,12 @@ func TestSub2APIChatTaskResultIncludesResolvedModel(t *testing.T) {
 		t.Fatalf("model = %q, want %q", got, util.DefaultChatModel)
 	}
 
-	result = sub2APIChatTaskResult(map[string]any{"model": util.ImageModelGPT54Mini}, "hello", util.DefaultChatModel)
+	result = sub2APIChatTaskResult(map[string]any{"model": util.ImageModelGPT54Mini, "usage": map[string]any{"total_tokens": 12}}, "hello", util.DefaultChatModel)
 	if got := util.Clean(result["model"]); got != util.ImageModelGPT54Mini {
 		t.Fatalf("model = %q, want upstream response model", got)
+	}
+	if usage := util.StringMap(result["usage"]); util.ToInt(usage["total_tokens"], 0) != 12 {
+		t.Fatalf("usage = %#v, want total_tokens 12", usage)
 	}
 }
 

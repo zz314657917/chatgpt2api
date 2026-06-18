@@ -251,7 +251,7 @@ func (a *App) handleImageGenerations(w http.ResponseWriter, r *http.Request) {
 	body["base_url"] = a.resolveImageBaseURL(r)
 	a.attachFallbackReferenceImage(identity, body)
 	a.attachCreationTaskLimiter(body, identity)
-	visibility, err := service.NormalizeImageVisibility(util.Clean(body["visibility"]))
+	visibility, err := service.NormalizePrivateImageVisibility(util.Clean(body["visibility"]))
 	if err != nil {
 		writeOpenAIError(w, http.StatusBadRequest, err.Error())
 		return
@@ -295,7 +295,7 @@ func (a *App) handleImageEdits(w http.ResponseWriter, r *http.Request) {
 	a.attachFallbackReferenceImage(identity, body)
 	a.attachCreationTaskLimiter(body, identity)
 	body["images"] = images
-	visibility, err := service.NormalizeImageVisibility(util.Clean(body["visibility"]))
+	visibility, err := service.NormalizePrivateImageVisibility(util.Clean(body["visibility"]))
 	if err != nil {
 		writeOpenAIError(w, http.StatusBadRequest, err.Error())
 		return
@@ -1237,7 +1237,6 @@ func (a *App) handleTextAssetCollectionItems(w http.ResponseWriter, r *http.Requ
 	util.WriteJSON(w, http.StatusOK, result)
 }
 
-
 func (a *App) handleImageTags(w http.ResponseWriter, r *http.Request) {
 	identity, ok := a.requireIdentity(w, r, "")
 	if !ok {
@@ -1510,7 +1509,7 @@ func (a *App) handleImageUploads(w http.ResponseWriter, r *http.Request) {
 		util.WriteError(w, http.StatusBadRequest, "image file is required")
 		return
 	}
-	visibility, err := service.NormalizeImageVisibility(util.Clean(body["visibility"]))
+	visibility, err := service.NormalizePrivateImageVisibility(util.Clean(body["visibility"]))
 	if err != nil {
 		util.WriteError(w, http.StatusBadRequest, err.Error())
 		return
@@ -1721,13 +1720,6 @@ func (a *App) handleImageReferenceFile(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	if ref.Visibility == service.ImageVisibilityPublic && ref.Shared {
-		if ref.ContentType != "" {
-			w.Header().Set("Content-Type", ref.ContentType)
-		}
-		http.ServeFile(w, r, ref.Path)
-		return
-	}
 	identity, ok := a.imageRequestIdentity(w, r)
 	if !ok {
 		return
@@ -1747,9 +1739,6 @@ func (a *App) authorizeImageFileRequest(w http.ResponseWriter, r *http.Request, 
 	if err != nil {
 		http.NotFound(w, r)
 		return service.ImageFileAccess{}, false
-	}
-	if ref.Visibility == service.ImageVisibilityPublic {
-		return ref, true
 	}
 	identity, ok := a.imageRequestIdentity(w, r)
 	if !ok {
@@ -2303,6 +2292,20 @@ func (a *App) jsonImageEditUploads(ctx context.Context, body map[string]any, ide
 		}
 		return images, nil
 	}
+	if (sub2APIImageModel(body["model"]) == util.ImageModelMidjourney || sub2APIImageModel(body["model"]) == util.ImageModelGrokImagine) && len(publicURLs) > 0 {
+		for _, rawURL := range urls {
+			if isPublicJSONImageURL(rawURL) {
+				images = append(images, protocol.UploadedImage{})
+				continue
+			}
+			image, err := uploadedImageFromJSONImageURL(ctx, rawURL)
+			if err != nil {
+				return nil, err
+			}
+			images = append(images, image)
+		}
+		return images, nil
+	}
 	for _, rawURL := range urls {
 		image, err := uploadedImageFromJSONImageURL(ctx, rawURL)
 		if err != nil {
@@ -2316,18 +2319,24 @@ func (a *App) jsonImageEditUploads(ctx context.Context, body map[string]any, ide
 func publicJSONImageURLs(urls []string) []string {
 	out := make([]string, 0, len(urls))
 	for _, rawURL := range urls {
-		parsed, err := url.Parse(strings.TrimSpace(rawURL))
-		if err != nil {
-			continue
-		}
-		switch strings.ToLower(parsed.Scheme) {
-		case "http", "https":
-			if parsed.Host != "" {
-				out = append(out, rawURL)
-			}
+		if isPublicJSONImageURL(rawURL) {
+			out = append(out, rawURL)
 		}
 	}
 	return dedupe(out)
+}
+
+func isPublicJSONImageURL(rawURL string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return false
+	}
+	switch strings.ToLower(parsed.Scheme) {
+	case "http", "https":
+		return parsed.Host != ""
+	default:
+		return false
+	}
 }
 
 func jsonImageURLReferences(body map[string]any) ([]string, error) {
@@ -2629,6 +2638,7 @@ func readMultipartImageBody(r *http.Request) (map[string]any, []protocol.Uploade
 		"partial_images":           firstForm(r.MultipartForm, "partial_images"),
 		"official_fallback":        firstForm(r.MultipartForm, "official_fallback"),
 		"input_image_mask":         firstForm(r.MultipartForm, "input_image_mask"),
+		"mask_url":                 firstForm(r.MultipartForm, "mask_url"),
 		"image_urls":               r.MultipartForm.Value["image_urls"],
 		"output_format":            firstForm(r.MultipartForm, "output_format"),
 		"output_compression":       firstForm(r.MultipartForm, "output_compression"),
@@ -2667,6 +2677,13 @@ func readMultipartImageBody(r *http.Request) (map[string]any, []protocol.Uploade
 			return nil, nil, fmt.Errorf("invalid official_settings")
 		}
 		body["official_settings"] = settings
+	}
+	if rawSettings := strings.TrimSpace(firstForm(r.MultipartForm, "midjourney_settings")); rawSettings != "" {
+		var settings any
+		if err := json.Unmarshal([]byte(rawSettings), &settings); err != nil {
+			return nil, nil, fmt.Errorf("invalid midjourney_settings")
+		}
+		body["midjourney_settings"] = settings
 	}
 	var images []protocol.UploadedImage
 	for _, field := range []string{"image", "image[]"} {
@@ -2970,7 +2987,7 @@ func (a *App) imageListAccessScope(identity service.Identity, query url.Values) 
 	case "mine":
 		return service.ImageAccessScope{OwnerID: identityScope(identity)}, service.TeamImageLibraryContext{}, 0, ""
 	case "public":
-		return service.ImageAccessScope{Public: true}, service.TeamImageLibraryContext{}, 0, ""
+		return service.ImageAccessScope{}, service.TeamImageLibraryContext{}, http.StatusBadRequest, "public image library is disabled"
 	case "team":
 		context, status, message := a.imageTeamContext(identity, query.Get("team_id"))
 		if status != 0 {
@@ -2983,7 +3000,7 @@ func (a *App) imageListAccessScope(identity service.Identity, query url.Values) 
 		}
 		return service.ImageAccessScope{All: true}, service.TeamImageLibraryContext{}, 0, ""
 	default:
-		return service.ImageAccessScope{}, service.TeamImageLibraryContext{}, http.StatusBadRequest, "scope must be mine, team, public, or all"
+		return service.ImageAccessScope{}, service.TeamImageLibraryContext{}, http.StatusBadRequest, "scope must be mine, team, or all"
 	}
 }
 
@@ -3381,11 +3398,15 @@ func (a *App) runLoggedChatTask(ctx context.Context, identity service.Identity, 
 		return result, err
 	}
 	a.logCall(ctx, identity, "文本生成", http.MethodPost, "/api/creation-tasks/chat-completions", model, start, "success", http.StatusOK, "", nil, requestCapture)
-	return map[string]any{
+	taskResult := map[string]any{
 		"created":     result["created"],
 		"output_type": "text",
 		"data":        []map[string]any{{"text_response": text}},
-	}, nil
+	}
+	if usage := util.StringMap(result["usage"]); len(usage) > 0 {
+		taskResult["usage"] = util.CopyMap(usage)
+	}
+	return taskResult, nil
 }
 
 func chatCompletionResultText(result map[string]any) string {

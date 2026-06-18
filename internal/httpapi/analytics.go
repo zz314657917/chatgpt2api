@@ -74,13 +74,50 @@ func (a *App) handleAdminUsageOverview(w http.ResponseWriter, r *http.Request) {
 	}
 	analytics := a.analytics.Overview(days)
 	tasks := a.tasks.UsageOverview(days)
+	recentTaskLogs := decorateUsageOverviewTaskLogs(tasks.RecentTaskLogs, a.usageOverviewUserDisplayNames())
 	util.WriteJSON(w, http.StatusOK, map[string]any{
 		"today":            mergeUsageOverviewMaps(tasks.Today, analytics.Today),
 		"last_7_days":      mergeUsageOverviewDays(tasks.Last7Days, analytics.Last7Days),
 		"pages":            analytics.Pages,
 		"task_modes":       tasks.TaskModes,
-		"recent_task_logs": tasks.RecentTaskLogs,
+		"recent_task_logs": recentTaskLogs,
 	})
+}
+
+func decorateUsageOverviewTaskLogs(items []map[string]any, names map[string]string) []map[string]any {
+	out := make([]map[string]any, 0, len(items))
+	for _, item := range items {
+		next := util.CopyMap(item)
+		if util.Clean(next["user_name"]) == "" {
+			for _, key := range []string{"user_id", "actor_user_id", "owner_id"} {
+				if name := names[util.Clean(next[key])]; name != "" {
+					next["user_name"] = name
+					break
+				}
+			}
+		}
+		out = append(out, next)
+	}
+	return out
+}
+
+func (a *App) usageOverviewUserDisplayNames() map[string]string {
+	names := a.imageOwnerDisplayNames()
+	for _, filter := range []service.AuthKeyFilter{{Kind: service.AuthKindSession}, {Kind: service.AuthKindAPIKey}} {
+		for _, item := range a.auth.ListKeys(filter) {
+			name := firstNonEmpty(util.Clean(item["owner_name"]), util.Clean(item["name"]))
+			if name == "" {
+				continue
+			}
+			if id := util.Clean(item["owner_id"]); id != "" {
+				names[id] = name
+			}
+			if id := util.Clean(item["id"]); id != "" {
+				names[id] = name
+			}
+		}
+	}
+	return names
 }
 
 func mergeUsageOverviewDays(left, right []map[string]any) []map[string]any {

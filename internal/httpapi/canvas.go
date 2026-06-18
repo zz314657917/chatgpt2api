@@ -22,6 +22,7 @@ type canvasModelOption struct {
 	Name         string   `json:"name"`
 	Kind         string   `json:"kind"`
 	Capabilities []string `json:"capabilities"`
+	GroupModes   []string `json:"group_modes,omitempty"`
 	Enabled      bool     `json:"enabled"`
 }
 
@@ -506,7 +507,8 @@ func isCanvasMaskRef(ref service.CanvasImageRef) bool {
 
 func (a *App) canvasModelCatalog(ctx context.Context, identity service.Identity) []canvasModelOption {
 	if a != nil && a.config != nil && a.config.LuoyeIndependentMode() {
-		seen := map[string]canvasModelOption{}
+		var out []canvasModelOption
+		seen := map[string]struct{}{}
 		for _, mode := range []string{"chat", "generate", "video"} {
 			binding, ok := a.sub2APIBindingForMode(ctx, identity, mode)
 			if !ok || binding.GroupID == "" {
@@ -516,14 +518,23 @@ func (a *App) canvasModelCatalog(ctx context.Context, identity service.Identity)
 			if !ok {
 				continue
 			}
+			groupMode := canvasModelGroupMode(mode)
 			for _, item := range items {
-				if item.ID != "" && !shouldHideCanvasModel(item.ID) {
-					seen[item.ID] = item
+				if !canvasModelAllowedForGroupMode(item, groupMode) {
+					continue
 				}
+				item = canvasModelOptionForGroupMode(item, groupMode)
+				key := groupMode + "\x00" + item.ID
+				if _, ok := seen[key]; ok {
+					continue
+				}
+				seen[key] = struct{}{}
+				out = append(out, item)
 			}
 		}
-		if len(seen) > 0 {
-			return sortedCanvasModelOptions(seen)
+		if len(out) > 0 {
+			sortCanvasModelOptions(out)
+			return out
 		}
 	}
 	if binding, ok := a.sub2APIBindingForIdentity(identity); ok {
@@ -541,6 +552,9 @@ func (a *App) canvasModelCatalog(ctx context.Context, identity service.Identity)
 func (a *App) sub2APIModelOptionsForBinding(ctx context.Context, binding service.Sub2APIBinding, mode string) ([]canvasModelOption, bool) {
 	if result, err := a.getSub2APIModelCatalog(ctx, binding); err == nil {
 		items := canvasModelOptionsFromCatalog(result)
+		if supplemental, ok := a.sub2APIConcreteModelOptionsForBinding(ctx, binding); ok {
+			items = mergeCanvasModelOptions(items, supplemental)
+		}
 		if mode == "generate" || mode == "edit" {
 			items = addBuiltInCanvasImageModels(items)
 		}
@@ -555,6 +569,77 @@ func (a *App) sub2APIModelOptionsForBinding(ctx context.Context, binding service
 		return items, true
 	}
 	return nil, false
+}
+
+func (a *App) sub2APIConcreteModelOptionsForBinding(ctx context.Context, binding service.Sub2APIBinding) ([]canvasModelOption, bool) {
+	if binding.GroupID == "" {
+		return nil, false
+	}
+	result, err := a.getSub2APIModels(ctx, binding)
+	if err != nil {
+		return nil, false
+	}
+	return canvasModelOptionsFromModelList(result, false, true), true
+}
+
+func mergeCanvasModelOptions(primary []canvasModelOption, supplemental []canvasModelOption) []canvasModelOption {
+	seen := make(map[string]canvasModelOption, len(primary)+len(supplemental))
+	for _, item := range primary {
+		if item.ID == "" || shouldHideCanvasModel(item.ID) {
+			continue
+		}
+		seen[item.ID] = item
+	}
+	for _, item := range supplemental {
+		if item.ID == "" || shouldHideCanvasModel(item.ID) {
+			continue
+		}
+		if _, ok := seen[item.ID]; ok {
+			continue
+		}
+		seen[item.ID] = item
+	}
+	return sortedCanvasModelOptions(seen)
+}
+
+func canvasModelGroupMode(mode string) string {
+	switch strings.TrimSpace(mode) {
+	case "chat":
+		return "chat"
+	case "video":
+		return "video"
+	default:
+		return "image"
+	}
+}
+
+func canvasModelOptionForGroupMode(item canvasModelOption, groupMode string) canvasModelOption {
+	groupMode = canvasModelGroupMode(groupMode)
+	item.GroupModes = []string{groupMode}
+	item.Capabilities = []string{groupMode}
+	item.Kind = canvasModelKindFromCapabilities(item.Capabilities)
+	return item
+}
+
+func canvasModelAllowedForGroupMode(item canvasModelOption, groupMode string) bool {
+	if item.ID == "" || shouldHideCanvasModel(item.ID) || item.Enabled == false {
+		return false
+	}
+	groupMode = canvasModelGroupMode(groupMode)
+	switch groupMode {
+	case "chat":
+		return (canvasModelHasCapability(item.Capabilities, "chat") || canvasModelLooksTextOnly(item.ID)) &&
+			!canvasModelHasCapability(item.Capabilities, "video") &&
+			!canvasModelLooksLikeImage(item.ID) &&
+			!canvasModelLooksLikeVideo(item.ID)
+	case "video":
+		return canvasModelHasCapability(item.Capabilities, "video")
+	default:
+		return (canvasModelHasCapability(item.Capabilities, "image") || canvasModelLooksLikeImage(item.ID)) &&
+			!canvasModelHasCapability(item.Capabilities, "video") &&
+			!canvasModelLooksTextOnly(item.ID) &&
+			!canvasModelLooksLikeVideo(item.ID)
+	}
 }
 
 func (a *App) getSub2APIModelCatalog(ctx context.Context, binding service.Sub2APIBinding) (map[string]any, error) {
@@ -599,6 +684,8 @@ func addBuiltInCanvasImageModels(items []canvasModelOption) []canvasModelOption 
 		util.ImageModelGeminiProPreviewOfficial,
 		util.ImageModelGeminiFlashPreview,
 		util.ImageModelGeminiFlashPreviewOfficial,
+		util.ImageModelMidjourney,
+		util.ImageModelGrokImagine,
 	} {
 		if _, ok := seen[id]; !ok {
 			seen[id] = newCanvasModelOption(id, canvasModelDisplayName(id), false)
@@ -843,7 +930,9 @@ func canvasModelCapabilitiesForModelList(id string, allowVideo bool) []string {
 		util.ImageModelGeminiProPreview,
 		util.ImageModelGeminiProPreviewOfficial,
 		util.ImageModelGeminiFlashPreview,
-		util.ImageModelGeminiFlashPreviewOfficial:
+		util.ImageModelGeminiFlashPreviewOfficial,
+		util.ImageModelMidjourney,
+		util.ImageModelGrokImagine:
 		return []string{"image"}
 	default:
 		if canvasModelLooksLikeImage(id) {
@@ -901,7 +990,9 @@ func canvasModelCapabilities(value any, id string) []string {
 		util.ImageModelGeminiProPreview,
 		util.ImageModelGeminiProPreviewOfficial,
 		util.ImageModelGeminiFlashPreview,
-		util.ImageModelGeminiFlashPreviewOfficial:
+		util.ImageModelGeminiFlashPreviewOfficial,
+		util.ImageModelMidjourney,
+		util.ImageModelGrokImagine:
 		return []string{"image"}
 	default:
 		if canvasModelLooksLikeVideo(id) {
@@ -962,6 +1053,42 @@ func canvasModelLooksLikeImage(id string) bool {
 	lower := strings.ToLower(strings.TrimSpace(id))
 	for _, hint := range []string{"image", "imagen", "flux", "stable-diffusion", "sdxl", "dall-e", "midjourney", "kolors", "ideogram", "recraft"} {
 		if strings.Contains(lower, hint) {
+			return true
+		}
+	}
+	return false
+}
+
+func canvasModelLooksTextOnly(id string) bool {
+	lower := strings.ToLower(strings.TrimSpace(id))
+	if lower == "" || canvasModelLooksLikeImage(lower) {
+		return false
+	}
+	for _, hint := range []string{
+		"gpt-",
+		"chatgpt-",
+		"o1",
+		"o3",
+		"o4",
+		"claude",
+		"gemini-",
+		"glm",
+		"deepseek",
+		"qwen",
+		"moonshot",
+		"kimi",
+		"yi-",
+		"doubao",
+		"ernie",
+		"hunyuan",
+		"llama",
+		"mistral",
+		"mixtral",
+		"command-",
+		"baichuan",
+		"internlm",
+	} {
+		if lower == hint || strings.HasPrefix(lower, hint) {
 			return true
 		}
 	}

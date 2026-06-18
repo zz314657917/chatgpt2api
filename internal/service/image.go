@@ -1109,7 +1109,7 @@ func imageIndexSortUnixNano(entry imageIndexEntry, scope ImageAccessScope) int64
 
 func imageIndexEntryMatchesScope(entry imageIndexEntry, scope ImageAccessScope) bool {
 	if scope.Public {
-		return entry.Visibility == ImageVisibilityPublic
+		return false
 	}
 	if scope.All {
 		return true
@@ -1500,6 +1500,9 @@ func (s *ImageService) UpdateImageVisibility(value, visibility string, scope Ima
 	visibility, err := NormalizeImageVisibility(visibility)
 	if err != nil {
 		return nil, err
+	}
+	if visibility == ImageVisibilityPublic {
+		return nil, errors.New("public image library is disabled")
 	}
 	options := ImageVisibilityUpdateOptions{}
 	if len(optionValues) > 0 {
@@ -2248,9 +2251,6 @@ func (s *ImageService) imageOwner(rel string) string {
 }
 
 func imageMetadataAllowsAccess(meta imageMetadata, scope ImageAccessScope) bool {
-	if meta.Visibility == ImageVisibilityPublic {
-		return true
-	}
 	if scope.All {
 		return true
 	}
@@ -3964,6 +3964,17 @@ func NormalizeImageVisibility(value string) (string, error) {
 	default:
 		return "", errors.New("visibility must be private or public")
 	}
+}
+
+func NormalizePrivateImageVisibility(value string) (string, error) {
+	visibility, err := NormalizeImageVisibility(value)
+	if err != nil {
+		return "", err
+	}
+	if visibility == ImageVisibilityPublic {
+		return "", errors.New("public image library is disabled")
+	}
+	return visibility, nil
 }
 
 func NormalizeImageTags(value any) []string {
