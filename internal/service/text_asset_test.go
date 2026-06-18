@@ -230,6 +230,68 @@ func TestTextAssetServiceTeamCollectionsRequireManager(t *testing.T) {
 	}
 }
 
+func TestTextAssetServiceRenameCollectionRollsBackAssetsOnCollectionSaveError(t *testing.T) {
+	backend := newTestStorageBackend(t)
+	service := NewTextAssetService(backend)
+	scope := TextAssetAccessScope{OwnerID: "user-alice", OwnerName: "Alice"}
+	item, err := service.Create(map[string]any{"name": "A", "content": "alpha"}, scope)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	collection, err := service.CreateTextAssetCollection("角色", scope)
+	if err != nil {
+		t.Fatalf("CreateTextAssetCollection() error = %v", err)
+	}
+	if _, err := service.UpdateTextAssetCollectionItems(collection.ID, []string{item["id"].(string)}, scope); err != nil {
+		t.Fatalf("UpdateTextAssetCollectionItems() error = %v", err)
+	}
+
+	store := &failingJSONDocumentStore{base: backend.(storage.JSONDocumentBackend), failName: textAssetCollectionsDocumentName}
+	failingService := &TextAssetService{store: store}
+	if _, err := failingService.RenameTextAssetCollection(collection.ID, "场景", scope); err == nil {
+		t.Fatalf("RenameTextAssetCollection(save failure) error = nil")
+	}
+	got := service.List(TextAssetListOptions{CollectionID: collection.ID}, scope)
+	if len(got.Items) != 1 || got.Items[0]["collection_name"] != "角色" {
+		t.Fatalf("failed rename should keep asset collection name: %#v", got.Items)
+	}
+	collections := service.ListTextAssetCollectionsResult(scope)
+	if len(collections.Items) != 1 || collections.Items[0].Name != "角色" || collections.Items[0].TextsCount != 1 {
+		t.Fatalf("failed rename should keep collection: %#v", collections)
+	}
+}
+
+func TestTextAssetServiceDeleteCollectionRollsBackAssetsOnCollectionSaveError(t *testing.T) {
+	backend := newTestStorageBackend(t)
+	service := NewTextAssetService(backend)
+	scope := TextAssetAccessScope{OwnerID: "user-alice", OwnerName: "Alice"}
+	item, err := service.Create(map[string]any{"name": "A", "content": "alpha"}, scope)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	collection, err := service.CreateTextAssetCollection("角色", scope)
+	if err != nil {
+		t.Fatalf("CreateTextAssetCollection() error = %v", err)
+	}
+	if _, err := service.UpdateTextAssetCollectionItems(collection.ID, []string{item["id"].(string)}, scope); err != nil {
+		t.Fatalf("UpdateTextAssetCollectionItems() error = %v", err)
+	}
+
+	store := &failingJSONDocumentStore{base: backend.(storage.JSONDocumentBackend), failName: textAssetCollectionsDocumentName}
+	failingService := &TextAssetService{store: store}
+	if _, err := failingService.DeleteTextAssetCollection(collection.ID, scope); err == nil {
+		t.Fatalf("DeleteTextAssetCollection(save failure) error = nil")
+	}
+	got := service.List(TextAssetListOptions{CollectionID: collection.ID}, scope)
+	if len(got.Items) != 1 || got.Items[0]["collection_name"] != "角色" {
+		t.Fatalf("failed delete should keep asset collection: %#v", got.Items)
+	}
+	collections := service.ListTextAssetCollectionsResult(scope)
+	if len(collections.Items) != 1 || collections.Items[0].ID != collection.ID || collections.Items[0].TextsCount != 1 {
+		t.Fatalf("failed delete should keep collection: %#v", collections)
+	}
+}
+
 func TestTextAssetServiceDeleteReturnsSaveError(t *testing.T) {
 	backend := newTestStorageBackend(t)
 	service := NewTextAssetService(backend)

@@ -778,6 +778,12 @@ export type ManagedTextAssetListResult = {
   page_size: number;
 };
 
+export type ManagedTextAssetPayload = {
+  name?: string;
+  content: string;
+  collection_id?: string;
+};
+
 export type ManagedImageListResult = {
   items: ManagedImageSummary[];
   groups: Array<{ date: string; items: ManagedImageSummary[] }>;
@@ -2613,7 +2619,7 @@ export async function fetchManagedTextAssets(
 }
 
 export async function createManagedTextAsset(
-  payload: { name?: string; content: string },
+  payload: ManagedTextAssetPayload,
   options: { scope?: ManagedTextAssetListScope; team_id?: string } = {},
 ) {
   const data = await httpRequest<{ item: ManagedTextAsset }>("/api/text-assets", {
@@ -2629,7 +2635,7 @@ export async function createManagedTextAsset(
 
 export async function updateManagedTextAsset(
   id: string,
-  payload: { name?: string; content: string },
+  payload: ManagedTextAssetPayload,
   options: { scope?: ManagedTextAssetListScope; team_id?: string } = {},
 ) {
   const data = await httpRequest<{ item: ManagedTextAsset }>(`/api/text-assets/${encodeURIComponent(id)}`, {

@@ -351,12 +351,14 @@ func (s *TextAssetService) RenameTextAssetCollection(id, name string, scope Text
 			return TextAssetCollection{}, errors.New("collection name already exists")
 		}
 	}
+	previous := collections[index]
+	if err := s.renameTextAssetCollectionOnAssetsLocked(id, name, scope); err != nil {
+		return TextAssetCollection{}, err
+	}
 	collections[index].Name = name
 	collections[index].UpdatedAt = util.NowISO()
 	if err := s.saveTextAssetCollectionsLocked(collections); err != nil {
-		return TextAssetCollection{}, err
-	}
-	if err := s.renameTextAssetCollectionOnAssetsLocked(id, name, scope); err != nil {
+		_ = s.renameTextAssetCollectionOnAssetsLocked(id, previous.Name, scope)
 		return TextAssetCollection{}, err
 	}
 	collections[index].TextsCount = s.textAssetCollectionCountsLocked(scope)[id]
@@ -378,9 +380,11 @@ func (s *TextAssetService) DeleteTextAssetCollection(id string, scope TextAssetA
 	collections := s.loadTextAssetCollectionsLocked()
 	next := make([]TextAssetCollection, 0, len(collections))
 	deleted := false
+	deletedName := ""
 	for _, collection := range collections {
 		if collection.ID == id && textAssetCollectionMatchesScope(collection, scope) {
 			deleted = true
+			deletedName = collection.Name
 			continue
 		}
 		next = append(next, collection)
@@ -388,11 +392,14 @@ func (s *TextAssetService) DeleteTextAssetCollection(id string, scope TextAssetA
 	if !deleted {
 		return nil, errors.New("collection not found")
 	}
-	if err := s.saveTextAssetCollectionsLocked(next); err != nil {
+	cleared, clearedIDs, err := s.clearTextAssetCollectionOnAssetsLocked(id, scope)
+	if err != nil {
 		return nil, err
 	}
-	cleared, err := s.clearTextAssetCollectionOnAssetsLocked(id, scope)
-	if err != nil {
+	if err := s.saveTextAssetCollectionsLocked(next); err != nil {
+		if len(clearedIDs) > 0 {
+			_ = s.restoreTextAssetCollectionOnAssetsLocked(id, deletedName, clearedIDs, scope)
+		}
 		return nil, err
 	}
 	return map[string]any{"deleted": true, "collection_id": id, "cleared": cleared}, nil
@@ -738,13 +745,15 @@ func (s *TextAssetService) renameTextAssetCollectionOnAssetsLocked(collectionID,
 	return s.saveLocked(items)
 }
 
-func (s *TextAssetService) clearTextAssetCollectionOnAssetsLocked(collectionID string, scope TextAssetAccessScope) (int, error) {
+func (s *TextAssetService) clearTextAssetCollectionOnAssetsLocked(collectionID string, scope TextAssetAccessScope) (int, []string, error) {
 	items := s.loadLocked()
 	cleared := 0
+	clearedIDs := make([]string, 0)
 	for index, item := range items {
 		if item.CollectionID != collectionID || !textAssetMatchesScope(item, scope) {
 			continue
 		}
+		clearedIDs = append(clearedIDs, item.ID)
 		item.CollectionID = ""
 		item.CollectionName = ""
 		item.UpdatedAt = util.NowISO()
@@ -752,12 +761,44 @@ func (s *TextAssetService) clearTextAssetCollectionOnAssetsLocked(collectionID s
 		cleared++
 	}
 	if cleared == 0 {
-		return 0, nil
+		return 0, nil, nil
 	}
 	if err := s.saveLocked(items); err != nil {
-		return cleared, err
+		return cleared, clearedIDs, err
 	}
-	return cleared, nil
+	return cleared, clearedIDs, nil
+}
+
+func (s *TextAssetService) restoreTextAssetCollectionOnAssetsLocked(collectionID, collectionName string, ids []string, scope TextAssetAccessScope) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	targetIDs := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		id = util.Clean(id)
+		if id != "" {
+			targetIDs[id] = struct{}{}
+		}
+	}
+	if len(targetIDs) == 0 {
+		return nil
+	}
+	items := s.loadLocked()
+	changed := false
+	for index, item := range items {
+		if _, ok := targetIDs[item.ID]; !ok || !textAssetMatchesScope(item, scope) {
+			continue
+		}
+		item.CollectionID = collectionID
+		item.CollectionName = collectionName
+		item.UpdatedAt = util.NowISO()
+		items[index] = item
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+	return s.saveLocked(items)
 }
 
 func ensureTextAssetWritableScope(scope TextAssetAccessScope) error {
