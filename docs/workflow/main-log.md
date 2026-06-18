@@ -11,4 +11,13 @@
 260616 00:24 | task-008-pro-studio-v1 | contract-approved | codex | docs/workflow/task-008-contract-review.md
 260616 01:31 | task-008-pro-studio-v1 | build-complete | codex | docs/workflow/worker-results/task-008-pro-studio-v1-result.md
 260616 01:31 | task-008-pro-studio-v1 | qa-pass | codex | docs/workflow/qa-reports/task-008-pro-studio-v1-qa.md
+260616 10:50 | task-009-pro-studio-production-workbench | contract-approved | codex | docs/workflow/tasks/task-009-pro-studio-production-workbench.md
+260616 11:20 | task-009-pro-studio-production-workbench | qa-pass | codex | docs/workflow/qa-reports/task-009-pro-studio-production-workbench-qa.md
+260616 11:50 | task-010-ecommerce-production-delivery | contract-approved | codex | docs/workflow/tasks/task-010-ecommerce-production-delivery.md
+260616 11:59 | task-010-ecommerce-production-delivery | qa-pass | codex | docs/workflow/qa-reports/task-010-ecommerce-production-delivery-qa.md
 260616 01:51 | task-008-pro-studio-v1 | local-container-updated | codex | chatgpt2api:codex-20260616-014314-pro-studio, version local-pro-studio-v1
+260616 12:46 | task-010-ecommerce-production-delivery | local-container-updated | codex | chatgpt2api:codex-20260616-124122-ecommerce-production-delivery, version local-20260616-ecommerce-production-delivery
+260616 12:55 | task-011-ecommerce-production-acceptance | contract-approved | codex | docs/workflow/tasks/task-011-ecommerce-production-acceptance.md
+260616 13:46 | task-011-ecommerce-production-acceptance | build-complete | codex | docs/workflow/worker-results/task-011-ecommerce-production-acceptance-result.md
+260616 13:46 | task-011-ecommerce-production-acceptance | qa-pass | codex | docs/workflow/qa-reports/task-011-ecommerce-production-acceptance-qa.md
+260616 17:27 | task-011-ecommerce-production-acceptance | local-container-updated | codex | chatgpt2api:codex-20260616-task011-acceptance, version local-20260616-task011-acceptance

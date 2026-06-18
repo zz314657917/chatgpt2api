@@ -2,7 +2,7 @@
 title: Luoye Independent Mode
 type: architecture
 repo: chatgpt2api
-last_verified: 2026-06-14
+last_verified: 2026-06-17
 ---
 
 # 落叶创艺独立用户版
@@ -13,6 +13,7 @@ last_verified: 2026-06-14
 - Sub2API 是注册、登录、充值、余额、默认分组、管理配置和扣费真源。
 - `chatgpt2api` 负责本地创作站会话、`/image` 与 `/canvas` 创作体验、团队空间 UI，以及与 Sub2API bridge 的最小必要映射。
 - 2026-06-12 之后，这个“独立用户版”已经不再只对应 `/image` 与 `/canvas`；`/image-manager`、`/social`、`/ecommerce-suite`、text assets 和 team usage 也开始共用同一套创作底座。
+- 2026-06-16 之后，这套产品面又前移到 Pro Studio 生产模式、电商生产交付和 Gemini reference upload；默认心智不应再停留在“普通图片工作台 + 登录桥接”。
 
 ## 默认用户链路
 
@@ -29,6 +30,7 @@ last_verified: 2026-06-14
 - 顶部余额和充值入口优先读取 Sub2API 钱包摘要。
 - 团队模式 v1 的稳定语义是 `team_id`、`payer_user_id`、`actor_user_id` 这组真实扣费上下文，而不是“调用队长 API”。
 - `ecommerce-suite` 不是独立业务后端；它复用现有登录态、素材能力、creation-task 和权限边界，属于独立用户版主线继续扩展出来的新工作台。
+- `/canvas` 与 `/ecommerce-suite` 的 production mode 已进入默认产品面；普通工作台、生产工作台和团队 usage 现在共享同一套会话、资产和计费语义。
 
 ## 登录态与 session-probe
 
@@ -76,6 +78,15 @@ last_verified: 2026-06-14
 - `gpt-image-2` 结果序列化、素材引用、session-probe 登录态恢复和钱包扣费语义，是这些工作台共享的稳定后端/前端边界。
 - 2026-06-12 的 Output 动作栈与 `ecommerce-suite` 落地说明：后续如果某个工作台的结果回填、下载、素材入库或 usage 展示异常，不要只在单页排查；默认应把 creation-task 输出、素材库和团队 usage 一起看。
 - text assets 已进入这套创作底座，说明“独立用户版”默认心智已经扩展到“图片工作台 + 素材管理 + 轻量文本资产 + 电商套图编排”的组合面。
+- 2026-06-16 的生产交付闭环进一步说明：ZIP 打包下载、文案保存为 text asset、已完成图片归入项目素材集，也属于同一条默认输出链路，而不是 `ecommerce-suite` 私有逻辑。
+
+## Pro Studio / Gemini 新稳定边界
+
+- `/canvas` 与 `/ecommerce-suite` 都已支持 production mode，显示用途、等级、高级 official 设置和 `gpt-image-2-official` 锁模。
+- 电商生产模式当前稳定支持商品主图、电商横幅、详情页竖图、场景图和 SKU 批量图；SKU `8/12` 张预览按 `4+4` / `4+4+4` 拆分。
+- 生产交付不再只是参数面板：ZIP 下载、text asset 保存、图片归档项目素材集已经进入默认交付闭环。
+- Gemini 图片模型当前按 preview 路由理解，并支持 reference uploads；后续再看 Gemini 兼容问题时，不应沿用旧入口或旧 payload 心智。
+- 因此后续凡是涉及 Pro Studio、官方生图、Gemini reference、素材归档或 team usage 的问题，默认都要把 `/canvas`、`/ecommerce-suite`、creation-task 输出和素材库一起看。
 
 ## 最小验证清单
 
@@ -95,6 +106,8 @@ last_verified: 2026-06-14
   - 下载个人 / 团队 / 公共图片时返回短期签名 URL
   - `/image-manager`、`/image`、`/canvas` 能按全部 / 未归类 / 素材集筛选
   - `ecommerce-suite` 进入后仍复用现有登录态和资产/输出链路，不出现独立鉴权或独立结果语义
+  - `/canvas` 与 `/ecommerce-suite` production mode 都能打开，`gpt-image-2-official` 锁模和 SKU 拆分预览不退化
+  - Gemini 图片模型仍走 preview/reference 语义，不回退到旧字段组合
 
 ## 现在优先排查什么
 
@@ -104,6 +117,7 @@ last_verified: 2026-06-14
 - 素材库异常：先看 `collection_id`、未归类筛选、团队 owner/manager 权限和公共图库只读边界。
 - 团队扣费争议：先看 `team_id`、`payer_user_id`、`actor_user_id` 和 Sub2API 对应 commit 记录。
 - 新工作台结果或 team usage 展示异常：先看 creation-task 输出序列化、Output 动作栈、素材链路和团队 usage 页面是否仍共用同一套会话/计费语义。
+- 生产模式或 Gemini 兼容异常：先看 official route / preview route、reference upload、结果序列化和项目素材集归档，而不是先把问题归到单个页面。
 
 ## 仍未验证的边界
 

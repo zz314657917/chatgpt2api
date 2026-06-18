@@ -2,7 +2,7 @@
 title: Current Focus
 type: status
 repo: chatgpt2api
-last_verified: 2026-06-12
+last_verified: 2026-06-18
 ---
 
 # 当前稳定心智模型
@@ -11,8 +11,9 @@ chatgpt2api 当前不应再被理解为单纯“ChatGPT 官网能力封装服务
 
 - 面向普通用户的独立创作站。
 - 面向 Sub2API bridge 的注册、登录、充值和余额真源接入。
-- 面向图像创作链路的 `/image` 工作台与 `/canvas` 自研节点画布。
+- 面向图像创作链路的 `/image` 工作台、`/canvas` 自研节点画布与 Pro Studio 生产模式。
 - 面向团队共享额度 v1 的 actor / payer 扣费语义。
+- 面向 `ecommerce-suite`、text assets 和多工作台共用创作底座的生产交付流。
 
 ## 当前主线
 
@@ -26,6 +27,14 @@ chatgpt2api 当前不应再被理解为单纯“ChatGPT 官网能力封装服务
   - `collection_id` / 未归类筛选 / 团队素材权限组成的素材库 collections 层
 - `/image` 与 `/canvas` 仍是创作底座：连续编辑、继续创作、结果回填、自研画布、视频节点 fail-closed 和参数归一规则继续成立，但它们现在服务于独立用户版而不再是唯一主线。
 - `embedded session recovery + bound Sub2API key preservation` 仍是这条链路的稳定默认约束，而不只是 launch 页或登录页的小修。
+- 2026-06-16 之后，默认产品面已继续前移到 `Pro Studio production mode + ecommerce-suite production delivery + Gemini preview/reference upload`：
+  - `/canvas` 与 `/ecommerce-suite` 都已支持生产模式，不再只是普通图片工作台的附属页面。
+  - `gpt-image-2-official`、batch 生产参数、官方 size 白名单、WebP/JPEG compression 和 public reference URL 已进入稳定实现边界。
+  - `Gemini` 图片模型已切到 preview 路由，并支持 reference uploads；后续再看图片协议兼容问题时，不应沿用旧的 Gemini 路径心智。
+- 2026-06-18 开始，`ecommerce-suite` 的“交付闭环”又前移到“排版编排”层：
+  - 已完成图片不再只按固定顺序展示，而是允许在工作台里自定义参与排版的图片、上下调整顺序，并实时预览拼图结果。
+  - 当前排版配置会持久化到项目本地状态；后续重新打开项目时，顺序、筛选、背景、适配模式和标题栏开关应被视为同一条稳定工作流，而不是一次性 UI 临时态。
+  - “下载拼图”和“生成 AI 合成图”都依赖当前排版结果；后续排查交付链路时，不能再把 summary composite 当成与工作台排版无关的独立动作。
 
 ## 已稳定结论
 
@@ -62,6 +71,18 @@ chatgpt2api 当前不应再被理解为单纯“ChatGPT 官网能力封装服务
   - 前端 `auto` 分辨率只作为 UI 值，不作为 `image_resolution` 提交。
   - 像素图标尺寸作为明确 `size`，不叠加分辨率预设。
   - 后端把 `1080p` 归一到上游 `1k`，并统一 `output_format/output_compression` 规范。
+- Pro Studio / 电商生产模式当前也已进入稳定默认面：
+  - `/canvas` 生产模式会显示用途、等级、高级 official 设置和 `gpt-image-2-official` 锁模。
+  - `/ecommerce-suite` 生产模式支持商品主图、电商横幅、详情页竖图、场景图和 SKU 批量图，SKU `8/12` 张预览按 `4+4` / `4+4+4` 拆分。
+  - ZIP 打包下载、文案保存为 text asset、已完成图片归入项目素材集，已经是当前工作台交付闭环的一部分。
+  - 6/18 新增的 summary layout 说明，`/ecommerce-suite` 现在还包含“排版方式 + 参与图片选择 + 顺序编排 + 拼图导出/AI 合成”这一层稳定交付能力；后续不能只按 ZIP、素材归档和 text asset 理解它的输出链路。
+- 当前多工作台默认共用同一套 creation-task 与输出序列化语义：
+  - `/image`
+  - `/canvas`
+  - `/image-manager`
+  - `/ecommerce-suite`
+  - Pro Studio 生产工作台
+  后续如果只按单页 UI 心智排查，很容易漏掉跨工作台的结果回填、素材归档和 team usage 连动。
 
 ## 当前推荐补读路径
 
@@ -79,13 +100,22 @@ chatgpt2api 当前不应再被理解为单纯“ChatGPT 官网能力封装服务
   - `web/src/app/canvas/use-smart-canvas-controller.ts`
   - `web/src/app/canvas/canvas-node.tsx`
   - `web/src/app/canvas/canvas-utils.ts`
+  - `web/src/app/ecommerce-suite/page.tsx`
+  - `web/src/components/pro-studio/pro-studio-panel.tsx`
+  - `web/src/store/ecommerce-suite-projects.ts`
+- 生产工作台/协议入口：
+  - `internal/httpapi/sub2api.go`
+  - `internal/service/pro_studio.go`
+  - `internal/service/image_parameters.go`
+  - `web/src/lib/pro-studio/pro-studio-payload.ts`
+  - `web/src/lib/pro-studio/official-image-capabilities.ts`
 
 ## 当前剩余重点
 
-1. 把 6 月初“视频节点 + composer 分辨率预设 + 图片参数共享配置”继续下沉到稳定知识，不要只留在 `current-task`。
-2. 把 2026-06-09 的独立用户版主线继续下沉到稳定知识，包括生产域名/回跳 URL/bridge secret/默认分组、余额展示、充值入口、预扣确认退款和团队空间最小闭环。
-3. 如果继续推进 Sub2API 集成，继续把 launch/redeem、embedded session 恢复、bound key 保持、钱包扣费、图片任务、对象存储、`/image` 与 `/canvas` 之间的关系固化到专题知识，而不是只留在提交历史。
-4. 如果准备公开说明能力边界，要显式区分“当前已支持的独立用户版、Sub2API 登录充值、image workspace、canvas workspace、受绑定约束的视频节点、团队共享额度 v1”与“尚未支持的 Grok/xAI、ComfyUI、独立 GPU 工作流”。
+1. 把 Pro Studio 生产模式、电商生产交付、6/18 的 summary layout 编排，以及 Gemini reference upload 的默认边界继续下沉到稳定专题知识，不要只留在 `current-task` 或 workflow 产物。
+2. 把 2026-06-09 之后的独立用户版主线继续下沉到稳定知识，包括生产域名/回跳 URL/bridge secret/默认分组、余额展示、充值入口、预扣确认退款和团队空间最小闭环。
+3. 如果继续推进 Sub2API 集成，继续把 launch/redeem、embedded session 恢复、bound key 保持、钱包扣费、图片任务、对象存储、`/image`、`/canvas` 与 `ecommerce-suite` 之间的关系固化到专题知识，而不是只留在提交历史。
+4. 如果准备公开说明能力边界，要显式区分“当前已支持的独立用户版、Sub2API 登录充值、image workspace、canvas workspace、Pro Studio 生产模式、电商生产交付、受绑定约束的视频节点、团队共享额度 v1”与“尚未支持的 Grok/xAI、ComfyUI、独立 GPU 工作流”。
 
 ## 不要误判的点
 
@@ -97,5 +127,8 @@ chatgpt2api 当前不应再被理解为单纯“ChatGPT 官网能力封装服务
 - 不要把对象存储下载能力误判成“前端拿 object_url 直接下”；当前默认路径是站内鉴权 + presign / CDN TypeA 临时签名。
 - 不要把素材库 collections 当成 `image-manager` 的孤立功能；它已经影响 `/image` 参考图选择和 `/canvas` 资产侧栏的默认工作流。
 - 不要把“视频模型隐藏”误判成纯前端展示条件；它反映的是当前能力边界依赖 Sub2API 绑定这一真实产品约束。
-- 不要把当前仓库默认理解成“继续做 `/canvas` 功能”或“继续打磨 image workspace UI”；最近更高优先级的是 bridge 配置、真实账号回跳、充值扣费、余额展示和团队空间闭环。
-- 仅看 README 和旧任务快照，容易漏掉独立用户版入口、Sub2API 钱包真源、团队共享额度 v1、per-user retention、continued edit、embedded session recovery、bound Sub2API key preservation、视频节点 fail-closed，以及 `/canvas` 自研节点画布这些新默认约束。
+- 不要把当前仓库默认理解成“继续做 `/canvas` 功能”或“继续打磨 image workspace UI”；最近更高优先级的是 bridge 配置、真实账号回跳、充值扣费、余额展示、团队空间闭环，以及 Pro Studio / 电商生产工作台交付。
+- 不要把 Pro Studio 生产模式误判成单纯 UI 壳层；它已经牵涉 official 路由能力、batch 参数、结果序列化、素材归档和项目交付。
+- 不要把 `ecommerce-suite` 的 summary composite 误判成单独的“导出按钮”；它现在依赖项目里的排版模式、参与图片、顺序和持久化配置，属于工作台默认状态的一部分。
+- 不要把 Gemini 模型变更理解成纯命名调整；当前 preview 路由和 reference upload 已影响协议入口、前端 payload 和兼容验证基线。
+- 仅看 README 和旧任务快照，容易漏掉独立用户版入口、Sub2API 钱包真源、团队共享额度 v1、per-user retention、continued edit、embedded session recovery、bound Sub2API key preservation、视频节点 fail-closed、`/canvas` 自研节点画布，以及 Pro Studio / `ecommerce-suite` 生产模式这些新默认约束。
