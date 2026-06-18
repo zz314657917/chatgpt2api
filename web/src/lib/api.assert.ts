@@ -10,6 +10,7 @@ import {
   supportsOfficialImageGenerationSettings,
   isImageTaskModel,
 } from "@/lib/api";
+import { cleanModelDisplayName, displayModelLabel } from "@/lib/model-display";
 
 const geminiFlash = IMAGE_CREATION_MODEL_OPTIONS.find((option) => option.value === "gemini-3.1-flash-image-preview");
 const geminiFlashOfficial = IMAGE_CREATION_MODEL_OPTIONS.find((option) => option.value === "gemini-3.1-flash-image-preview-official");
@@ -64,3 +65,6 @@ assert.equal(estimateImageDisplayPriceUSD("gemini-3-pro-image-preview", 2, "4K")
 assert.equal(estimateImageBillingUnits("gemini-3-pro-image-preview-official", 2, "4K"), 4032);
 assert.equal(estimateImageDisplayPriceUSD("midjourney", 1, "16:9"), null);
 assert.equal(estimateImageDisplayPriceUSD("grok-imagine-1.5", 1, "1:1"), null);
+assert.equal(displayModelLabel("grok-imagine-1.5-apimart"), "grok-imagine-1.5");
+assert.equal(cleanModelDisplayName("grok-imagine-1.5 (APIMart)"), "grok-imagine-1.5");
+assert.equal(cleanModelDisplayName("Nano Banana Pro - Api Mart"), "Nano Banana Pro");

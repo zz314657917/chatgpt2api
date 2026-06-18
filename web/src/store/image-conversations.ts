@@ -21,6 +21,7 @@ import {
   type ImageQuality,
   type ImageVisibility,
 } from "@/lib/api";
+import { displayModelLabel } from "@/lib/model-display";
 import type { ImageTaskToolOptions } from "@/lib/image-task-request";
 import { getManagedImagePathFromUrl, getManagedImageUrlFromPath } from "@/lib/image-path";
 import { compactImageModelSettings, type ImageModelSettingsState } from "@/lib/image-model-settings";
@@ -380,10 +381,10 @@ function normalizeArenaMode(value: unknown, fallbackMode: ImageConversationMode)
 
 function modelLabel(model: ImageModel, label: unknown) {
   if (typeof label === "string" && label.trim()) {
-    return label;
+    return displayModelLabel(model, label);
   }
   const option = [...CHAT_MODEL_OPTIONS, ...IMAGE_CREATION_MODEL_OPTIONS].find((item) => item.value === model);
-  return option?.label || model;
+  return displayModelLabel(model, option?.label);
 }
 
 function normalizeArenaAgentSlot(slot: ImageArenaAgentSlot & Record<string, unknown>, fallbackIndex: number): ImageArenaAgentSlot | null {

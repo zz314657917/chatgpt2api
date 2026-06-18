@@ -22,6 +22,7 @@ import {
 } from "@/lib/api";
 import type { ImageModelSettingsState } from "@/lib/image-model-settings";
 import type { ImageTaskToolOptions } from "@/lib/image-task-request";
+import { displayModelLabel } from "@/lib/model-display";
 import { cn } from "@/lib/utils";
 import type { StoredReferenceImage } from "@/store/image-conversations";
 
@@ -202,7 +203,7 @@ export function ImageArenaComposer({
                         const selectedBy = selectedFamilies.get(option.familyId);
                         const disabled = Boolean(selectedBy && selectedBy !== slot.id);
                         return (
-                          <SelectItem key={option.value} value={option.value} disabled={disabled} textValue={option.label}>
+                          <SelectItem key={option.value} value={option.value} disabled={disabled} textValue={displayModelLabel(option.value, option.label)}>
                             <ModelProviderOptionLabel model={option.value} label={option.label} />
                           </SelectItem>
                         );
