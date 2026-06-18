@@ -1,6 +1,6 @@
 "use client";
 
-import { LoaderCircle, MessageSquarePlus, Trash2 } from "lucide-react";
+import { LoaderCircle, MessageSquarePlus, Trash2, UsersRound } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -11,6 +11,7 @@ type ImageSidebarProps = {
   isLoadingHistory: boolean;
   selectedConversationId: string | null;
   onCreateDraft: () => void;
+  onCreateArenaDraft: () => void;
   onClearHistory: () => void | Promise<void>;
   onSelectConversation: (id: string) => void;
   onDeleteConversation: (id: string) => void | Promise<void>;
@@ -23,6 +24,7 @@ export function ImageSidebar({
   isLoadingHistory,
   selectedConversationId,
   onCreateDraft,
+  onCreateArenaDraft,
   onClearHistory,
   onSelectConversation,
   onDeleteConversation,
@@ -33,10 +35,14 @@ export function ImageSidebar({
     <aside className="h-full min-h-0 overflow-hidden">
       <div className="flex h-full min-h-0 flex-col gap-2 py-1 sm:gap-3 sm:py-2">
         {!hideActionButtons && (
-          <div className="flex items-center gap-2">
-            <Button className="h-10 flex-1 rounded-full" onClick={onCreateDraft}>
+          <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] items-center gap-2">
+            <Button className="h-10 rounded-full" onClick={onCreateDraft}>
               <MessageSquarePlus className="size-4" />
               新建对话
+            </Button>
+            <Button className="h-10 rounded-full bg-[#18181b] text-white hover:bg-[#27272a]" onClick={onCreateArenaDraft}>
+              <UsersRound className="size-4" />
+              多智能体
             </Button>
             <Button
               variant="outline"
@@ -101,6 +107,11 @@ export function ImageSidebar({
                     <span className={cn("min-w-0 flex-1 truncate font-medium", hideActionButtons ? "text-sm" : "text-sm")}>
                       {conversation.title}
                     </span>
+                    {conversation.kind === "arena" ? (
+                      <span className="shrink-0 rounded-full bg-indigo-50 px-1.5 py-0.5 text-[10px] font-medium text-indigo-600">
+                        多智能体
+                      </span>
+                    ) : null}
                   </button>
                   {!hideActionButtons ? (
                     <button

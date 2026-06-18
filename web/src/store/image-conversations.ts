@@ -5,21 +5,30 @@ import localforage from "localforage";
 import {
   DEFAULT_CHAT_MODEL,
   DEFAULT_IMAGE_MODEL,
+  CHAT_MODEL_OPTIONS,
+  IMAGE_CREATION_MODEL_OPTIONS,
   isChatModel,
   isImageCreationModel,
   isImageModel,
   isImageOutputFormat,
   isImageQuality,
+  midjourneyVersionSupportsStop,
   supportsImageOutputCompression,
+  type GeminiFlashSettingsPayload,
   type ImageModel,
+  type MidjourneySettingsPayload,
   type ImageOutputFormat,
   type ImageQuality,
   type ImageVisibility,
 } from "@/lib/api";
+import type { ImageTaskToolOptions } from "@/lib/image-task-request";
 import { getManagedImagePathFromUrl, getManagedImageUrlFromPath } from "@/lib/image-path";
+import { compactImageModelSettings, type ImageModelSettingsState } from "@/lib/image-model-settings";
 import { getStoredAuthSession, type StoredAuthSession } from "@/store/auth";
 
 export type ImageConversationMode = "chat" | "generate" | "image" | "edit";
+export type ImageConversationKind = "normal" | "arena";
+export type ImageArenaConversationMode = "chat" | "image";
 export type StoredReferenceImageSource = "upload" | "conversation";
 export type StoredReferenceImageUploadStatus = "pending" | "uploading" | "uploaded" | "error";
 
@@ -67,11 +76,51 @@ export type StoredImageSizeSelection = {
   customHeight: string;
 };
 
+export type ImageArenaAgentSlot = {
+  id: string;
+  model: ImageModel;
+  modelLabel: string;
+  familyId: string;
+  imageModelSettings?: ImageModelSettingsState;
+  midjourneySettings?: MidjourneySettingsPayload;
+  geminiFlashSettings?: GeminiFlashSettingsPayload;
+  officialImageSettings?: ImageTaskToolOptions;
+  geminiProSettings?: ImageTaskToolOptions;
+};
+
+export type ImageArenaRunStatus = "idle" | "submitting" | "queued" | "running" | "success" | "error" | "cancelled" | "blocked";
+
+export type ImageArenaRun = {
+  id: string;
+  slotId: string;
+  model: ImageModel;
+  modelLabel: string;
+  familyId: string;
+  imageModelSettings?: ImageModelSettingsState;
+  midjourneySettings?: MidjourneySettingsPayload;
+  geminiFlashSettings?: GeminiFlashSettingsPayload;
+  officialImageSettings?: ImageTaskToolOptions;
+  geminiProSettings?: ImageTaskToolOptions;
+  taskId?: string;
+  status: ImageArenaRunStatus;
+  error?: string;
+  warnings?: string[];
+  submittedFields?: Record<string, unknown>;
+  usageTokens?: number;
+  textResponse?: string;
+  images?: StoredImage[];
+  startedAt?: string;
+  completedAt?: string;
+};
+
 export type ImageTurn = {
   id: string;
   prompt: string;
   model: ImageModel;
   mode: ImageConversationMode;
+  arenaMode?: ImageArenaConversationMode;
+  agentSlots?: ImageArenaAgentSlot[];
+  arenaRuns?: ImageArenaRun[];
   referenceImages: StoredReferenceImage[];
   count: number;
   size: string;
@@ -81,7 +130,10 @@ export type ImageTurn = {
   outputCompression?: number;
   background?: string;
   moderation?: string;
+  inputImageMask?: string;
   partialImages?: number;
+  midjourneySettings?: MidjourneySettingsPayload;
+  geminiFlashSettings?: GeminiFlashSettingsPayload;
   visibility?: ImageVisibility;
   images: StoredImage[];
   createdAt: string;
@@ -92,6 +144,7 @@ export type ImageTurn = {
 
 export type ImageConversation = {
   id: string;
+  kind?: ImageConversationKind;
   title: string;
   createdAt: string;
   updatedAt: string;
@@ -242,6 +295,7 @@ function normalizeReferenceImage(image: StoredReferenceImage & Record<string, un
       : undefined;
   const originalSize = Number(image.originalSize);
   const compressedSize = Number(image.compressedSize);
+
   return {
     name: image.name || "reference.png",
     type: image.type || "image/png",
@@ -308,6 +362,186 @@ function normalizeOutputCompression(value: unknown): number | undefined {
     return undefined;
   }
   return Math.min(100, Math.round(numeric));
+}
+
+function normalizeConversationKind(value: unknown): ImageConversationKind {
+  return value === "arena" ? "arena" : "normal";
+}
+
+function normalizeArenaMode(value: unknown, fallbackMode: ImageConversationMode): ImageArenaConversationMode | undefined {
+  if (value === "chat" || value === "image") {
+    return value;
+  }
+  if (fallbackMode === "chat") {
+    return "chat";
+  }
+  return undefined;
+}
+
+function modelLabel(model: ImageModel, label: unknown) {
+  if (typeof label === "string" && label.trim()) {
+    return label;
+  }
+  const option = [...CHAT_MODEL_OPTIONS, ...IMAGE_CREATION_MODEL_OPTIONS].find((item) => item.value === model);
+  return option?.label || model;
+}
+
+function normalizeArenaAgentSlot(slot: ImageArenaAgentSlot & Record<string, unknown>, fallbackIndex: number): ImageArenaAgentSlot | null {
+  const model = isImageModel(slot.model) ? slot.model : undefined;
+  if (!model) {
+    return null;
+  }
+  const familyId = typeof slot.familyId === "string" && slot.familyId ? slot.familyId : model;
+  const imageModelSettings = compactImageModelSettings((slot.imageModelSettings || {
+    midjourney: slot.midjourneySettings,
+    geminiFlash: slot.geminiFlashSettings,
+    officialImage: slot.officialImageSettings,
+    geminiPro: slot.geminiProSettings,
+  }) as ImageModelSettingsState);
+  return {
+    id: String(slot.id || `slot-${fallbackIndex}`),
+    model,
+    modelLabel: modelLabel(model, slot.modelLabel),
+    familyId,
+    imageModelSettings,
+    midjourneySettings: normalizeMidjourneySettings(imageModelSettings?.midjourney || slot.midjourneySettings),
+    geminiFlashSettings: normalizeGeminiFlashSettings(imageModelSettings?.geminiFlash || slot.geminiFlashSettings),
+    officialImageSettings: normalizeImageToolOptions(imageModelSettings?.officialImage || slot.officialImageSettings),
+    geminiProSettings: normalizeImageToolOptions(imageModelSettings?.geminiPro || slot.geminiProSettings),
+  };
+}
+
+function normalizeArenaRunStatus(value: unknown): ImageArenaRunStatus {
+  if (
+    value === "idle" ||
+    value === "submitting" ||
+    value === "queued" ||
+    value === "running" ||
+    value === "success" ||
+    value === "error" ||
+    value === "cancelled" ||
+    value === "blocked"
+  ) {
+    return value;
+  }
+  return "idle";
+}
+
+function normalizeTokenCount(value: unknown): number | undefined {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric < 0) {
+    return undefined;
+  }
+  return Math.round(numeric);
+}
+
+function normalizeArenaRun(run: ImageArenaRun & Record<string, unknown>, fallbackIndex: number): ImageArenaRun | null {
+  const model = isImageModel(run.model) ? run.model : undefined;
+  if (!model) {
+    return null;
+  }
+  const images = Array.isArray(run.images) ? run.images.map(normalizeStoredImage) : undefined;
+  const imageModelSettings = compactImageModelSettings((run.imageModelSettings || {
+    midjourney: run.midjourneySettings,
+    geminiFlash: run.geminiFlashSettings,
+    officialImage: run.officialImageSettings,
+    geminiPro: run.geminiProSettings,
+  }) as ImageModelSettingsState);
+  return {
+    id: String(run.id || `run-${fallbackIndex}`),
+    slotId: String(run.slotId || run.id || `slot-${fallbackIndex}`),
+    model,
+    modelLabel: modelLabel(model, run.modelLabel),
+    familyId: typeof run.familyId === "string" && run.familyId ? run.familyId : model,
+    imageModelSettings,
+    midjourneySettings: normalizeMidjourneySettings(imageModelSettings?.midjourney || run.midjourneySettings),
+    geminiFlashSettings: normalizeGeminiFlashSettings(imageModelSettings?.geminiFlash || run.geminiFlashSettings),
+    officialImageSettings: normalizeImageToolOptions(imageModelSettings?.officialImage || run.officialImageSettings),
+    geminiProSettings: normalizeImageToolOptions(imageModelSettings?.geminiPro || run.geminiProSettings),
+    taskId: typeof run.taskId === "string" && run.taskId ? run.taskId : undefined,
+    status: normalizeArenaRunStatus(run.status),
+    error: typeof run.error === "string" ? run.error : undefined,
+    warnings: Array.isArray(run.warnings) ? run.warnings.filter((item): item is string => typeof item === "string") : undefined,
+    submittedFields: run.submittedFields && typeof run.submittedFields === "object" ? run.submittedFields as Record<string, unknown> : undefined,
+    usageTokens: normalizeTokenCount(run.usageTokens),
+    textResponse: typeof run.textResponse === "string" ? run.textResponse : undefined,
+    images,
+    startedAt: typeof run.startedAt === "string" ? run.startedAt : undefined,
+    completedAt: typeof run.completedAt === "string" ? run.completedAt : undefined,
+  };
+}
+
+function normalizeMidjourneySettings(value: unknown): MidjourneySettingsPayload | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const source = value as Record<string, unknown>;
+  const out: MidjourneySettingsPayload = {};
+  for (const key of ["version", "speed", "quality"] as const) {
+    if (typeof source[key] === "string" && source[key].trim()) {
+      out[key] = source[key].trim();
+    }
+  }
+  for (const key of ["stylize", "chaos", "weird", "stop"] as const) {
+    if (key === "stop" && !midjourneyVersionSupportsStop(out.version)) {
+      continue;
+    }
+    const numberValue = Number(source[key]);
+    if (Number.isFinite(numberValue)) {
+      out[key] = Math.round(numberValue);
+    }
+  }
+  for (const key of ["niji", "raw", "tile"] as const) {
+    if (source[key] === true) {
+      out[key] = true;
+    }
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+function normalizeGeminiFlashSettings(value: unknown): GeminiFlashSettingsPayload | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const source = value as Record<string, unknown>;
+  const out: GeminiFlashSettingsPayload = {};
+  if (source.google_search === true || source.google_image_search === true) {
+    out.google_search = true;
+  }
+  if (source.google_image_search === false) {
+    out.google_image_search = false;
+  } else if (source.google_image_search === true) {
+    out.google_image_search = true;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+function normalizeImageToolOptions(value: unknown): ImageTaskToolOptions | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const source = value as Record<string, unknown>;
+  const out: ImageTaskToolOptions = {};
+  for (const key of ["background", "moderation", "style"] as const) {
+    if (typeof source[key] === "string" && source[key].trim()) {
+      out[key] = source[key].trim();
+    }
+  }
+  const inputImageMask = typeof source.inputImageMask === "string" && source.inputImageMask.trim()
+    ? source.inputImageMask.trim()
+    : typeof source.input_image_mask === "string" && source.input_image_mask.trim()
+      ? source.input_image_mask.trim()
+      : typeof source.mask_url === "string" && source.mask_url.trim()
+        ? source.mask_url.trim()
+        : "";
+  if (inputImageMask) {
+    out.inputImageMask = inputImageMask;
+  }
+  const partialImages = Number(source.partialImages ?? source.partial_images);
+  if (Number.isFinite(partialImages) && partialImages > 0) {
+    out.partialImages = Math.round(partialImages);
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 function normalizePositiveInt(value: unknown): number | undefined {
@@ -395,12 +629,29 @@ function normalizeTurn(turn: ImageTurn & Record<string, unknown>): ImageTurn {
     turn.status === "message"
       ? turn.status
       : undefined;
+  const inputImageMask =
+    typeof turn.inputImageMask === "string" && turn.inputImageMask
+      ? turn.inputImageMask
+      : typeof turn.input_image_mask === "string" && turn.input_image_mask
+        ? turn.input_image_mask
+        : undefined;
 
   return {
     id: String(turn.id || `${Date.now()}`),
     prompt: String(turn.prompt || ""),
     model,
     mode,
+    arenaMode: normalizeArenaMode(turn.arenaMode, mode),
+    agentSlots: Array.isArray(turn.agentSlots)
+      ? turn.agentSlots
+          .map((slot, index) => normalizeArenaAgentSlot(slot as ImageArenaAgentSlot & Record<string, unknown>, index))
+          .filter((slot): slot is ImageArenaAgentSlot => Boolean(slot))
+      : undefined,
+    arenaRuns: Array.isArray(turn.arenaRuns)
+      ? turn.arenaRuns
+          .map((run, index) => normalizeArenaRun(run as ImageArenaRun & Record<string, unknown>, index))
+          .filter((run): run is ImageArenaRun => Boolean(run))
+      : undefined,
     referenceImages,
     count: Math.max(1, Number(turn.count || images.length || 1)),
     size: typeof turn.size === "string" ? turn.size : "",
@@ -413,7 +664,10 @@ function normalizeTurn(turn: ImageTurn & Record<string, unknown>): ImageTurn {
         : undefined,
     background: typeof turn.background === "string" && turn.background ? turn.background : undefined,
     moderation: typeof turn.moderation === "string" && turn.moderation ? turn.moderation : undefined,
+    inputImageMask,
     partialImages: normalizePositiveInt(turn.partialImages),
+    midjourneySettings: normalizeMidjourneySettings(turn.midjourneySettings),
+    geminiFlashSettings: normalizeGeminiFlashSettings(turn.geminiFlashSettings),
     visibility,
     images,
     createdAt: String(turn.createdAt || new Date().toISOString()),
@@ -460,6 +714,7 @@ function normalizeConversation(conversation: ImageConversation & Record<string, 
 
   return {
     id: String(conversation.id || `${Date.now()}`),
+    kind: normalizeConversationKind(conversation.kind),
     title: String(conversation.title || ""),
     createdAt: String(conversation.createdAt || lastTurn?.createdAt || new Date().toISOString()),
     updatedAt: String(conversation.updatedAt || lastTurn?.createdAt || new Date().toISOString()),
@@ -561,6 +816,16 @@ export function getImageConversationStats(conversation: ImageConversation | null
 
   return conversation.turns.reduce(
     (acc, turn) => {
+      if (conversation.kind === "arena" && turn.arenaRuns?.length) {
+        for (const run of turn.arenaRuns) {
+          if (run.status === "queued" || run.status === "idle" || run.status === "submitting") {
+            acc.queued += 1;
+          } else if (run.status === "running") {
+            acc.running += 1;
+          }
+        }
+        return acc;
+      }
       if (turn.status === "queued") {
         acc.queued += 1;
       } else if (turn.status === "generating") {

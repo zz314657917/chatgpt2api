@@ -16,7 +16,8 @@ import {
   type ImageTaskToolOptions,
 } from "@/lib/image-task-request";
 import type { ImageOutputFormat, ImageQuality } from "@/lib/image-parameters";
-import type { ProStudioOfficialSettingsPayload, ProStudioPayloadMeta } from "@/lib/pro-studio";
+import type { ImageModelSettingsState } from "@/lib/image-model-settings";
+import type { ProStudioOfficialSettingsPayload, ProStudioPayloadMeta, ProStudioState } from "@/lib/pro-studio";
 
 export type AccountType = "Free" | "Plus" | "ProLite" | "Pro" | "Team";
 export type AccountStatus = "正常" | "限流" | "异常" | "禁用" | "刷新中" | "过期待刷新";
@@ -24,6 +25,8 @@ export const IMAGE_MODEL_OPTIONS = [
   { value: "auto", label: "Auto" },
   { value: "gpt-image-2", label: "gpt-image-2" },
   { value: "gpt-image-2-official", label: "gpt-image-2-official" },
+  { value: "midjourney", label: "Midjourney" },
+  { value: "grok-imagine-1.5", label: "grok-imagine-1.5" },
   { value: "gemini-3-pro-image-preview", label: "gemini-3-pro-image-preview" },
   { value: "gemini-3-pro-image-preview-official", label: "gemini-3-pro-image-preview-official" },
   { value: "gemini-3.1-flash-image-preview", label: "gemini-3.1-flash-image-preview" },
@@ -37,12 +40,16 @@ export const DEFAULT_IMAGE_MODEL: ImageModel = "gpt-image-2";
 export const DEFAULT_CHAT_MODEL: ImageModel = "auto";
 export const CODEX_IMAGE_MODEL: ImageModel = "codex-gpt-image-2";
 export const OFFICIAL_IMAGE_MODEL: ImageModel = "gpt-image-2-official";
+export const MIDJOURNEY_IMAGE_MODEL: ImageModel = "midjourney";
+export const GROK_IMAGINE_IMAGE_MODEL: ImageModel = "grok-imagine-1.5";
 const IMAGE_MODEL_VALUES = new Set<string>(IMAGE_MODEL_OPTIONS.map((option) => option.value));
 const GEMINI_FLASH_IMAGE_MODELS = new Set<string>(["gemini-3.1-flash-image-preview", "gemini-3.1-flash-image-preview-official"]);
 const GEMINI_PRO_IMAGE_MODELS = new Set<string>(["gemini-3-pro-image-preview", "gemini-3-pro-image-preview-official"]);
 const IMAGE_TASK_MODEL_VALUES = new Set<string>([
   "gpt-image-2",
   "gpt-image-2-official",
+  MIDJOURNEY_IMAGE_MODEL,
+  GROK_IMAGINE_IMAGE_MODEL,
   ...GEMINI_PRO_IMAGE_MODELS,
   ...GEMINI_FLASH_IMAGE_MODELS,
 ]);
@@ -55,6 +62,40 @@ const CHAT_MODEL_VALUES = new Set<string>([
 export const IMAGE_TASK_MODEL_OPTIONS = IMAGE_MODEL_OPTIONS.filter((option) => IMAGE_TASK_MODEL_VALUES.has(option.value));
 export const IMAGE_CREATION_MODEL_OPTIONS = IMAGE_TASK_MODEL_OPTIONS;
 export const CHAT_MODEL_OPTIONS = IMAGE_MODEL_OPTIONS.filter((option) => CHAT_MODEL_VALUES.has(option.value));
+export type MidjourneySettingsPayload = {
+  version?: string;
+  speed?: string;
+  stylize?: number;
+  chaos?: number;
+  weird?: number;
+  quality?: string;
+  niji?: boolean;
+  raw?: boolean;
+  tile?: boolean;
+  stop?: number;
+};
+
+export type GeminiFlashSettingsPayload = {
+  google_search?: boolean;
+  google_image_search?: boolean;
+};
+
+export function midjourneyVersionSupportsStop(version?: string) {
+  const normalized = String(version || "")
+    .trim()
+    .toLowerCase()
+    .replace(/^v/, "");
+  return ["5", "5.1", "5.2", "6", "6.1"].includes(normalized);
+}
+
+export function isGeminiFlashImageModel(model?: string) {
+  return GEMINI_FLASH_IMAGE_MODELS.has(String(model || "").trim());
+}
+
+export function isGeminiProImageModel(model?: string) {
+  return GEMINI_PRO_IMAGE_MODELS.has(String(model || "").trim());
+}
+
 const IMAGE_PRICE_ESTIMATE_MULTIPLIER = 1.2;
 const IMAGE_PRICE_ESTIMATE_USD_CNY_RATE = 7;
 const IMAGE_BILLING_UNIT_SCALE = 1000;
@@ -295,6 +336,14 @@ export const IMAGE_MODEL_ROUTE_DETAILS: Partial<Record<
     routeLabel: "官方版本",
     description: "官方版本图片通道，固定像素为本地输出尺寸，实际像素以结果为准。",
   },
+  midjourney: {
+    routeLabel: "Imagine",
+    description: "Midjourney Imagine 通道，支持提示词和最多 4 张参考图。",
+  },
+  "grok-imagine-1.5": {
+    routeLabel: "Grok Imagine 1.5",
+    description: "Grok Imagine 1.5 通道，支持提示词和 1 张参考图。",
+  },
   "gemini-3-pro-image-preview": {
     routeLabel: "Nano Banana Pro 标准版本",
     description: "Nano Banana Pro 标准版本。",
@@ -343,11 +392,43 @@ export function modelIDLooksImageCapable(model: string) {
     "sdxl",
     "dall-e",
     "midjourney",
+    "grok-imagine",
     "kolors",
     "ideogram",
     "recraft",
     "banana",
   ].some((hint) => lower.includes(hint));
+}
+
+export function modelIDLooksTextOnly(model: string) {
+  const lower = model.trim().toLowerCase();
+  if (!lower || modelIDLooksImageCapable(lower)) {
+    return false;
+  }
+  return [
+    "gpt-",
+    "chatgpt-",
+    "o1",
+    "o3",
+    "o4",
+    "claude",
+    "gemini-",
+    "glm",
+    "deepseek",
+    "qwen",
+    "moonshot",
+    "kimi",
+    "yi-",
+    "doubao",
+    "ernie",
+    "hunyuan",
+    "llama",
+    "mistral",
+    "mixtral",
+    "command-",
+    "baichuan",
+    "internlm",
+  ].some((hint) => lower === hint || lower.startsWith(hint));
 }
 
 export function usesOfficialImageRoute(model: ImageModel) {
@@ -378,12 +459,24 @@ export function isOfficialImageModel(model: ImageModel | string | undefined) {
   return isOfficialImageGatewayModel(model);
 }
 
+export function supportsOfficialImageGenerationSettings(model: ImageModel | string | undefined) {
+  return isOfficialImageModel(model);
+}
+
+export function supportsImageMaskParameter(model: ImageModel | string | undefined) {
+  return isOfficialImageModel(model) || isGeminiProImageModel(model);
+}
+
 export function supportsImageQuality(model: ImageModel) {
   return isOfficialImageModel(model);
 }
 
 export function imageReferenceInputLimit(model: ImageModel | string | undefined) {
   switch (model) {
+    case MIDJOURNEY_IMAGE_MODEL:
+      return 4;
+    case GROK_IMAGINE_IMAGE_MODEL:
+      return 1;
     case "gemini-3-pro-image-preview":
     case "gemini-3-pro-image-preview-official":
     case "gemini-3.1-flash-image-preview":
@@ -697,6 +790,7 @@ export type ManagedImageDetail = ManagedImageSummary & {
   requested_size?: string;
   output_format?: ImageOutputFormat;
   output_compression?: number;
+  image_model_settings?: Record<string, unknown>;
   background?: string;
   moderation?: string;
   style?: string;
@@ -725,7 +819,7 @@ export type ManagedImageDownloadURL = {
   direct?: boolean;
 };
 
-export type ManagedImageListScope = "mine" | "team" | "public" | "all";
+export type ManagedImageListScope = "mine" | "team" | "all";
 export type ManagedTextAssetListScope = "mine" | "team";
 
 export type ManagedImageListFilters = {
@@ -956,10 +1050,16 @@ export type UsageOverviewTaskMode = UsageOverviewSummary & {
 
 export type UsageOverviewTaskLog = {
   id: string;
+  user_id?: string;
+  user_name?: string;
+  owner_name?: string;
+  actor_user_id?: string;
+  actor_name?: string;
   mode: string;
   label: string;
   model: string;
   status: string;
+  error?: string;
   created_at: string;
   updated_at: string;
   duration_seconds?: number;
@@ -1065,6 +1165,15 @@ export type CreationTaskProStudioFields = {
   official_settings?: ProStudioOfficialSettingsPayload;
 };
 
+export type CreationTaskUsage = {
+  input_tokens?: number;
+  output_tokens?: number;
+  total_tokens?: number;
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  [key: string]: unknown;
+};
+
 export type CreationTask = {
   id: string;
   status: "queued" | "running" | "success" | "error" | "cancelled";
@@ -1077,16 +1186,19 @@ export type CreationTask = {
   professional_mode?: boolean;
   pro_studio?: ProStudioPayloadMeta;
   official_settings?: ProStudioOfficialSettingsPayload;
+  midjourney_settings?: MidjourneySettingsPayload;
   background?: string;
   moderation?: string;
   style?: string;
   partial_images?: number;
+  input_image_mask?: string;
   created_at: string;
   updated_at: string;
   data?: CreationTaskData[];
   output_statuses?: ("queued" | "running" | "success" | "error" | "cancelled")[];
   error?: string;
   output_type?: "text";
+  usage?: CreationTaskUsage;
   visibility?: ImageVisibility;
 };
 
@@ -1160,6 +1272,11 @@ export type CanvasNodeData = {
   image_path?: string;
   output_format?: ImageOutputFormat;
   output_compression?: number;
+  image_model_settings?: ImageModelSettingsState;
+  professional_mode?: boolean;
+  pro_studio?: ProStudioPayloadMeta;
+  pro_studio_state?: ProStudioState;
+  official_settings?: ProStudioOfficialSettingsPayload;
   background?: string;
   moderation?: string;
   style?: string;
@@ -1266,6 +1383,7 @@ export type CanvasModelOption = {
   name: string;
   kind: "text" | "image" | "video" | "both";
   capabilities?: Array<"chat" | "image" | "video">;
+  group_modes?: Array<"chat" | "image" | "video">;
   enabled?: boolean;
 };
 
@@ -2092,6 +2210,7 @@ export async function createImageGenerationTask(
   frontendConversationId?: string,
   fallbackReferenceImage?: FallbackReferenceImage,
   extraBody: Record<string, unknown> = {},
+  publicImageUrls: string[] = [],
 ) {
   const requestParameters = buildImageTaskRequestParameters({
     model,
@@ -2109,6 +2228,7 @@ export async function createImageGenerationTask(
       prompt,
       ...imageTaskRequestBodyFields(requestParameters),
       ...extraBody,
+      ...(publicImageUrls.length ? { image_urls: publicImageUrls } : {}),
       ...(messages?.length ? { messages } : {}),
       ...(frontendConversationId ? { frontend_conversation_id: frontendConversationId } : {}),
       ...(fallbackReferenceImage ? { fallback_reference_image: fallbackReferenceImage } : {}),
@@ -2296,12 +2416,14 @@ export async function createChatCompletionTask(
   model: string,
   messages: CreationTaskMessage[],
   referenceImages?: { name: string; dataUrl: string }[],
+  extraBody: Record<string, unknown> = {},
 ) {
   const body: Record<string, unknown> = {
     client_task_id: clientTaskId,
     prompt,
     model,
     messages,
+    ...extraBody,
   };
 
   if (referenceImages && referenceImages.length > 0) {
@@ -2725,7 +2847,6 @@ export async function updateManagedTextAssetCollectionItems(
   });
 }
 
-
 export async function fetchManagedImageDetail(
   path: string,
   filters: { scope?: ManagedImageListScope; team_id?: string } = {},
@@ -2771,27 +2892,6 @@ export async function uploadManagedImages(
     onUploadProgress: options.onUploadProgress,
   });
   return Array.isArray(data.items) ? data.items : [];
-}
-
-export async function updateManagedImageVisibility(
-  path: string,
-  visibility: ImageVisibility,
-  options: { sharePromptParameters?: boolean; shareReferenceImages?: boolean; scope?: ManagedImageListScope; team_id?: string } = {},
-) {
-  return httpRequest<{ item: Partial<ManagedImageDetail> & { path: string; visibility: ImageVisibility } }>(
-    "/api/images/visibility",
-    {
-      method: "PATCH",
-      body: {
-        path,
-        visibility,
-        ...(options.scope ? { scope: options.scope } : {}),
-        ...(options.team_id ? { team_id: options.team_id } : {}),
-        ...(visibility === "public" && options.sharePromptParameters ? { share_prompt_parameters: true } : {}),
-        ...(visibility === "public" && options.sharePromptParameters && options.shareReferenceImages ? { share_reference_images: true } : {}),
-      },
-    },
-  );
 }
 
 export async function fetchManagedImageTags(filters: { scope?: ManagedImageListScope; team_id?: string } = {}) {

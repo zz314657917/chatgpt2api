@@ -20,6 +20,7 @@ import {
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
+import { ModelProviderOptionLabel } from "@/components/model-provider-icon";
 import { useMobileNav } from "@/components/mobile-nav-context";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -172,6 +173,9 @@ function socialModelsByCapability(models: CanvasModelOption[], capability: "chat
   return models
     .filter((model) => model.enabled !== false)
     .filter((model) => {
+      if (Array.isArray(model.group_modes) && model.group_modes.length > 0) {
+        return model.group_modes.includes(capability);
+      }
       const hasRequestedCapability =
         canvasModelHasCapability(model, capability) ||
         (capability === "chat" && (model.kind === "text" || model.kind === "both")) ||
@@ -1384,7 +1388,11 @@ export default function SocialPage() {
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        {chatModelOptions.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}
+                        {chatModelOptions.map((option) => (
+                          <SelectItem key={option.value} value={option.value} textValue={option.label}>
+                            <ModelProviderOptionLabel model={option.value} label={option.label} />
+                          </SelectItem>
+                        ))}
                       </SelectContent>
                     </Select>
                   </label>
@@ -1395,7 +1403,11 @@ export default function SocialPage() {
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        {imageModelOptions.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}
+                        {imageModelOptions.map((option) => (
+                          <SelectItem key={option.value} value={option.value} textValue={option.label}>
+                            <ModelProviderOptionLabel model={option.value} label={option.label} />
+                          </SelectItem>
+                        ))}
                       </SelectContent>
                     </Select>
                   </label>

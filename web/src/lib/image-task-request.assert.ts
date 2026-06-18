@@ -50,6 +50,13 @@ const regularWebp = buildImageTaskRequestParameters({
   outputCompression: 55,
 });
 
+const maskFields = imageTaskRequestBodyFields(buildImageTaskRequestParameters({
+  model: "gemini-3-pro-image-preview",
+  toolOptions: { inputImageMask: "https://cdn.example/mask.png" },
+}));
+assert.equal(maskFields.input_image_mask, "https://cdn.example/mask.png");
+assert.equal(maskFields.mask_url, "https://cdn.example/mask.png");
+
 assert.equal(supportsTaskOutputCompression("gpt-image-2-official", "webp"), true);
 assert.equal(supportsTaskOutputCompression("gpt-image-2", "webp"), false);
 assert.equal(regularWebp.output_format, "webp");

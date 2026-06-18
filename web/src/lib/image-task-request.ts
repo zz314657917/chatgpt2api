@@ -83,7 +83,9 @@ export function imageTaskRequestBodyFields(parameters: NormalizedImageTaskReques
     ...(parameters.toolOptions?.moderation ? { moderation: parameters.toolOptions.moderation } : {}),
     ...(parameters.toolOptions?.style ? { style: parameters.toolOptions.style } : {}),
     ...(typeof parameters.toolOptions?.partialImages === "number" ? { partial_images: parameters.toolOptions.partialImages } : {}),
-    ...(parameters.toolOptions?.inputImageMask ? { input_image_mask: parameters.toolOptions.inputImageMask } : {}),
+    ...(parameters.toolOptions?.inputImageMask
+      ? { input_image_mask: parameters.toolOptions.inputImageMask, mask_url: parameters.toolOptions.inputImageMask }
+      : {}),
   };
 }
 
