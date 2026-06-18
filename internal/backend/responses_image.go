@@ -571,11 +571,28 @@ func anySlice(value any) []any {
 }
 
 func imageDataURL(image ResponsesInputImage) string {
-	contentType := strings.TrimSpace(image.ContentType)
-	if contentType == "" {
-		contentType = "image/png"
-	}
+	contentType := normalizedInputImageContentType(image.Data, image.ContentType)
 	return "data:" + contentType + ";base64," + base64.StdEncoding.EncodeToString(image.Data)
+}
+
+func normalizedInputImageContentType(data []byte, value string) string {
+	declared := strings.ToLower(strings.TrimSpace(strings.Split(value, ";")[0]))
+	if declared == "image/jpg" {
+		declared = "image/jpeg"
+	}
+	detected := strings.ToLower(strings.TrimSpace(strings.Split(http.DetectContentType(data), ";")[0]))
+	if detected == "image/jpg" {
+		detected = "image/jpeg"
+	}
+	if strings.HasPrefix(detected, "image/") {
+		return detected
+	}
+	switch declared {
+	case "image/png", "image/jpeg", "image/gif", "image/webp":
+		return declared
+	default:
+		return "image/png"
+	}
 }
 
 func max(a, b int) int {
@@ -764,10 +781,7 @@ func (c *Client) uploadImage(ctx context.Context, input ResponsesInputImage, fil
 	if err != nil || cfg.Width <= 0 || cfg.Height <= 0 {
 		return uploadedImageRef{}, fmt.Errorf("image decode failed: %w", err)
 	}
-	contentType := strings.TrimSpace(input.ContentType)
-	if contentType == "" {
-		contentType = "image/png"
-	}
+	contentType := normalizedInputImageContentType(input.Data, input.ContentType)
 	path := "/backend-api/files"
 	payload := map[string]any{
 		"file_name": fileName,

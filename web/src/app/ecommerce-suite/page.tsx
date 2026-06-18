@@ -66,6 +66,7 @@ import {
   DEFAULT_IMAGE_MODEL,
   IMAGE_CREATION_MODEL_OPTIONS,
   createChatCompletionTask,
+  createImageGenerationTask,
   createManagedImageCollection,
   createManagedTextAsset,
   createImageEditTaskFromReferenceIds,
@@ -654,6 +655,15 @@ function hasProductImages(project: CommerceSuiteProject) {
   return project.referenceImages.some((image) => image.role === "product" || image.role === "primary");
 }
 
+function hasGenerationInput(project: CommerceSuiteProject) {
+  const title = project.title.trim();
+  return (
+    project.referenceImages.length > 0 ||
+    Boolean(project.analysisText.trim()) ||
+    Boolean(title && title !== "未命名商品套图")
+  );
+}
+
 function extractTaskText(task: CreationTask) {
   return (task.data || []).map((item) => item.text_response || "").join("\n").trim();
 }
@@ -732,18 +742,21 @@ function buildAnalysisPrompt(project: CommerceSuiteProject) {
   ].join("\n");
 }
 
-function buildGenerationPrompt(project: CommerceSuiteProject, templateId: string) {
+function buildGenerationPrompt(project: CommerceSuiteProject, templateId: string, hasReferenceImages: boolean) {
   const template = templateById(templateId);
   const platform = commerceSuiteOptionLabel(COMMERCE_SUITE_PLATFORMS, project.targeting.platform);
   const market = commerceSuiteOptionLabel(COMMERCE_SUITE_MARKETS, project.targeting.market);
   const language = commerceSuiteOptionLabel(COMMERCE_SUITE_LANGUAGES, project.targeting.language);
   return [
-    "你是一名电商详情页视觉设计师。请基于产品图保持商品主体一致，并参考辅助图片的场景、风格或细节，生成一张可直接用于电商详情页的成品图。",
+    hasReferenceImages
+      ? "你是一名电商详情页视觉设计师。请基于产品图保持商品主体一致，并参考辅助图片的场景、风格或细节，生成一张可直接用于电商详情页的成品图。"
+      : "你是一名电商详情页视觉设计师。请根据商品标题、运营摘要和模板要求，生成一张可直接用于电商详情页的成品图。",
     `图片类型：${template?.title || templateId}`,
     `目标平台：${platform}`,
     `目标市场：${market}`,
     `画面语言：${language}`,
-    `商品运营摘要：\n${project.analysisText || "请根据产品图和参考图自行提炼商品标题、卖点、参数和适用场景。"}`,
+    `商品标题或备注：${project.title || "未命名商品套图"}`,
+    `商品运营摘要：\n${project.analysisText || (hasReferenceImages ? "请根据产品图和参考图自行提炼商品标题、卖点、参数和适用场景。" : "请根据商品标题或备注、目标平台和模板要求，自行提炼商品卖点、参数和适用场景。")}`,
     `图片要求：${template?.prompt || ""}`,
     "输出要求：单张成品图，主体清晰，适合电商套图；如画面需要文字，优先使用商品运营摘要里的标题、卖点、参数或详情页文案，并保持短句可读；不添加虚假的认证、价格、品牌 Logo 或未经确认的夸张承诺。",
   ].filter(Boolean).join("\n\n");
@@ -756,13 +769,15 @@ function proStudioTemplateIds(project: CommerceSuiteProject) {
   return matched.length > 0 ? matched : ids.slice(0, 4);
 }
 
-function buildProStudioGenerationPrompt(project: CommerceSuiteProject, intent: ProStudioIntent, batchIndex = 0) {
+function buildProStudioGenerationPrompt(project: CommerceSuiteProject, intent: ProStudioIntent, batchIndex = 0, hasReferenceImages = true) {
   const output = PRO_STUDIO_OUTPUTS.find((item) => item.id === intent);
   return [
-    "你是一名电商生产素材视觉设计师。请基于产品图保持商品主体一致，并参考辅助图片的场景、风格或细节，生成可直接用于投放或详情页的成品图。",
+    hasReferenceImages
+      ? "你是一名电商生产素材视觉设计师。请基于产品图保持商品主体一致，并参考辅助图片的场景、风格或细节，生成可直接用于投放或详情页的成品图。"
+      : "你是一名电商生产素材视觉设计师。请根据商品标题、运营摘要和生产规格，生成可直接用于投放或详情页的成品图。",
     `素材类型：${output?.label || intent}`,
     `商品标题：${project.title}`,
-    `商品运营摘要：\n${project.analysisText || "请根据产品图和参考图自行提炼商品标题、卖点、参数和适用场景。"}`,
+    `商品运营摘要：\n${project.analysisText || (hasReferenceImages ? "请根据产品图和参考图自行提炼商品标题、卖点、参数和适用场景。" : "请根据商品标题、素材类型和目标电商场景，自行提炼商品卖点、参数和适用场景。")}`,
     intent === "sku_variants" ? `SKU 批次：${batchIndex + 1}，保持光线、角度和构图一致，变化体现在颜色、材质或款式细节。` : "",
     "输出要求：主体清晰、构图稳定、商业可用；如画面需要文字，优先使用商品运营摘要里的标题、卖点、参数或详情页文案，并保持短句可读；不添加虚假认证、价格、品牌 Logo 或未经确认的夸张承诺。",
   ].filter(Boolean).join("\n\n");
@@ -1635,10 +1650,6 @@ export default function EcommerceSuitePage() {
     const referenceIds: string[] = [];
     for (let index = 0; index < nextImages.length; index += 1) {
       const image = nextImages[index];
-      if (image.serverReferenceId) {
-        referenceIds.push(image.serverReferenceId);
-        continue;
-      }
       nextImages[index] = { ...image, uploadStatus: "uploading", uploadError: undefined };
       await persistProject({ ...project, referenceImages: nextImages });
       try {
@@ -1712,8 +1723,8 @@ export default function EcommerceSuitePage() {
   const submitGenerationTasks = async (templateIds: string[], options: { retrySeed?: CommerceSuiteResult } = {}) => {
     const project = selectedProjectRef.current;
     if (!project || generating) return;
-    if (!hasProductImages(project)) {
-      toast.error("请先上传产品图");
+    if (!hasGenerationInput(project)) {
+      toast.error("请先填写商品标题/文案，或上传产品图/参考图");
       return;
     }
     const referenceImageLimit = commerceReferenceImageLimit(project);
@@ -1787,6 +1798,7 @@ export default function EcommerceSuitePage() {
       });
       const submitted = await Promise.allSettled(
         placeholders.map((placeholder) => {
+          const hasReferenceImages = referenceIds.length > 0;
           if (proStudioEnabled) {
             const placeholderIntent = String(placeholder.intent || "");
             const intent: ProStudioIntent = isCommerceProStudioIntent(placeholderIntent) ? placeholderIntent : "product_main";
@@ -1800,10 +1812,35 @@ export default function EcommerceSuitePage() {
                 },
               } as Partial<ProStudioState>, intent);
             const payload = buildProStudioImagePayload({
-              prompt: buildProStudioGenerationPrompt(pendingProject, intent, placeholder.batchIndex),
+              prompt: buildProStudioGenerationPrompt(pendingProject, intent, placeholder.batchIndex, hasReferenceImages),
               state,
               referenceImageUrls: publicImageUrls,
             });
+            if (!hasReferenceImages) {
+              return createImageGenerationTask(
+                placeholder.taskId,
+                payload.prompt,
+                OFFICIAL_IMAGE_MODEL,
+                payload.size,
+                isImageQuality(payload.quality) ? payload.quality : "auto",
+                payload.n,
+                [{ role: "system", content: "你是电商生产素材视觉设计师，输出适合商业使用的单张成品图。" }],
+                "private",
+                payload.image_resolution,
+                isImageOutputFormat(payload.output_format) ? payload.output_format : "png",
+                payload.output_compression,
+                { background: payload.background, moderation: payload.moderation, inputImageMask: payload.input_image_mask },
+                pendingProject.id,
+                undefined,
+                {
+                  professional_mode: true,
+                  pro_studio: payload.pro_studio,
+                  official_settings: payload.official_settings,
+                  resolution: payload.resolution,
+                },
+                publicImageUrls,
+              );
+            }
             return createImageEditTaskFromReferenceIds(
               placeholder.taskId,
               referenceIds,
@@ -1829,10 +1866,33 @@ export default function EcommerceSuitePage() {
               },
             );
           }
+          const prompt = buildGenerationPrompt(pendingProject, placeholder.templateId, hasReferenceImages);
+          if (!hasReferenceImages) {
+            return createImageGenerationTask(
+              placeholder.taskId,
+              prompt,
+              pendingProject.imageModel,
+              pendingProject.size,
+              isOfficialImageModel(pendingProject.imageModel) && isImageQuality(pendingProject.imageQuality)
+                ? pendingProject.imageQuality
+                : undefined,
+              1,
+              [{ role: "system", content: "你是电商套图视觉设计师，输出适合商品详情页的单张成品图。" }],
+              "private",
+              pendingProject.imageResolution,
+              pendingProject.outputFormat,
+              undefined,
+              undefined,
+              pendingProject.id,
+              undefined,
+              {},
+              publicImageUrls,
+            );
+          }
           return createImageEditTaskFromReferenceIds(
             placeholder.taskId,
             referenceIds,
-            buildGenerationPrompt(pendingProject, placeholder.templateId),
+            prompt,
             pendingProject.imageModel,
             pendingProject.size,
             isOfficialImageModel(pendingProject.imageModel) && isImageQuality(pendingProject.imageQuality)

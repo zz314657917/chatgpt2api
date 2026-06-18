@@ -14,6 +14,7 @@ import (
 	"image/jpeg"
 	"image/png"
 	"math/big"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -1008,7 +1009,27 @@ func responsesInputImage(value string) backend.ResponsesInputImage {
 	if err != nil {
 		return backend.ResponsesInputImage{}
 	}
-	return backend.ResponsesInputImage{Data: data, ContentType: contentType}
+	return backend.ResponsesInputImage{Data: data, ContentType: normalizedImageContentType(data, contentType)}
+}
+
+func normalizedImageContentType(data []byte, value string) string {
+	declared := strings.ToLower(strings.TrimSpace(strings.Split(value, ";")[0]))
+	if declared == "image/jpg" {
+		declared = "image/jpeg"
+	}
+	detected := strings.ToLower(strings.TrimSpace(strings.Split(http.DetectContentType(data), ";")[0]))
+	if detected == "image/jpg" {
+		detected = "image/jpeg"
+	}
+	if strings.HasPrefix(detected, "image/") {
+		return detected
+	}
+	switch declared {
+	case "image/png", "image/jpeg", "image/gif", "image/webp":
+		return declared
+	default:
+		return "image/png"
+	}
 }
 
 func firstNonZeroInt64(values ...int64) int64 {
