@@ -1,5 +1,5 @@
-export type CommerceSuitePlatform = "amazon" | "tiktok_shop" | "independent_site" | "general";
-export type CommerceSuiteMarket = "us" | "eu" | "jp" | "sea" | "global";
+export type CommerceSuitePlatform = "taobao" | "pdd" | "jd" | "douyin" | "amazon" | "tiktok_shop" | "independent_site" | "general";
+export type CommerceSuiteMarket = "cn" | "us" | "eu" | "jp" | "sea" | "global";
 export type CommerceSuiteLanguage = "zh" | "en" | "ja" | "de" | "es";
 
 export type CommerceSuiteTemplate = {
@@ -11,6 +11,10 @@ export type CommerceSuiteTemplate = {
 };
 
 export const COMMERCE_SUITE_PLATFORMS = [
+  { value: "taobao", label: "淘宝" },
+  { value: "pdd", label: "PDD" },
+  { value: "jd", label: "京东" },
+  { value: "douyin", label: "抖音" },
   { value: "amazon", label: "Amazon" },
   { value: "tiktok_shop", label: "TikTok Shop" },
   { value: "independent_site", label: "独立站" },
@@ -18,6 +22,7 @@ export const COMMERCE_SUITE_PLATFORMS = [
 ] as const;
 
 export const COMMERCE_SUITE_MARKETS = [
+  { value: "cn", label: "中国" },
   { value: "us", label: "美国" },
   { value: "eu", label: "欧洲" },
   { value: "jp", label: "日本" },
