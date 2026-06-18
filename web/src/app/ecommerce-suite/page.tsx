@@ -2887,7 +2887,7 @@ export default function EcommerceSuitePage() {
                   </label>
                   {!selectedProject.professionalMode && imageModelHasSettings(selectedProject.imageModel) ? (
                     <div className="grid gap-1.5">
-                      <span className="text-xs font-medium text-muted-foreground">模型参数</span>
+                      <span className="text-xs font-medium text-muted-foreground">模型</span>
                       <ImageModelSettingsButton
                         model={selectedProject.imageModel}
                         value={selectedProject.imageModelSettings}
