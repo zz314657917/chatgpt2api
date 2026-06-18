@@ -391,6 +391,8 @@ function getCommerceQueueItem(project: CommerceSuiteProject): CommerceQueueItem 
   if (activeResults.length === 0) {
     return null;
   }
+  const resultOutputCount = (result: CommerceSuiteResult) => Math.max(1, Math.round(Number(result.outputCount || 1) || 1));
+  const resultOutputSum = (results: CommerceSuiteResult[]) => results.reduce((sum, result) => sum + resultOutputCount(result), 0);
   const startedTimes = activeResults
     .map((result) => result.startedAt || result.updatedAt || project.updatedAt)
     .filter(Boolean)
@@ -400,12 +402,12 @@ function getCommerceQueueItem(project: CommerceSuiteProject): CommerceQueueItem 
     projectId: project.id,
     projectTitle: project.title,
     results: project.results,
-    totalCount: Math.max(1, project.results.length),
-    runningCount: project.results.filter((result) => result.status === "running").length,
-    queuedCount: project.results.filter((result) => result.status === "queued").length,
-    completedCount: project.results.filter((result) => result.status === "success").length,
-    failedCount: project.results.filter((result) => result.status === "error").length,
-    cancelledCount: project.results.filter((result) => result.status === "cancelled").length,
+    totalCount: Math.max(1, resultOutputSum(project.results)),
+    runningCount: resultOutputSum(project.results.filter((result) => result.status === "running")),
+    queuedCount: resultOutputSum(project.results.filter((result) => result.status === "queued")),
+    completedCount: resultOutputSum(project.results.filter((result) => result.status === "success")),
+    failedCount: resultOutputSum(project.results.filter((result) => result.status === "error")),
+    cancelledCount: resultOutputSum(project.results.filter((result) => result.status === "cancelled")),
     startedAt: startedTimes[0] || project.updatedAt,
     updatedAt: project.updatedAt,
   };
@@ -421,8 +423,8 @@ function commerceResultFromTask(result: CommerceSuiteResult, task: CreationTask)
     url: image?.url || (image?.b64_json ? `data:image/png;base64,${image.b64_json}` : undefined),
     revisedPrompt: image?.revised_prompt,
     error: task.error,
-    proStudio: task.pro_studio,
-    officialSettings: task.official_settings,
+    proStudio: task.pro_studio || result.proStudio,
+    officialSettings: task.official_settings || result.officialSettings,
     startedAt: result.startedAt || task.created_at,
     updatedAt: task.updated_at,
   };

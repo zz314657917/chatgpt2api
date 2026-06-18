@@ -1,7 +1,6 @@
 "use client";
 import {
   ArrowUp,
-  Bot,
   Check,
   ChevronDown,
   Eraser,
@@ -33,8 +32,10 @@ import {
   type RefObject,
 } from "react";
 
+import { ImageModelSettingsButton } from "@/components/image-model-settings-button";
 import { ImageOutputControls } from "@/components/image-output-controls";
 import { ImageRatioPicker } from "@/components/image-ratio-picker";
+import { ModelProviderIcon } from "@/components/model-provider-icon";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Textarea } from "@/components/ui/textarea";
@@ -60,16 +61,20 @@ import {
 } from "@/lib/image-parameters";
 import {
   IMAGE_MODEL_ROUTE_DETAILS,
+  isGeminiProImageModel,
   isOfficialImageModel,
   supportsImageQuality,
   supportsImageOutputControls,
   supportsImageResolutionPresets,
   supportsStructuredImageParameters,
+  type GeminiFlashSettingsPayload,
   type ImageModel,
+  type MidjourneySettingsPayload,
   type ManagedImageSummary,
 } from "@/lib/api";
-import { DEFAULT_IMAGE_RATIO_PICKER_OPTIONS, imageRatioPickerValueLabel } from "@/lib/image-ratio-picker-options";
+import { imageModelHasSettings, type ImageModelSettingsState } from "@/lib/image-model-settings";
 import { cn } from "@/lib/utils";
+import { DEFAULT_IMAGE_RATIO_PICKER_OPTIONS, imageRatioPickerValueLabel } from "@/lib/image-ratio-picker-options";
 
 const ImageLightbox = lazy(() =>
   import("@/components/image-lightbox").then((module) => ({ default: module.ImageLightbox })),
@@ -90,6 +95,11 @@ type ImageComposerProps = {
   imageOutputFormat: ImageOutputFormat;
   imageOutputCompression: string;
   imageQuality: ImageQuality;
+  imageBackground: string;
+  imageModeration: string;
+  imageMaskUrl: string;
+  midjourneySettings: MidjourneySettingsPayload;
+  geminiFlashSettings: GeminiFlashSettingsPayload;
   highResolutionHint?: ReactNode;
   billingBlocked: boolean;
   referenceImages: Array<{ name: string; dataUrl: string }>;
@@ -109,6 +119,11 @@ type ImageComposerProps = {
   onImageOutputFormatChange: (value: ImageOutputFormat) => void;
   onImageOutputCompressionChange: (value: string) => void;
   onImageQualityChange: (value: ImageQuality) => void;
+  onImageBackgroundChange: (value: string) => void;
+  onImageModerationChange: (value: string) => void;
+  onImageMaskUrlChange: (value: string) => void;
+  onMidjourneySettingsChange: (settings: MidjourneySettingsPayload) => void;
+  onGeminiFlashSettingsChange: (settings: GeminiFlashSettingsPayload) => void;
   onSubmit: () => void | Promise<void>;
   onReferenceImageChange: (files: File[]) => void | Promise<void>;
   onImageResultDrop: (imageIds: string[]) => void | Promise<void>;
@@ -192,7 +207,6 @@ type ImageSettingsMenuOption<Value extends string> = {
 };
 
 const IMAGE_QUALITY_SETTINGS_OPTIONS = IMAGE_QUALITY_OPTIONS satisfies ReadonlyArray<ImageSettingsMenuOption<ImageQuality>>;
-
 function ImageSettingsPopoverMenu<Value extends string>({
   label,
   value,
@@ -340,6 +354,11 @@ export function ImageComposer({
   imageOutputFormat,
   imageOutputCompression,
   imageQuality,
+  imageBackground,
+  imageModeration,
+  imageMaskUrl,
+  midjourneySettings,
+  geminiFlashSettings,
   highResolutionHint,
   billingBlocked,
   referenceImages,
@@ -359,6 +378,11 @@ export function ImageComposer({
   onImageOutputFormatChange,
   onImageOutputCompressionChange,
   onImageQualityChange,
+  onImageBackgroundChange,
+  onImageModerationChange,
+  onImageMaskUrlChange,
+  onMidjourneySettingsChange,
+  onGeminiFlashSettingsChange,
   onSubmit,
   onReferenceImageChange,
   onImageResultDrop,
@@ -407,6 +431,35 @@ export function ImageComposer({
   const outputControlsSupported = supportsImageOutputControls(imageModel);
   const imageQualitySupported = supportsImageQuality(imageModel);
   const imageQualityLabel = IMAGE_QUALITY_OPTIONS.find((option) => option.value === imageQuality)?.label || "自动";
+  const modelSettingsSupported = imageModelHasSettings(imageModel);
+  const imageModelSettingsValue: ImageModelSettingsState = {
+    midjourney: midjourneySettings,
+    geminiFlash: geminiFlashSettings,
+    officialImage: {
+      background: imageBackground,
+      moderation: imageModeration,
+      inputImageMask: imageMaskUrl,
+    },
+    geminiPro: {
+      inputImageMask: imageMaskUrl,
+    },
+  };
+  const handleImageModelSettingsChange = (settings: ImageModelSettingsState) => {
+    if (settings.midjourney) {
+      onMidjourneySettingsChange(settings.midjourney);
+    }
+    if (settings.geminiFlash) {
+      onGeminiFlashSettingsChange(settings.geminiFlash);
+    }
+    if (settings.officialImage) {
+      onImageBackgroundChange(settings.officialImage.background || "auto");
+      onImageModerationChange(settings.officialImage.moderation || "auto");
+      onImageMaskUrlChange(settings.officialImage.inputImageMask || "");
+    }
+    if (isGeminiProImageModel(imageModel)) {
+      onImageMaskUrlChange(settings.geminiPro?.inputImageMask || "");
+    }
+  };
   const availableImageSizeModeOptions = structuredImageParameters
     ? IMAGE_SIZE_MODE_OPTIONS
     : IMAGE_SIZE_MODE_OPTIONS.filter((option) => option.value !== "custom");
@@ -929,8 +982,9 @@ export function ImageComposer({
                     aria-label={`选择模型，当前 ${imageModelLabel}`}
                     title={`模型：${imageModelLabel}`}
                   >
-                    <Bot className="size-5 shrink-0 sm:hidden" />
+                    <ModelProviderIcon model={imageModel} label={imageModelLabel} size="sm" className="sm:hidden" />
                     <span className="hidden shrink-0 sm:inline">模型</span>
+                    <ModelProviderIcon model={imageModel} label={imageModelLabel} size="sm" className="hidden sm:inline-flex" />
                     <span className="hidden min-w-0 flex-1 truncate text-left font-semibold sm:inline">
                       {imageModelLabel}
                     </span>
@@ -945,7 +999,7 @@ export function ImageComposer({
                             key={option.value}
                             type="button"
                             className={cn(
-                              "flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm text-[#45515e] transition hover:bg-black/[0.05] dark:text-muted-foreground dark:hover:bg-accent/60",
+                              "flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-[#45515e] transition hover:bg-black/[0.05] dark:text-muted-foreground dark:hover:bg-accent/60",
                               active && "bg-black/[0.05] font-medium text-[#18181b] dark:bg-accent dark:text-foreground",
                             )}
                             onClick={() => {
@@ -953,7 +1007,8 @@ export function ImageComposer({
                               setIsModelMenuOpen(false);
                             }}
                           >
-                            <span className="min-w-0">
+                            <ModelProviderIcon model={option.value} label={option.label} size="sm" />
+                            <span className="min-w-0 flex-1">
                               <span className="block truncate">{option.label}</span>
                               {composerMode === "image" && IMAGE_MODEL_ROUTE_DETAILS[option.value] ? (
                                 <span className="block truncate text-[11px] font-normal text-[#8e8e93] dark:text-muted-foreground">
@@ -1246,6 +1301,18 @@ export function ImageComposer({
                                 ? "常规图片通道会提交分辨率预设，画幅仍作为构图偏好；实际像素以上游返回为准。"
                                 : "当前图片通道只会把比例作为构图偏好，实际像素以上游返回为准；格式由后端保存结果时处理。"}
                           </p>
+                        ) : null}
+                        {modelSettingsSupported ? (
+                          <div className="col-span-2 flex min-w-0 items-center justify-between gap-2 rounded-xl border border-[#dbe7ff] bg-[#f8fbff] px-3 py-2 dark:border-sky-900/60 dark:bg-sky-950/20 sm:col-span-3">
+                            <span className="text-[11px] font-semibold text-[#18181b] dark:text-foreground">模型参数</span>
+                            <ImageModelSettingsButton
+                              model={imageModel}
+                              value={imageModelSettingsValue}
+                              onChange={handleImageModelSettingsChange}
+                              compact
+                              className="h-8 rounded-xl"
+                            />
+                          </div>
                         ) : null}
                         {outputControlsSupported ? (
                           <ImageOutputControls

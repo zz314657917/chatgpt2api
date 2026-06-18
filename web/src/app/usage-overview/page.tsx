@@ -171,11 +171,11 @@ function KpiCard({
 }) {
   return (
     <Card className="overflow-hidden rounded-lg">
-      <CardContent className="flex min-h-[124px] items-start justify-between gap-3 p-4">
+      <CardContent className="grid min-h-[124px] grid-cols-[minmax(0,1fr)_2.25rem] items-start gap-3 p-4">
         <div className="min-w-0">
-          <div className="text-xs font-medium text-muted-foreground">{title}</div>
-          <div className="mt-2 truncate text-2xl font-semibold text-foreground">{value}</div>
-          {detail ? <div className="mt-1 text-xs text-muted-foreground">{detail}</div> : null}
+          <div className="truncate text-xs font-medium text-muted-foreground">{title}</div>
+          <div className="mt-2 truncate whitespace-nowrap text-xl font-semibold leading-tight text-foreground xl:text-2xl">{value}</div>
+          {detail ? <div className="mt-1 truncate text-xs text-muted-foreground">{detail}</div> : null}
         </div>
         <span className={cn("flex size-9 shrink-0 items-center justify-center rounded-lg", accent)}>
           <Icon className="size-4" />
@@ -252,6 +252,10 @@ function ConsumptionText({ local, external }: { local: unknown; external: unknow
       <span className="text-muted-foreground">{fixed(external, 4)} Sub2API</span>
     </div>
   );
+}
+
+function taskUserLabel(item: UsageOverviewTaskLog) {
+  return item.user_name || item.actor_name || item.owner_name || item.user_id || item.actor_user_id || "-";
 }
 
 function UsageOverviewPage() {
@@ -490,11 +494,12 @@ function UsageOverviewPage() {
             <CardTitle className="text-sm">今日最近任务日志</CardTitle>
           </CardHeader>
           <CardContent className="p-0">
-            <div className="overflow-x-auto">
-              <Table className="min-w-[900px]">
+            <div className="max-h-[460px] overflow-auto">
+              <Table className="min-w-[1040px]">
                 <TableHeader>
                   <TableRow>
                     <TableHead>时间</TableHead>
+                    <TableHead>用户</TableHead>
                     <TableHead>功能</TableHead>
                     <TableHead>模型</TableHead>
                     <TableHead>状态</TableHead>
@@ -507,10 +512,15 @@ function UsageOverviewPage() {
                     overview.recent_task_logs.map((item: UsageOverviewTaskLog) => (
                       <TableRow key={item.id} className="text-muted-foreground">
                         <TableCell className="whitespace-nowrap text-foreground">{displayTime(item.updated_at || item.created_at)}</TableCell>
+                        <TableCell className="max-w-[180px] truncate text-foreground" title={taskUserLabel(item)}>{taskUserLabel(item)}</TableCell>
                         <TableCell>{item.label || item.mode || "-"}</TableCell>
                         <TableCell className="max-w-[220px] truncate">{item.model || "-"}</TableCell>
                         <TableCell>
-                          <Badge variant={statusVariant(item.status)} className="rounded-md">
+                          <Badge
+                            variant={statusVariant(item.status)}
+                            className={cn("rounded-md", item.status === "error" && item.error ? "cursor-help" : "")}
+                            title={item.status === "error" && item.error ? item.error : undefined}
+                          >
                             {statusLabel(item.status)}
                           </Badge>
                         </TableCell>
@@ -521,7 +531,7 @@ function UsageOverviewPage() {
                       </TableRow>
                     ))
                   ) : (
-                    <EmptyRow colSpan={6} text="今日暂无任务日志" />
+                    <EmptyRow colSpan={7} text="今日暂无任务日志" />
                   )}
                 </TableBody>
               </Table>

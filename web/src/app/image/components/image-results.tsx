@@ -1,14 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ArrowUpRight, Check, CircleStop, Clock3, Download, Eye, Globe2, LoaderCircle, Lock, PencilLine, Plus, RotateCcw, Sparkles } from "lucide-react";
+import { ArrowUpRight, Check, CircleStop, Clock3, Download, Eye, LoaderCircle, PencilLine, Plus, RotateCcw, Sparkles } from "lucide-react";
 
 import { AuthenticatedImage } from "@/components/authenticated-image";
+import { MarkdownMessage } from "@/components/markdown-message";
 import { Button } from "@/components/ui/button";
 import { IMAGE_RESULT_DRAG_MIME, type ImageResultDragPayload } from "@/app/image/image-result-drag";
 import type { ImagePromptPreset } from "@/app/image/image-presets";
 import { fetchManagedImageDetail, IMAGE_MODEL_ROUTE_DETAILS, supportsImageOutputCompression } from "@/lib/api";
-import type { ImageVisibility } from "@/lib/api";
 import {
   fetchAuthenticatedImageBlob,
   getCachedAuthenticatedImageByteSize,
@@ -62,13 +62,6 @@ type ImageResultsProps = {
   onRegenerateTurn: (conversationId: string, turnId: string) => void | Promise<void>;
   onRetryImage: (conversationId: string, turnId: string, imageIndex: number) => void | Promise<void>;
   onRetryImages: (conversationId: string, turnId: string, imageIndexes: number[]) => void | Promise<void>;
-  onImageVisibilityChange: (
-    conversationId: string,
-    turnId: string,
-    imageIndex: number,
-    visibility: ImageVisibility,
-  ) => void | Promise<void>;
-  visibilityMutatingImageKey: string;
   formatConversationTime: (value: string) => string;
 };
 
@@ -207,22 +200,6 @@ function imageNeedsDetailMeta(image: StoredImage) {
   return image.status === "success" && (!image.width || !image.height) && Boolean(imagePathForMetadata(image));
 }
 
-function imageVisibilityLabel(visibility?: ImageVisibility) {
-  return visibility === "public" ? "已公开" : "私有";
-}
-
-function imageVisibilityPillClass(visibility?: ImageVisibility) {
-  return visibility === "public"
-    ? "bg-[#e8f2ff] text-[#1456f0] ring-1 ring-[#bfdbfe]"
-    : "bg-[#181e25]/82 text-white ring-1 ring-white/20";
-}
-
-function imageVisibilityActionClass(visibility?: ImageVisibility) {
-  return visibility === "public"
-    ? "bg-white/95 text-[#1456f0] hover:bg-[#e8f2ff]"
-    : "bg-white/95 text-stone-800 hover:bg-stone-100";
-}
-
 function blurFocusedElementInContainer(container: HTMLElement) {
   const activeElement = document.activeElement;
   if (activeElement instanceof HTMLElement && container.contains(activeElement)) {
@@ -279,8 +256,6 @@ export function ImageResults({
   onRegenerateTurn,
   onRetryImage,
   onRetryImages,
-  onImageVisibilityChange,
-  visibilityMutatingImageKey,
   formatConversationTime,
 }: ImageResultsProps) {
   const [imageDimensions, setImageDimensions] = useState<Record<string, string>>({});
@@ -801,7 +776,9 @@ export function ImageResults({
                             {turn.mode === "chat" ? "重新发送" : "重试生成"}
                           </Button>
                         </div>
-                        <div className="whitespace-pre-wrap break-words">{image.text_response}</div>
+                        <MarkdownMessage className="text-[#45515e] dark:text-foreground">
+                          {image.text_response || ""}
+                        </MarkdownMessage>
                       </div>
                     ))}
                   </div>
@@ -828,12 +805,6 @@ export function ImageResults({
                       const dimensions = imageResolutionLabel(image, imageDimensionsFromMeta(meta) || imageDimensions[image.id]);
                       const imageMeta = [dimensions, sizeLabel].filter(Boolean).join(" | ");
                       const formatLabel = getImageFormatLabel(image, imageSrc);
-                      const visibility = image.visibility || turn.visibility || "private";
-                      const nextVisibility = visibility === "public" ? "private" : "public";
-                      const visibilityMutatingKey = `${selectedConversation.id}:${turn.id}:${image.id}`;
-                      const isVisibilityMutating = visibilityMutatingImageKey === visibilityMutatingKey;
-                      const canUpdateVisibility = Boolean(image.path || image.localUrl || image.url);
-
                       return (
                         <figure
                           key={image.id}
@@ -944,48 +915,6 @@ export function ImageResults({
                             >
                               <Plus className="size-3.5" />
                             </button>
-                          </div>
-                          <div className="absolute right-2 bottom-2 z-20 flex items-center gap-1">
-                            {canUpdateVisibility ? (
-                              <button
-                                type="button"
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  event.currentTarget.blur();
-                                  void onImageVisibilityChange(
-                                    selectedConversation.id,
-                                    turn.id,
-                                    index,
-                                    nextVisibility,
-                                  );
-                                }}
-                                disabled={isVisibilityMutating}
-                                className={cn(
-                                  "inline-flex h-7 items-center gap-1.5 rounded-full px-2.5 text-[11px] font-medium opacity-0 shadow-sm transition group-hover:opacity-100 group-focus-within:opacity-100 disabled:cursor-not-allowed disabled:opacity-70",
-                                  imageVisibilityActionClass(visibility),
-                                )}
-                                aria-label={visibility === "public" ? "取消公开图片" : "公开图片"}
-                                title={visibility === "public" ? "取消公开" : "公开"}
-                              >
-                                {isVisibilityMutating ? (
-                                  <LoaderCircle className="size-3 animate-spin" />
-                                ) : visibility === "public" ? (
-                                  <Lock className="size-3" />
-                                ) : (
-                                  <Globe2 className="size-3" />
-                                )}
-                                {visibility === "public" ? "取消公开" : "公开"}
-                              </button>
-                            ) : null}
-                            <div
-                              className={cn(
-                                "pointer-events-none inline-flex h-7 items-center gap-1 rounded-full px-2 text-[11px] font-medium shadow-sm backdrop-blur-sm",
-                                imageVisibilityPillClass(visibility),
-                              )}
-                            >
-                              {visibility === "public" ? <Globe2 className="size-3" /> : <Lock className="size-3" />}
-                              {imageVisibilityLabel(visibility)}
-                            </div>
                           </div>
                           <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/55 via-black/20 to-transparent px-2.5 pt-8 pb-11 opacity-0 transition duration-150 group-hover:opacity-100 group-focus-within:opacity-100">
                             <div className="text-left text-white drop-shadow-sm">

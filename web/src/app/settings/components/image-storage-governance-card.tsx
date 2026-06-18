@@ -217,8 +217,8 @@ export function ImageStorageGovernanceCard() {
                 value={`${governance?.images_count ?? 0} 张`}
               />
               <StatBlock
-                label="公开 / 私有"
-                value={`${governance?.public_images_count ?? 0} / ${governance?.private_images_count ?? 0}`}
+                label="访问控制"
+                value="仅授权访问"
               />
               <StatBlock
                 label="参考图附件"
@@ -295,8 +295,8 @@ export function ImageStorageGovernanceCard() {
               {cleanupAction === "thumbnails"
                 ? "将删除缩略图和中图预览缓存，原图和参考图不会被删除。"
                 : cleanupAction === "quota"
-                  ? "将按容量上限删除最旧的非公开图片，公共素材库图片默认保留。"
-                  : "将删除保留窗口以前的非公开图片，并同步清理缩略图、元数据和参考图。"}
+                  ? "将按容量上限删除最旧的个人图片。"
+                  : "将删除保留窗口以前的个人图片，并同步清理缩略图、元数据和参考图。"}
             </DialogDescription>
           </DialogHeader>
           <div className={settingsPanelClassName}>

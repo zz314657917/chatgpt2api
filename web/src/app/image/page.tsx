@@ -1,10 +1,12 @@
 "use client";
 
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { useLocation } from "react-router-dom";
-import { Globe2, ImagePlus, LoaderCircle, Plus, Trash2, X } from "lucide-react";
+import { useLocation, useNavigate } from "react-router-dom";
+import { ImagePlus, LoaderCircle, Plus, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 
+import { ImageArenaComposer } from "@/app/image/components/image-arena-composer";
+import { ImageArenaResults } from "@/app/image/components/image-arena-results";
 import { ImageComposer } from "@/app/image/components/image-composer";
 import type { ImageLightboxItem } from "@/app/image/components/image-results";
 import { ImageRatioPicker } from "@/components/image-ratio-picker";
@@ -38,11 +40,12 @@ import {
 import { IMAGE_PROMPT_PRESETS, type ImagePromptPreset } from "@/app/image/image-presets";
 import { consumeSimilarImageIntent } from "@/app/image/similar-image-intent";
 import { ImageOutputControls } from "@/components/image-output-controls";
+import { ImageModelSettingsButton } from "@/components/image-model-settings-button";
 import { DEFAULT_IMAGE_RATIO_PICKER_OPTIONS, imageRatioPickerValueLabel } from "@/lib/image-ratio-picker-options";
 import { ManagedImageAssetDock } from "@/components/managed-image-asset-dock";
+import { ModelProviderOptionLabel } from "@/components/model-provider-icon";
 import { useMobileNav } from "@/components/mobile-nav-context";
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -65,9 +68,11 @@ import {
   cancelCreationTask,
   canvasModelHasCapability,
   CHAT_MODEL_OPTIONS,
+  createCanvas,
   createChatCompletionTask,
   createImageEditTaskFromReferenceIds,
   createImageGenerationTask,
+  createManagedImageCollection,
   DEFAULT_CHAT_MODEL,
   DEFAULT_IMAGE_MODEL,
   estimateImageBillingUnits,
@@ -80,22 +85,31 @@ import {
   fetchTeamWorkspace,
   IMAGE_CREATION_MODEL_OPTIONS,
   IMAGE_MODEL_ROUTE_DETAILS,
+  MIDJOURNEY_IMAGE_MODEL,
   imageReferenceInputLimit,
+  isGeminiFlashImageModel,
+  isGeminiProImageModel,
   isChatModel,
   isImageCreationModel,
   isImageModel,
   isOfficialImageModel,
+  midjourneyVersionSupportsStop,
   modelIDLooksImageCapable,
+  modelIDLooksTextOnly,
   MANAGED_IMAGE_UNCLASSIFIED_COLLECTION_ID,
+  updateManagedImageCollectionItems,
   supportsImageOutputCompression,
   supportsImageOutputControls,
   supportsImageQuality,
   supportsImageResolutionPresets,
+  supportsImageMaskParameter,
+  supportsOfficialImageGenerationSettings,
   supportsStructuredImageParameters,
   type CanvasModelOption,
   uploadCreationTaskReferenceImage,
-  updateManagedImageVisibility,
   type ImageModel,
+  type GeminiFlashSettingsPayload,
+  type MidjourneySettingsPayload,
   type CreationTask,
   type CreationTaskMessage,
   type FallbackReferenceImage,
@@ -105,13 +119,26 @@ import {
   type ManagedImageSummary,
   type TeamSummary,
 } from "@/lib/api";
+import { compactImageModelSettings, imageModelHasSettings, imageModelSettingsToTaskFields, type ImageModelSettingsState } from "@/lib/image-model-settings";
+import type { ImageTaskToolOptions } from "@/lib/image-task-request";
 import {
   isImageOutputFormat,
   type ImageOutputFormat,
 } from "@/lib/image-parameters";
 import { fetchAuthenticatedImageBlob } from "@/lib/authenticated-image";
-import { clearImageManagerCache } from "@/lib/image-manager-cache";
 import { getManagedImagePathFromUrl, getManagedImageUrlFromPath } from "@/lib/image-path";
+import {
+  adaptImageArenaSettings,
+  defaultImageArenaAgentSlots,
+  hasImageArenaFamilyConflict,
+  imageArenaAgentOptions,
+  imageArenaSubmittedFields,
+  sanitizeImageArenaAgentSlots,
+  IMAGE_ARENA_AGENT_SELECTION_STORAGE_KEY,
+  IMAGE_ARENA_MAX_AGENT_SLOTS,
+  type ImageArenaAgentMode,
+  type ImageArenaAgentSlotDraft,
+} from "@/lib/image-arena";
 import { authSessionFromLoginResponse, setVerifiedAuthSession } from "@/lib/session";
 import { useAppMeta } from "@/lib/use-app-meta";
 import { cn } from "@/lib/utils";
@@ -130,11 +157,15 @@ import {
   type ImageConversation,
   type ImageConversationMode,
   type ImageTurn,
+  type ImageArenaRun,
+  type ImageArenaRunStatus,
   type ImageTurnStatus,
   type StoredImageSizeSelection,
   type StoredImage,
   type StoredReferenceImage,
 } from "@/store/image-conversations";
+import { createEmptySmartCanvas, createImageItem, createPromptNode, createSmartEdge, toCanvasPayload } from "@/app/canvas/canvas-utils";
+import { createCommerceSuiteProject, saveCommerceSuiteProject } from "@/store/ecommerce-suite-projects";
 import { hasAPIPermission } from "@/store/auth";
 import {
   clearImageTurnProgress,
@@ -168,9 +199,31 @@ const IMAGE_CUSTOM_HEIGHT_STORAGE_KEY = "chatgpt2api:image_last_custom_height";
 const IMAGE_OUTPUT_FORMAT_STORAGE_KEY = "chatgpt2api:image_last_output_format";
 const IMAGE_OUTPUT_COMPRESSION_STORAGE_KEY = "chatgpt2api:image_last_output_compression";
 const IMAGE_QUALITY_STORAGE_KEY = "chatgpt2api:image_last_quality";
+const IMAGE_BACKGROUND_STORAGE_KEY = "chatgpt2api:image_last_background";
+const IMAGE_MODERATION_STORAGE_KEY = "chatgpt2api:image_last_moderation";
+const MIDJOURNEY_SETTINGS_STORAGE_KEY = "chatgpt2api:image_midjourney_settings";
+const GEMINI_FLASH_SETTINGS_STORAGE_KEY = "chatgpt2api:image_gemini_flash_settings";
 const QUOTA_REFRESH_EVENT = "chatgpt2api:quota-refresh";
 const DEFAULT_IMAGE_OUTPUT_FORMAT: ImageOutputFormat = "png";
 const DEFAULT_IMAGE_QUALITY: ImageQuality = "auto";
+const DEFAULT_IMAGE_BACKGROUND = "auto";
+const DEFAULT_IMAGE_MODERATION = "auto";
+const DEFAULT_MIDJOURNEY_SETTINGS: Required<Pick<MidjourneySettingsPayload, "version" | "speed" | "stylize" | "chaos" | "weird" | "quality">> &
+  Pick<MidjourneySettingsPayload, "niji" | "raw" | "tile"> = {
+    version: "8.1",
+    speed: "relax",
+    stylize: 100,
+    chaos: 0,
+    weird: 0,
+    quality: "1",
+    niji: false,
+    raw: false,
+    tile: false,
+  };
+const DEFAULT_GEMINI_FLASH_SETTINGS: Required<GeminiFlashSettingsPayload> = {
+  google_search: true,
+  google_image_search: true,
+};
 const AI_BACKGROUND_REMOVAL_PROMPT = "AI 抠图：自动识别图片中的主要主体，移除背景并输出透明背景 PNG。保持主体形状、纹理、颜色和像素细节，避免新增或重绘无关内容。注意：这是 AI 编辑，可能会重绘图片内容。";
 const REFERENCE_IMAGE_MAX_SIDE = 2048;
 const REFERENCE_IMAGE_JPEG_QUALITY = 0.86;
@@ -179,9 +232,11 @@ const IMAGE_ASSET_SIDEBAR_STORAGE_PREFIX = "image-composer-asset-sidebar";
 const activeConversationQueueIds = new Set<string>();
 const MISSING_RECOVERABLE_TASK_ID_ERROR = "页面刷新或任务中断，未找到可恢复的任务 ID";
 const HIDDEN_IMAGE_MODEL_VALUES = new Set(["codex-gpt-image-2"]);
+const IMAGE_ARENA_COLLECTION_NAME = "模型竞技场收藏";
+const IMAGE_ARENA_POLL_INTERVAL_MS = 2000;
 
 type ComposerMode = "chat" | "image";
-type ImageAssetLibraryScope = Exclude<ManagedImageListScope, "all">;
+type ImageAssetLibraryScope = Exclude<ManagedImageListScope, "all" | "public">;
 
 type EditingTurnDraft = {
   conversationId: string;
@@ -199,6 +254,11 @@ type EditingTurnDraft = {
   outputFormat: ImageOutputFormat;
   outputCompression: string;
   quality: ImageQuality;
+  background?: string;
+  moderation?: string;
+  inputImageMask?: string;
+  midjourneySettings?: MidjourneySettingsPayload;
+  geminiFlashSettings?: GeminiFlashSettingsPayload;
   visibility: ImageVisibility;
   referenceImages: StoredReferenceImage[];
 };
@@ -223,6 +283,8 @@ type PublishRecipeOptions = {
 type ImageModelMenuOption = { value: ImageModel; label: string };
 
 type CreationTaskDataItem = NonNullable<CreationTask["data"]>[number];
+
+type StoredArenaAgentSelections = Partial<Record<ImageArenaAgentMode, ImageArenaAgentSlotDraft[]>>;
 
 function getInitialAssetSidebarActivated() {
   if (typeof window === "undefined") {
@@ -944,6 +1006,94 @@ function isActiveCreationTask(task: CreationTask) {
   return task.status === "queued" || task.status === "running";
 }
 
+function creationTaskToArenaRunStatus(task: CreationTask): ImageArenaRunStatus {
+  if (task.status === "success") return "success";
+  if (task.status === "error") return "error";
+  if (task.status === "cancelled") return "cancelled";
+  if (task.status === "running") return "running";
+  return "queued";
+}
+
+function tokenCount(value: unknown): number | undefined {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric < 0) {
+    return undefined;
+  }
+  return Math.round(numeric);
+}
+
+function creationTaskUsageTokens(task: CreationTask): number | undefined {
+  const usage = task.usage;
+  if (!usage) {
+    return undefined;
+  }
+  const totalTokens = tokenCount(usage.total_tokens);
+  if (totalTokens !== undefined) {
+    return totalTokens;
+  }
+  const inputTokens = tokenCount(usage.input_tokens);
+  const outputTokens = tokenCount(usage.output_tokens);
+  if (inputTokens !== undefined || outputTokens !== undefined) {
+    return (inputTokens || 0) + (outputTokens || 0);
+  }
+  const promptTokens = tokenCount(usage.prompt_tokens);
+  const completionTokens = tokenCount(usage.completion_tokens);
+  if (promptTokens !== undefined || completionTokens !== undefined) {
+    return (promptTokens || 0) + (completionTokens || 0);
+  }
+  return undefined;
+}
+
+function deriveArenaRunStatus(run: ImageArenaRun): ImageArenaRunStatus {
+  if (run.status === "blocked") {
+    return "blocked";
+  }
+  const images = run.images || [];
+  if (run.textResponse && run.status !== "error" && run.status !== "cancelled") {
+    return "success";
+  }
+  if (images.some((image) => image.status === "loading" && image.taskStatus === "running")) {
+    return "running";
+  }
+  if (images.some((image) => image.status === "loading")) {
+    return "queued";
+  }
+  if (images.some((image) => image.status === "success" || image.status === "message")) {
+    return "success";
+  }
+  if (images.some((image) => image.status === "cancelled")) {
+    return "cancelled";
+  }
+  if (images.some((image) => image.status === "error")) {
+    return "error";
+  }
+  return run.status;
+}
+
+function isArenaRunTerminal(run: ImageArenaRun) {
+  return run.status === "success" || run.status === "error" || run.status === "cancelled" || run.status === "blocked";
+}
+
+function deriveArenaTurnStatus(turn: ImageTurn): Pick<ImageTurn, "status" | "error"> {
+  const runs = turn.arenaRuns || [];
+  if (runs.some((run) => !isArenaRunTerminal(run))) {
+    return runs.some((run) => run.status === "running") ? { status: "generating", error: undefined } : { status: "queued", error: undefined };
+  }
+  const successCount = runs.filter((run) => run.status === "success").length;
+  const failedCount = runs.filter((run) => run.status === "error" || run.status === "blocked").length;
+  const cancelledCount = runs.filter((run) => run.status === "cancelled").length;
+  if (successCount > 0 && failedCount === 0 && cancelledCount === 0) {
+    return { status: "success", error: undefined };
+  }
+  if (successCount > 0) {
+    return { status: "error", error: `成功 ${successCount} 个，失败 ${failedCount} 个，终止 ${cancelledCount} 个` };
+  }
+  if (cancelledCount > 0 && failedCount === 0) {
+    return { status: "cancelled", error: "任务已终止" };
+  }
+  return { status: "error", error: failedCount > 0 ? `失败 ${failedCount} 个模型` : "多智能体任务失败" };
+}
+
 function sleep(ms: number) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
@@ -1034,8 +1184,66 @@ function getStoredImageQuality(): ImageQuality {
   return isImageQuality(storedQuality) ? storedQuality : DEFAULT_IMAGE_QUALITY;
 }
 
+function normalizeImageBackground(value: unknown) {
+  const normalized = String(value || "").trim();
+  return normalized === "opaque" || normalized === "transparent" || normalized === "auto" ? normalized : DEFAULT_IMAGE_BACKGROUND;
+}
+
+function normalizeImageModeration(value: unknown) {
+  const normalized = String(value || "").trim();
+  return normalized === "low" || normalized === "auto" ? normalized : DEFAULT_IMAGE_MODERATION;
+}
+
+function getStoredImageBackground() {
+  if (typeof window === "undefined") {
+    return DEFAULT_IMAGE_BACKGROUND;
+  }
+  return normalizeImageBackground(window.localStorage.getItem(IMAGE_BACKGROUND_STORAGE_KEY));
+}
+
+function getStoredImageModeration() {
+  if (typeof window === "undefined") {
+    return DEFAULT_IMAGE_MODERATION;
+  }
+  return normalizeImageModeration(window.localStorage.getItem(IMAGE_MODERATION_STORAGE_KEY));
+}
+
 function imageQualityForModel(model: ImageModel, quality: ImageQuality): ImageQuality | undefined {
   return supportsImageQuality(model) ? quality : undefined;
+}
+
+function visibleImageToolOptionsForModel(
+  model: ImageModel,
+  options: { background?: string; moderation?: string; inputImageMask?: string },
+): ImageTaskToolOptions | undefined {
+  const fields = imageModelSettingsToTaskFields(model, {
+    officialImage: {
+      background: normalizeImageBackground(options.background),
+      moderation: normalizeImageModeration(options.moderation),
+      inputImageMask: options.inputImageMask,
+    },
+    geminiPro: {
+      inputImageMask: options.inputImageMask,
+    },
+  });
+  return fields.toolOptions;
+}
+
+function imageTurnToolOptions(turn: ImageTurn): ImageTaskToolOptions | undefined {
+  const out: ImageTaskToolOptions = {};
+  if (turn.background) {
+    out.background = turn.background;
+  }
+  if (turn.moderation) {
+    out.moderation = turn.moderation;
+  }
+  if (turn.inputImageMask) {
+    out.inputImageMask = turn.inputImageMask;
+  }
+  if (typeof turn.partialImages === "number") {
+    out.partialImages = turn.partialImages;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 function serializeImageSizeSelection(selection: ImageSizeSelection): StoredImageSizeSelection {
@@ -1128,11 +1336,179 @@ function hasEnoughBilling(session: NonNullable<ReturnType<typeof useAuthGuard>["
 }
 
 function imageBillingEstimate(model: ImageModel, count: number, sizeOrResolution: string, quality: ImageQuality = DEFAULT_IMAGE_QUALITY) {
+  if (model === MIDJOURNEY_IMAGE_MODEL) {
+    return { price: null, units: 0 };
+  }
   const estimatedPrice = estimateImageDisplayPriceUSD(model, count, sizeOrResolution, quality);
   return {
     price: estimatedPrice,
     units: estimateImageBillingUnits(model, count, sizeOrResolution, quality),
   };
+}
+
+function clampIntegerSetting(value: unknown, fallback: number, min: number, max: number) {
+	const parsed = Math.round(Number(value));
+	if (!Number.isFinite(parsed)) {
+		return fallback;
+	}
+	return Math.min(max, Math.max(min, parsed));
+}
+
+function normalizeMidjourneySettings(value: unknown): MidjourneySettingsPayload {
+  const source = value && typeof value === "object" ? value as Record<string, unknown> : {};
+  const version = typeof source.version === "string" && source.version.trim() ? source.version.trim() : DEFAULT_MIDJOURNEY_SETTINGS.version;
+  const speed = typeof source.speed === "string" && source.speed.trim() ? source.speed.trim() : DEFAULT_MIDJOURNEY_SETTINGS.speed;
+  const quality = typeof source.quality === "string" && source.quality.trim() ? source.quality.trim() : DEFAULT_MIDJOURNEY_SETTINGS.quality;
+  const out: MidjourneySettingsPayload = {
+    version,
+    speed,
+    stylize: clampIntegerSetting(source.stylize, DEFAULT_MIDJOURNEY_SETTINGS.stylize, 0, 1000),
+    chaos: clampIntegerSetting(source.chaos, DEFAULT_MIDJOURNEY_SETTINGS.chaos, 0, 100),
+    weird: clampIntegerSetting(source.weird, DEFAULT_MIDJOURNEY_SETTINGS.weird, 0, 3000),
+    quality,
+    niji: source.niji === true || version.toLowerCase().startsWith("niji"),
+    raw: source.raw === true,
+    tile: source.tile === true,
+  };
+  if (midjourneyVersionSupportsStop(version)) {
+    out.stop = clampIntegerSetting(source.stop, 100, 10, 100);
+  }
+  return out;
+}
+
+function getStoredMidjourneySettings() {
+  if (typeof window === "undefined") {
+    return normalizeMidjourneySettings(DEFAULT_MIDJOURNEY_SETTINGS);
+  }
+  try {
+    const raw = window.localStorage.getItem(MIDJOURNEY_SETTINGS_STORAGE_KEY);
+    return normalizeMidjourneySettings(raw ? JSON.parse(raw) : DEFAULT_MIDJOURNEY_SETTINGS);
+  } catch {
+    return normalizeMidjourneySettings(DEFAULT_MIDJOURNEY_SETTINGS);
+  }
+}
+
+function normalizeGeminiFlashSettings(value: unknown): GeminiFlashSettingsPayload {
+  const source = value && typeof value === "object" ? value as Record<string, unknown> : {};
+  const googleImageSearch = source.google_image_search === false ? false : true;
+  return {
+    google_search: source.google_search === true || googleImageSearch,
+    google_image_search: googleImageSearch,
+  };
+}
+
+function getStoredGeminiFlashSettings() {
+  if (typeof window === "undefined") {
+    return normalizeGeminiFlashSettings(DEFAULT_GEMINI_FLASH_SETTINGS);
+  }
+  try {
+    const raw = window.localStorage.getItem(GEMINI_FLASH_SETTINGS_STORAGE_KEY);
+    return normalizeGeminiFlashSettings(raw ? JSON.parse(raw) : DEFAULT_GEMINI_FLASH_SETTINGS);
+  } catch {
+    return normalizeGeminiFlashSettings(DEFAULT_GEMINI_FLASH_SETTINGS);
+  }
+}
+
+function getStoredArenaAgentSelections(): StoredArenaAgentSelections {
+  if (typeof window === "undefined") {
+    return {};
+  }
+  try {
+    const raw = window.localStorage.getItem(IMAGE_ARENA_AGENT_SELECTION_STORAGE_KEY);
+    return raw ? JSON.parse(raw) as StoredArenaAgentSelections : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveStoredArenaAgentSelections(mode: ImageArenaAgentMode, slots: ImageArenaAgentSlotDraft[]) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  const current = getStoredArenaAgentSelections();
+  window.localStorage.setItem(IMAGE_ARENA_AGENT_SELECTION_STORAGE_KEY, JSON.stringify({
+    ...current,
+    [mode]: slots,
+  }));
+}
+
+function midjourneyExtraBody(model: ImageModel, settings?: MidjourneySettingsPayload): { midjourney_settings: MidjourneySettingsPayload } | undefined {
+  const midjourneySettings = imageModelSettingsToTaskFields(model, {
+    midjourney: normalizeMidjourneySettings(settings || DEFAULT_MIDJOURNEY_SETTINGS),
+  }).extraBody?.midjourney_settings;
+  return midjourneySettings && typeof midjourneySettings === "object"
+    ? { midjourney_settings: midjourneySettings as MidjourneySettingsPayload }
+    : undefined;
+}
+
+function geminiFlashExtraBody(model: ImageModel, settings?: GeminiFlashSettingsPayload): GeminiFlashSettingsPayload | undefined {
+  const extraBody = imageModelSettingsToTaskFields(model, {
+    geminiFlash: normalizeGeminiFlashSettings(settings || DEFAULT_GEMINI_FLASH_SETTINGS),
+  }).extraBody;
+  return extraBody
+    ? {
+        google_search: extraBody.google_search === true,
+        google_image_search: extraBody.google_image_search === true,
+      }
+    : undefined;
+}
+
+function normalizeArenaSlotSettings(slot: ImageArenaAgentSlotDraft): ImageArenaAgentSlotDraft {
+  const base = {
+    id: slot.id,
+    model: slot.model,
+    modelLabel: slot.modelLabel,
+    familyId: slot.familyId,
+  };
+  const sourceSettings = slot.imageModelSettings || {};
+  if (slot.model === MIDJOURNEY_IMAGE_MODEL) {
+    const midjourneySettings = normalizeMidjourneySettings(sourceSettings.midjourney || slot.midjourneySettings || DEFAULT_MIDJOURNEY_SETTINGS);
+    return {
+      ...base,
+      imageModelSettings: { midjourney: midjourneySettings },
+      midjourneySettings,
+    };
+  }
+  if (isGeminiFlashImageModel(slot.model)) {
+    const geminiFlashSettings = normalizeGeminiFlashSettings(sourceSettings.geminiFlash || slot.geminiFlashSettings || DEFAULT_GEMINI_FLASH_SETTINGS);
+    return {
+      ...base,
+      imageModelSettings: { geminiFlash: geminiFlashSettings },
+      geminiFlashSettings,
+    };
+  }
+  if (isOfficialImageModel(slot.model)) {
+    const officialImageSettings = visibleImageToolOptionsForModel(slot.model, {
+      background: sourceSettings.officialImage?.background || slot.officialImageSettings?.background,
+      moderation: sourceSettings.officialImage?.moderation || slot.officialImageSettings?.moderation,
+      inputImageMask: sourceSettings.officialImage?.inputImageMask || slot.officialImageSettings?.inputImageMask,
+    });
+    return {
+      ...base,
+      imageModelSettings: { officialImage: officialImageSettings },
+      officialImageSettings,
+    };
+  }
+  if (isGeminiProImageModel(slot.model)) {
+    const geminiProSettings = visibleImageToolOptionsForModel(slot.model, {
+      inputImageMask: sourceSettings.geminiPro?.inputImageMask || slot.geminiProSettings?.inputImageMask,
+    });
+    return {
+      ...base,
+      imageModelSettings: { geminiPro: geminiProSettings },
+      geminiProSettings,
+    };
+  }
+  return base;
+}
+
+function arenaRunImageModelSettings(run: Pick<ImageArenaRun, "imageModelSettings" | "midjourneySettings" | "geminiFlashSettings" | "officialImageSettings" | "geminiProSettings">) {
+  return compactImageModelSettings(run.imageModelSettings || {
+    midjourney: run.midjourneySettings,
+    geminiFlash: run.geminiFlashSettings,
+    officialImage: run.officialImageSettings,
+    geminiPro: run.geminiProSettings,
+  });
 }
 
 function referenceImageLimitMessage(limit: number) {
@@ -1175,6 +1551,14 @@ function isTurnInProgress(turn: ImageTurn) {
     turn.status === "queued" ||
     turn.status === "generating" ||
     turn.images.some((image) => image.status === "loading")
+  );
+}
+
+function isArenaTurnInProgress(turn: ImageTurn) {
+  return (
+    turn.status === "queued" ||
+    turn.status === "generating" ||
+    (turn.arenaRuns || []).some((run) => !isArenaRunTerminal(run))
   );
 }
 
@@ -1253,10 +1637,25 @@ function modelMatchesComposerMode(mode: ComposerMode, model: ImageModel) {
   return isImageCreationModel(model);
 }
 
+function remoteCanvasModelMatchesComposerMode(model: CanvasModelOption, mode: ComposerMode) {
+  const hasChatSignal = canvasModelHasCapability(model, "chat") || model.kind === "text" || model.kind === "both";
+  const hasImageSignal = canvasModelHasCapability(model, "image") || model.kind === "image" || model.kind === "both" || isImageCreationModel(model.id);
+  const hasVideoSignal = canvasModelHasCapability(model, "video") || model.kind === "video";
+  const isBuiltInChatModel = CHAT_MODEL_OPTIONS.some((option) => option.value === model.id);
+  const isBuiltInImageModel = IMAGE_CREATION_MODEL_OPTIONS.some((option) => option.value === model.id);
+  if (mode === "chat") {
+    return hasChatSignal && !hasImageSignal && !hasVideoSignal && !isBuiltInImageModel && isChatModel(model.id) && !modelIDLooksImageCapable(model.id);
+  }
+  return hasImageSignal && !hasVideoSignal && !isBuiltInChatModel && !modelIDLooksTextOnly(model.id) && !(hasChatSignal && !modelIDLooksImageCapable(model.id));
+}
+
 function canvasModelsByCapability(models: CanvasModelOption[], capability: "chat" | "image") {
   return models
     .filter((model) => model.enabled !== false)
     .filter((model) => {
+      if (Array.isArray(model.group_modes) && model.group_modes.length > 0) {
+        return model.group_modes.includes(capability) && remoteCanvasModelMatchesComposerMode(model, capability);
+      }
       const hasRequestedCapability =
         canvasModelHasCapability(model, capability) ||
         (capability === "chat" && (model.kind === "text" || model.kind === "both")) ||
@@ -1264,7 +1663,7 @@ function canvasModelsByCapability(models: CanvasModelOption[], capability: "chat
       if (!hasRequestedCapability) {
         return false;
       }
-      return capability !== "image" || isImageCreationModel(model.id);
+      return remoteCanvasModelMatchesComposerMode(model, capability);
     })
     .map(modelMenuOption);
 }
@@ -1332,9 +1731,10 @@ async function syncConversationCreationTasks(items: ImageConversation[]) {
   const taskIds = Array.from(
     new Set(
       items.flatMap((conversation) =>
-        conversation.turns.flatMap((turn) =>
-          turn.images.flatMap((image) => (image.status === "loading" && image.taskId ? [image.taskId] : [])),
-        ),
+        conversation.turns.flatMap((turn) => [
+          ...turn.images.flatMap((image) => (image.status === "loading" && image.taskId ? [image.taskId] : [])),
+          ...(turn.arenaRuns || []).flatMap((run) => (!isArenaRunTerminal(run) && run.taskId ? [run.taskId] : [])),
+        ]),
       ),
     ),
   );
@@ -1353,6 +1753,56 @@ async function syncConversationCreationTasks(items: ImageConversation[]) {
   const normalized = items.map((conversation) => {
     let completedActiveTurn = false;
     const turns = conversation.turns.map((turn) => {
+      if (conversation.kind === "arena" && turn.arenaRuns?.length) {
+        let turnChanged = false;
+        const arenaRuns = turn.arenaRuns.map((run) => {
+          if (isArenaRunTerminal(run) || !run.taskId) {
+            return run;
+          }
+          const task = taskMap.get(run.taskId);
+          if (!task) {
+            return run;
+          }
+          turnChanged = true;
+          const baseImage = run.images?.[0] || { id: `${run.id}-0`, taskId: run.taskId, status: "loading" as const };
+          const outputItems = task.data?.length
+            ? task.data
+            : Array.from({ length: Math.max(1, run.images?.length || turn.count || 1) });
+          const images = task.output_type === "text"
+            ? []
+            : outputItems.map((_, index) =>
+                taskDataToStoredImage(
+                  run.images?.[index] || { ...baseImage, id: `${run.id}-${index}`, taskId: run.taskId, status: "loading" as const },
+                  task,
+                  index,
+                  turn.visibility,
+                ),
+              );
+          const status = creationTaskToArenaRunStatus(task);
+          return {
+            ...run,
+            status,
+            error: status === "error" ? formatCreationTaskErrorMessage(task.error || "任务失败") : status === "cancelled" ? task.error || "任务已终止" : undefined,
+            usageTokens: creationTaskUsageTokens(task) ?? run.usageTokens,
+            textResponse: task.output_type === "text" ? task.data?.[0]?.text_response || task.error || "" : run.textResponse,
+            images: task.output_type === "text" ? run.images : images,
+            completedAt: status === "success" || status === "error" || status === "cancelled" ? new Date().toISOString() : run.completedAt,
+          };
+        });
+        if (!turnChanged) {
+          return turn;
+        }
+        changed = true;
+        const nextTurn = {
+          ...turn,
+          ...deriveArenaTurnStatus({ ...turn, arenaRuns }),
+          arenaRuns,
+        };
+        if (isArenaTurnInProgress(turn) && !isArenaTurnInProgress(nextTurn)) {
+          completedActiveTurn = true;
+        }
+        return nextTurn;
+      }
       let turnChanged = false;
       const images = turn.images.map((image, imageIndex) => {
         if (image.status !== "loading" || !image.taskId) {
@@ -1495,6 +1945,7 @@ async function recoverConversationHistory(items: ImageConversation[]) {
 
 function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof useAuthGuard>["session"]> }) {
   const location = useLocation();
+  const navigate = useNavigate();
   const appMeta = useAppMeta();
   const isEmbeddedMode = useMemo(() => new URLSearchParams(location.search).get("ui_mode") === "embedded", [location.search]);
   const isSubmitDispatchingRef = useRef(false);
@@ -1508,11 +1959,15 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
   const editFileInputRef = useRef<HTMLInputElement>(null);
   const promptApplyRequestIdRef = useRef(0);
   const similarIntentAppliedRef = useRef(false);
+  const arenaNewIntentAppliedRef = useRef(false);
   const assetsLoadingRequestRef = useRef(false);
   const { clearPanel, closeDrawer, setPanel } = useMobileNav();
 
   const [imagePrompt, setImagePrompt] = useState("");
   const [composerMode, setComposerMode] = useState<ComposerMode>(getStoredComposerMode);
+  const [arenaMode, setArenaMode] = useState<ImageArenaAgentMode>("chat");
+  const [arenaSlots, setArenaSlots] = useState<ImageArenaAgentSlotDraft[]>([]);
+  const [arenaActionKey, setArenaActionKey] = useState("");
   const [chatModel, setChatModel] = useState<ImageModel>(getStoredChatModel);
   const [imageModel, setImageModel] = useState<ImageModel>(getStoredImageModel);
   const [imageCount, setImageCount] = useState("1");
@@ -1525,6 +1980,11 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
   const [imageOutputFormat, setImageOutputFormat] = useState<ImageOutputFormat>(getStoredImageOutputFormat);
   const [imageOutputCompression, setImageOutputCompression] = useState(getStoredImageOutputCompression);
   const [imageQuality, setImageQuality] = useState<ImageQuality>(getStoredImageQuality);
+  const [imageBackground, setImageBackground] = useState(getStoredImageBackground);
+  const [imageModeration, setImageModeration] = useState(getStoredImageModeration);
+  const [imageMaskUrl, setImageMaskUrl] = useState("");
+  const [midjourneySettings, setMidjourneySettings] = useState<MidjourneySettingsPayload>(getStoredMidjourneySettings);
+  const [geminiFlashSettings, setGeminiFlashSettings] = useState<GeminiFlashSettingsPayload>(getStoredGeminiFlashSettings);
   const [defaultImageVisibility, setDefaultImageVisibility] = useState<ImageVisibility>("private");
   const [referenceImages, setReferenceImages] = useState<StoredReferenceImage[]>([]);
   const [conversations, setConversations] = useState<ImageConversation[]>([]);
@@ -1542,20 +2002,11 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
   );
   const [progressNow, setProgressNow] = useState(Date.now());
   const [composerDockHeight, setComposerDockHeight] = useState(0);
-  const [visibilityMutatingImageKey, setVisibilityMutatingImageKey] = useState("");
-  const [publishImageTarget, setPublishImageTarget] = useState<PublishImageTarget | null>(null);
   const [backgroundRemovalDraft, setBackgroundRemovalDraft] = useState<BackgroundRemovalDraft | null>(null);
   const [backgroundRemovalSubmitting, setBackgroundRemovalSubmitting] = useState(false);
-  const [publishRecipeOptions, setPublishRecipeOptions] = useState<PublishRecipeOptions>({
-    sharePromptParameters: false,
-    shareReferenceImages: false,
-  });
   const [assets, setAssets] = useState<ManagedImageSummary[]>([]);
   const [assetNextCursor, setAssetNextCursor] = useState("");
   const [hasMoreAssets, setHasMoreAssets] = useState(false);
-  const [publicAssets, setPublicAssets] = useState<ManagedImageSummary[]>([]);
-  const [publicAssetNextCursor, setPublicAssetNextCursor] = useState("");
-  const [hasMorePublicAssets, setHasMorePublicAssets] = useState(false);
   const [teamAssets, setTeamAssets] = useState<ManagedImageSummary[]>([]);
   const [teamAssetNextCursor, setTeamAssetNextCursor] = useState("");
   const [hasMoreTeamAssets, setHasMoreTeamAssets] = useState(false);
@@ -1564,17 +2015,14 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
   const [loadingAssets, setLoadingAssets] = useState(false);
   const [loadingMoreAssets, setLoadingMoreAssets] = useState(false);
   const [assetsLoaded, setAssetsLoaded] = useState(false);
-  const [publicAssetsLoaded, setPublicAssetsLoaded] = useState(false);
   const [teamAssetsLoaded, setTeamAssetsLoaded] = useState(false);
   const [assetCollections, setAssetCollections] = useState<Record<ImageAssetLibraryScope, ManagedImageCollection[]>>({
     mine: [],
     team: [],
-    public: [],
   });
   const [assetUnclassifiedCounts, setAssetUnclassifiedCounts] = useState<Record<ImageAssetLibraryScope, number>>({
     mine: 0,
     team: 0,
-    public: 0,
   });
   const [activeAssetCollectionId, setActiveAssetCollectionId] = useState("");
   const [assetSidebarActivated, setAssetSidebarActivated] = useState(getInitialAssetSidebarActivated);
@@ -1645,6 +2093,23 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
   const editingDraftOutputControls = editingTurnDraft
     ? supportsImageOutputControls(editingTurnDraft.model)
     : false;
+  const editingDraftModelSettingsSupported = editingTurnDraft
+    ? editingTurnDraft.mode !== "chat" && imageModelHasSettings(editingTurnDraft.model)
+    : false;
+  const editingDraftModelSettingsValue: ImageModelSettingsState | undefined = editingTurnDraft
+    ? {
+        midjourney: editingTurnDraft.midjourneySettings,
+        geminiFlash: editingTurnDraft.geminiFlashSettings,
+        officialImage: {
+          background: editingTurnDraft.background,
+          moderation: editingTurnDraft.moderation,
+          inputImageMask: editingTurnDraft.inputImageMask,
+        },
+        geminiPro: {
+          inputImageMask: editingTurnDraft.inputImageMask,
+        },
+      }
+    : undefined;
   const editingDraftReferenceLimit =
     editingTurnDraft && editingTurnDraft.mode !== "chat"
       ? imageReferenceInputLimit(editingTurnDraft.model)
@@ -1715,9 +2180,40 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         imageResolutionPresetForModel(editingTurnDraft?.model || "", editingDraftEffectiveSizeSelection),
       ),
   );
+  const handleEditingDraftModelSettingsChange = useCallback((settings: ImageModelSettingsState) => {
+    setEditingTurnDraft((current) => {
+      if (!current) {
+        return current;
+      }
+      return {
+        ...current,
+        ...(settings.midjourney ? { midjourneySettings: settings.midjourney } : {}),
+        ...(settings.geminiFlash ? { geminiFlashSettings: normalizeGeminiFlashSettings(settings.geminiFlash) } : {}),
+        ...(settings.officialImage
+          ? {
+              background: settings.officialImage.background || DEFAULT_IMAGE_BACKGROUND,
+              moderation: settings.officialImage.moderation || DEFAULT_IMAGE_MODERATION,
+              inputImageMask: settings.officialImage.inputImageMask || "",
+            }
+          : {}),
+        ...(isGeminiProImageModel(current.model)
+          ? { inputImageMask: settings.geminiPro?.inputImageMask || "" }
+          : {}),
+      };
+    });
+  }, []);
   const selectedConversation = useMemo(
     () => conversations.find((item) => item.id === selectedConversationId) ?? null,
     [conversations, selectedConversationId],
+  );
+  const selectedConversationIsArena = selectedConversation?.kind === "arena";
+  const arenaModelOptions = useMemo(
+    () => arenaMode === "chat" ? chatModelOptions : imageCreationModelOptions,
+    [arenaMode, chatModelOptions, imageCreationModelOptions],
+  );
+  const arenaAgentOptions = useMemo(
+    () => imageArenaAgentOptions(arenaMode, arenaModelOptions),
+    [arenaMode, arenaModelOptions],
   );
   const activeTaskCount = useMemo(
     () =>
@@ -1770,27 +2266,75 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
   );
   const activeAssetCollections = useMemo(() => assetCollections[assetLibraryScope] || [], [assetCollections, assetLibraryScope]);
   const activeAssetUnclassifiedCount = assetUnclassifiedCounts[assetLibraryScope] || 0;
-  const visibleAssets = assetLibraryScope === "public" ? publicAssets : assetLibraryScope === "team" ? teamAssets : assets;
+  const visibleAssets = assetLibraryScope === "team" ? teamAssets : assets;
   const visibleAssetCount = visibleAssets.length;
   const visibleLoadingAssets = loadingAssets;
   const visibleLoadingMoreAssets = loadingMoreAssets;
-  const visibleHasMoreAssets = assetLibraryScope === "public" ? hasMorePublicAssets : assetLibraryScope === "team" ? hasMoreTeamAssets : hasMoreAssets;
+  const visibleHasMoreAssets = assetLibraryScope === "team" ? hasMoreTeamAssets : hasMoreAssets;
   const assetLibraryTabs = useMemo(() => [
     { id: "mine", label: "个人", count: assets.length },
     ...(activeTeam?.id ? [{ id: "team", label: "团队", count: teamAssets.length }] : []),
-    { id: "public", label: "公共", count: publicAssets.length },
-  ], [activeTeam?.id, assets.length, publicAssets.length, teamAssets.length]);
+  ], [activeTeam?.id, assets.length, teamAssets.length]);
   const assetLibrarySubtitle = `${visibleAssetCount} 张素材 · 拖到输入框`;
-  const assetLibraryTitle = assetLibraryScope === "team" ? "团队素材库" : assetLibraryScope === "public" ? "公共素材库" : "个人素材库";
+  const assetLibraryTitle = assetLibraryScope === "team" ? "团队素材库" : "个人素材库";
   const assetLibraryEmptyLabel = assetLibraryScope === "team"
     ? "团队素材库暂无图片"
-    : assetLibraryScope === "public"
-      ? "公共素材库暂无图片"
-      : "个人素材库暂无图片";
+    : "个人素材库暂无图片";
 
   useEffect(() => {
     conversationsRef.current = conversations;
   }, [conversations]);
+
+  useEffect(() => {
+    if (arenaModelOptions.length === 0) {
+      setArenaSlots([]);
+      return;
+    }
+    setArenaSlots((current) => {
+      const stored = getStoredArenaAgentSelections()[arenaMode] || [];
+      const source = current.length > 0 ? current : stored;
+      const sanitized = sanitizeImageArenaAgentSlots({
+        mode: arenaMode,
+        slots: source,
+        options: arenaModelOptions,
+      }).map(normalizeArenaSlotSettings);
+      const currentKey = current
+        .map((slot) =>
+          [
+            slot.id,
+            slot.model,
+            slot.familyId,
+            JSON.stringify(slot.imageModelSettings || {}),
+            JSON.stringify(slot.midjourneySettings || {}),
+            JSON.stringify(slot.geminiFlashSettings || {}),
+            JSON.stringify(slot.officialImageSettings || {}),
+            JSON.stringify(slot.geminiProSettings || {}),
+          ].join(":"),
+        )
+        .join("|");
+      const nextKey = sanitized
+        .map((slot) =>
+          [
+            slot.id,
+            slot.model,
+            slot.familyId,
+            JSON.stringify(slot.imageModelSettings || {}),
+            JSON.stringify(slot.midjourneySettings || {}),
+            JSON.stringify(slot.geminiFlashSettings || {}),
+            JSON.stringify(slot.officialImageSettings || {}),
+            JSON.stringify(slot.geminiProSettings || {}),
+          ].join(":"),
+        )
+        .join("|");
+      return currentKey === nextKey ? current : sanitized;
+    });
+  }, [arenaMode, arenaModelOptions]);
+
+  useEffect(() => {
+    if (arenaSlots.length > 0) {
+      saveStoredArenaAgentSelections(arenaMode, arenaSlots);
+    }
+  }, [arenaMode, arenaSlots]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1897,6 +2441,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         setImageOutputFormat(getStoredImageOutputFormat());
         setImageOutputCompression(getStoredImageOutputCompression());
         setImageQuality(getStoredImageQuality());
+        setGeminiFlashSettings(getStoredGeminiFlashSettings());
 
         const items = await listImageConversations();
         const normalizedItems = await recoverConversationHistory(items);
@@ -1974,13 +2519,13 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     const usesPublicImageFallback = intent.sourceKind !== "original_references";
     const toastId = toast.loading(
       usesPublicImageFallback
-        ? "正在读取公开图作为参考图"
+        ? "正在读取当前图作为参考图"
         : sourceImageUrls.length > 1
-          ? "正在读取公开的原始参考图"
-          : "正在读取公开的原始参考图",
+          ? "正在读取原始参考图"
+          : "正在读取原始参考图",
     );
     void Promise.allSettled(
-      sourceImageUrls.map((url, index) => buildReferenceImageFromUrl(url, index, "public-gallery-reference")),
+      sourceImageUrls.map((url, index) => buildReferenceImageFromUrl(url, index, "asset-reference")),
     )
       .then((results) => {
         if (promptApplyRequestIdRef.current !== requestId) {
@@ -1997,7 +2542,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
           failedCount > 0
             ? `已带入原始提示词、${loadedReferences.length} 张参考图和生成参数，${failedCount} 张读取失败`
             : usesPublicImageFallback
-              ? "未公开原始参考图，已使用公开图和可用参数"
+              ? "未找到原始参考图，已使用当前图和可用参数"
               : `已带入原始提示词、${loadedReferences.length} 张原始参考图和生成参数`,
         );
       })
@@ -2129,6 +2674,34 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     }
     window.localStorage.setItem(IMAGE_QUALITY_STORAGE_KEY, imageQuality);
   }, [imageQuality]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    window.localStorage.setItem(IMAGE_BACKGROUND_STORAGE_KEY, normalizeImageBackground(imageBackground));
+  }, [imageBackground]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    window.localStorage.setItem(IMAGE_MODERATION_STORAGE_KEY, normalizeImageModeration(imageModeration));
+  }, [imageModeration]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    window.localStorage.setItem(MIDJOURNEY_SETTINGS_STORAGE_KEY, JSON.stringify(normalizeMidjourneySettings(midjourneySettings)));
+  }, [midjourneySettings]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    window.localStorage.setItem(GEMINI_FLASH_SETTINGS_STORAGE_KEY, JSON.stringify(normalizeGeminiFlashSettings(geminiFlashSettings)));
+  }, [geminiFlashSettings]);
 
   useEffect(() => {
     if (selectedConversationId && !conversations.some((conversation) => conversation.id === selectedConversationId)) {
@@ -2360,6 +2933,157 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     textareaRef.current?.focus();
   }, []);
 
+  const handleCreateArenaDraft = useCallback(async () => {
+    const now = new Date().toISOString();
+    const conversationId = createId();
+    const initialSlots = sanitizeImageArenaAgentSlots({
+      mode: arenaMode,
+      slots: arenaSlots.length > 0 ? arenaSlots : defaultImageArenaAgentSlots(arenaMode, arenaModelOptions),
+      options: arenaModelOptions,
+    }).map(normalizeArenaSlotSettings);
+    const conversation: ImageConversation = {
+      id: conversationId,
+      kind: "arena",
+      title: "多智能体对话",
+      createdAt: now,
+      updatedAt: now,
+      turns: [],
+    };
+    await persistConversation(conversation);
+    setSelectedConversationId(conversationId);
+    setArenaSlots(initialSlots);
+    clearComposerInputs();
+    textareaRef.current?.focus();
+  }, [arenaMode, arenaModelOptions, arenaSlots, clearComposerInputs]);
+
+  useEffect(() => {
+    if (isLoadingHistory || arenaNewIntentAppliedRef.current) {
+      return;
+    }
+    const params = new URLSearchParams(location.search);
+    if (params.get("new") !== "arena") {
+      return;
+    }
+    arenaNewIntentAppliedRef.current = true;
+    void handleCreateArenaDraft().then(() => {
+      const nextParams = new URLSearchParams(location.search);
+      nextParams.delete("new");
+      const query = nextParams.toString();
+      navigate(`/image${query ? `?${query}` : ""}`, { replace: true });
+    });
+  }, [handleCreateArenaDraft, isLoadingHistory, location.search, navigate]);
+
+  const handleArenaModeChange = useCallback((mode: ImageArenaAgentMode) => {
+    setArenaMode(mode);
+    const stored = getStoredArenaAgentSelections()[mode] || [];
+    const options = mode === "chat" ? chatModelOptions : imageCreationModelOptions;
+    setArenaSlots(sanitizeImageArenaAgentSlots({ mode, slots: stored, options }).map(normalizeArenaSlotSettings));
+  }, [chatModelOptions, imageCreationModelOptions]);
+
+  const handleAddArenaSlot = useCallback(() => {
+    setArenaSlots((current) => {
+      if (current.length >= IMAGE_ARENA_MAX_AGENT_SLOTS) {
+        return current;
+      }
+      const usedFamilies = new Set(current.map((slot) => slot.familyId));
+      const nextOption = arenaAgentOptions.find((option) => !usedFamilies.has(option.familyId));
+      if (!nextOption) {
+        toast.error("没有更多不同类型的模型可添加");
+        return current;
+      }
+      return [
+        ...current,
+        {
+          ...normalizeArenaSlotSettings({
+            id: createId(),
+            model: nextOption.value,
+            modelLabel: nextOption.label,
+            familyId: nextOption.familyId,
+          }),
+        },
+      ];
+    });
+  }, [arenaAgentOptions]);
+
+  const handleRemoveArenaSlot = useCallback((slotId: string) => {
+    setArenaSlots((current) => current.length <= 1 ? current : current.filter((slot) => slot.id !== slotId));
+  }, []);
+
+  const handleArenaSlotModelChange = useCallback((slotId: string, model: ImageModel) => {
+    const option = arenaAgentOptions.find((item) => item.value === model);
+    if (!option) {
+      return;
+    }
+    setArenaSlots((current) => {
+      if (current.some((slot) => slot.id !== slotId && slot.familyId === option.familyId)) {
+        toast.error("同类型模型已选择，请先移除另一个槽位");
+        return current;
+      }
+      return current.map((slot) =>
+        slot.id === slotId
+          ? normalizeArenaSlotSettings({
+              ...slot,
+              model: option.value,
+              modelLabel: option.label,
+              familyId: option.familyId,
+            })
+          : slot,
+      );
+    });
+  }, [arenaAgentOptions]);
+
+  const handleArenaSlotMidjourneySettingsChange = useCallback((slotId: string, settings: MidjourneySettingsPayload) => {
+    setArenaSlots((current) =>
+      current.map((slot) =>
+        slot.id === slotId
+          ? normalizeArenaSlotSettings({
+              ...slot,
+              midjourneySettings: settings,
+            })
+          : slot,
+      ),
+    );
+  }, []);
+
+  const handleArenaSlotGeminiFlashSettingsChange = useCallback((slotId: string, settings: GeminiFlashSettingsPayload) => {
+    setArenaSlots((current) =>
+      current.map((slot) =>
+        slot.id === slotId
+          ? normalizeArenaSlotSettings({
+              ...slot,
+              geminiFlashSettings: normalizeGeminiFlashSettings(settings),
+            })
+          : slot,
+      ),
+    );
+  }, []);
+
+  const handleArenaSlotOfficialImageSettingsChange = useCallback((slotId: string, settings: ImageTaskToolOptions) => {
+    setArenaSlots((current) =>
+      current.map((slot) =>
+        slot.id === slotId
+          ? normalizeArenaSlotSettings({
+              ...slot,
+              officialImageSettings: settings,
+            })
+          : slot,
+      ),
+    );
+  }, []);
+
+  const handleArenaSlotGeminiProSettingsChange = useCallback((slotId: string, settings: ImageTaskToolOptions | undefined) => {
+    setArenaSlots((current) =>
+      current.map((slot) =>
+        slot.id === slotId
+          ? normalizeArenaSlotSettings({
+              ...slot,
+              geminiProSettings: settings,
+            })
+          : slot,
+      ),
+    );
+  }, []);
+
   const handleApplyPromptPreset = useCallback(async (preset: ImagePromptPreset) => {
     const requestId = promptApplyRequestIdRef.current + 1;
     promptApplyRequestIdRef.current = requestId;
@@ -2493,33 +3217,6 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     }
   }, [activeAssetCollectionId, canUseImageAssets]);
 
-  const loadPublicAssets = useCallback(async () => {
-    if (assetsLoadingRequestRef.current) {
-      return;
-    }
-    if (!canUseImageAssets) {
-      setPublicAssets([]);
-      setPublicAssetNextCursor("");
-      setHasMorePublicAssets(false);
-      setPublicAssetsLoaded(true);
-      return;
-    }
-    assetsLoadingRequestRef.current = true;
-    setLoadingAssets(true);
-    try {
-      const result = await fetchManagedImages({ scope: "public", page_size: IMAGE_ASSET_PAGE_SIZE, collection_id: activeAssetCollectionId });
-      setPublicAssets(result.items);
-      setPublicAssetNextCursor(result.next_cursor);
-      setHasMorePublicAssets(result.has_more);
-      setPublicAssetsLoaded(true);
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "加载公共素材库失败");
-    } finally {
-      assetsLoadingRequestRef.current = false;
-      setLoadingAssets(false);
-    }
-  }, [activeAssetCollectionId, canUseImageAssets]);
-
   const loadTeamAssets = useCallback(async () => {
     if (assetsLoadingRequestRef.current) {
       return;
@@ -2569,28 +3266,6 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     }
   }, [activeAssetCollectionId, assetNextCursor, canUseImageAssets, hasMoreAssets, loadingAssets, loadingMoreAssets]);
 
-  const loadMorePublicAssets = useCallback(async () => {
-    if (!canUseImageAssets || loadingAssets || loadingMoreAssets || !hasMorePublicAssets || !publicAssetNextCursor) {
-      return;
-    }
-    setLoadingMoreAssets(true);
-    try {
-      const result = await fetchManagedImages({
-        scope: "public",
-        page_size: IMAGE_ASSET_PAGE_SIZE,
-        cursor: publicAssetNextCursor,
-        collection_id: activeAssetCollectionId,
-      });
-      setPublicAssets((current) => mergeManagedImageAssets(current, result.items));
-      setPublicAssetNextCursor(result.next_cursor);
-      setHasMorePublicAssets(result.has_more);
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "加载更多公共图片失败");
-    } finally {
-      setLoadingMoreAssets(false);
-    }
-  }, [activeAssetCollectionId, canUseImageAssets, hasMorePublicAssets, loadingAssets, loadingMoreAssets, publicAssetNextCursor]);
-
   const loadMoreTeamAssets = useCallback(async () => {
     if (!canUseImageAssets || !activeTeam?.id || loadingAssets || loadingMoreAssets || !hasMoreTeamAssets || !teamAssetNextCursor) {
       return;
@@ -2615,33 +3290,21 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
   }, [activeAssetCollectionId, activeTeam?.id, canUseImageAssets, hasMoreTeamAssets, loadingAssets, loadingMoreAssets, teamAssetNextCursor]);
 
   const loadAssetLibrary = useCallback(() => {
-    if (assetLibraryScope === "public") {
-      return loadPublicAssets();
-    }
     if (assetLibraryScope === "team") {
       return loadTeamAssets();
     }
     return loadAssets();
-  }, [assetLibraryScope, loadAssets, loadPublicAssets, loadTeamAssets]);
+  }, [assetLibraryScope, loadAssets, loadTeamAssets]);
 
   const loadMoreAssetLibrary = useCallback(() => {
-    if (assetLibraryScope === "public") {
-      return loadMorePublicAssets();
-    }
     if (assetLibraryScope === "team") {
       return loadMoreTeamAssets();
     }
     return loadMoreAssets();
-  }, [assetLibraryScope, loadMoreAssets, loadMorePublicAssets, loadMoreTeamAssets]);
+  }, [assetLibraryScope, loadMoreAssets, loadMoreTeamAssets]);
 
   const ensureAssetsLoaded = useCallback(() => {
     if (loadingAssets || assetsLoadingRequestRef.current) {
-      return;
-    }
-    if (assetLibraryScope === "public") {
-      if (!publicAssetsLoaded) {
-        void loadPublicAssets();
-      }
       return;
     }
     if (assetLibraryScope === "team") {
@@ -2653,7 +3316,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     if (!assetsLoaded) {
       void loadAssets();
     }
-  }, [assetLibraryScope, assetsLoaded, loadAssets, loadPublicAssets, loadTeamAssets, loadingAssets, publicAssetsLoaded, teamAssetsLoaded]);
+  }, [assetLibraryScope, assetsLoaded, loadAssets, loadTeamAssets, loadingAssets, teamAssetsLoaded]);
 
   useEffect(() => {
     if (assetSidebarActivated) {
@@ -2665,12 +3328,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     if (!assetSidebarActivated) {
       return;
     }
-    if (assetLibraryScope === "public") {
-      setPublicAssetsLoaded(false);
-      setPublicAssets([]);
-      setPublicAssetNextCursor("");
-      setHasMorePublicAssets(false);
-    } else if (assetLibraryScope === "team") {
+    if (assetLibraryScope === "team") {
       setTeamAssetsLoaded(false);
       setTeamAssets([]);
       setTeamAssetNextCursor("");
@@ -2691,7 +3349,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
   }, [assetLibraryScope, assetSidebarActivated, ensureAssetsLoaded]);
 
   const selectAssetLibraryScope = useCallback((scope: string) => {
-    if (scope === "mine" || scope === "public" || (scope === "team" && activeTeam?.id)) {
+    if (scope === "mine" || (scope === "team" && activeTeam?.id)) {
       setAssetLibraryScope(scope);
       setActiveAssetCollectionId("");
     }
@@ -2774,6 +3432,10 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                 handleCreateDraft();
                 closeDrawer();
               }}
+              onCreateArenaDraft={() => {
+                void handleCreateArenaDraft();
+                closeDrawer();
+              }}
               onClearHistory={openClearHistoryConfirm}
               onSelectConversation={(id) => {
                 setSelectedConversationId(id);
@@ -2790,6 +3452,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     closeDrawer,
     conversations,
     handleCreateDraft,
+    handleCreateArenaDraft,
     isLoadingHistory,
     openClearHistoryConfirm,
     openDeleteConversationConfirm,
@@ -3049,100 +3712,6 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     setLightboxOpen(true);
   }, []);
 
-  const handleImageVisibilityChange = useCallback(
-    async (
-      conversationId: string,
-      turnId: string,
-      imageIndex: number,
-      visibility: ImageVisibility,
-      options: PublishRecipeOptions = { sharePromptParameters: false, shareReferenceImages: false },
-    ) => {
-      const targetConversation = conversationsRef.current.find((conversation) => conversation.id === conversationId);
-      const targetTurn = targetConversation?.turns.find((turn) => turn.id === turnId);
-      const targetImage = targetTurn?.images[imageIndex];
-      if (!targetConversation || !targetTurn || !targetImage) {
-        toast.error("未找到对应的图片记录");
-        return;
-      }
-      if (targetImage.status !== "success") {
-        toast.error("图片生成成功后才能修改公开状态");
-        return;
-      }
-      const imageUrl = targetImage.localUrl || targetImage.url || "";
-      const path = targetImage.path || (imageUrl ? getManagedImagePathFromUrl(imageUrl) : "");
-      if (!path) {
-        toast.error("未找到可同步到素材库的图片路径");
-        return;
-      }
-      const currentVisibility = targetImage.visibility || targetTurn.visibility || "private";
-      if (visibility === "public" && currentVisibility !== "public" && !publishImageTarget) {
-        setPublishRecipeOptions({ sharePromptParameters: false, shareReferenceImages: false });
-        setPublishImageTarget({ conversationId, turnId, imageIndex });
-        return;
-      }
-
-      const mutatingKey = `${conversationId}:${turnId}:${targetImage.id}`;
-      if (visibilityMutatingImageKey === mutatingKey) {
-        return;
-      }
-      if (visibilityMutatingImageKey) {
-        return;
-      }
-      setVisibilityMutatingImageKey(mutatingKey);
-      try {
-        const data = await updateManagedImageVisibility(path, visibility, options);
-        const updatedVisibility = data.item.visibility || visibility;
-        const updatedPath = data.item.path || path;
-        await updateConversation(conversationId, (current) => {
-          const conversation = current ?? targetConversation;
-          return {
-            ...conversation,
-            updatedAt: new Date().toISOString(),
-            turns: conversation.turns.map((turn) =>
-              turn.id === turnId
-                ? {
-                    ...turn,
-                    images: turn.images.map((image, index) =>
-                      index === imageIndex
-                        ? {
-                            ...image,
-                            path: updatedPath,
-                            visibility: updatedVisibility,
-                          }
-                        : image,
-                    ),
-                  }
-                : turn,
-            ),
-          };
-        });
-        clearImageManagerCache();
-        toast.success(updatedVisibility === "public" ? "已公开到公共素材库" : "已取消公开");
-      } catch (error) {
-        toast.error(error instanceof Error ? error.message : "更新公开状态失败");
-      } finally {
-        setVisibilityMutatingImageKey("");
-      }
-    },
-    [publishImageTarget, updateConversation, visibilityMutatingImageKey],
-  );
-
-  const handleConfirmPublishImage = useCallback(async () => {
-    if (!publishImageTarget || visibilityMutatingImageKey) {
-      return;
-    }
-    const target = publishImageTarget;
-    const options = {
-      sharePromptParameters: publishRecipeOptions.sharePromptParameters,
-      shareReferenceImages: publishRecipeOptions.sharePromptParameters && publishRecipeOptions.shareReferenceImages,
-    };
-    try {
-      await handleImageVisibilityChange(target.conversationId, target.turnId, target.imageIndex, "public", options);
-    } finally {
-      setPublishImageTarget(null);
-    }
-  }, [handleImageVisibilityChange, publishImageTarget, publishRecipeOptions, visibilityMutatingImageKey]);
-
   const openEditTurnDialog = useCallback((conversationId: string, turnId: string) => {
     const targetConversation = conversationsRef.current.find((conversation) => conversation.id === conversationId);
     const targetTurn = targetConversation?.turns.find((turn) => turn.id === turnId);
@@ -3174,6 +3743,11 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
           ? ""
           : String(targetTurn.outputCompression),
       quality: targetTurn.quality || DEFAULT_IMAGE_QUALITY,
+      background: targetTurn.background,
+      moderation: targetTurn.moderation,
+      inputImageMask: targetTurn.inputImageMask,
+      midjourneySettings: targetTurn.midjourneySettings,
+      geminiFlashSettings: targetTurn.geminiFlashSettings,
       visibility: targetTurn.visibility || "private",
       referenceImages: targetTurn.mode === "chat" ? [] : targetTurn.referenceImages,
     });
@@ -3239,6 +3813,314 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     );
   }, []);
 
+  const runArenaConversationQueue = useCallback(
+    async (conversationId: string, snapshot: ImageConversation, activeTurn: ImageTurn) => {
+      const activeTurnKey = imageTurnProgressKey(conversationId, activeTurn.id);
+      const startedAt = imageTurnStartedAtTimestamp(activeTurn.processingStartedAt, activeTurn.createdAt);
+      updateTurnProgress(conversationId, activeTurn.id, {
+        message: activeTurn.arenaMode === "chat" ? "正在准备多智能体回答" : "正在准备多模型生图",
+        detail: `${activeTurn.arenaRuns?.length || 0} 个模型任务正在准备`,
+        startedAt,
+      });
+
+      const markRun = async (runId: string, updater: (run: ImageArenaRun) => ImageArenaRun) => {
+        await updateConversation(conversationId, (current) => {
+          const conversation = current ?? snapshot;
+          return {
+            ...conversation,
+            updatedAt: new Date().toISOString(),
+            turns: conversation.turns.map((turn) => {
+              if (turn.id !== activeTurn.id) {
+                return turn;
+              }
+              const arenaRuns = (turn.arenaRuns || []).map((run) => run.id === runId ? updater(run) : run);
+              return {
+                ...turn,
+                ...deriveArenaTurnStatus({ ...turn, arenaRuns }),
+                arenaRuns,
+              };
+            }),
+          };
+        });
+      };
+
+      const applyTaskToRun = async (runId: string, task: CreationTask) => {
+        await markRun(runId, (run) => {
+          const status = creationTaskToArenaRunStatus(task);
+          const outputItems = task.data?.length
+            ? task.data
+            : Array.from({ length: Math.max(1, run.images?.length || activeTurn.count || 1) });
+          const images = task.output_type === "text"
+            ? run.images
+            : outputItems.map((_, index) =>
+                taskDataToStoredImage(
+                  run.images?.[index] || {
+                    id: `${run.id}-${index}`,
+                    taskId: task.id,
+                    status: "loading" as const,
+                    taskStatus: task.status === "running" ? "running" as const : "queued" as const,
+                    visibility: activeTurn.visibility,
+                  },
+                  task,
+                  index,
+                  activeTurn.visibility,
+                ),
+              );
+          const nextRun = {
+            ...run,
+            taskId: task.id,
+            status,
+            error: status === "error" ? formatCreationTaskErrorMessage(task.error || "任务失败") : status === "cancelled" ? task.error || "任务已终止" : undefined,
+            usageTokens: creationTaskUsageTokens(task) ?? run.usageTokens,
+            textResponse: task.output_type === "text" ? task.data?.[0]?.text_response || task.error || "" : run.textResponse,
+            images: task.output_type === "text" ? run.images : images,
+            completedAt: status === "success" || status === "error" || status === "cancelled" ? new Date().toISOString() : run.completedAt,
+          };
+          return {
+            ...nextRun,
+            status: deriveArenaRunStatus(nextRun),
+          };
+        });
+      };
+
+      try {
+        await updateConversation(conversationId, (current) => {
+          const conversation = current ?? snapshot;
+          return {
+            ...conversation,
+            turns: conversation.turns.map((turn) =>
+              turn.id === activeTurn.id
+                ? {
+                    ...turn,
+                    status: "generating",
+                    error: undefined,
+                    processingStartedAt: new Date().toISOString(),
+                    arenaRuns: (turn.arenaRuns || []).map((run) =>
+                      isArenaRunTerminal(run)
+                        ? run
+                        : {
+                            ...run,
+                            status: "submitting" as const,
+                            error: undefined,
+                            startedAt: run.startedAt || new Date().toISOString(),
+                          },
+                    ),
+                  }
+                : turn,
+            ),
+          };
+        });
+
+        const activeReferenceLimit = activeTurn.arenaMode === "image"
+          ? Math.min(...(activeTurn.agentSlots || []).map((slot) => imageReferenceInputLimit(slot.model)))
+          : 0;
+        if (activeTurn.arenaMode === "image" && activeTurn.referenceImages.length > activeReferenceLimit) {
+          throw new Error(`${referenceImageLimitMessage(activeReferenceLimit)}，请移除多余图片后再生成`);
+        }
+        const referenceImageIds = activeTurn.arenaMode === "image" && activeTurn.referenceImages.length > 0
+          ? await ensureReferenceUploads(conversationId, snapshot, activeTurn)
+          : [];
+        const publicImageUrls = activeTurn.arenaMode === "image" ? publicReferenceImageUrls(activeTurn.referenceImages) : [];
+        const taskMessages = buildCreationTaskMessages(snapshot, activeTurn.id);
+        const fallbackReferenceImage = activeTurn.arenaMode === "image" ? getFallbackReferenceImage(snapshot, activeTurn.id) : undefined;
+        const baseExtraBody = (run: ImageArenaRun) => ({
+          source: "image_arena",
+          arena_job_id: conversationId,
+          arena_turn_id: activeTurn.id,
+          arena_run_id: run.id,
+          arena_model_label: run.modelLabel,
+          arena_model_family: run.familyId,
+        });
+
+        const submitRun = async (run: ImageArenaRun) => {
+          if (isArenaRunTerminal(run) || run.taskId) {
+            return run;
+          }
+          const clientTaskId = `${activeTurn.id}-${run.id}`;
+          try {
+            let task: CreationTask;
+            if (activeTurn.arenaMode === "chat") {
+              task = await createChatCompletionTask(
+                clientTaskId,
+                activeTurn.prompt,
+                run.model,
+                taskMessages,
+                activeTurn.referenceImages.map((img) => ({ name: img.name, dataUrl: img.dataUrl })),
+                baseExtraBody(run),
+              );
+            } else {
+              const settings = {
+                aspectRatio: activeTurn.size || activeTurn.sizeSelection?.aspectRatio || "1:1",
+                qualityTier: activeTurn.quality === "high" ? "production" as const : activeTurn.quality === "low" ? "draft" as const : "standard" as const,
+                countPerModel: activeTurn.count,
+                outputFormat: activeTurn.outputFormat || DEFAULT_IMAGE_OUTPUT_FORMAT,
+                outputCompression: activeTurn.outputCompression,
+                visibility: activeTurn.visibility || "private",
+              };
+              const imageModelSettings = arenaRunImageModelSettings(run);
+              const adaptation = adaptImageArenaSettings(run.model, settings, {
+                imageModelSettings,
+                midjourneySettings: run.midjourneySettings,
+                geminiFlashSettings: run.geminiFlashSettings,
+                officialImageSettings: run.officialImageSettings,
+                geminiProSettings: run.geminiProSettings,
+              });
+              const payload = adaptation.payload;
+              const extraBody = {
+                ...payload.extraBody,
+                ...baseExtraBody(run),
+              };
+              await markRun(run.id, (current) => ({
+                ...current,
+                warnings: adaptation.warnings,
+                submittedFields: imageArenaSubmittedFields({ ...payload, extraBody }),
+              }));
+              task = referenceImageIds.length > 0
+                ? await createImageEditTaskFromReferenceIds(
+                    clientTaskId,
+                    referenceImageIds,
+                    activeTurn.prompt,
+                    payload.model,
+                    payload.size,
+                    payload.quality,
+                    payload.count,
+                    taskMessages,
+                    activeTurn.visibility || "private",
+                    payload.imageResolution,
+                    payload.outputFormat,
+                    payload.outputCompression,
+                    payload.toolOptions,
+                    conversationId,
+                    fallbackReferenceImage,
+                    publicImageUrls,
+                    extraBody,
+                  )
+                : await createImageGenerationTask(
+                    clientTaskId,
+                    activeTurn.prompt,
+                    payload.model,
+                    payload.size,
+                    payload.quality,
+                    payload.count,
+                    taskMessages,
+                    activeTurn.visibility || "private",
+                    payload.imageResolution,
+                    payload.outputFormat,
+                    payload.outputCompression,
+                    payload.toolOptions,
+                    conversationId,
+                    fallbackReferenceImage,
+                    extraBody,
+                  );
+            }
+            await applyTaskToRun(run.id, task);
+            return task;
+          } catch (error) {
+            const message = formatCreationTaskError(error, "提交模型任务失败");
+            await markRun(run.id, (current) => ({
+              ...current,
+              status: "error",
+              error: message,
+              completedAt: new Date().toISOString(),
+            }));
+            return null;
+          }
+        };
+
+        const initialRuns = activeTurn.arenaRuns || [];
+        await Promise.allSettled(initialRuns.map(submitRun));
+
+        while (true) {
+          const latestConversation = conversationsRef.current.find((conversation) => conversation.id === conversationId);
+          const latestTurn = latestConversation?.turns.find((turn) => turn.id === activeTurn.id);
+          const pollingRuns = latestTurn?.arenaRuns?.filter((run) => run.taskId && !isArenaRunTerminal(run)) || [];
+          if (pollingRuns.length === 0) {
+            break;
+          }
+          updateTurnProgress(conversationId, activeTurn.id, {
+            message: activeTurn.arenaMode === "chat" ? "多智能体回答中" : "多模型生图中",
+            detail: `还有 ${pollingRuns.length} 个模型任务未完成`,
+          });
+          await sleep(IMAGE_ARENA_POLL_INTERVAL_MS);
+          const taskList = await fetchCreationTasks(pollingRuns.map((run) => run.taskId || ""));
+          for (const task of taskList.items) {
+            const run = pollingRuns.find((item) => item.taskId === task.id);
+            if (run) {
+              await applyTaskToRun(run.id, task);
+            }
+          }
+          for (const missingId of taskList.missing_ids) {
+            const run = pollingRuns.find((item) => item.taskId === missingId);
+            if (run) {
+              await markRun(run.id, (current) => ({
+                ...current,
+                status: "error",
+                error: "任务状态丢失，请重试此模型",
+                completedAt: new Date().toISOString(),
+              }));
+            }
+          }
+        }
+
+        await updateConversation(conversationId, (current) => {
+          const conversation = current ?? snapshot;
+          return {
+            ...conversation,
+            updatedAt: new Date().toISOString(),
+            turns: conversation.turns.map((turn) =>
+              turn.id === activeTurn.id
+                ? {
+                    ...turn,
+                    ...deriveArenaTurnStatus(turn),
+                  }
+                : turn,
+            ),
+          };
+        });
+        if (activeTurn.arenaMode === "image") {
+          window.dispatchEvent(new Event(QUOTA_REFRESH_EVENT));
+        }
+        if (session.role === "user") {
+          const data = await fetchProfile();
+          await setVerifiedAuthSession(authSessionFromLoginResponse(data, session.key));
+        }
+      } catch (error) {
+        const message = formatCreationTaskError(error, activeTurn.arenaMode === "chat" ? "多智能体回答失败" : "多模型生图失败");
+        await updateConversation(conversationId, (current) => {
+          const conversation = current ?? snapshot;
+          return {
+            ...conversation,
+            updatedAt: new Date().toISOString(),
+            turns: conversation.turns.map((turn) =>
+              turn.id === activeTurn.id
+                ? {
+                    ...turn,
+                    status: "error",
+                    error: message,
+                    arenaRuns: (turn.arenaRuns || []).map((run) =>
+                      isArenaRunTerminal(run)
+                        ? run
+                        : {
+                            ...run,
+                            status: "error",
+                            error: message,
+                            completedAt: new Date().toISOString(),
+                          },
+                    ),
+                  }
+                : turn,
+            ),
+          };
+        });
+        toast.error(message);
+      } finally {
+        clearTurnProgress(conversationId, activeTurn.id);
+        cancelledTurnIdsRef.current.delete(activeTurnKey);
+      }
+    },
+    [clearTurnProgress, ensureReferenceUploads, session.key, session.role, updateConversation, updateTurnProgress],
+  );
+
   const runConversationQueue = useCallback(
     async (conversationId: string) => {
       if (activeConversationQueueIds.has(conversationId)) {
@@ -3246,16 +4128,38 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
       }
 
       const snapshot = conversationsRef.current.find((conversation) => conversation.id === conversationId);
-      const activeTurn = snapshot?.turns.find(
-        (turn) =>
-          (turn.status === "queued" || turn.status === "generating") &&
-          turn.images.some((image) => image.status === "loading"),
-      );
+      const activeTurn = snapshot?.kind === "arena"
+        ? snapshot.turns.find((turn) => (turn.status === "queued" || turn.status === "generating") && (turn.arenaRuns || []).some((run) => !isArenaRunTerminal(run)))
+        : snapshot?.turns.find(
+            (turn) =>
+              (turn.status === "queued" || turn.status === "generating") &&
+              turn.images.some((image) => image.status === "loading"),
+          );
       if (!snapshot || !activeTurn) {
         return;
       }
 
       activeConversationQueueIds.add(conversationId);
+      if (snapshot.kind === "arena") {
+        try {
+          await runArenaConversationQueue(conversationId, snapshot, activeTurn);
+        } finally {
+          activeConversationQueueIds.delete(conversationId);
+          for (const conversation of conversationsRef.current) {
+            if (
+              !activeConversationQueueIds.has(conversation.id) &&
+              conversation.turns.some((turn) =>
+                conversation.kind === "arena"
+                  ? (turn.status === "queued" || turn.status === "generating") && (turn.arenaRuns || []).some((run) => !isArenaRunTerminal(run))
+                  : (turn.status === "queued" || turn.status === "generating") && turn.images.some((image) => image.status === "loading"),
+              )
+            ) {
+              void runConversationQueue(conversation.id);
+            }
+          }
+        }
+        return;
+      }
       const activeTurnKey = imageTurnProgressKey(conversationId, activeTurn.id);
       const activeTurnStartedAt = imageTurnStartedAtTimestamp(activeTurn.processingStartedAt, activeTurn.createdAt);
       updateTurnProgress(conversationId, activeTurn.id, {
@@ -3374,6 +4278,13 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
             : imageOutputCompressionForModel(activeTurn.model, taskOutputFormat, activeTurn.outputCompression);
         const taskImageResolution = imageResolutionPresetForModel(activeTurn.model, activeTurnSizeRequest.selection);
         const fallbackReferenceImage = activeTurn.mode === "chat" ? undefined : getFallbackReferenceImage(snapshot, activeTurn.id);
+        const activeTurnMidjourneyBody = activeTurn.mode === "chat" ? undefined : midjourneyExtraBody(activeTurn.model, activeTurn.midjourneySettings);
+        const activeTurnGeminiFlashBody = activeTurn.mode === "chat" ? undefined : geminiFlashExtraBody(activeTurn.model, activeTurn.geminiFlashSettings);
+        const activeTurnToolOptions = activeTurn.mode === "chat" ? undefined : imageTurnToolOptions(activeTurn);
+        const activeTurnExtraBody = {
+          ...activeTurnMidjourneyBody,
+          ...activeTurnGeminiFlashBody,
+        };
         const pendingTaskGroups = activeTurn.images.reduce<Array<{ taskId: string; count: number }>>(
           (groups, image, imageIndex) => {
             if (image.status !== "loading") {
@@ -3417,10 +4328,11 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
               taskImageResolution,
               taskOutputFormat,
               taskOutputCompression,
-              activeTurn.background ? { background: activeTurn.background } : undefined,
+              activeTurnToolOptions,
               conversationId,
               fallbackReferenceImage,
               publicImageUrls,
+              activeTurnExtraBody,
             );
           }
           return createImageGenerationTask(
@@ -3435,9 +4347,10 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
             taskImageResolution,
             taskOutputFormat,
             taskOutputCompression,
-            activeTurn.background ? { background: activeTurn.background } : undefined,
+            activeTurnToolOptions,
             conversationId,
             fallbackReferenceImage,
+            activeTurnExtraBody,
           );
         };
         updateTurnProgress(conversationId, activeTurn.id, {
@@ -3541,8 +4454,10 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
             !activeConversationQueueIds.has(conversation.id) &&
             conversation.turns.some(
               (turn) =>
-                (turn.status === "queued" || turn.status === "generating") &&
-                turn.images.some((image) => image.status === "loading"),
+                conversation.kind === "arena"
+                  ? (turn.status === "queued" || turn.status === "generating") && (turn.arenaRuns || []).some((run) => !isArenaRunTerminal(run))
+                  : (turn.status === "queued" || turn.status === "generating") &&
+                    turn.images.some((image) => image.status === "loading"),
             )
           ) {
             void runConversationQueue(conversation.id);
@@ -3550,7 +4465,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         }
       }
     },
-    [clearTurnProgress, ensureReferenceUploads, session.key, session.role, updateConversation, updateTurnProgress],
+    [clearTurnProgress, ensureReferenceUploads, runArenaConversationQueue, session.key, session.role, updateConversation, updateTurnProgress],
   );
   useEffect(() => {
     for (const conversation of conversations) {
@@ -3558,8 +4473,10 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         !activeConversationQueueIds.has(conversation.id) &&
         conversation.turns.some(
           (turn) =>
-            (turn.status === "queued" || turn.status === "generating") &&
-            turn.images.some((image) => image.status === "loading"),
+            conversation.kind === "arena"
+              ? (turn.status === "queued" || turn.status === "generating") && (turn.arenaRuns || []).some((run) => !isArenaRunTerminal(run))
+              : (turn.status === "queued" || turn.status === "generating") &&
+                turn.images.some((image) => image.status === "loading"),
         )
       ) {
         void runConversationQueue(conversation.id);
@@ -3681,6 +4598,45 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
       const targetTurn = targetConversation?.turns.find((turn) => turn.id === turnId);
       if (!targetConversation || !targetTurn) {
         toast.error("未找到对应的对话轮次");
+        return;
+      }
+      if (targetConversation.kind === "arena") {
+        const taskIds = Array.from(
+          new Set((targetTurn.arenaRuns || []).flatMap((run) => (!isArenaRunTerminal(run) && run.taskId ? [run.taskId] : []))),
+        );
+        const results = await Promise.allSettled(taskIds.map((taskId) => cancelCreationTask(taskId)));
+        const taskMap = new Map(results.flatMap((result) => result.status === "fulfilled" ? [[result.value.id, result.value] as const] : []));
+        await updateConversation(conversationId, (current) => {
+          const conversation = current ?? targetConversation;
+          return {
+            ...conversation,
+            updatedAt: new Date().toISOString(),
+            turns: conversation.turns.map((turn) => {
+              if (turn.id !== turnId) {
+                return turn;
+              }
+              const arenaRuns = (turn.arenaRuns || []).map((run) => {
+                if (isArenaRunTerminal(run)) {
+                  return run;
+                }
+                const task = run.taskId ? taskMap.get(run.taskId) : undefined;
+                return {
+                  ...run,
+                  status: task ? creationTaskToArenaRunStatus(task) : "cancelled" as const,
+                  error: task?.error || "任务已终止",
+                  completedAt: new Date().toISOString(),
+                };
+              });
+              return {
+                ...turn,
+                ...deriveArenaTurnStatus({ ...turn, arenaRuns }),
+                arenaRuns,
+              };
+            }),
+          };
+        });
+        clearTurnProgress(conversationId, turnId);
+        toast.success("已终止多智能体任务");
         return;
       }
       const taskIds = Array.from(
@@ -3877,6 +4833,174 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     [handleRetryImages],
   );
 
+  const handleRetryArenaRun = useCallback(
+    async (conversationId: string, turnId: string, runId: string) => {
+      const targetConversation = conversationsRef.current.find((conversation) => conversation.id === conversationId);
+      const targetTurn = targetConversation?.turns.find((turn) => turn.id === turnId);
+      const targetRun = targetTurn?.arenaRuns?.find((run) => run.id === runId);
+      if (!targetConversation || !targetTurn || !targetRun) {
+        toast.error("未找到对应的模型结果");
+        return;
+      }
+      if (!targetTurn.prompt.trim()) {
+        toast.error("请输入提示词");
+        return;
+      }
+      if (!isArenaRunTerminal(targetRun)) {
+        toast.error("当前模型正在处理，稍后再重试");
+        return;
+      }
+      const now = new Date().toISOString();
+      const nextRunId = createId();
+      await updateConversation(conversationId, (current) => {
+        const conversation = current ?? targetConversation;
+        return {
+          ...conversation,
+          updatedAt: now,
+          turns: conversation.turns.map((turn) => {
+            if (turn.id !== turnId) {
+              return turn;
+            }
+            const arenaRuns = (turn.arenaRuns || []).map((run) =>
+              run.id === runId
+                ? {
+                    ...run,
+                    id: nextRunId,
+                    taskId: undefined,
+                    status: "idle" as const,
+                    error: undefined,
+                    usageTokens: undefined,
+                    textResponse: undefined,
+                    completedAt: undefined,
+                    images: turn.arenaMode === "image"
+                      ? Array.from({ length: turn.count || 1 }, (_, index): StoredImage => ({
+                          id: `${turn.id}-${nextRunId}-${index}`,
+                          status: "loading",
+                          taskStatus: "queued",
+                          visibility: turn.visibility || "private",
+                        }))
+                      : [],
+                  }
+                : run,
+            );
+            return {
+              ...turn,
+              status: "queued" as const,
+              error: undefined,
+              arenaRuns,
+            };
+          }),
+        };
+      });
+      void runConversationQueue(conversationId);
+      toast.success("已重试此模型");
+    },
+    [runConversationQueue, updateConversation],
+  );
+
+  const handleFavoriteArenaImage = useCallback(async (image: StoredImage) => {
+    const path = image.path || getManagedImagePathFromUrl(image.localUrl || image.url || "");
+    if (!path) {
+      toast.error("当前图片还没有素材库路径");
+      return;
+    }
+    setArenaActionKey(`favorite:${image.id}`);
+    try {
+      const collections = await fetchManagedImageCollections({ scope: "mine" });
+      const existing = collections.items.find((item) => item.name === IMAGE_ARENA_COLLECTION_NAME);
+      const collection = existing || (await createManagedImageCollection(IMAGE_ARENA_COLLECTION_NAME, { scope: "mine" })).item;
+      await updateManagedImageCollectionItems(collection.id, [path], { scope: "mine" });
+      toast.success(`已归入「${collection.name || IMAGE_ARENA_COLLECTION_NAME}」`);
+    } catch (error) {
+      toast.error(formatCreationTaskError(error, "归入素材集失败"));
+    } finally {
+      setArenaActionKey("");
+    }
+  }, []);
+
+  const handleSendArenaRunToCanvas = useCallback(async (conversationId: string, turnId: string, run: ImageArenaRun) => {
+    const conversation = conversationsRef.current.find((item) => item.id === conversationId);
+    const turn = conversation?.turns.find((item) => item.id === turnId);
+    if (!turn) {
+      toast.error("未找到对应的多智能体轮次");
+      return;
+    }
+    const images = (run.images || [])
+      .filter((image) => image.status === "success")
+      .map((image) => ({
+        url: image.url,
+        local_url: image.localUrl,
+        path: image.path || getManagedImagePathFromUrl(image.localUrl || image.url || "") || undefined,
+        name: `${run.modelLabel} ${image.id}`,
+      }))
+      .filter((image) => image.url || image.local_url || image.path);
+    if (images.length === 0) {
+      toast.error("当前模型还没有可发送的图片");
+      return;
+    }
+    setArenaActionKey(`canvas:${run.id}`);
+    try {
+      const canvas = createEmptySmartCanvas(`多智能体 - ${run.modelLabel}`);
+      const promptNode = createPromptNode({ x: 80, y: 120 }, turn.prompt, {
+        model: run.model,
+        size: turn.size || turn.sizeSelection?.aspectRatio || "1:1",
+        n: turn.count,
+        visibility: turn.visibility || "private",
+      });
+      const imageNode = createImageItem(images, { x: 460, y: 120 });
+      canvas.nodes = [promptNode, imageNode];
+      canvas.edges = [createSmartEdge(promptNode.id, imageNode.id)];
+      const saved = await createCanvas(toCanvasPayload(canvas));
+      toast.success("已发送到无限画布");
+      navigate(`/canvas?canvas=${encodeURIComponent(saved.id)}`);
+    } catch (error) {
+      toast.error(formatCreationTaskError(error, "发送到画布失败"));
+    } finally {
+      setArenaActionKey("");
+    }
+  }, [navigate]);
+
+  const handleSendArenaImageToEcommerce = useCallback(async (conversationId: string, turnId: string, run: ImageArenaRun, image: StoredImage) => {
+    const conversation = conversationsRef.current.find((item) => item.id === conversationId);
+    const turn = conversation?.turns.find((item) => item.id === turnId);
+    const src = image.localUrl || image.url || (image.path ? getManagedImageUrlFromPath(image.path) : "");
+    if (!turn || !src) {
+      toast.error("当前图片没有可发送的地址");
+      return;
+    }
+    setArenaActionKey(`commerce:${image.id}`);
+    try {
+      const project = createCommerceSuiteProject();
+      const updatedAt = new Date().toISOString();
+      project.title = `多智能体 - ${run.modelLabel}`;
+      project.analysisText = turn.prompt;
+      project.imageModel = run.model;
+      project.size = turn.size || turn.sizeSelection?.aspectRatio || "1:1";
+      project.imageResolution = image.resolution || "";
+      project.results = [{
+        templateId: "image_arena",
+        intent: "image_arena",
+        taskId: run.taskId,
+        status: "success",
+        model: run.model,
+        arenaJobId: conversationId,
+        localUrl: image.localUrl,
+        url: image.url,
+        path: image.path || getManagedImagePathFromUrl(image.localUrl || image.url || "") || undefined,
+        revisedPrompt: image.revised_prompt || turn.prompt,
+        startedAt: run.startedAt,
+        updatedAt,
+      }];
+      await saveCommerceSuiteProject(project);
+      toast.success("已发送到电商套图");
+      navigate("/ecommerce-suite");
+    } catch (error) {
+      toast.error(formatCreationTaskError(error, "发送到电商套图失败"));
+    } finally {
+      setArenaActionKey("");
+    }
+  }, [navigate]);
+
   const handleRegenerateTurn = useCallback(
     async (conversationId: string, turnId: string) => {
       const targetConversation = conversationsRef.current.find((conversation) => conversation.id === conversationId);
@@ -4021,6 +5145,10 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
           ? undefined
           : imageOutputCompressionForModel(draft.model, draftOutputFormat, draft.outputCompression);
       const draftImageResolution = imageResolutionPresetForModel(effectiveDraftModel, draftSizeRequest?.selection);
+      const draftMidjourneySettings =
+        mode === "chat" ? undefined : midjourneyExtraBody(effectiveDraftModel, draft.midjourneySettings)?.midjourney_settings;
+      const draftGeminiFlashSettings =
+        mode === "chat" ? undefined : geminiFlashExtraBody(effectiveDraftModel, draft.geminiFlashSettings);
       if (mode !== "chat" && isHighResolutionImageRequest(draftImageSize, draftImageResolution)) {
         if (regenerate) {
           toast.message(`${formatImageRequestTargetLabel(draftImageSize, draftImageResolution)} 属于高分辨率任务，会直接提交给上游判断。`);
@@ -4052,7 +5180,11 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
               quality: imageQualityForModel(effectiveDraftModel, draft.quality),
               outputFormat: draftOutputFormat,
               outputCompression: draftOutputCompression,
-              background: undefined,
+              midjourneySettings: draftMidjourneySettings,
+              geminiFlashSettings: draftGeminiFlashSettings,
+              background: mode === "chat" ? undefined : draft.background,
+              moderation: mode === "chat" ? undefined : draft.moderation,
+              inputImageMask: mode === "chat" ? undefined : draft.inputImageMask,
               visibility: mode === "chat" ? "private" : draft.visibility,
             };
             if (!regenerate) {
@@ -4100,6 +5232,127 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     const prompt = imagePrompt.trim();
     if (!prompt) {
       toast.error("请输入提示词");
+      return;
+    }
+    if (selectedConversationIsArena) {
+      if (arenaSlots.length < 1) {
+        toast.error("请至少保留一个智能体");
+        return;
+      }
+      if (arenaSlots.length > IMAGE_ARENA_MAX_AGENT_SLOTS) {
+        toast.error(`最多同时选择 ${IMAGE_ARENA_MAX_AGENT_SLOTS} 个智能体`);
+        return;
+      }
+      if (hasImageArenaFamilyConflict(arenaSlots)) {
+        toast.error("同类型模型只能选择一个");
+        return;
+      }
+      if (arenaMode === "image" && (parsedCount < 1 || parsedCount > 4)) {
+        toast.error("每个模型最多生成 4 张图");
+        return;
+      }
+      if (arenaMode === "image" && parsedCount * arenaSlots.length > 12) {
+        toast.error("多模型生图总图片数最多 12 张");
+        return;
+      }
+      isSubmitDispatchingRef.current = true;
+      try {
+        const targetConversation = selectedConversationId
+          ? conversationsRef.current.find((conversation) => conversation.id === selectedConversationId && conversation.kind === "arena") ?? null
+          : null;
+        const now = new Date().toISOString();
+        const conversationId = targetConversation?.id ?? createId();
+        const turnId = createId();
+        const mode: ImageConversationMode = arenaMode === "chat" ? "chat" : getComposerConversationMode("image", referenceImages);
+        const count = arenaMode === "chat" ? 1 : parsedCount;
+        const rawImageSizeSelection = {
+          mode: imageSizeMode,
+          aspectRatio: imageAspectRatio,
+          resolution: imageResolution,
+          customRatio: imageCustomRatio,
+          customWidth: imageCustomWidth,
+          customHeight: imageCustomHeight,
+        };
+        const currentImageSizeRequest = arenaMode === "image"
+          ? buildEffectiveImageSizeRequest(arenaSlots[0]?.model || effectiveImageModel, rawImageSizeSelection)
+          : null;
+        const storedSizeSelection = currentImageSizeRequest ? serializeImageSizeSelection(currentImageSizeRequest.selection) : undefined;
+        const minReferenceLimit = arenaMode === "image"
+          ? Math.min(...arenaSlots.map((slot) => imageReferenceInputLimit(slot.model)))
+          : 0;
+        if (arenaMode === "image" && referenceImages.length > minReferenceLimit) {
+          toast.error(`${referenceImageLimitMessage(minReferenceLimit)}，请移除多余图片后再生成`);
+          return;
+        }
+        const outputFormat = arenaMode === "image" ? imageOutputFormatForModel(arenaSlots[0]?.model || effectiveImageModel, imageOutputFormat) : undefined;
+        const outputCompression = outputFormat === undefined ? undefined : imageOutputCompressionForModel(arenaSlots[0]?.model || effectiveImageModel, outputFormat, imageOutputCompression);
+        const draftTurn: ImageTurn = {
+          id: turnId,
+          prompt,
+          model: arenaSlots[0]?.model || (arenaMode === "chat" ? effectiveChatModel : effectiveImageModel),
+          mode,
+          arenaMode,
+          agentSlots: arenaSlots,
+          arenaRuns: arenaSlots.map((slot): ImageArenaRun => ({
+            id: createId(),
+            slotId: slot.id,
+            model: slot.model,
+            modelLabel: slot.modelLabel,
+            familyId: slot.familyId,
+            imageModelSettings: slot.imageModelSettings,
+            midjourneySettings: slot.midjourneySettings,
+            geminiFlashSettings: slot.geminiFlashSettings,
+            officialImageSettings: slot.officialImageSettings,
+            geminiProSettings: slot.geminiProSettings,
+            status: "idle",
+            images: arenaMode === "image"
+              ? Array.from({ length: count }, (_, index): StoredImage => ({
+                  id: `${turnId}-${slot.id}-${index}`,
+                  status: "loading",
+                  taskStatus: "queued",
+                  visibility: defaultImageVisibility,
+                }))
+              : [],
+          })),
+          referenceImages: arenaMode === "chat" ? referenceImages : referenceImages,
+          count,
+          size: arenaMode === "image" ? currentImageSizeRequest?.size || "" : "",
+          sizeSelection: arenaMode === "image" ? storedSizeSelection : undefined,
+          quality: arenaMode === "image" ? imageQuality : undefined,
+          outputFormat,
+          outputCompression,
+          midjourneySettings: undefined,
+          background: undefined,
+          visibility: arenaMode === "image" ? defaultImageVisibility : "private",
+          images: [],
+          createdAt: now,
+          status: "queued",
+        };
+        const baseConversation: ImageConversation = targetConversation
+          ? {
+              ...targetConversation,
+              title: targetConversation.turns.length === 0 ? buildConversationTitle(prompt) : targetConversation.title,
+              updatedAt: now,
+              turns: [...targetConversation.turns, draftTurn],
+            }
+          : {
+              id: conversationId,
+              kind: "arena",
+              title: buildConversationTitle(prompt),
+              createdAt: now,
+              updatedAt: now,
+              turns: [draftTurn],
+            };
+        setSelectedConversationId(conversationId);
+        clearComposerInputs();
+        await persistConversation(baseConversation);
+        toast.message(`将同时创建 ${arenaSlots.length} 个任务`);
+        void runConversationQueue(conversationId);
+      } catch (error) {
+        toast.error(formatCreationTaskError(error, "提交多智能体任务失败"));
+      } finally {
+        isSubmitDispatchingRef.current = false;
+      }
       return;
     }
     if (!hasEnoughBilling(session, estimatedBillingUnits)) {
@@ -4160,6 +5413,18 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
           : imageOutputCompressionForModel(effectiveModel, effectiveOutputFormat, imageOutputCompression);
       const effectiveImageResolution = imageResolutionPresetForModel(effectiveModel, currentImageSizeRequest?.selection);
       const effectiveImageQuality = imageQualityForModel(effectiveModel, imageQuality);
+      const effectiveToolOptions =
+        effectiveImageMode === "chat"
+          ? undefined
+          : visibleImageToolOptionsForModel(effectiveModel, {
+              background: imageBackground,
+              moderation: imageModeration,
+              inputImageMask: imageMaskUrl,
+            });
+      const effectiveMidjourneySettings =
+        effectiveImageMode === "chat" ? undefined : midjourneyExtraBody(effectiveModel, midjourneySettings)?.midjourney_settings;
+      const effectiveGeminiFlashSettings =
+        effectiveImageMode === "chat" ? undefined : geminiFlashExtraBody(effectiveModel, geminiFlashSettings);
       const isHighResolutionRequest =
         effectiveImageMode !== "chat" &&
         isHighResolutionImageRequest(currentImageSize, effectiveImageResolution);
@@ -4184,7 +5449,11 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         quality: effectiveImageQuality,
         outputFormat: effectiveOutputFormat,
         outputCompression: effectiveImageMode === "chat" ? undefined : effectiveOutputCompression,
-        background: undefined,
+        midjourneySettings: effectiveMidjourneySettings,
+        geminiFlashSettings: effectiveGeminiFlashSettings,
+        background: effectiveToolOptions?.background,
+        moderation: effectiveToolOptions?.moderation,
+        inputImageMask: effectiveToolOptions?.inputImageMask,
         visibility: effectiveImageMode === "chat" ? "private" : defaultImageVisibility,
         images: Array.from({ length: requestedCount }, (_, index): StoredImage => {
           const imageId = `${turnId}-${index}`;
@@ -4264,6 +5533,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
               isLoadingHistory={isLoadingHistory}
               selectedConversationId={selectedConversationId}
               onCreateDraft={handleCreateDraft}
+              onCreateArenaDraft={handleCreateArenaDraft}
               onClearHistory={openClearHistoryConfirm}
               onSelectConversation={setSelectedConversationId}
               onDeleteConversation={openDeleteConversationConfirm}
@@ -4394,7 +5664,15 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                         value={editingTurnDraft.model}
                         onValueChange={(value) =>
                           setEditingTurnDraft((current) =>
-                            current && isImageModel(value) ? { ...current, model: value } : current,
+                            current && isImageModel(value)
+                              ? {
+                                  ...current,
+                                  model: value,
+                                  background: supportsOfficialImageGenerationSettings(value) ? current.background || DEFAULT_IMAGE_BACKGROUND : undefined,
+                                  moderation: supportsOfficialImageGenerationSettings(value) ? current.moderation || DEFAULT_IMAGE_MODERATION : undefined,
+                                  inputImageMask: supportsImageMaskParameter(value) ? current.inputImageMask : undefined,
+                                }
+                              : current,
                           )
                         }
                       >
@@ -4404,8 +5682,8 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                         <SelectContent>
                           <SelectGroup>
                             {(editingTurnDraft.mode === "chat" ? chatModelOptions : imageCreationModelOptions).map((option) => (
-                              <SelectItem key={option.value} value={option.value}>
-                                {option.label}
+                              <SelectItem key={option.value} value={option.value} textValue={option.label}>
+                                <ModelProviderOptionLabel model={option.value} label={option.label} />
                               </SelectItem>
                             ))}
                           </SelectGroup>
@@ -4606,6 +5884,17 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                             </Select>
                           </label>
                         ) : null}
+                        {editingDraftModelSettingsSupported ? (
+                          <div className="flex flex-col gap-2 text-sm font-medium text-stone-700">
+                            模型参数
+                            <ImageModelSettingsButton
+                              model={editingTurnDraft.model}
+                              value={editingDraftModelSettingsValue}
+                              onChange={handleEditingDraftModelSettingsChange}
+                              className="h-10 w-full justify-between rounded-xl"
+                            />
+                          </div>
+                        ) : null}
                         {editingDraftEffectiveSizeSelection.mode !== "auto" ? (
                           <>
                             <div className="rounded-2xl border border-stone-200 bg-stone-50 px-3 py-2 text-sm sm:col-span-2 lg:col-span-4">
@@ -4670,24 +5959,36 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
             style={composerDockHeight > 0 ? { paddingBottom: composerDockHeight + (isEmbeddedMode ? 12 : 24) } : undefined}
           >
             <Suspense fallback={<ImageLazyLoading label="加载结果区..." className="min-h-[160px]" />}>
-              <ImageResults
-                selectedConversation={selectedConversation}
-                progressByTurnKey={progressByTurnKey}
-                progressNow={progressNow}
-                promptPresets={IMAGE_PROMPT_PRESETS}
-                onOpenLightbox={openLightbox}
-                onApplyPromptPreset={handleApplyPromptPreset}
-                onContinueEdit={handleContinueEdit}
-                onContinueEditBatch={handleContinueEditBatch}
-                onEditTurn={openEditTurnDialog}
-                onCancelTurn={handleCancelTurn}
-                onRegenerateTurn={handleRegenerateTurn}
-                onRetryImage={handleRetryImage}
-                onRetryImages={handleRetryImages}
-                onImageVisibilityChange={handleImageVisibilityChange}
-                visibilityMutatingImageKey={visibilityMutatingImageKey}
-                formatConversationTime={formatConversationTime}
-              />
+              {selectedConversationIsArena ? (
+                <ImageArenaResults
+                  selectedConversation={selectedConversation}
+                  actionKey={arenaActionKey}
+                  onOpenLightbox={openLightbox}
+                  onRetryRun={handleRetryArenaRun}
+                  onCancelTurn={handleCancelTurn}
+                  onFavoriteImage={handleFavoriteArenaImage}
+                  onSendRunToCanvas={handleSendArenaRunToCanvas}
+                  onSendImageToEcommerce={handleSendArenaImageToEcommerce}
+                  formatConversationTime={formatConversationTime}
+                />
+              ) : (
+                <ImageResults
+                  selectedConversation={selectedConversation}
+                  progressByTurnKey={progressByTurnKey}
+                  progressNow={progressNow}
+                  promptPresets={IMAGE_PROMPT_PRESETS}
+                  onOpenLightbox={openLightbox}
+                  onApplyPromptPreset={handleApplyPromptPreset}
+                  onContinueEdit={handleContinueEdit}
+                  onContinueEditBatch={handleContinueEditBatch}
+                  onEditTurn={openEditTurnDialog}
+                  onCancelTurn={handleCancelTurn}
+                  onRegenerateTurn={handleRegenerateTurn}
+                  onRetryImage={handleRetryImage}
+                  onRetryImages={handleRetryImages}
+                  formatConversationTime={formatConversationTime}
+                />
+              )}
             </Suspense>
           </div>
 
@@ -4704,47 +6005,85 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
             }
           >
             <div className={cn("pointer-events-auto mx-auto w-full", isEmbeddedMode ? "max-w-[1280px]" : "max-w-[1120px]")}>
-              <ImageComposer
-                composerMode={composerMode}
-                prompt={imagePrompt}
-                imageCount={imageCount}
-                imageModel={composerModel}
-                imageModelOptions={composerModelOptions}
-                imageSizeMode={imageSizeMode}
-                imageAspectRatio={imageAspectRatio}
-                imageResolution={imageResolution}
-                imageCustomRatio={imageCustomRatio}
-                imageCustomWidth={imageCustomWidth}
-                imageCustomHeight={imageCustomHeight}
-                imageOutputFormat={imageOutputFormat}
-                imageOutputCompression={imageOutputCompression}
-                imageQuality={imageQuality}
-                highResolutionHint={highResolutionHint}
-                billingBlocked={billingBlocked}
-                referenceImages={referenceImages}
-                mentionAssets={visibleAssets}
-                textareaRef={textareaRef}
-                fileInputRef={fileInputRef}
-                onComposerModeChange={handleComposerModeChange}
-                onPromptChange={setImagePrompt}
-                onImageCountChange={setImageCount}
-                onImageModelChange={handleComposerModelChange}
-                onImageSizeModeChange={setImageSizeMode}
-                onImageAspectRatioChange={setImageAspectRatio}
-                onImageResolutionChange={setImageResolution}
-                onImageCustomRatioChange={setImageCustomRatio}
-                onImageCustomWidthChange={setImageCustomWidth}
-                onImageCustomHeightChange={setImageCustomHeight}
-                onImageOutputFormatChange={setImageOutputFormat}
-                onImageOutputCompressionChange={setImageOutputCompression}
-                onImageQualityChange={setImageQuality}
-                onSubmit={handleSubmit}
-                onReferenceImageChange={handleReferenceImageChange}
-                onImageResultDrop={handleImageResultDrop}
-                onManagedImageDrop={handleManagedImageReference}
-                onRemoveReferenceImage={handleRemoveReferenceImage}
-                onRemoveReferenceBackground={handleRemoveReferenceBackground}
-              />
+              {selectedConversationIsArena ? (
+                <ImageArenaComposer
+                  mode={arenaMode}
+                  prompt={imagePrompt}
+                  imageCount={imageCount}
+                  slots={arenaSlots}
+                  chatModelOptions={chatModelOptions}
+                  imageModelOptions={imageCreationModelOptions}
+                  referenceImages={referenceImages}
+                  submitting={isSubmitDispatchingRef.current}
+                  textareaRef={textareaRef}
+                  fileInputRef={fileInputRef}
+                  onModeChange={handleArenaModeChange}
+                  onPromptChange={setImagePrompt}
+                  onImageCountChange={setImageCount}
+                  onAddSlot={handleAddArenaSlot}
+                  onRemoveSlot={handleRemoveArenaSlot}
+                  onSlotModelChange={handleArenaSlotModelChange}
+                  onSlotMidjourneySettingsChange={handleArenaSlotMidjourneySettingsChange}
+                  onSlotGeminiFlashSettingsChange={handleArenaSlotGeminiFlashSettingsChange}
+                  onSlotOfficialImageSettingsChange={handleArenaSlotOfficialImageSettingsChange}
+                  onSlotGeminiProSettingsChange={handleArenaSlotGeminiProSettingsChange}
+                  onReferenceImageChange={handleReferenceImageChange}
+                  onRemoveReferenceImage={handleRemoveReferenceImage}
+                  onSubmit={handleSubmit}
+                />
+              ) : (
+                <ImageComposer
+                  composerMode={composerMode}
+                  prompt={imagePrompt}
+                  imageCount={imageCount}
+                  imageModel={composerModel}
+                  imageModelOptions={composerModelOptions}
+                  imageSizeMode={imageSizeMode}
+                  imageAspectRatio={imageAspectRatio}
+                  imageResolution={imageResolution}
+                  imageCustomRatio={imageCustomRatio}
+                  imageCustomWidth={imageCustomWidth}
+                  imageCustomHeight={imageCustomHeight}
+                  imageOutputFormat={imageOutputFormat}
+                  imageOutputCompression={imageOutputCompression}
+                  imageQuality={imageQuality}
+                  imageBackground={imageBackground}
+                  imageModeration={imageModeration}
+                  imageMaskUrl={imageMaskUrl}
+                  midjourneySettings={midjourneySettings}
+                  geminiFlashSettings={geminiFlashSettings}
+                  highResolutionHint={highResolutionHint}
+                  billingBlocked={billingBlocked}
+                  referenceImages={referenceImages}
+                  mentionAssets={visibleAssets}
+                  textareaRef={textareaRef}
+                  fileInputRef={fileInputRef}
+                  onComposerModeChange={handleComposerModeChange}
+                  onPromptChange={setImagePrompt}
+                  onImageCountChange={setImageCount}
+                  onImageModelChange={handleComposerModelChange}
+                  onImageSizeModeChange={setImageSizeMode}
+                  onImageAspectRatioChange={setImageAspectRatio}
+                  onImageResolutionChange={setImageResolution}
+                  onImageCustomRatioChange={setImageCustomRatio}
+                  onImageCustomWidthChange={setImageCustomWidth}
+                  onImageCustomHeightChange={setImageCustomHeight}
+                  onImageOutputFormatChange={setImageOutputFormat}
+                  onImageOutputCompressionChange={setImageOutputCompression}
+                  onImageQualityChange={setImageQuality}
+                  onImageBackgroundChange={(value) => setImageBackground(normalizeImageBackground(value))}
+                  onImageModerationChange={(value) => setImageModeration(normalizeImageModeration(value))}
+                  onImageMaskUrlChange={setImageMaskUrl}
+                  onMidjourneySettingsChange={(settings) => setMidjourneySettings(normalizeMidjourneySettings(settings))}
+                  onGeminiFlashSettingsChange={(settings) => setGeminiFlashSettings(normalizeGeminiFlashSettings(settings))}
+                  onSubmit={handleSubmit}
+                  onReferenceImageChange={handleReferenceImageChange}
+                  onImageResultDrop={handleImageResultDrop}
+                  onManagedImageDrop={handleManagedImageReference}
+                  onRemoveReferenceImage={handleRemoveReferenceImage}
+                  onRemoveReferenceBackground={handleRemoveReferenceBackground}
+                />
+              )}
             </div>
           </div>
         </div>
@@ -4866,63 +6205,6 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
               >
                 {backgroundRemovalSubmitting ? <LoaderCircle className="size-4 animate-spin" /> : null}
                 AI 抠图
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
-      ) : null}
-
-      {publishImageTarget ? (
-        <Dialog open onOpenChange={(open) => (!open && !visibilityMutatingImageKey ? setPublishImageTarget(null) : null)}>
-          <DialogContent showCloseButton={false} className="rounded-2xl p-6">
-            <DialogHeader className="gap-2">
-              <DialogTitle>公开图片</DialogTitle>
-              <DialogDescription className="text-sm leading-6">
-                将这张图片加入公共素材库。
-              </DialogDescription>
-            </DialogHeader>
-            <div className="grid gap-3 py-1">
-              <label className="flex items-start gap-3 rounded-xl border border-stone-200 bg-white px-3 py-3 text-sm">
-                <Checkbox
-                  className="mt-0.5"
-                  checked={publishRecipeOptions.sharePromptParameters}
-                  onCheckedChange={(checked) =>
-                    setPublishRecipeOptions({
-                      sharePromptParameters: checked === true,
-                      shareReferenceImages: checked === true ? publishRecipeOptions.shareReferenceImages : false,
-                    })
-                  }
-                />
-                <span className="min-w-0">
-                  <span className="block font-medium text-stone-900">公开原始提示词和生成参数</span>
-                  <span className="mt-0.5 block text-xs leading-5 text-stone-500">公共素材库会展示可复用的 prompt、模型、尺寸和输出设置。</span>
-                </span>
-              </label>
-              <label className="flex items-start gap-3 rounded-xl border border-stone-200 bg-white px-3 py-3 text-sm">
-                <Checkbox
-                  className="mt-0.5"
-                  checked={publishRecipeOptions.shareReferenceImages}
-                  disabled={!publishRecipeOptions.sharePromptParameters}
-                  onCheckedChange={(checked) =>
-                    setPublishRecipeOptions((current) => ({
-                      ...current,
-                      shareReferenceImages: checked === true,
-                    }))
-                  }
-                />
-                <span className="min-w-0">
-                  <span className="block font-medium text-stone-900">公开原始参考图用于同款生成</span>
-                  <span className="mt-0.5 block text-xs leading-5 text-stone-500">其他用户复用时可以读取这些参考图；不勾选时会改用公开成品图。</span>
-                </span>
-              </label>
-            </div>
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setPublishImageTarget(null)} disabled={visibilityMutatingImageKey !== ""}>
-                取消
-              </Button>
-              <Button onClick={() => void handleConfirmPublishImage()} disabled={visibilityMutatingImageKey !== ""}>
-                {visibilityMutatingImageKey ? <LoaderCircle className="size-4 animate-spin" /> : <Globe2 className="size-4" />}
-                公开
               </Button>
             </DialogFooter>
           </DialogContent>

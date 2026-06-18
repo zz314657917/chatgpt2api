@@ -68,6 +68,9 @@ export function localizeErrorMessage(message: string): string {
     if (exactErrorTranslations[normalized]) {
         return exactErrorTranslations[normalized];
     }
+    if (normalized === "network error") {
+        return "网络请求失败，请检查后端服务、登录状态或浏览器是否能访问 API";
+    }
     if (normalized.includes("image generation request rejected by content policy")) {
         const reason = trimmed.includes(":") ? trimmed.slice(trimmed.indexOf(":") + 1).trim() : "";
         return reason ? `图片生成请求被内容安全策略拒绝：${reason}` : "图片生成请求被内容安全策略拒绝";
