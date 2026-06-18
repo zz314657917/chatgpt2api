@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import {
   Archive,
   BarChart3,
@@ -36,6 +36,7 @@ import {
   commerceSuiteOptionLabel,
 } from "@/app/ecommerce-suite/ecommerce-suite-options";
 import { AuthenticatedImage } from "@/components/authenticated-image";
+import { ModelProviderOptionLabel } from "@/components/model-provider-icon";
 import { BatchJobPreview } from "@/components/pro-studio/batch-job-preview";
 import { ProStudioBadge } from "@/components/pro-studio/pro-studio-badge";
 import { ProStudioPanel } from "@/components/pro-studio/pro-studio-panel";
@@ -65,6 +66,8 @@ import {
   DEFAULT_IMAGE_MODEL,
   IMAGE_CREATION_MODEL_OPTIONS,
   createChatCompletionTask,
+  createManagedImageCollection,
+  createManagedTextAsset,
   createImageEditTaskFromReferenceIds,
   fetchCreationTasks,
   fetchManagedImages,
@@ -73,6 +76,7 @@ import {
   isImageCreationModel,
   isOfficialImageModel,
   uploadCreationTaskReferenceImage,
+  updateManagedImageCollectionItems,
   type CreationTask,
   type ImageModel,
   type ManagedImageSummary,
@@ -96,23 +100,28 @@ import {
   COMMERCE_SUITE_PROJECTS_CHANGED_EVENT,
   commerceSuiteResultImageSource,
   createCommerceSuiteProject,
+  DEFAULT_COMMERCE_SUMMARY_LAYOUT,
   deleteCommerceSuiteProject,
   listCommerceSuiteProjects,
   saveCommerceSuiteProject,
   touchCommerceSuiteProject,
+  type CommerceSummaryFitMode,
+  type CommerceSummaryLayout,
+  type CommerceSummaryLayoutMode,
   type CommerceSuiteProject,
   type CommerceSuiteReferenceImage,
   type CommerceSuiteResult,
 } from "@/store/ecommerce-suite-projects";
 import exampleModuleImage from "./example-module.webp";
-import exampleSummaryImage from "./example-summary.webp";
 
 const POLL_INTERVAL_MS = 1800;
 const SUMMARY_TILE_SIZE = 720;
 const SUMMARY_GAP = 28;
 const SUMMARY_HEADER_HEIGHT = 112;
+const SUMMARY_COMPOSITE_INTENT = "summary_composite";
 const LEFT_RAIL_COLLAPSED_STORAGE_KEY = "ecommerce-suite-left-rail-collapsed";
 const REFERENCE_LIBRARY_PAGE_SIZE = 24;
+const ZIP_DOS_EPOCH = new Date("1980-01-01T00:00:00Z");
 const REFERENCE_IMAGE_SLOTS = [
   { role: "product", title: "产品图", description: "上传商品主体、包装、不同角度，可多张" },
   { role: "reference", title: "参考图", description: "补充场景、风格、竞品或详情参考，可多张" },
@@ -128,6 +137,54 @@ const PRO_STUDIO_OUTPUTS: Array<{ id: ProStudioIntent; label: string; count: (pr
 
 type ReferenceImageRole = typeof REFERENCE_IMAGE_SLOTS[number]["role"];
 type ReferenceLibraryScope = "mine" | "team";
+type ArchivedCollectionLink = {
+  id: string;
+  name: string;
+  scope: ReferenceLibraryScope;
+};
+
+const ANALYSIS_SECTIONS = [
+  "商品标题",
+  "一句话卖点",
+  "产品类目",
+  "核心卖点",
+  "参数说明",
+  "目标人群",
+  "使用场景",
+  "详情页首屏文案",
+  "详情页模块文案",
+  "规格/尺寸说明",
+  "视觉风格方向",
+  "图片生成注意事项",
+] as const;
+
+const RESULT_GROUP_ORDER = [
+  "product_main",
+  "product_banner",
+  "detail_page",
+  "lifestyle_scene",
+  "sku_variants",
+  SUMMARY_COMPOSITE_INTENT,
+] as const;
+
+const SUMMARY_LAYOUT_MODE_OPTIONS: Array<{ value: CommerceSummaryLayoutMode; label: string; description: string }> = [
+  { value: "auto-grid", label: "自动网格", description: "根据数量自动排成总览图" },
+  { value: "vertical", label: "上下拼接", description: "适合详情页长图和竖向浏览" },
+  { value: "horizontal", label: "左右拼接", description: "适合横幅、对比和横向展示" },
+  { value: "two-column", label: "双列", description: "固定双列商品图册" },
+];
+
+const SUMMARY_FIT_OPTIONS: Array<{ value: CommerceSummaryFitMode; label: string }> = [
+  { value: "cover", label: "铺满裁切" },
+  { value: "contain", label: "完整显示" },
+];
+
+const SUMMARY_BACKGROUND_OPTIONS = [
+  { value: "#f6f8fc", label: "浅灰" },
+  { value: "#ffffff", label: "白色" },
+  { value: "#f8f1e7", label: "暖白" },
+  { value: "#111827", label: "深色" },
+] as const;
 
 const FEATURE_ACTIONS = [
   {
@@ -231,6 +288,100 @@ function downloadBlob(blob: Blob, filename: string) {
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+function crc32(bytes: Uint8Array) {
+  let crc = -1;
+  for (const byte of bytes) {
+    crc = (crc >>> 8) ^ CRC32_TABLE[(crc ^ byte) & 0xff];
+  }
+  return (crc ^ -1) >>> 0;
+}
+
+const CRC32_TABLE = Array.from({ length: 256 }, (_, index) => {
+  let value = index;
+  for (let bit = 0; bit < 8; bit += 1) {
+    value = value & 1 ? 0xedb88320 ^ (value >>> 1) : value >>> 1;
+  }
+  return value >>> 0;
+});
+
+function dateToZipTime(dateValue?: string) {
+  const date = new Date(dateValue || "");
+  const safeDate = Number.isNaN(date.getTime()) || date < ZIP_DOS_EPOCH ? ZIP_DOS_EPOCH : date;
+  const dosTime = (safeDate.getHours() << 11) | (safeDate.getMinutes() << 5) | Math.floor(safeDate.getSeconds() / 2);
+  const dosDate = ((safeDate.getFullYear() - 1980) << 9) | ((safeDate.getMonth() + 1) << 5) | safeDate.getDate();
+  return { dosTime, dosDate };
+}
+
+function pushUint16(out: number[], value: number) {
+  out.push(value & 0xff, (value >>> 8) & 0xff);
+}
+
+function pushUint32(out: number[], value: number) {
+  out.push(value & 0xff, (value >>> 8) & 0xff, (value >>> 16) & 0xff, (value >>> 24) & 0xff);
+}
+
+async function buildZipBlob(files: Array<{ name: string; blob: Blob; updatedAt?: string }>) {
+  const encoder = new TextEncoder();
+  const localParts: BlobPart[] = [];
+  const centralParts: BlobPart[] = [];
+  let offset = 0;
+
+  for (const file of files) {
+    const data = new Uint8Array(await file.blob.arrayBuffer());
+    const nameBytes = encoder.encode(file.name.replace(/\\/g, "/"));
+    const checksum = crc32(data);
+    const { dosTime, dosDate } = dateToZipTime(file.updatedAt);
+
+    const localHeader: number[] = [];
+    pushUint32(localHeader, 0x04034b50);
+    pushUint16(localHeader, 20);
+    pushUint16(localHeader, 0x0800);
+    pushUint16(localHeader, 0);
+    pushUint16(localHeader, dosTime);
+    pushUint16(localHeader, dosDate);
+    pushUint32(localHeader, checksum);
+    pushUint32(localHeader, data.byteLength);
+    pushUint32(localHeader, data.byteLength);
+    pushUint16(localHeader, nameBytes.byteLength);
+    pushUint16(localHeader, 0);
+    localParts.push(new Uint8Array(localHeader), nameBytes, data);
+
+    const centralHeader: number[] = [];
+    pushUint32(centralHeader, 0x02014b50);
+    pushUint16(centralHeader, 20);
+    pushUint16(centralHeader, 20);
+    pushUint16(centralHeader, 0x0800);
+    pushUint16(centralHeader, 0);
+    pushUint16(centralHeader, dosTime);
+    pushUint16(centralHeader, dosDate);
+    pushUint32(centralHeader, checksum);
+    pushUint32(centralHeader, data.byteLength);
+    pushUint32(centralHeader, data.byteLength);
+    pushUint16(centralHeader, nameBytes.byteLength);
+    pushUint16(centralHeader, 0);
+    pushUint16(centralHeader, 0);
+    pushUint16(centralHeader, 0);
+    pushUint16(centralHeader, 0);
+    pushUint32(centralHeader, 0);
+    pushUint32(centralHeader, offset);
+    centralParts.push(new Uint8Array(centralHeader), nameBytes);
+
+    offset += localHeader.length + nameBytes.byteLength + data.byteLength;
+  }
+
+  const centralSize = centralParts.reduce((sum, part) => sum + (typeof part === "string" ? encoder.encode(part).byteLength : part instanceof Blob ? part.size : part.byteLength), 0);
+  const endHeader: number[] = [];
+  pushUint32(endHeader, 0x06054b50);
+  pushUint16(endHeader, 0);
+  pushUint16(endHeader, 0);
+  pushUint16(endHeader, files.length);
+  pushUint16(endHeader, files.length);
+  pushUint32(endHeader, centralSize);
+  pushUint32(endHeader, offset);
+  pushUint16(endHeader, 0);
+  return new Blob([...localParts, ...centralParts, new Uint8Array(endHeader)], { type: "application/zip" });
+}
+
 function taskStatusLabel(status?: CreationTask["status"] | "idle") {
   switch (status) {
     case "queued":
@@ -279,6 +430,222 @@ function templateById(id: string) {
   return COMMERCE_SUITE_TEMPLATES.find((template) => template.id === id);
 }
 
+function proStudioOutputByIntent(intent?: string) {
+  return PRO_STUDIO_OUTPUTS.find((item) => item.id === intent);
+}
+
+function isCommerceProStudioIntent(intent: string): intent is ProStudioIntent {
+  return PRO_STUDIO_OUTPUTS.some((item) => item.id === intent);
+}
+
+function commerceResultIntent(result: CommerceSuiteResult) {
+  if (result.intent) {
+    return result.intent;
+  }
+  if (result.proStudio?.intent) {
+    return result.proStudio.intent;
+  }
+  if (result.templateId.startsWith("sku_variants-")) {
+    return "sku_variants";
+  }
+  return result.templateId;
+}
+
+function commerceResultTitle(result: CommerceSuiteResult) {
+  const intent = commerceResultIntent(result);
+  if (intent === SUMMARY_COMPOSITE_INTENT) {
+    return "AI 合成排版图";
+  }
+  const output = proStudioOutputByIntent(intent);
+  const template = templateById(result.templateId);
+  const base = output?.label || template?.title || result.templateId;
+  if (intent === "sku_variants" && typeof result.batchIndex === "number") {
+    return `${base} · 批次 ${result.batchIndex + 1}`;
+  }
+  return base;
+}
+
+function commerceResultShortTitle(result: CommerceSuiteResult) {
+  const intent = commerceResultIntent(result);
+  if (intent === SUMMARY_COMPOSITE_INTENT) {
+    return "AI-合成排版图";
+  }
+  const output = proStudioOutputByIntent(intent);
+  const template = templateById(result.templateId);
+  const base = output?.label || template?.shortTitle || result.templateId;
+  if (intent === "sku_variants" && typeof result.batchIndex === "number") {
+    return `${base}-${result.batchIndex + 1}`;
+  }
+  return base;
+}
+
+function commerceResultBaseFileName(project: CommerceSuiteProject | null | undefined, result: CommerceSuiteResult, index = 0) {
+  const sequence = String(index + 1).padStart(2, "0");
+  const batch = typeof result.batchIndex === "number" ? `-batch-${result.batchIndex + 1}` : "";
+  return `${safeFileName(project?.title || "ecommerce-suite")}-${safeFileName(commerceResultShortTitle(result))}${batch}-${sequence}`;
+}
+
+function commerceResultZipDirectory(result: CommerceSuiteResult) {
+  return `images/${safeFileName(commerceResultShortTitle(result))}`;
+}
+
+function plannedResultMatches(result: CommerceSuiteResult, plannedTemplateIds: string[]) {
+  const planned = new Set(plannedTemplateIds);
+  return planned.has(result.templateId) || planned.has(commerceResultIntent(result));
+}
+
+function resultIdentity(result: CommerceSuiteResult) {
+  return `${result.templateId}:${result.taskId || ""}:${typeof result.batchIndex === "number" ? result.batchIndex : ""}`;
+}
+
+function resultViewKey(result: CommerceSuiteResult) {
+  return resultIdentity(result) || `${result.templateId}:${commerceResultIntent(result)}`;
+}
+
+function resultMatchesRetrySeed(result: CommerceSuiteResult, seed: CommerceSuiteResult) {
+  if (seed.taskId && result.taskId === seed.taskId) {
+    return true;
+  }
+  return result.templateId === seed.templateId && result.batchIndex === seed.batchIndex;
+}
+
+function resultGroupLabel(groupId: string) {
+  if (groupId === SUMMARY_COMPOSITE_INTENT) {
+    return "排版与合成";
+  }
+  return proStudioOutputByIntent(groupId)?.label || TEMPLATE_GROUPS.find((group) => group.id === groupId)?.title || groupId;
+}
+
+function resultGroupDescription(groupId: string) {
+  switch (groupId) {
+    case SUMMARY_COMPOSITE_INTENT:
+      return "基于已完成图片再生成的整套合成图。";
+    case "product_main":
+      return "用于商品橱窗、首屏和核心展示。";
+    case "product_banner":
+      return "用于店铺横幅、广告位和活动视觉。";
+    case "detail_page":
+      return "用于详情页竖版模块和信息承接。";
+    case "lifestyle_scene":
+      return "用于真实场景、氛围和使用价值表达。";
+    case "sku_variants":
+      return "批量生成不同颜色、材质或款式细节。";
+    case "main":
+      return "普通模式主图模板结果。";
+    case "aplus":
+      return "普通模式详情页模块结果。";
+    default:
+      return "项目生成结果。";
+  }
+}
+
+function resultGroupId(result: CommerceSuiteResult) {
+  const intent = commerceResultIntent(result);
+  if (intent === SUMMARY_COMPOSITE_INTENT) {
+    return SUMMARY_COMPOSITE_INTENT;
+  }
+  if (PRO_STUDIO_OUTPUTS.some((item) => item.id === intent)) {
+    return intent;
+  }
+  if (MAIN_IMAGE_TEMPLATE_IDS.includes(result.templateId as typeof MAIN_IMAGE_TEMPLATE_IDS[number])) {
+    return "main";
+  }
+  if (APLUS_TEMPLATE_IDS.includes(result.templateId as typeof APLUS_TEMPLATE_IDS[number])) {
+    return "aplus";
+  }
+  return intent;
+}
+
+function isSummaryCompositeResult(result: CommerceSuiteResult) {
+  return commerceResultIntent(result) === SUMMARY_COMPOSITE_INTENT;
+}
+
+function groupCommerceResults(results: CommerceSuiteResult[]) {
+  const groups = new Map<string, CommerceSuiteResult[]>();
+  results.forEach((result) => {
+    const groupId = resultGroupId(result);
+    groups.set(groupId, [...(groups.get(groupId) || []), result]);
+  });
+  const ordered = [
+    ...RESULT_GROUP_ORDER,
+    "main",
+    "aplus",
+    ...Array.from(groups.keys()).filter((id) => !RESULT_GROUP_ORDER.includes(id as typeof RESULT_GROUP_ORDER[number]) && id !== "main" && id !== "aplus"),
+  ];
+  return ordered.flatMap((id) => {
+    const items = groups.get(id);
+    return items && items.length > 0 ? [{ id, items }] : [];
+  });
+}
+
+function parseAnalysisSections(text: string) {
+  const source = text.trim();
+  if (!source) {
+    return [];
+  }
+  const pattern = new RegExp(`(?:^|\\n)(${ANALYSIS_SECTIONS.join("|")})[：:]\\s*`, "g");
+  const matches = Array.from(source.matchAll(pattern));
+  if (matches.length === 0) {
+    return [{ title: "商品文案", body: source }];
+  }
+  return matches.flatMap((match, index) => {
+    const title = match[1];
+    const start = (match.index || 0) + match[0].length;
+    const end = index + 1 < matches.length ? matches[index + 1].index || source.length : source.length;
+    const body = source.slice(start, end).trim();
+    return body ? [{ title, body }] : [];
+  });
+}
+
+function formatAnalysisAssetContent(project: CommerceSuiteProject) {
+  const sections = parseAnalysisSections(project.analysisText);
+  const body = sections.length > 0
+    ? sections.map((section) => `${section.title}：\n${section.body}`).join("\n\n")
+    : project.analysisText.trim();
+  return [
+    `项目：${project.title || "未命名商品套图"}`,
+    `平台：${commerceSuiteOptionLabel(COMMERCE_SUITE_PLATFORMS, project.targeting.platform)}`,
+    `市场：${commerceSuiteOptionLabel(COMMERCE_SUITE_MARKETS, project.targeting.market)}`,
+    `语言：${commerceSuiteOptionLabel(COMMERCE_SUITE_LANGUAGES, project.targeting.language)}`,
+    "",
+    body,
+  ].join("\n").trim();
+}
+
+function textBlob(content: string, type = "text/plain;charset=utf-8") {
+  return new Blob([content], { type });
+}
+
+function buildDeliveryManifest(project: CommerceSuiteProject, items: Array<{ result: CommerceSuiteResult; fileName: string }>) {
+  return {
+    project: {
+      id: project.id,
+      title: project.title || "未命名商品套图",
+      platform: commerceSuiteOptionLabel(COMMERCE_SUITE_PLATFORMS, project.targeting.platform),
+      market: commerceSuiteOptionLabel(COMMERCE_SUITE_MARKETS, project.targeting.market),
+      language: commerceSuiteOptionLabel(COMMERCE_SUITE_LANGUAGES, project.targeting.language),
+      professional_mode: project.professionalMode === true,
+    },
+    exported_at: new Date().toISOString(),
+    image_count: items.length,
+    images: items.map(({ result, fileName }, index) => ({
+      index: index + 1,
+      title: commerceResultTitle(result),
+      type: commerceResultShortTitle(result),
+      intent: commerceResultIntent(result),
+      batch_index: typeof result.batchIndex === "number" ? result.batchIndex + 1 : undefined,
+      output_count: result.outputCount,
+      status: result.status,
+      file_name: fileName,
+      task_id: result.taskId,
+      path: result.path,
+      updated_at: result.updatedAt,
+      pro_studio: result.proStudio,
+      official_settings: result.officialSettings,
+    })),
+  };
+}
+
 function referenceRoleLabel(role: ReferenceImageRole) {
   return role === "product" ? "产品图" : "参考图";
 }
@@ -291,9 +658,10 @@ function extractTaskText(task: CreationTask) {
   return (task.data || []).map((item) => item.text_response || "").join("\n").trim();
 }
 
-function resultFromTask(templateId: string, task: CreationTask): CommerceSuiteResult {
+function resultFromTask(templateId: string, task: CreationTask, seed?: Partial<CommerceSuiteResult>): CommerceSuiteResult {
   const image = (task.data || []).find((item) => item.local_url || item.url || item.b64_json);
   return {
+    ...seed,
     templateId,
     taskId: task.id,
     status: task.status,
@@ -301,9 +669,9 @@ function resultFromTask(templateId: string, task: CreationTask): CommerceSuiteRe
     url: image?.url || (image?.b64_json ? `data:image/png;base64,${image.b64_json}` : undefined),
     revisedPrompt: image?.revised_prompt,
     error: task.error,
-    proStudio: task.pro_studio,
-    officialSettings: task.official_settings,
-    startedAt: task.created_at,
+    proStudio: task.pro_studio || seed?.proStudio,
+    officialSettings: task.official_settings || seed?.officialSettings,
+    startedAt: seed?.startedAt || task.created_at,
     updatedAt: task.updated_at,
   };
 }
@@ -455,6 +823,85 @@ function commercePublicReferenceImageUrls(images: CommerceSuiteReferenceImage[])
   return Array.from(new Set(images.map((image) => image.publicUrl?.trim() || "").filter(Boolean)));
 }
 
+function summaryLayoutModeLabel(mode: CommerceSummaryLayoutMode) {
+  return SUMMARY_LAYOUT_MODE_OPTIONS.find((option) => option.value === mode)?.label || "自动网格";
+}
+
+function summaryLayoutPrompt(layout: CommerceSummaryLayout) {
+  switch (layout.mode) {
+    case "vertical":
+      return "上下拼接的长图版式，按模块从上到下排列，适合电商详情页浏览。";
+    case "horizontal":
+      return "左右拼接的横向版式，图片横向并列，适合对比、横幅或总览展示。";
+    case "two-column":
+      return "双列商品图册版式，左右两列均衡排布，适合整套商品图总览。";
+    default:
+      return "自动网格版式，根据图片数量组成清晰的商品套图总览。";
+  }
+}
+
+function normalizeSummaryLayoutForCanvas(layout?: CommerceSummaryLayout): CommerceSummaryLayout {
+  return {
+    ...DEFAULT_COMMERCE_SUMMARY_LAYOUT,
+    ...layout,
+    gap: Math.max(0, Math.min(96, Math.round(Number(layout?.gap ?? DEFAULT_COMMERCE_SUMMARY_LAYOUT.gap) || 0))),
+    background: /^#[0-9a-fA-F]{6}$/.test(layout?.background || "")
+      ? layout?.background || DEFAULT_COMMERCE_SUMMARY_LAYOUT.background
+      : DEFAULT_COMMERCE_SUMMARY_LAYOUT.background,
+  };
+}
+
+function summaryPreviewGap(layout: CommerceSummaryLayout) {
+  return Math.max(4, Math.round(layout.gap / 3));
+}
+
+function summaryPreviewGridStyle(layout: CommerceSummaryLayout, count: number): CSSProperties {
+  const gap = summaryPreviewGap(layout);
+  if (layout.mode === "vertical") {
+    return {
+      display: "grid",
+      gap,
+      gridTemplateColumns: "minmax(0, 1fr)",
+    };
+  }
+  if (layout.mode === "horizontal") {
+    return {
+      display: "grid",
+      gap,
+      gridAutoColumns: "minmax(136px, 180px)",
+      gridAutoFlow: "column",
+      overflowX: "auto",
+    };
+  }
+  if (layout.mode === "two-column") {
+    return {
+      display: "grid",
+      gap,
+      gridTemplateColumns: `repeat(${Math.min(2, Math.max(1, count))}, minmax(0, 1fr))`,
+    };
+  }
+  const { columns } = summaryGridForCount(count, layout.mode);
+  return {
+    display: "grid",
+    gap,
+    gridTemplateColumns: `repeat(${Math.min(4, Math.max(1, columns))}, minmax(0, 1fr))`,
+  };
+}
+
+function summaryPreviewTileClass(layout: CommerceSummaryLayout) {
+  if (layout.mode === "vertical") {
+    return "aspect-[5/4]";
+  }
+  if (layout.mode === "horizontal") {
+    return "aspect-[4/3]";
+  }
+  return "aspect-square";
+}
+
+function isDarkSummaryBackground(background: string) {
+  return background.toLowerCase() === "#111827";
+}
+
 async function dataUrlToFile(dataUrl: string, name: string, type: string) {
   const response = await fetch(dataUrl);
   const blob = await response.blob();
@@ -483,6 +930,17 @@ async function loadImageForCanvas(src: string): Promise<HTMLImageElement> {
   }
 }
 
+async function resultBlobForDownload(result: CommerceSuiteResult) {
+  const src = commerceSuiteResultImageSource(result);
+  if (!src) {
+    throw new Error("图片不可下载");
+  }
+  if (src.startsWith("data:") || src.startsWith("blob:")) {
+    return await fetch(src).then((response) => response.blob());
+  }
+  return await fetchAuthenticatedImageBlob(src);
+}
+
 function drawCoverImage(ctx: CanvasRenderingContext2D, image: HTMLImageElement, x: number, y: number, width: number, height: number) {
   const scale = Math.max(width / image.naturalWidth, height / image.naturalHeight);
   const drawWidth = image.naturalWidth * scale;
@@ -492,27 +950,51 @@ function drawCoverImage(ctx: CanvasRenderingContext2D, image: HTMLImageElement, 
   ctx.drawImage(image, drawX, drawY, drawWidth, drawHeight);
 }
 
-function drawLabel(ctx: CanvasRenderingContext2D, label: string, x: number, y: number, width: number) {
-  ctx.save();
-  ctx.fillStyle = "rgba(24, 30, 37, 0.78)";
-  ctx.fillRect(x, y, width, 54);
-  ctx.fillStyle = "#ffffff";
-  ctx.font = "600 26px system-ui, sans-serif";
-  ctx.textBaseline = "middle";
-  ctx.fillText(label, x + 20, y + 27);
-  ctx.restore();
+function drawContainImage(ctx: CanvasRenderingContext2D, image: HTMLImageElement, x: number, y: number, width: number, height: number) {
+  const scale = Math.min(width / image.naturalWidth, height / image.naturalHeight);
+  const drawWidth = image.naturalWidth * scale;
+  const drawHeight = image.naturalHeight * scale;
+  const drawX = x + (width - drawWidth) / 2;
+  const drawY = y + (height - drawHeight) / 2;
+  ctx.drawImage(image, drawX, drawY, drawWidth, drawHeight);
+}
+
+function drawSummaryImage(ctx: CanvasRenderingContext2D, image: HTMLImageElement, fit: CommerceSummaryFitMode, x: number, y: number, width: number, height: number) {
+  if (fit === "contain") {
+    drawContainImage(ctx, image, x, y, width, height);
+    return;
+  }
+  drawCoverImage(ctx, image, x, y, width, height);
+}
+
+function summaryGridForCount(count: number, mode: CommerceSummaryLayoutMode) {
+  if (mode === "vertical") {
+    return { columns: 1, rows: count };
+  }
+  if (mode === "horizontal") {
+    return { columns: count, rows: 1 };
+  }
+  if (mode === "two-column") {
+    return { columns: Math.min(2, count), rows: Math.ceil(count / Math.min(2, count)) };
+  }
+  const columns = count <= 2 ? count : Math.ceil(Math.sqrt(count));
+  return { columns, rows: Math.ceil(count / columns) };
 }
 
 async function buildSummaryBlob(project: CommerceSuiteProject) {
-  const successfulResults = project.results.filter((result) => result.status === "success" && commerceSuiteResultImageSource(result));
+  const successfulResults = project.results.filter((result) => result.status === "success" && !isSummaryCompositeResult(result) && commerceSuiteResultImageSource(result));
   if (successfulResults.length === 0) {
-    throw new Error("还没有可以汇总的图片");
+    throw new Error("还没有可以排版的图片");
   }
 
-  const columns = successfulResults.length <= 2 ? successfulResults.length : 2;
-  const rows = Math.ceil(successfulResults.length / columns);
-  const width = columns * SUMMARY_TILE_SIZE + (columns + 1) * SUMMARY_GAP;
-  const height = SUMMARY_HEADER_HEIGHT + rows * SUMMARY_TILE_SIZE + (rows + 1) * SUMMARY_GAP;
+  const layout = normalizeSummaryLayoutForCanvas(project.summaryLayout);
+  const gap = layout.gap;
+  const headerHeight = layout.showHeader ? SUMMARY_HEADER_HEIGHT : 0;
+  const { columns, rows } = summaryGridForCount(successfulResults.length, layout.mode);
+  const tileWidth = layout.mode === "vertical" ? Math.round(SUMMARY_TILE_SIZE * 1.18) : SUMMARY_TILE_SIZE;
+  const tileHeight = layout.mode === "horizontal" ? Math.round(SUMMARY_TILE_SIZE * 0.72) : SUMMARY_TILE_SIZE;
+  const width = columns * tileWidth + (columns + 1) * gap;
+  const height = headerHeight + rows * tileHeight + (rows + 1) * gap;
   const canvas = document.createElement("canvas");
   canvas.width = width;
   canvas.height = height;
@@ -521,26 +1003,27 @@ async function buildSummaryBlob(project: CommerceSuiteProject) {
     throw new Error("浏览器不支持画布导出");
   }
 
-  ctx.fillStyle = "#f6f8fc";
+  ctx.fillStyle = layout.background;
   ctx.fillRect(0, 0, width, height);
-  ctx.fillStyle = "#181e25";
-  ctx.font = "700 40px system-ui, sans-serif";
-  ctx.fillText(project.title || "电商套图", SUMMARY_GAP, 58);
-  ctx.fillStyle = "#45515e";
-  ctx.font = "400 22px system-ui, sans-serif";
-  ctx.fillText("整套图片预览", SUMMARY_GAP, 92);
+  if (layout.showHeader) {
+    ctx.fillStyle = layout.background === "#111827" ? "#f8fafc" : "#181e25";
+    ctx.font = "700 40px system-ui, sans-serif";
+    ctx.fillText(project.title || "电商套图", gap, 58);
+    ctx.fillStyle = layout.background === "#111827" ? "#cbd5e1" : "#45515e";
+    ctx.font = "400 22px system-ui, sans-serif";
+    ctx.fillText(`${summaryLayoutModeLabel(layout.mode)} · 整套图片拼图`, gap, 92);
+  }
 
   for (let index = 0; index < successfulResults.length; index += 1) {
     const result = successfulResults[index];
     const image = await loadImageForCanvas(commerceSuiteResultImageSource(result));
     const col = index % columns;
     const row = Math.floor(index / columns);
-    const x = SUMMARY_GAP + col * (SUMMARY_TILE_SIZE + SUMMARY_GAP);
-    const y = SUMMARY_HEADER_HEIGHT + SUMMARY_GAP + row * (SUMMARY_TILE_SIZE + SUMMARY_GAP);
+    const x = gap + col * (tileWidth + gap);
+    const y = headerHeight + gap + row * (tileHeight + gap);
     ctx.fillStyle = "#ffffff";
-    ctx.fillRect(x, y, SUMMARY_TILE_SIZE, SUMMARY_TILE_SIZE);
-    drawCoverImage(ctx, image, x, y, SUMMARY_TILE_SIZE, SUMMARY_TILE_SIZE);
-    drawLabel(ctx, templateById(result.templateId)?.title || result.templateId, x, y + SUMMARY_TILE_SIZE - 54, SUMMARY_TILE_SIZE);
+    ctx.fillRect(x, y, tileWidth, tileHeight);
+    drawSummaryImage(ctx, image, layout.fit, x, y, tileWidth, tileHeight);
   }
 
   return await new Promise<Blob>((resolve, reject) => {
@@ -585,6 +1068,8 @@ export default function EcommerceSuitePage() {
   const [generating, setGenerating] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [buildingSummary, setBuildingSummary] = useState(false);
+  const [deliveryAction, setDeliveryAction] = useState<"" | "zip" | "text" | "archive" | "composite">("");
+  const [archivedCollectionLink, setArchivedCollectionLink] = useState<ArchivedCollectionLink | null>(null);
   const [renamingProjectId, setRenamingProjectId] = useState("");
   const [renamingTitle, setRenamingTitle] = useState("");
   const [referenceLibraryOpen, setReferenceLibraryOpen] = useState(false);
@@ -599,6 +1084,7 @@ export default function EcommerceSuitePage() {
   const [referenceLibraryApplyingPath, setReferenceLibraryApplyingPath] = useState("");
   const [activeTeam, setActiveTeam] = useState<TeamSummary | null>(null);
   const [now, setNow] = useState(() => Date.now());
+  const [selectedResultKey, setSelectedResultKey] = useState("");
   const [leftRailCollapsed, setLeftRailCollapsed] = useState(() => {
     if (typeof window === "undefined") {
       return false;
@@ -1195,7 +1681,7 @@ export default function EcommerceSuitePage() {
     }
   };
 
-  const submitGenerationTasks = async (templateIds: string[]) => {
+  const submitGenerationTasks = async (templateIds: string[], options: { retrySeed?: CommerceSuiteResult } = {}) => {
     const project = selectedProjectRef.current;
     if (!project || generating) return;
     if (!hasProductImages(project)) {
@@ -1217,10 +1703,31 @@ export default function EcommerceSuitePage() {
       const latest = selectedProjectRef.current || project;
       const publicImageUrls = commercePublicReferenceImageUrls(latest.referenceImages);
       const proStudioEnabled = latest.professionalMode === true;
-      const plannedTemplateIds = proStudioEnabled ? proStudioTemplateIds(latest) : templateIds;
-      const nextResults = latest.results.filter((result) => !plannedTemplateIds.includes(result.templateId));
+      const retrySeed = options.retrySeed;
+      const plannedTemplateIds = retrySeed
+        ? [commerceResultIntent(retrySeed)]
+        : proStudioEnabled ? proStudioTemplateIds(latest) : templateIds;
+      const nextResults = retrySeed
+        ? latest.results.filter((result) => !resultMatchesRetrySeed(result, retrySeed))
+        : latest.results.filter((result) => !plannedResultMatches(result, plannedTemplateIds));
       const submittedAt = new Date().toISOString();
-      const placeholders = proStudioEnabled
+      const placeholders = retrySeed
+        ? [{
+            ...retrySeed,
+            intent: commerceResultIntent(retrySeed),
+            taskId: createID(`commerce-${commerceResultIntent(retrySeed)}`),
+            status: "queued" as const,
+            outputCount: Math.max(1, retrySeed.outputCount || 1),
+            batchIndex: retrySeed.batchIndex ?? 0,
+            localUrl: undefined,
+            url: undefined,
+            path: undefined,
+            revisedPrompt: undefined,
+            error: undefined,
+            startedAt: submittedAt,
+            updatedAt: submittedAt,
+          }]
+        : proStudioEnabled
         ? plannedTemplateIds.flatMap((templateId) => {
             const output = PRO_STUDIO_OUTPUTS.find((item) => item.id === templateId);
             const total = output?.count(latest) || 1;
@@ -1229,7 +1736,7 @@ export default function EcommerceSuitePage() {
               intent: templateId as ProStudioIntent,
               taskId: createID(`commerce-${templateId}`),
               status: "queued" as const,
-              n,
+              outputCount: n,
               batchIndex: index,
               startedAt: submittedAt,
               updatedAt: submittedAt,
@@ -1240,7 +1747,7 @@ export default function EcommerceSuitePage() {
         intent: templateId as ProStudioIntent,
         taskId: createID(`commerce-${templateId}`),
         status: "queued" as const,
-        n: 1,
+        outputCount: 1,
         batchIndex: 0,
         startedAt: submittedAt,
         updatedAt: submittedAt,
@@ -1253,17 +1760,19 @@ export default function EcommerceSuitePage() {
       const submitted = await Promise.allSettled(
         placeholders.map((placeholder) => {
           if (proStudioEnabled) {
+            const placeholderIntent = String(placeholder.intent || "");
+            const intent: ProStudioIntent = isCommerceProStudioIntent(placeholderIntent) ? placeholderIntent : "product_main";
             const state = normalizeProStudioState({
-              ...pendingProject.proStudioState,
-              enabled: true,
-              intent: placeholder.intent,
-              settings: {
-                ...normalizeProStudioState(pendingProject.proStudioState, placeholder.intent).settings,
-                n: placeholder.n,
-              },
-            } as Partial<ProStudioState>, placeholder.intent);
+                ...pendingProject.proStudioState,
+                enabled: true,
+                intent,
+                settings: {
+                  ...normalizeProStudioState(pendingProject.proStudioState, intent).settings,
+                  n: placeholder.outputCount,
+                },
+              } as Partial<ProStudioState>, intent);
             const payload = buildProStudioImagePayload({
-              prompt: buildProStudioGenerationPrompt(pendingProject, placeholder.intent, placeholder.batchIndex),
+              prompt: buildProStudioGenerationPrompt(pendingProject, intent, placeholder.batchIndex),
               state,
               referenceImageUrls: publicImageUrls,
             });
@@ -1317,7 +1826,7 @@ export default function EcommerceSuitePage() {
       const submittedResults = placeholders.map((placeholder, index) => {
         const submittedItem = submitted[index];
         if (submittedItem?.status === "fulfilled") {
-          return resultFromTask(placeholder.templateId, submittedItem.value);
+          return resultFromTask(placeholder.templateId, submittedItem.value, placeholder);
         }
         return {
           ...placeholder,
@@ -1332,6 +1841,8 @@ export default function EcommerceSuitePage() {
       const failedCount = submittedResults.filter((result) => result.status === "error").length;
       if (failedCount > 0) {
         toast.error(`已提交 ${submittedResults.length - failedCount} 个任务，${failedCount} 个失败`);
+      } else if (retrySeed) {
+        toast.success("已重新提交当前图片");
       } else {
         toast.success("已提交套图生成任务");
       }
@@ -1342,8 +1853,12 @@ export default function EcommerceSuitePage() {
     }
   };
 
-  const retryTemplate = async (templateId: string) => {
-    await submitGenerationTasks([templateId]);
+  const retryTemplate = async (result: CommerceSuiteResult) => {
+    if (isSummaryCompositeResult(result)) {
+      await submitSummaryCompositeTask();
+      return;
+    }
+    await submitGenerationTasks([commerceResultIntent(result)], { retrySeed: result });
   };
 
   useEffect(() => {
@@ -1409,7 +1924,7 @@ export default function EcommerceSuitePage() {
           if (!matchedResult) {
             continue;
           }
-          const nextResult = resultFromTask(matchedResult.templateId, task);
+          const nextResult = resultFromTask(matchedResult.templateId, task, matchedResult);
           if (!commerceResultChanged(matchedResult, nextResult)) {
             continue;
           }
@@ -1467,36 +1982,133 @@ export default function EcommerceSuitePage() {
     toggleTemplate(templateId, !selectedProject.selectedTemplates.includes(templateId));
   };
 
-  const buildAndDownloadSummary = async () => {
+  const updateSummaryLayout = async (patch: Partial<CommerceSummaryLayout>) => {
+    const project = selectedProjectRef.current;
+    if (!project) return;
+    const summaryLayout = normalizeSummaryLayoutForCanvas({
+      ...normalizeSummaryLayoutForCanvas(project.summaryLayout),
+      ...patch,
+    });
+    await persistProject({
+      ...project,
+      summaryLayout,
+      summaryImage: undefined,
+    });
+  };
+
+  const downloadSummaryPreview = async () => {
     if (!selectedProject || buildingSummary) return;
     setBuildingSummary(true);
     try {
       const blob = await buildSummaryBlob(selectedProject);
-      const dataUrl = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(String(reader.result || ""));
-        reader.onerror = () => reject(new Error("整套预览读取失败"));
-        reader.readAsDataURL(blob);
-      });
-      await persistProject({ ...selectedProject, summaryImage: dataUrl });
       downloadBlob(blob, `${safeFileName(selectedProject.title)}-summary.png`);
-      toast.success("整套预览已下载");
+      toast.success("整套拼图已下载");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "整套预览生成失败");
+      toast.error(error instanceof Error ? error.message : "整套拼图下载失败");
     } finally {
       setBuildingSummary(false);
+    }
+  };
+
+  const submitSummaryCompositeTask = async () => {
+    const project = selectedProjectRef.current;
+    if (!project || deliveryAction || generating) {
+      return;
+    }
+    const successfulResults = project.results.filter((result) => result.status === "success" && !isSummaryCompositeResult(result) && commerceSuiteResultImageSource(result));
+    if (successfulResults.length === 0) {
+      toast.error("还没有可以合成的图片");
+      return;
+    }
+    const referenceImageLimit = commerceReferenceImageLimit(project);
+    const selectedResults = successfulResults.slice(0, referenceImageLimit);
+    if (selectedResults.length === 0) {
+      toast.error("当前模型不支持参考图合成");
+      return;
+    }
+    setDeliveryAction("composite");
+    try {
+      const referenceIds: string[] = [];
+      for (let index = 0; index < selectedResults.length; index += 1) {
+        const result = selectedResults[index];
+        const blob = await resultBlobForDownload(result);
+        const src = commerceSuiteResultImageSource(result);
+        const fileName = `${commerceResultBaseFileName(project, result, index)}.${imageExtension("png", src)}`;
+        const file = new File([blob], fileName, { type: blob.type || "image/png" });
+        const uploaded = await uploadCreationTaskReferenceImage(file, `${SUMMARY_COMPOSITE_INTENT}-${index + 1}`, { conversationId: project.id });
+        referenceIds.push(uploaded.id);
+      }
+      const layout = normalizeSummaryLayoutForCanvas(project.summaryLayout);
+      const taskId = createID("commerce-summary-composite");
+      const submittedAt = new Date().toISOString();
+      const placeholder: CommerceSuiteResult = {
+        templateId: SUMMARY_COMPOSITE_INTENT,
+        intent: SUMMARY_COMPOSITE_INTENT,
+        taskId,
+        status: "queued",
+        model: project.professionalMode ? OFFICIAL_IMAGE_MODEL : project.imageModel,
+        outputCount: 1,
+        batchIndex: 0,
+        startedAt: submittedAt,
+        updatedAt: submittedAt,
+      };
+      const nextResults = project.results.filter((result) => commerceResultIntent(result) !== SUMMARY_COMPOSITE_INTENT);
+      const prompt = [
+        "你是一名电商套图排版设计师。请基于参考图生成一张整套商品图片的合成排版图。",
+        `项目名称：${project.title || "未命名商品套图"}`,
+        `排版方式：${summaryLayoutPrompt(layout)}`,
+        `图片适配偏好：${layout.fit === "contain" ? "尽量完整保留每张参考图主体，不要过度裁切。" : "允许适度裁切，让画面铺满且视觉统一。"}`,
+        `商品运营摘要：\n${project.analysisText || "请根据参考图保持商品主体一致，并形成清晰的电商总览图。"}`,
+        "输出要求：只生成一张成品图；保持商品主体一致；整体像真实可用的电商套图预览、详情首屏或商品图册；文字可少量使用但必须短句清晰；不添加虚假认证、价格、品牌 Logo、疗效或未经确认的夸张承诺。",
+      ].join("\n\n");
+      const task = await createImageEditTaskFromReferenceIds(
+        taskId,
+        referenceIds,
+        prompt,
+        project.professionalMode ? OFFICIAL_IMAGE_MODEL : project.imageModel,
+        project.size,
+        isOfficialImageModel(project.professionalMode ? OFFICIAL_IMAGE_MODEL : project.imageModel) && isImageQuality(project.imageQuality)
+          ? project.imageQuality
+          : undefined,
+        1,
+        [{ role: "system", content: "你是电商套图排版设计师，输出适合商业使用的一张合成排版图。" }],
+        "private",
+        project.imageResolution,
+        project.outputFormat,
+        undefined,
+        undefined,
+        project.id,
+        undefined,
+        undefined,
+        {
+          summary_layout: layout,
+          source_result_count: selectedResults.length,
+        },
+      );
+      await persistProject({
+        ...project,
+        results: [...nextResults, resultFromTask(SUMMARY_COMPOSITE_INTENT, task, placeholder)],
+      });
+      if (successfulResults.length > selectedResults.length) {
+        toast.warning(`当前模型最多参考 ${referenceImageLimit} 张图，已取前 ${selectedResults.length} 张生成 AI 合成图`);
+      } else {
+        toast.success("已提交 AI 合成排版图");
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "AI 合成图提交失败");
+    } finally {
+      setDeliveryAction("");
     }
   };
 
   const downloadResult = async (result: CommerceSuiteResult) => {
     const src = commerceSuiteResultImageSource(result);
     if (!src) return;
-    const template = templateById(result.templateId);
     await downloadImageFile({
       id: result.taskId || result.templateId,
       src,
       path: result.path,
-      fileName: `${safeFileName(selectedProject?.title || "ecommerce-suite")}-${template?.shortTitle || result.templateId}.${imageExtension("png", src)}`,
+      fileName: `${commerceResultBaseFileName(selectedProject, result)}.${imageExtension("png", src)}`,
     }).catch((error) => {
       toast.error(error instanceof Error ? error.message : "下载失败");
     });
@@ -1520,6 +2132,130 @@ export default function EcommerceSuitePage() {
   const generationProgressPercent = generationTotal > 0
     ? Math.max(activeResults.length > 0 ? 8 : 0, Math.min(100, Math.round((generationSettled / generationTotal) * 100)))
     : 0;
+  const analysisSections = parseAnalysisSections(selectedProject?.analysisText || "");
+  const resultGroups = groupCommerceResults(selectedProject?.results || []);
+  const galleryResults = resultGroups.flatMap((group) => group.items.map((result) => ({ groupId: group.id, result })));
+  const selectedGalleryItem = galleryResults.find((item) => resultViewKey(item.result) === selectedResultKey) || galleryResults[0] || null;
+  const selectedGalleryResult = selectedGalleryItem?.result || null;
+  const selectedGalleryKey = selectedGalleryResult ? resultViewKey(selectedGalleryResult) : "";
+  const summaryLayout = normalizeSummaryLayoutForCanvas(selectedProject?.summaryLayout);
+  const completedImageResults = completedResults.filter((result) => commerceSuiteResultImageSource(result));
+  const compositeSourceResults = completedImageResults.filter((result) => !isSummaryCompositeResult(result));
+  const summaryPreviewStyle = summaryPreviewGridStyle(summaryLayout, compositeSourceResults.length);
+  const summaryPreviewTileClassName = summaryPreviewTileClass(summaryLayout);
+  const summaryPreviewTextClassName = isDarkSummaryBackground(summaryLayout.background)
+    ? "text-slate-100"
+    : "text-slate-900";
+  const summaryPreviewSubTextClassName = isDarkSummaryBackground(summaryLayout.background)
+    ? "text-slate-300"
+    : "text-slate-500";
+
+  const downloadCompletedResults = async () => {
+    if (!selectedProject || deliveryAction) {
+      return;
+    }
+    const items = completedResults.filter((result) => commerceSuiteResultImageSource(result));
+    if (items.length === 0) {
+      toast.error("还没有可下载的图片");
+      return;
+    }
+    setDeliveryAction("zip");
+    try {
+      const imageFiles = await Promise.all(items.map(async (result, index) => {
+        const src = commerceSuiteResultImageSource(result);
+        const blob = await resultBlobForDownload(result);
+        const name = `${commerceResultZipDirectory(result)}/${commerceResultBaseFileName(selectedProject, result, index)}.${imageExtension("png", src)}`;
+        return {
+          result,
+          name,
+          blob,
+          updatedAt: result.updatedAt,
+        };
+      }));
+      const manifest = buildDeliveryManifest(selectedProject, imageFiles.map(({ result, name }) => ({ result, fileName: name })));
+      const analysisContent = selectedProject.analysisText.trim()
+        ? formatAnalysisAssetContent(selectedProject)
+        : [
+            `项目：${selectedProject.title || "未命名商品套图"}`,
+            "",
+            "暂无商品文案。建议先运行“商品文案策划”，再重新打包交付。",
+          ].join("\n");
+      const files = [
+        ...imageFiles.map(({ name, blob, updatedAt }) => ({ name, blob, updatedAt })),
+        {
+          name: "商品文案.txt",
+          blob: textBlob(analysisContent),
+          updatedAt: selectedProject.updatedAt,
+        },
+        {
+          name: "manifest.json",
+          blob: textBlob(JSON.stringify(manifest, null, 2), "application/json;charset=utf-8"),
+          updatedAt: selectedProject.updatedAt,
+        },
+      ];
+      const zip = await buildZipBlob(files);
+      downloadBlob(zip, `${safeFileName(selectedProject.title || "ecommerce-suite")}-delivery.zip`);
+      toast.success(`已打包 ${imageFiles.length} 张图片、文案和 manifest`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "打包下载失败");
+    } finally {
+      setDeliveryAction("");
+    }
+  };
+
+  const saveAnalysisAsTextAsset = async () => {
+    const project = selectedProjectRef.current;
+    if (!project || deliveryAction) {
+      return;
+    }
+    if (!project.analysisText.trim()) {
+      toast.error("请先生成或填写商品文案");
+      return;
+    }
+    setDeliveryAction("text");
+    try {
+      const item = await createManagedTextAsset({
+        name: `${project.title || "未命名商品套图"} 商品文案`,
+        content: formatAnalysisAssetContent(project),
+      }, { scope: "mine" });
+      toast.success(`已保存到文本素材「${item.name || "商品文案"}」，可在画布和社媒运营中引用`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "保存文本素材失败";
+      toast.error(`保存到文本素材失败：${message}`);
+    } finally {
+      setDeliveryAction("");
+    }
+  };
+
+  const archiveCompletedResults = async () => {
+    const project = selectedProjectRef.current;
+    if (!project || deliveryAction) {
+      return;
+    }
+    const paths = Array.from(new Set(project.results
+      .filter((result) => result.status === "success")
+      .map((result) => result.path || "")
+      .filter(Boolean)));
+    const completedCount = project.results.filter((result) => result.status === "success").length;
+    if (paths.length === 0) {
+      toast.error("当前完成图片还没有素材库路径，无法归入素材集");
+      return;
+    }
+    setDeliveryAction("archive");
+    try {
+      const collection = await createManagedImageCollection(project.title || "电商套图", { scope: "mine" });
+      const collectionId = collection.item.id;
+      const collectionName = collection.item.name || project.title || "电商套图";
+      const result = await updateManagedImageCollectionItems(collectionId, paths, { scope: "mine" });
+      const skipped = Math.max(0, completedCount - paths.length);
+      setArchivedCollectionLink({ id: collectionId, name: collectionName, scope: "mine" });
+      toast.success(`已将 ${result.updated || paths.length} 张图片归入「${collectionName}」${skipped ? `，跳过 ${skipped} 张本地结果` : ""}`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "归入素材集失败");
+    } finally {
+      setDeliveryAction("");
+    }
+  };
 
   return (
     <>
@@ -1943,7 +2679,9 @@ export default function EcommerceSuitePage() {
                       </SelectTrigger>
                       <SelectContent>
                         {chatModelOptions.map((option) => (
-                          <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+                          <SelectItem key={option.value} value={option.value} textValue={option.label}>
+                            <ModelProviderOptionLabel model={option.value} label={option.label} />
+                          </SelectItem>
                         ))}
                       </SelectContent>
                     </Select>
@@ -1956,9 +2694,15 @@ export default function EcommerceSuitePage() {
                       </SelectTrigger>
                       <SelectContent>
                         {selectedProject.professionalMode
-                          ? <SelectItem value={OFFICIAL_IMAGE_MODEL}>{OFFICIAL_IMAGE_MODEL}</SelectItem>
+                          ? (
+                              <SelectItem value={OFFICIAL_IMAGE_MODEL} textValue={OFFICIAL_IMAGE_MODEL}>
+                                <ModelProviderOptionLabel model={OFFICIAL_IMAGE_MODEL} label={OFFICIAL_IMAGE_MODEL} />
+                              </SelectItem>
+                            )
                           : imageModelOptions.map((option) => (
-                              <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+                              <SelectItem key={option.value} value={option.value} textValue={option.label}>
+                                <ModelProviderOptionLabel model={option.value} label={option.label} />
+                              </SelectItem>
                             ))}
                       </SelectContent>
                     </Select>
@@ -2013,9 +2757,30 @@ export default function EcommerceSuitePage() {
                 <Textarea
                   value={selectedProject.analysisText}
                   onChange={(event) => updateSelectedProject({ analysisText: event.target.value })}
-                  className="h-56 resize-none rounded-xl"
+                  className="h-56 min-h-56 resize-none rounded-xl"
                   placeholder="点击分析商品后，会自动填入商品标题、一句话卖点、核心卖点、参数说明、详情页首屏文案、详情页模块文案和视觉风格方向。"
                 />
+                <div className="min-h-[184px] rounded-2xl border border-border bg-muted/20 p-3">
+                  {isActiveTask(selectedProject.analysisStatus) ? (
+                    <div className="flex h-[152px] items-center justify-center gap-2 text-sm text-muted-foreground">
+                      <LoaderCircle className="size-4 animate-spin" />
+                      文案生成中，完成后会自动整理成结构化模块
+                    </div>
+                  ) : analysisSections.length > 0 ? (
+                    <div className="grid grid-cols-2 gap-2 max-md:grid-cols-1">
+                      {analysisSections.slice(0, 8).map((section) => (
+                        <div key={section.title} className="min-h-[72px] rounded-xl border border-border bg-background p-3">
+                          <div className="text-[11px] font-semibold text-[#1456f0]">{section.title}</div>
+                          <div className="mt-1 line-clamp-3 whitespace-pre-wrap text-xs leading-5 text-muted-foreground">{section.body}</div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="grid h-[152px] place-items-center text-center text-xs leading-5 text-muted-foreground">
+                      生成后会在这里稳定展示标题、核心卖点、参数说明和详情页文案。
+                    </div>
+                  )}
+                </div>
                 {selectedProject.analysisError ? (
                   <div className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700 dark:border-rose-800 dark:bg-rose-950/30 dark:text-rose-300">
                     {selectedProject.analysisError}
@@ -2237,11 +3002,30 @@ export default function EcommerceSuitePage() {
                   <Button
                     variant="outline"
                     className="h-9 rounded-xl"
-                    onClick={() => void buildAndDownloadSummary()}
-                    disabled={buildingSummary || !selectedProject.results.some((result) => result.status === "success")}
+                    onClick={() => void saveAnalysisAsTextAsset()}
+                    disabled={deliveryAction !== "" || !selectedProject.analysisText.trim()}
+                    title="保存到文本素材后，可在画布和社媒运营中复用"
                   >
-                    {buildingSummary ? <LoaderCircle className="size-4 animate-spin" /> : <Download className="size-4" />}
-                    下载总览图
+                    {deliveryAction === "text" ? <LoaderCircle className="size-4 animate-spin" /> : <Archive className="size-4" />}
+                    保存到文本素材
+                  </Button>
+                  <Button
+                    variant="outline"
+                    className="h-9 rounded-xl"
+                    onClick={() => void archiveCompletedResults()}
+                    disabled={deliveryAction !== "" || completedResults.length === 0}
+                  >
+                    {deliveryAction === "archive" ? <LoaderCircle className="size-4 animate-spin" /> : <Images className="size-4" />}
+                    归入素材集
+                  </Button>
+                  <Button
+                    variant="outline"
+                    className="h-9 rounded-xl"
+                    onClick={() => void downloadCompletedResults()}
+                    disabled={deliveryAction !== "" || completedResults.length === 0}
+                  >
+                    {deliveryAction === "zip" ? <LoaderCircle className="size-4 animate-spin" /> : <Download className="size-4" />}
+                    打包下载
                   </Button>
                 </div>
                 {activeResults.length > 0 ? (
@@ -2275,6 +3059,28 @@ export default function EcommerceSuitePage() {
                     </div>
                   </div>
                 ) : null}
+                {archivedCollectionLink ? (
+                  <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-emerald-200 bg-emerald-50/80 p-3 text-emerald-950 dark:border-emerald-900/60 dark:bg-emerald-950/25 dark:text-emerald-100">
+                    <div className="min-w-0">
+                      <div className="text-sm font-semibold">已归入素材集「{archivedCollectionLink.name}」</div>
+                      <div className="mt-1 text-xs text-emerald-800 dark:text-emerald-200">打开素材库后会自动定位到这组图片</div>
+                    </div>
+                    <Button
+                      variant="outline"
+                      className="h-9 rounded-xl border-emerald-200 bg-white/80 text-emerald-900 hover:bg-white dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-100"
+                      onClick={() => {
+                        const params = new URLSearchParams({
+                          scope: archivedCollectionLink.scope,
+                          collection_id: archivedCollectionLink.id,
+                        });
+                        window.location.href = `/image-manager?${params.toString()}`;
+                      }}
+                    >
+                      <Images className="size-4" />
+                      打开素材集
+                    </Button>
+                  </div>
+                ) : null}
                 {selectedProject.results.length === 0 ? (
                   <div className="overflow-hidden rounded-2xl border border-dashed border-border bg-muted/25">
                     <div className="relative aspect-[4/3] bg-muted">
@@ -2289,93 +3095,288 @@ export default function EcommerceSuitePage() {
                       <Badge variant="outline">待生成</Badge>
                     </div>
                   </div>
-                ) : (
-                  <div className="grid grid-cols-2 gap-3 max-md:grid-cols-1">
-                    {selectedProject.results.map((result) => {
-                      const template = templateById(result.templateId);
-                      const src = commerceSuiteResultImageSource(result);
-                      return (
-                        <div key={result.templateId} className="overflow-hidden rounded-2xl border border-border bg-background">
-                          <div className="relative aspect-square bg-muted">
-                            {src ? (
-                              <AuthenticatedImage src={src} alt={template?.title || result.templateId} className="h-full w-full object-cover" />
-                            ) : (
-                              <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-                                {isActiveTask(result.status) ? <LoaderCircle className="size-6 animate-spin" /> : "暂无图片"}
-                              </div>
-                            )}
-                            <div className="absolute left-2 top-2">
-                              <Badge variant={taskStatusVariant(result.status)}>{taskStatusLabel(result.status)}</Badge>
-                            </div>
+                ) : selectedGalleryResult ? (
+                  <div className="grid min-h-[560px] grid-cols-[minmax(0,1fr)_112px] gap-4 max-md:grid-cols-1">
+                    <div className="min-w-0 overflow-hidden rounded-2xl bg-muted/40">
+                      <div className="relative flex min-h-[420px] items-center justify-center bg-muted">
+                        {commerceSuiteResultImageSource(selectedGalleryResult) ? (
+                          <AuthenticatedImage
+                            src={commerceSuiteResultImageSource(selectedGalleryResult)}
+                            alt={commerceResultTitle(selectedGalleryResult)}
+                            className="max-h-[min(68vh,760px)] w-full object-contain"
+                          />
+                        ) : (
+                          <div className="grid min-h-[420px] place-items-center text-sm text-muted-foreground">
+                            {isActiveTask(selectedGalleryResult.status) ? <LoaderCircle className="size-7 animate-spin" /> : "暂无图片"}
                           </div>
-                          <div className="grid gap-2 p-3">
-                            <div className="flex items-center justify-between gap-2">
-                              <div className="min-w-0">
-                                <div className="truncate text-sm font-semibold">{template?.title || result.templateId}</div>
-                                <div className="text-[11px] text-muted-foreground">{formatDateTime(result.updatedAt)}</div>
-                              </div>
-                              {result.status === "success" ? <CheckCircle2 className="size-4 shrink-0 text-emerald-600" /> : null}
-                            </div>
-                            <ProStudioBadge proStudio={result.proStudio} officialSettings={result.officialSettings} compact />
-                            {result.error ? (
-                              <div className="line-clamp-2 text-xs text-rose-600">{result.error}</div>
-                            ) : null}
-                            <div className="flex gap-2">
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                className="h-8 flex-1 rounded-xl"
-                                onClick={() => void retryTemplate(result.templateId)}
-                                disabled={isActiveTask(result.status) || generating}
-                              >
-                                <RotateCcw className="size-3.5" />
-                                重试
-                              </Button>
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                className="h-8 flex-1 rounded-xl"
-                                onClick={() => void downloadResult(result)}
-                                disabled={!src}
-                              >
-                                <Download className="size-3.5" />
-                                下载
-                              </Button>
-                            </div>
-                          </div>
+                        )}
+                        <div className="absolute left-3 top-3">
+                          <Badge variant={taskStatusVariant(selectedGalleryResult.status)}>{taskStatusLabel(selectedGalleryResult.status)}</Badge>
                         </div>
-                      );
-                    })}
+                        {selectedGalleryResult.status === "success" ? (
+                          <div className="absolute right-3 top-3 rounded-full bg-background/90 p-1 text-emerald-600 shadow-sm">
+                            <CheckCircle2 className="size-4" />
+                          </div>
+                        ) : null}
+                      </div>
+                      <div className="grid gap-3 border-t border-border/70 bg-background/80 p-3">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="truncate text-base font-semibold text-foreground">{commerceResultTitle(selectedGalleryResult)}</div>
+                            <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                              <span>{resultGroupLabel(selectedGalleryItem.groupId)}</span>
+                              {selectedGalleryResult.updatedAt ? <span>{formatDateTime(selectedGalleryResult.updatedAt)}</span> : null}
+                            </div>
+                          </div>
+                          <ProStudioBadge proStudio={selectedGalleryResult.proStudio} officialSettings={selectedGalleryResult.officialSettings} compact />
+                        </div>
+                        {selectedGalleryResult.error ? (
+                          <div className="rounded-xl bg-rose-50 px-3 py-2 text-xs leading-5 text-rose-700 dark:bg-rose-950/25 dark:text-rose-300">
+                            {selectedGalleryResult.error}
+                          </div>
+                        ) : null}
+                        <div className="flex flex-wrap gap-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-9 rounded-xl"
+                            onClick={() => void retryTemplate(selectedGalleryResult)}
+                            disabled={isActiveTask(selectedGalleryResult.status) || generating}
+                          >
+                            <RotateCcw className="size-3.5" />
+                            重试
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-9 rounded-xl"
+                            onClick={() => void downloadResult(selectedGalleryResult)}
+                            disabled={!commerceSuiteResultImageSource(selectedGalleryResult)}
+                          >
+                            <Download className="size-3.5" />
+                            下载
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="min-h-0 rounded-2xl bg-muted/30 p-2 max-md:max-h-36">
+                      <div className="hide-scrollbar flex max-h-[720px] flex-col gap-2 overflow-y-auto pr-1 max-md:flex-row max-md:overflow-x-auto max-md:overflow-y-hidden max-md:pr-0">
+                        {galleryResults.map(({ groupId, result }) => {
+                          const src = commerceSuiteResultImageSource(result);
+                          const key = resultViewKey(result);
+                          const active = selectedGalleryKey === key;
+                          return (
+                            <button
+                              key={key}
+                              type="button"
+                              className={cn(
+                                "group relative size-24 shrink-0 overflow-hidden rounded-xl bg-background transition",
+                                active ? "ring-2 ring-[#1456f0] ring-offset-2 ring-offset-background" : "opacity-80 hover:opacity-100",
+                              )}
+                              onClick={() => setSelectedResultKey(key)}
+                              title={`${resultGroupLabel(groupId)} · ${commerceResultTitle(result)}`}
+                              aria-label={`查看${commerceResultTitle(result)}`}
+                              aria-pressed={active}
+                            >
+                              {src ? (
+                                <AuthenticatedImage src={src} alt={commerceResultTitle(result)} className="h-full w-full object-cover" />
+                              ) : (
+                                <span className="flex h-full w-full items-center justify-center text-muted-foreground">
+                                  {isActiveTask(result.status) ? <LoaderCircle className="size-5 animate-spin" /> : <Images className="size-5" />}
+                                </span>
+                              )}
+                              <span className="absolute left-1 top-1 rounded-full bg-background/90 px-1.5 py-0.5 text-[10px] font-semibold text-foreground shadow-sm">
+                                {taskStatusLabel(result.status)}
+                              </span>
+                              <span className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/60 to-transparent px-1.5 pb-1 pt-5 text-left text-[10px] font-semibold leading-3 text-white">
+                                <span className="line-clamp-2">{commerceResultShortTitle(result)}</span>
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
                   </div>
-                )}
+                ) : null}
               </Card>
 
               <Card className="gap-4 rounded-2xl p-4">
-                <div className="flex items-center justify-between gap-3">
+                <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
-                    <div className="text-sm font-semibold text-foreground">整套预览</div>
-                    <div className="text-xs text-muted-foreground">把已完成的图片拼成一张总览图</div>
+                    <div className="text-sm font-semibold text-foreground">排版与合成</div>
+                    <div className="text-xs text-muted-foreground">已完成图片会在下面实时排版，下载时直接导出当前拼图</div>
                   </div>
-                  {selectedProject.summaryImage ? <Badge variant="success">已生成</Badge> : <Badge variant="secondary">待生成</Badge>}
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge variant={compositeSourceResults.length > 0 ? "success" : "secondary"}>
+                      {compositeSourceResults.length} 张参与排版
+                    </Badge>
+                    <Badge variant="outline">{summaryLayoutModeLabel(summaryLayout.mode)}</Badge>
+                  </div>
                 </div>
-                {selectedProject.summaryImage ? (
-                  <div className="overflow-hidden rounded-2xl border border-border bg-muted">
-                    <img src={selectedProject.summaryImage} alt="整套预览" className="w-full object-contain" />
+
+                <div className="grid gap-3 rounded-xl bg-muted/20 p-3">
+                  <div className="grid grid-cols-4 gap-2 max-lg:grid-cols-2">
+                    {SUMMARY_LAYOUT_MODE_OPTIONS.map((option) => {
+                      const active = summaryLayout.mode === option.value;
+                      return (
+                        <button
+                          key={option.value}
+                          type="button"
+                          className={cn(
+                            "min-h-[72px] rounded-xl border p-3 text-left transition",
+                            active
+                              ? "border-[#1456f0]/45 bg-[#edf4ff] text-[#123a8c] dark:bg-sky-950/30 dark:text-sky-200"
+                              : "border-border bg-background hover:bg-accent",
+                          )}
+                          onClick={() => void updateSummaryLayout({ mode: option.value })}
+                        >
+                          <span className="block text-sm font-semibold">{option.label}</span>
+                          <span className="mt-1 line-clamp-2 block text-xs leading-5 text-muted-foreground">{option.description}</span>
+                        </button>
+                      );
+                    })}
                   </div>
-                ) : selectedProject.results.length === 0 ? (
-                  <div className="overflow-hidden rounded-2xl border border-dashed border-border bg-muted/25">
-                    <img src={exampleSummaryImage} alt="整套预览示意" className="w-full object-contain" />
-                    <div className="flex flex-wrap items-center justify-between gap-2 p-3">
-                      <div className="min-w-0">
-                        <div className="text-sm font-semibold text-foreground">整套预览示意</div>
-                        <div className="text-xs text-muted-foreground">有生成结果后，可以拼成一张总览图</div>
-                      </div>
-                      <Badge variant="outline">示例</Badge>
+
+                  <div className="grid grid-cols-4 gap-3 max-lg:grid-cols-2 max-sm:grid-cols-1">
+                    <label className="grid gap-1.5">
+                      <span className="text-xs font-semibold text-muted-foreground">图片适配</span>
+                      <Select
+                        value={summaryLayout.fit}
+                        onValueChange={(value) => void updateSummaryLayout({ fit: value as CommerceSummaryFitMode })}
+                      >
+                        <SelectTrigger className="h-9 rounded-xl bg-background">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {SUMMARY_FIT_OPTIONS.map((option) => (
+                            <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </label>
+                    <label className="grid gap-1.5">
+                      <span className="text-xs font-semibold text-muted-foreground">间距</span>
+                      <Input
+                        type="number"
+                        min={0}
+                        max={96}
+                        value={summaryLayout.gap}
+                        onChange={(event) => void updateSummaryLayout({ gap: Number(event.target.value) })}
+                        className="h-9 rounded-xl bg-background"
+                      />
+                    </label>
+                    <label className="grid gap-1.5">
+                      <span className="text-xs font-semibold text-muted-foreground">背景</span>
+                      <Select
+                        value={summaryLayout.background}
+                        onValueChange={(value) => void updateSummaryLayout({ background: value })}
+                      >
+                        <SelectTrigger className="h-9 rounded-xl bg-background">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {SUMMARY_BACKGROUND_OPTIONS.map((option) => (
+                            <SelectItem key={option.value} value={option.value}>
+                              <span className="inline-flex items-center gap-2">
+                                <span className="size-3 rounded-full border border-border" style={{ backgroundColor: option.value }} />
+                                {option.label}
+                              </span>
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </label>
+                    <div className="grid gap-1.5">
+                      <span className="text-xs font-semibold text-muted-foreground">标题栏</span>
+                      <Button
+                        variant="outline"
+                        className="h-9 justify-start rounded-xl bg-background"
+                        onClick={() => void updateSummaryLayout({ showHeader: !summaryLayout.showHeader })}
+                      >
+                        {summaryLayout.showHeader ? <Check className="size-4" /> : null}
+                        {summaryLayout.showHeader ? "显示标题" : "隐藏标题"}
+                      </Button>
                     </div>
                   </div>
+
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="text-xs leading-5 text-muted-foreground">
+                      当前：{summaryLayoutModeLabel(summaryLayout.mode)} · {summaryLayout.fit === "contain" ? "完整显示" : "铺满裁切"} · 间距 {summaryLayout.gap}px
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        variant="outline"
+                        className="h-9 rounded-xl"
+                        onClick={() => void downloadSummaryPreview()}
+                        disabled={buildingSummary || compositeSourceResults.length === 0}
+                      >
+                        {buildingSummary ? <LoaderCircle className="size-4 animate-spin" /> : <Download className="size-4" />}
+                        下载拼图
+                      </Button>
+                      <Button
+                        className="h-9 rounded-xl"
+                        onClick={() => void submitSummaryCompositeTask()}
+                        disabled={deliveryAction !== "" || generating || compositeSourceResults.length === 0}
+                      >
+                        {deliveryAction === "composite" ? <LoaderCircle className="size-4 animate-spin" /> : <WandSparkles className="size-4" />}
+                        生成 AI 合成图
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+
+                {compositeSourceResults.length === 0 ? (
+                  <div className="grid min-h-40 place-items-center rounded-xl bg-muted/25 p-6 text-center text-sm text-muted-foreground">
+                    生成结果完成后，这里会直接按当前模式排成小块
+                  </div>
                 ) : (
-                  <div className="rounded-2xl border border-dashed border-border p-8 text-center text-sm text-muted-foreground">
-                    至少完成一张图后，就可以生成整套预览
+                  <div className="overflow-hidden rounded-xl bg-muted/25">
+                    <div className="max-h-[520px] overflow-auto">
+                      <div className="min-w-0 p-3" style={{ backgroundColor: summaryLayout.background }}>
+                        {summaryLayout.showHeader ? (
+                          <div className="mb-3 flex flex-wrap items-end justify-between gap-2">
+                            <div className="min-w-0">
+                              <div className={cn("truncate text-sm font-semibold", summaryPreviewTextClassName)}>
+                                {selectedProject.title || "电商套图"}
+                              </div>
+                              <div className={cn("mt-0.5 text-xs", summaryPreviewSubTextClassName)}>
+                                {summaryLayoutModeLabel(summaryLayout.mode)} · {compositeSourceResults.length} 张图片
+                              </div>
+                            </div>
+                            <Badge variant="secondary" className="bg-background/85">
+                              实时排版
+                            </Badge>
+                          </div>
+                        ) : null}
+                        <div className={cn(summaryLayout.mode === "horizontal" ? "pb-2" : "")} style={summaryPreviewStyle}>
+                          {compositeSourceResults.map((result, index) => {
+                            const src = commerceSuiteResultImageSource(result);
+                            return (
+                              <div
+                                key={resultViewKey(result)}
+                                className={cn(
+                                  "group relative min-w-0 overflow-hidden rounded-lg bg-white/90 shadow-sm",
+                                  summaryPreviewTileClassName,
+                                )}
+                              >
+                                <AuthenticatedImage
+                                  src={src}
+                                  alt={commerceResultTitle(result)}
+                                  className={cn(
+                                    "h-full w-full bg-white",
+                                    summaryLayout.fit === "contain" ? "object-contain" : "object-cover",
+                                  )}
+                                />
+                                <span className="absolute left-2 top-2 rounded-full bg-background/90 px-2 py-0.5 text-[10px] font-semibold text-foreground shadow-sm">
+                                  {index + 1}
+                                </span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 )}
               </Card>

@@ -32,10 +32,26 @@ export type CommerceSuiteTargeting = {
   language: CommerceSuiteLanguage;
 };
 
+export type CommerceSummaryLayoutMode = "auto-grid" | "vertical" | "horizontal" | "two-column";
+export type CommerceSummaryFitMode = "cover" | "contain";
+
+export type CommerceSummaryLayout = {
+  mode: CommerceSummaryLayoutMode;
+  fit: CommerceSummaryFitMode;
+  gap: number;
+  background: string;
+  showHeader: boolean;
+};
+
 export type CommerceSuiteResult = {
   templateId: string;
+  intent?: ProStudioPayloadMeta["intent"] | string;
+  batchIndex?: number;
+  outputCount?: number;
   taskId?: string;
   status: CreationTask["status"] | "idle";
+  model?: ImageModel;
+  arenaJobId?: string;
   localUrl?: string;
   url?: string;
   path?: string;
@@ -69,7 +85,16 @@ export type CommerceSuiteProject = {
   analysisStatus?: CreationTask["status"] | "idle";
   analysisError?: string;
   results: CommerceSuiteResult[];
+  summaryLayout?: CommerceSummaryLayout;
   summaryImage?: string;
+};
+
+export const DEFAULT_COMMERCE_SUMMARY_LAYOUT: CommerceSummaryLayout = {
+  mode: "auto-grid",
+  fit: "cover",
+  gap: 28,
+  background: "#f6f8fc",
+  showHeader: true,
 };
 
 const commerceSuiteStorage = localforage.createInstance({
@@ -200,8 +225,13 @@ function normalizeResult(result: Partial<CommerceSuiteResult> & Record<string, u
       : "idle";
   return {
     templateId,
+    intent: String(result.intent || "").trim() || undefined,
+    batchIndex: Number.isFinite(Number(result.batchIndex)) ? Math.max(0, Math.round(Number(result.batchIndex))) : undefined,
+    outputCount: Number.isFinite(Number(result.outputCount)) ? Math.max(1, Math.round(Number(result.outputCount))) : undefined,
     taskId: String(result.taskId || "").trim() || undefined,
     status,
+    model: String(result.model || "").trim() || undefined,
+    arenaJobId: String(result.arenaJobId || result.arena_job_id || "").trim() || undefined,
     localUrl,
     url,
     path: path || undefined,
@@ -211,6 +241,30 @@ function normalizeResult(result: Partial<CommerceSuiteResult> & Record<string, u
     officialSettings: result.officialSettings && typeof result.officialSettings === "object" ? result.officialSettings as ProStudioOfficialSettingsPayload : undefined,
     startedAt: String(result.startedAt || "").trim() || undefined,
     updatedAt: String(result.updatedAt || "").trim() || undefined,
+  };
+}
+
+function normalizeSummaryLayout(value: unknown): CommerceSummaryLayout {
+  const input = value && typeof value === "object"
+    ? value as Partial<CommerceSummaryLayout> & Record<string, unknown>
+    : {};
+  const mode = input.mode === "vertical" ||
+    input.mode === "horizontal" ||
+    input.mode === "two-column" ||
+    input.mode === "auto-grid"
+    ? input.mode
+    : DEFAULT_COMMERCE_SUMMARY_LAYOUT.mode;
+  const fit = input.fit === "contain" || input.fit === "cover"
+    ? input.fit
+    : DEFAULT_COMMERCE_SUMMARY_LAYOUT.fit;
+  const gap = Number(input.gap);
+  const background = String(input.background || DEFAULT_COMMERCE_SUMMARY_LAYOUT.background).trim();
+  return {
+    mode,
+    fit,
+    gap: Number.isFinite(gap) ? Math.max(0, Math.min(96, Math.round(gap))) : DEFAULT_COMMERCE_SUMMARY_LAYOUT.gap,
+    background: /^#[0-9a-fA-F]{6}$/.test(background) ? background : DEFAULT_COMMERCE_SUMMARY_LAYOUT.background,
+    showHeader: typeof input.showHeader === "boolean" ? input.showHeader : DEFAULT_COMMERCE_SUMMARY_LAYOUT.showHeader,
   };
 }
 
@@ -240,6 +294,7 @@ export function createCommerceSuiteProject(): CommerceSuiteProject {
     skuCount: 8,
     analysisStatus: "idle",
     results: [],
+    summaryLayout: { ...DEFAULT_COMMERCE_SUMMARY_LAYOUT },
   };
 }
 
@@ -302,6 +357,7 @@ export function normalizeCommerceSuiteProject(value: Partial<CommerceSuiteProjec
           return normalized ? [normalized] : [];
         })
       : [],
+    summaryLayout: normalizeSummaryLayout(value.summaryLayout),
     summaryImage: String(value.summaryImage || "").trim() || undefined,
   };
 }
