@@ -1,6 +1,7 @@
 import localforage from "localforage";
 
 import { DEFAULT_CHAT_MODEL, DEFAULT_IMAGE_MODEL, type CreationTask, type ImageModel } from "@/lib/api";
+import { compactImageModelSettings, type ImageModelSettingsState } from "@/lib/image-model-settings";
 import type { ProStudioOfficialSettingsPayload, ProStudioPayloadMeta } from "@/lib/pro-studio";
 import { isImageQuality, type ImageQuality } from "@/lib/image-parameters";
 import { createDefaultProStudioState, normalizeProStudioState, type ProStudioState } from "@/lib/pro-studio";
@@ -80,6 +81,7 @@ export type CommerceSuiteProject = {
   imageResolution: string;
   imageQuality: ImageQuality;
   outputFormat: "png";
+  imageModelSettings?: ImageModelSettingsState;
   professionalMode?: boolean;
   proStudioState?: ProStudioState;
   skuCount?: number;
@@ -351,6 +353,7 @@ export function normalizeCommerceSuiteProject(value: Partial<CommerceSuiteProjec
     imageResolution: String(value.imageResolution || "1K").trim(),
     imageQuality: isImageQuality(value.imageQuality) ? value.imageQuality : "auto",
     outputFormat: "png",
+    imageModelSettings: compactImageModelSettings((value.imageModelSettings || value.image_model_settings) as ImageModelSettingsState | undefined),
     professionalMode: Boolean(value.professionalMode),
     proStudioState: normalizeProStudioState(value.proStudioState as Partial<ProStudioState> | undefined, "product_main"),
     skuCount: Math.max(1, Math.min(24, Math.round(Number(value.skuCount || 8) || 8))),

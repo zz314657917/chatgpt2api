@@ -9,6 +9,7 @@ import type {
   ImageVisibility,
   ManagedImageSummary,
 } from "@/lib/api";
+import type { ImageModelSettingsState } from "@/lib/image-model-settings";
 import type { ProStudioOfficialSettingsPayload, ProStudioPayloadMeta, ProStudioState } from "@/lib/pro-studio";
 
 export const SMART_CANVAS_KIND = "smart";
@@ -47,6 +48,7 @@ export type SmartCanvasItemData = {
   image_resolution_user_modified?: boolean;
   output_format?: "png" | "jpeg" | "webp";
   output_compression?: number;
+  image_model_settings?: ImageModelSettingsState;
   professional_mode?: boolean;
   pro_studio?: ProStudioPayloadMeta;
   pro_studio_state?: ProStudioState;

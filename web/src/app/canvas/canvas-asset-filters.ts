@@ -1,6 +1,6 @@
 import type { ImageVisibility, ManagedImageSummary } from "@/lib/api";
 
-export type SmartCanvasAssetVisibilityFilter = ImageVisibility | "all";
+export type SmartCanvasAssetVisibilityFilter = Extract<ImageVisibility, "private"> | "all";
 export type SmartCanvasAssetOrientationFilter = "all" | "square" | "portrait" | "landscape";
 export type SmartCanvasAssetSort = "newest" | "oldest" | "name";
 
@@ -20,7 +20,7 @@ export const DEFAULT_SMART_CANVAS_ASSET_FILTERS: SmartCanvasAssetFilterState = {
   sort: "newest",
 };
 
-const SMART_CANVAS_ASSET_VISIBILITIES = new Set<SmartCanvasAssetVisibilityFilter>(["all", "private", "public"]);
+const SMART_CANVAS_ASSET_VISIBILITIES = new Set<SmartCanvasAssetVisibilityFilter>(["all", "private"]);
 const SMART_CANVAS_ASSET_ORIENTATIONS = new Set<SmartCanvasAssetOrientationFilter>([
   "all",
   "square",

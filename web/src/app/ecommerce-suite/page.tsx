@@ -84,9 +84,11 @@ import {
   type TeamSummary,
 } from "@/lib/api";
 import { fetchAuthenticatedImageBlob } from "@/lib/authenticated-image";
+import { ImageModelSettingsButton } from "@/components/image-model-settings-button";
 import { imageExtension, downloadImageFile } from "@/lib/image-download";
 import { getManagedImagePreviewUrlFromPath, getManagedImageUrlFromPath } from "@/lib/image-path";
 import { IMAGE_QUALITY_OPTIONS, isImageOutputFormat, isImageQuality } from "@/lib/image-parameters";
+import { imageModelHasSettings, imageModelSettingsToTaskFields } from "@/lib/image-model-settings";
 import {
   OFFICIAL_IMAGE_MODEL,
   buildProStudioImagePayload,
@@ -1867,6 +1869,7 @@ export default function EcommerceSuitePage() {
             );
           }
           const prompt = buildGenerationPrompt(pendingProject, placeholder.templateId, hasReferenceImages);
+          const modelFields = imageModelSettingsToTaskFields(pendingProject.imageModel, pendingProject.imageModelSettings);
           if (!hasReferenceImages) {
             return createImageGenerationTask(
               placeholder.taskId,
@@ -1882,10 +1885,10 @@ export default function EcommerceSuitePage() {
               pendingProject.imageResolution,
               pendingProject.outputFormat,
               undefined,
-              undefined,
+              modelFields.toolOptions,
               pendingProject.id,
               undefined,
-              {},
+              modelFields.extraBody,
               publicImageUrls,
             );
           }
@@ -1904,10 +1907,11 @@ export default function EcommerceSuitePage() {
             pendingProject.imageResolution,
             pendingProject.outputFormat,
             undefined,
-            undefined,
+            modelFields.toolOptions,
             pendingProject.id,
             undefined,
             publicImageUrls,
+            modelFields.extraBody,
           );
         }),
       );
@@ -2196,29 +2200,64 @@ export default function EcommerceSuitePage() {
         `商品运营摘要：\n${project.analysisText || "请根据参考图保持商品主体一致，并形成清晰的电商总览图。"}`,
         "输出要求：只生成一张成品图；保持商品主体一致；整体像真实可用的电商套图预览、详情首屏或商品图册；文字可少量使用但必须短句清晰；不添加虚假认证、价格、品牌 Logo、疗效或未经确认的夸张承诺。",
       ].join("\n\n");
+      const proStudioCompositeState = project.professionalMode
+        ? normalizeProStudioState({
+            ...project.proStudioState,
+            enabled: true,
+            intent: "lifestyle_scene",
+            settings: {
+              ...normalizeProStudioState(project.proStudioState, "lifestyle_scene").settings,
+              n: 1,
+            },
+          } as Partial<ProStudioState>, "lifestyle_scene")
+        : undefined;
+      const proStudioCompositePayload = proStudioCompositeState
+        ? buildProStudioImagePayload({
+            prompt,
+            state: proStudioCompositeState,
+            referenceImageUrls: referenceIds.length > 0 ? [] : selectedResults.map((result) => commerceSuiteResultImageSource(result)).filter(Boolean),
+          })
+        : undefined;
+      const taskModel = proStudioCompositePayload ? OFFICIAL_IMAGE_MODEL : project.imageModel;
+      const modelFields = proStudioCompositePayload ? undefined : imageModelSettingsToTaskFields(project.imageModel, project.imageModelSettings);
+      const extraBody = {
+        ...(proStudioCompositePayload
+          ? {
+              professional_mode: true,
+              pro_studio: proStudioCompositePayload.pro_studio,
+              official_settings: proStudioCompositePayload.official_settings,
+              resolution: proStudioCompositePayload.resolution,
+            }
+          : modelFields?.extraBody),
+        summary_layout: layout,
+        source_result_count: selectedResults.length,
+      };
       const task = await createImageEditTaskFromReferenceIds(
         taskId,
         referenceIds,
-        prompt,
-        project.professionalMode ? OFFICIAL_IMAGE_MODEL : project.imageModel,
-        project.size,
-        isOfficialImageModel(project.professionalMode ? OFFICIAL_IMAGE_MODEL : project.imageModel) && isImageQuality(project.imageQuality)
-          ? project.imageQuality
-          : undefined,
+        proStudioCompositePayload?.prompt || prompt,
+        taskModel,
+        proStudioCompositePayload?.size || project.size,
+        proStudioCompositePayload
+          ? isImageQuality(proStudioCompositePayload.quality) ? proStudioCompositePayload.quality : "auto"
+          : isOfficialImageModel(taskModel) && isImageQuality(project.imageQuality)
+            ? project.imageQuality
+            : undefined,
         1,
         [{ role: "system", content: "你是电商套图排版设计师，输出适合商业使用的一张合成排版图。" }],
         "private",
-        project.imageResolution,
-        project.outputFormat,
-        undefined,
-        undefined,
+        proStudioCompositePayload?.image_resolution || project.imageResolution,
+        proStudioCompositePayload
+          ? isImageOutputFormat(proStudioCompositePayload.output_format) ? proStudioCompositePayload.output_format : "png"
+          : project.outputFormat,
+        proStudioCompositePayload?.output_compression,
+        proStudioCompositePayload
+          ? { background: proStudioCompositePayload.background, moderation: proStudioCompositePayload.moderation, inputImageMask: proStudioCompositePayload.input_image_mask }
+          : modelFields?.toolOptions,
         project.id,
         undefined,
         undefined,
-        {
-          summary_layout: layout,
-          source_result_count: selectedResults.length,
-        },
+        extraBody,
       );
       await persistProject({
         ...project,
@@ -2846,6 +2885,17 @@ export default function EcommerceSuitePage() {
                       </SelectContent>
                     </Select>
                   </label>
+                  {!selectedProject.professionalMode && imageModelHasSettings(selectedProject.imageModel) ? (
+                    <div className="grid gap-1.5">
+                      <span className="text-xs font-medium text-muted-foreground">模型参数</span>
+                      <ImageModelSettingsButton
+                        model={selectedProject.imageModel}
+                        value={selectedProject.imageModelSettings}
+                        onChange={(imageModelSettings) => updateSelectedProject({ imageModelSettings })}
+                        className="h-10 w-full rounded-xl"
+                      />
+                    </div>
+                  ) : null}
                   {!selectedProject.professionalMode && isOfficialImageModel(selectedProject.imageModel) ? (
                     <label className="grid gap-1.5">
                       <span className="text-xs font-medium text-muted-foreground">质量强度</span>
@@ -2874,7 +2924,6 @@ export default function EcommerceSuitePage() {
                     onChange={(next) => updateSelectedProject({
                       professionalMode: next.enabled,
                       proStudioState: next,
-                      imageModel: next.enabled ? OFFICIAL_IMAGE_MODEL : selectedProject.imageModel,
                       imageQuality: next.enabled && isImageQuality(next.settings.quality) ? next.settings.quality : selectedProject.imageQuality,
                     })}
                     fieldClassName="flex h-10 min-w-0 items-center justify-between gap-2 rounded-xl border border-input bg-background px-3 text-xs"

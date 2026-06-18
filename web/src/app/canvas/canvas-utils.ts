@@ -19,12 +19,14 @@ import {
   normalizePixelIconSizeAlias,
   isPixelIconSize,
 } from "@/lib/image-parameters";
+import { compactImageModelSettings } from "@/lib/image-model-settings";
 import {
   CHAT_MODEL_OPTIONS,
   IMAGE_CREATION_MODEL_OPTIONS,
   isChatModel,
   isImageCreationModel,
   modelIDLooksImageCapable,
+  modelIDLooksTextOnly,
   supportsImageOutputCompression,
 } from "@/lib/api";
 
@@ -207,7 +209,7 @@ export function createImageItem(images: CanvasImageRef[], position: { x: number;
     position,
     data: {
       images: refs,
-      visibility: imageRefsVisibility(refs),
+      visibility: imageRefsVisibility(),
       created_at: new Date().toISOString(),
     },
   };
@@ -781,9 +783,11 @@ export function normalizeModelCatalog(models: CanvasModelOption[]): SmartCanvasM
   const enabledModels = models.filter((model) => model.enabled !== false);
   const text = mergeCanvasModelOptions([
     ...enabledModels.filter((model) =>
+      canvasModelMatchesGroupMode(model, "chat") ||
+      (!canvasModelHasGroupModes(model) &&
       (modelHasCapability(model, "chat") || model.kind === "text" || model.kind === "both") &&
       isChatModel(model.id) &&
-      !modelIDLooksImageCapable(model.id)
+      !modelIDLooksImageCapable(model.id))
     ),
     ...CHAT_MODEL_OPTIONS.map((option) => ({
       id: option.value,
@@ -795,8 +799,11 @@ export function normalizeModelCatalog(models: CanvasModelOption[]): SmartCanvasM
   ]);
   const image = mergeCanvasModelOptions([
     ...enabledModels.filter((model) =>
+      (canvasModelMatchesGroupMode(model, "image") && !modelIDLooksTextOnly(model.id)) ||
+      (!canvasModelHasGroupModes(model) &&
       (modelHasCapability(model, "image") || model.kind === "image" || model.kind === "both") &&
-      isImageCreationModel(model.id)
+      isImageCreationModel(model.id) &&
+      !modelIDLooksTextOnly(model.id))
     ),
     ...IMAGE_CREATION_MODEL_OPTIONS.map((option) => ({
       id: option.value,
@@ -806,7 +813,10 @@ export function normalizeModelCatalog(models: CanvasModelOption[]): SmartCanvasM
       enabled: true,
     })),
   ]);
-  const video = models.filter((model) => modelHasCapability(model, "video") || model.kind === "video");
+  const video = models.filter((model) =>
+    model.enabled !== false &&
+    (canvasModelMatchesGroupMode(model, "video") || (!canvasModelHasGroupModes(model) && (modelHasCapability(model, "video") || model.kind === "video")))
+  );
   const autoImageModel: CanvasModelOption = { id: "auto", name: "auto", kind: "image", capabilities: ["image"], enabled: true };
   const autoTextModel: CanvasModelOption = { id: "auto", name: "auto", kind: "text", capabilities: ["chat"], enabled: true };
   const withAuto = image.some((model) => model.id === "auto")
@@ -833,6 +843,14 @@ function mergeCanvasModelOptions(models: CanvasModelOption[]) {
 
 function modelHasCapability(model: CanvasModelOption, capability: "chat" | "image" | "video") {
   return Array.isArray(model.capabilities) && model.capabilities.includes(capability);
+}
+
+function canvasModelHasGroupModes(model: CanvasModelOption) {
+  return Array.isArray(model.group_modes) && model.group_modes.length > 0;
+}
+
+function canvasModelMatchesGroupMode(model: CanvasModelOption, mode: "chat" | "image" | "video") {
+  return Array.isArray(model.group_modes) && model.group_modes.includes(mode);
 }
 
 export function smartCanvasRuns(canvas: SmartCanvasDocument | null): SmartCanvasRunRecord[] {
@@ -930,6 +948,7 @@ function sanitizeSmartItemData(data?: SmartCanvasItemData): SmartCanvasItemData 
   const size = normalizeCanvasImageSize(data.size);
   const pixelIconSize = isPixelIconSize(size);
   const resolutionUserModified = isUserModifiedCanvasImageResolution(data);
+  const source = data as SmartCanvasItemData & { imageModelSettings?: SmartCanvasItemData["image_model_settings"] };
   return {
     ...data,
     prompt: typeof data.prompt === "string" ? data.prompt : "",
@@ -940,6 +959,7 @@ function sanitizeSmartItemData(data?: SmartCanvasItemData): SmartCanvasItemData 
     image_resolution_user_modified: pixelIconSize ? true : resolutionUserModified,
     output_format: data.output_format ? normalizeCanvasImageOutputFormat(data.output_format) : undefined,
     output_compression: normalizeCanvasImageOutputCompression(data.output_format, data.output_compression),
+    image_model_settings: compactImageModelSettings(data.image_model_settings || source.imageModelSettings),
     background: normalizeCanvasImageBackground(data.background),
     duration: Number.isFinite(Number(data.duration)) ? Math.max(5, Math.min(15, Number(data.duration))) : undefined,
     aspect_ratio: typeof data.aspect_ratio === "string" && data.aspect_ratio ? data.aspect_ratio : "16:9",
@@ -948,7 +968,7 @@ function sanitizeSmartItemData(data?: SmartCanvasItemData): SmartCanvasItemData 
     generate_audio: data.generate_audio === true,
     quality: typeof data.quality === "string" && data.quality ? data.quality : "auto",
     n: Number.isFinite(Number(data.n)) ? Math.max(1, Math.min(10, Number(data.n))) : 1,
-    visibility: data.visibility === "public" ? "public" : "private",
+    visibility: "private",
     images: dedupeCanvasImageRefs(Array.isArray(data.images) ? data.images : []),
     videos: dedupeCanvasVideoRefs(Array.isArray(data.videos) ? data.videos : []),
     source_images: dedupeCanvasImageRefs(Array.isArray(data.source_images) ? data.source_images : []),
@@ -1000,11 +1020,11 @@ function uniqueStringList(values: unknown[]) {
 }
 
 function normalizeCanvasImageRefVisibility(value: unknown): ImageVisibility | undefined {
-  return value === "public" ? "public" : value === "private" ? "private" : undefined;
+  return value === "private" ? "private" : undefined;
 }
 
-function imageRefsVisibility(refs: CanvasImageRef[]): ImageVisibility {
-  return refs.some((ref) => ref.visibility === "public") ? "public" : "private";
+function imageRefsVisibility(): ImageVisibility {
+  return "private";
 }
 
 function normalizeOutput(output?: CanvasNodeOutput): CanvasNodeOutput | undefined {
