@@ -71,6 +71,8 @@ const midjourney = adaptImageArenaSettings("midjourney", productionSettings, {
   },
 });
 const midjourneyFields = imageArenaSubmittedFields(midjourney.payload);
+assert(midjourney.payload.count === 1, "Midjourney should submit one Imagine request");
+assert(midjourneyFields.n === 1, "Midjourney submitted n should be 1");
 assert(midjourneyFields.midjourney_settings && typeof midjourneyFields.midjourney_settings === "object", "Midjourney should submit settings");
 assert((midjourneyFields.midjourney_settings as Record<string, unknown>).version === "6.1", "Midjourney should preserve version");
 assert((midjourneyFields.midjourney_settings as Record<string, unknown>).stop === 80, "Midjourney v6.1 should submit stop");

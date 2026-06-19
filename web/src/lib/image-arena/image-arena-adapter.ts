@@ -169,7 +169,7 @@ export function adaptImageArenaSettings(
     payload = {
       model,
       size: settings.aspectRatio || undefined,
-      count,
+      count: 1,
       ...(midjourneySettings ? { midjourneySettings } : {}),
       ...(fields.extraBody ? { extraBody: fields.extraBody } : {}),
     };

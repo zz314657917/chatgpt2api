@@ -23,6 +23,7 @@ import { compactImageModelSettings } from "@/lib/image-model-settings";
 import {
   CHAT_MODEL_OPTIONS,
   IMAGE_CREATION_MODEL_OPTIONS,
+  MIDJOURNEY_IMAGE_MODEL,
   isChatModel,
   isImageCreationModel,
   modelIDLooksImageCapable,
@@ -949,10 +950,11 @@ function sanitizeSmartItemData(data?: SmartCanvasItemData): SmartCanvasItemData 
   const pixelIconSize = isPixelIconSize(size);
   const resolutionUserModified = isUserModifiedCanvasImageResolution(data);
   const source = data as SmartCanvasItemData & { imageModelSettings?: SmartCanvasItemData["image_model_settings"] };
+  const model = typeof data.model === "string" && data.model ? data.model : "auto";
   return {
     ...data,
     prompt: typeof data.prompt === "string" ? data.prompt : "",
-    model: typeof data.model === "string" && data.model ? data.model : "auto",
+    model,
     size: data.size_user_modified === true && !cleanImageText(data.size) ? "" : size,
     size_user_modified: isUserModifiedCanvasImageSize(data, size),
     image_resolution: pixelIconSize || !resolutionUserModified ? "" : normalizeCanvasImageResolution(data.image_resolution),
@@ -967,7 +969,7 @@ function sanitizeSmartItemData(data?: SmartCanvasItemData): SmartCanvasItemData 
     enhance_prompt: data.enhance_prompt !== false,
     generate_audio: data.generate_audio === true,
     quality: typeof data.quality === "string" && data.quality ? data.quality : "auto",
-    n: Number.isFinite(Number(data.n)) ? Math.max(1, Math.min(10, Number(data.n))) : 1,
+    n: model === MIDJOURNEY_IMAGE_MODEL ? 1 : Number.isFinite(Number(data.n)) ? Math.max(1, Math.min(10, Number(data.n))) : 1,
     visibility: "private",
     images: dedupeCanvasImageRefs(Array.isArray(data.images) ? data.images : []),
     videos: dedupeCanvasVideoRefs(Array.isArray(data.videos) ? data.videos : []),

@@ -61,8 +61,20 @@ import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import type { CanvasImageRef, CanvasModelOption, CanvasVideoRef, CreationTask, ManagedTextAsset, ManagedTextAssetListScope, TeamSummary } from "@/lib/api";
-import { createManagedTextAsset, fetchManagedTextAssets, supportsImageOutputControls, supportsImageQuality } from "@/lib/api";
+import {
+  MIDJOURNEY_IMAGE_MODEL,
+  createManagedTextAsset,
+  fetchManagedTextAssets,
+  supportsImageOutputControls,
+  supportsImageQuality,
+  type CanvasImageRef,
+  type CanvasModelOption,
+  type CanvasVideoRef,
+  type CreationTask,
+  type ManagedTextAsset,
+  type ManagedTextAssetListScope,
+  type TeamSummary,
+} from "@/lib/api";
 import {
   buildTimestampedImageDownloadName,
   downloadImageFile,
@@ -4138,7 +4150,8 @@ function GeneratorNodeBody({
   const proStudioState = normalizeProStudioState(item.data?.pro_studio_state as Partial<ProStudioState> | undefined, "free_canvas");
   const proStudioEnabled = item.data?.professional_mode === true || proStudioState.enabled;
   const activeImageModel = proStudioEnabled ? OFFICIAL_IMAGE_MODEL : imageModel;
-  const imageCount = Math.max(1, Math.min(10, Number(item.data?.n || 1)));
+  const midjourneyImageModel = activeImageModel === MIDJOURNEY_IMAGE_MODEL;
+  const imageCount = midjourneyImageModel ? 1 : Math.max(1, Math.min(10, Number(item.data?.n || 1)));
   const hasInputImages = images.length > 0;
   const ratioValue: CanvasImageRatioValue = hasInputImages && (!item.data?.size_user_modified || !String(item.data?.size || "").trim())
     ? "auto"
@@ -4160,7 +4173,7 @@ function GeneratorNodeBody({
   const outputFormat = normalizeImageOutputFormat(item.data?.output_format);
   const outputCompression = typeof item.data?.output_compression === "number" ? item.data.output_compression : undefined;
   const imageQuality = isImageQuality(item.data?.quality) ? item.data.quality : "auto";
-  const setImageCount = (next: number) => onUpdateData({ n: Math.max(1, Math.min(10, Math.round(next) || 1)) });
+  const setImageCount = (next: number) => onUpdateData({ n: midjourneyImageModel ? 1 : Math.max(1, Math.min(10, Math.round(next) || 1)) });
   const setOutputCompression = (value: string) => {
     if (!value.trim()) {
       onUpdateData({ output_compression: undefined });
@@ -4255,7 +4268,7 @@ function GeneratorNodeBody({
         compact
       />
       <div className="flex min-w-0 gap-2">
-        <Select value={activeImageModel} onValueChange={(model) => onUpdateData({ model })} disabled={proStudioEnabled}>
+        <Select value={activeImageModel} onValueChange={(model) => onUpdateData({ model, ...(model === MIDJOURNEY_IMAGE_MODEL ? { n: 1 } : {}) })} disabled={proStudioEnabled}>
           <SelectTrigger className={cn(canvasSelectClass, "min-w-0 flex-1")}>
             <SelectValue placeholder="模型" />
           </SelectTrigger>
@@ -4348,9 +4361,9 @@ function GeneratorNodeBody({
           <button
             type="button"
             className="flex items-center justify-center border-r border-border text-muted-foreground transition hover:bg-accent hover:text-foreground disabled:opacity-40 dark:border-slate-700"
-            disabled={imageCount <= 1}
+            disabled={midjourneyImageModel || imageCount <= 1}
             onClick={() => setImageCount(imageCount - 1)}
-            aria-label="减少张数"
+            aria-label={midjourneyImageModel ? "减少生成次数" : "减少张数"}
           >
             <ChevronLeft className="size-3.5" />
           </button>
@@ -4361,17 +4374,18 @@ function GeneratorNodeBody({
               pattern="[0-9]*"
               value={imageCount}
               onChange={(event) => setImageCount(Number(event.target.value) || 1)}
-              className="h-9 w-7 rounded-none border-0 bg-transparent p-0 text-right text-xs font-bold shadow-none focus-visible:ring-0"
-              aria-label="生成张数"
+              disabled={midjourneyImageModel}
+              className="h-9 w-7 rounded-none border-0 bg-transparent p-0 text-right text-xs font-bold shadow-none focus-visible:ring-0 disabled:cursor-default disabled:opacity-100"
+              aria-label={midjourneyImageModel ? "生成次数" : "生成张数"}
             />
-            <span className={cn("text-[11px] font-bold", canvasSubtleTextClass)}>张</span>
+            <span className={cn("text-[11px] font-bold", canvasSubtleTextClass)}>{midjourneyImageModel ? "次" : "张"}</span>
           </div>
           <button
             type="button"
             className="flex items-center justify-center border-l border-border text-muted-foreground transition hover:bg-accent hover:text-foreground disabled:opacity-40 dark:border-slate-700"
-            disabled={imageCount >= 10}
+            disabled={midjourneyImageModel || imageCount >= 10}
             onClick={() => setImageCount(imageCount + 1)}
-            aria-label="增加张数"
+            aria-label={midjourneyImageModel ? "增加生成次数" : "增加张数"}
           >
             <ChevronRight className="size-3.5" />
           </button>

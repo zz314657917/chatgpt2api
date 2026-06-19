@@ -61,6 +61,7 @@ import {
 } from "@/lib/image-parameters";
 import {
   IMAGE_MODEL_ROUTE_DETAILS,
+  MIDJOURNEY_IMAGE_MODEL,
   isGeminiProImageModel,
   isOfficialImageModel,
   supportsImageQuality,
@@ -419,6 +420,7 @@ export function ImageComposer({
   );
   const imageModelLabel = imageModelOptions.find((option) => option.value === imageModel)?.label || imageModel;
   const imageModelRoute = IMAGE_MODEL_ROUTE_DETAILS[imageModel];
+  const midjourneyImageModel = imageModel === MIDJOURNEY_IMAGE_MODEL;
   const imageAspectRatioLabel =
     imageAspectRatio === CUSTOM_IMAGE_ASPECT_RATIO
       ? imageCustomRatio.trim() || "自定义比例"
@@ -1117,16 +1119,23 @@ export function ImageComposer({
                           </div>
                         ) : null}
                         <div className={imageSettingsFieldClass}>
-                          <span className="shrink-0 text-[11px] font-medium text-[#45515e] dark:text-muted-foreground">张数</span>
+                          <span className="shrink-0 text-[11px] font-medium text-[#45515e] dark:text-muted-foreground">
+                            {midjourneyImageModel ? "生成次数" : "张数"}
+                          </span>
                           <Input
                             type="number"
                             inputMode="numeric"
                             min="1"
-                            max="10"
+                            max={midjourneyImageModel ? "1" : "10"}
                             step="1"
-                            value={imageCount}
-                            onChange={(event) => onImageCountChange(event.target.value)}
-                            className="h-7 w-[36px] border-0 bg-transparent px-0 text-center text-xs font-semibold text-[#18181b] shadow-none focus-visible:ring-0 dark:text-foreground"
+                            value={midjourneyImageModel ? "1" : imageCount}
+                            disabled={midjourneyImageModel}
+                            onChange={(event) => {
+                              if (!midjourneyImageModel) {
+                                onImageCountChange(event.target.value);
+                              }
+                            }}
+                            className="h-7 w-[36px] border-0 bg-transparent px-0 text-center text-xs font-semibold text-[#18181b] shadow-none focus-visible:ring-0 disabled:cursor-default disabled:opacity-100 dark:text-foreground"
                           />
                         </div>
                         <div className={imageSettingsFieldClass}>
