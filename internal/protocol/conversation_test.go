@@ -922,6 +922,13 @@ func TestImageConversationFallbackReferenceUsedOnlyForNewUpstreamSession(t *test
 	}
 }
 
+func TestNewImageGenerationErrorNormalizesContentPolicy(t *testing.T) {
+	err := NewImageGenerationError("内容不合规：「draw」，请修改提示词后重试")
+	if err.StatusCode != http.StatusBadRequest || err.Type != "invalid_request_error" || err.Code != "content_policy_violation" || err.Param != "prompt" {
+		t.Fatalf("ImageGenerationError = %#v", err)
+	}
+}
+
 func TestStreamResponsesImageOutputsCompletesWithUpstreamRefusalText(t *testing.T) {
 	const upstreamText = "非常抱歉，生成的图片可能违反了关于裸露、色情或情色内容的防护限制。如果你认为此判断有误，请重试或修改提示语。"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

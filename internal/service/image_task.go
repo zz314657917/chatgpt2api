@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"sort"
@@ -900,7 +901,7 @@ func (s *ImageTaskService) runTask(ctx context.Context, key, mode string, identi
 		payload[imageOutputSlotAcquirerPayloadKey] = func(ctx context.Context, index int) (func(), error) {
 			release, err := s.AcquireCreationUnit(ctx, identity)
 			if err != nil {
-				return nil, err
+				return nil, NormalizeImageContentPolicyError(err)
 			}
 			if !s.ensureTaskRunning(key) {
 				release()
@@ -915,6 +916,7 @@ func (s *ImageTaskService) runTask(ctx context.Context, key, mode string, identi
 	} else if mode == "chat" {
 		release, err := s.AcquireCreationUnit(runCtx, identity)
 		if err != nil {
+			err = NormalizeImageContentPolicyError(err)
 			status := TaskStatusError
 			message := util.LocalizeErrorMessage(err.Error())
 			if ctx.Err() != nil {
@@ -923,7 +925,9 @@ func (s *ImageTaskService) runTask(ctx context.Context, key, mode string, identi
 			} else if runCtx.Err() == context.DeadlineExceeded {
 				message = "图片生成超时，请稍后重试或降低分辨率"
 			}
-			s.updateActiveTask(key, map[string]any{"status": status, "error": message, "data": []any{}})
+			updates := map[string]any{"status": status, "error": message, "data": []any{}}
+			mergeImageTaskErrorFields(updates, err)
+			s.updateActiveTask(key, updates)
 			return
 		}
 		if !s.ensureTaskRunning(key) {
@@ -934,6 +938,7 @@ func (s *ImageTaskService) runTask(ctx context.Context, key, mode string, identi
 	}
 	result, err := handler(runCtx, identity, payload)
 	if err != nil {
+		err = NormalizeImageContentPolicyError(err)
 		status := TaskStatusError
 		message := util.LocalizeErrorMessage(err.Error())
 		if ctx.Err() != nil {
@@ -970,6 +975,7 @@ func (s *ImageTaskService) runTask(ctx context.Context, key, mode string, identi
 		if isMediaTaskMode(mode) {
 			updates["output_statuses"] = finalImageOutputStatuses(taskCount(mode, payload), data, status)
 		}
+		mergeImageTaskErrorFields(updates, err)
 		s.updateActiveTask(key, updates)
 		s.settleTaskBilling(key)
 		return
@@ -1773,6 +1779,7 @@ func publicTask(task map[string]any) map[string]any {
 	if util.Clean(task["error"]) != "" {
 		item["error"] = task["error"]
 	}
+	copyImageTaskErrorFields(item, task)
 	if util.Clean(task["output_type"]) != "" {
 		item["output_type"] = task["output_type"]
 	}
@@ -2057,6 +2064,35 @@ func imageTaskUsage(value any) map[string]any {
 		return nil
 	}
 	return util.CopyMap(usage)
+}
+
+func mergeImageTaskErrorFields(updates map[string]any, err error) {
+	if updates == nil || err == nil {
+		return
+	}
+	var policyErr ImageContentPolicyError
+	if errors.As(err, &policyErr) {
+		updates["error_code"] = "content_policy_violation"
+		updates["error_type"] = "invalid_request_error"
+		updates["error_param"] = "prompt"
+		details := map[string]any{"source": firstNonEmpty(policyErr.Category, "upstream")}
+		if reason := strings.TrimSpace(policyErr.Reason); reason != "" {
+			details["reason"] = reason
+		}
+		updates["error_details"] = details
+		return
+	}
+}
+
+func copyImageTaskErrorFields(item map[string]any, task map[string]any) {
+	for _, key := range []string{"error_code", "error_type", "error_param"} {
+		if value := util.Clean(task[key]); value != "" {
+			item[key] = value
+		}
+	}
+	if details := util.StringMap(task["error_details"]); len(details) > 0 {
+		item["error_details"] = util.CopyMap(details)
+	}
 }
 
 func imageTaskBillingSize(payload map[string]any) string {

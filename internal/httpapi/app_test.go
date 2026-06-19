@@ -1520,6 +1520,43 @@ func TestDirectImageGenerationRejectsBlockedPrompt(t *testing.T) {
 	}
 }
 
+func TestDirectImageGenerationNormalizesUpstreamContentPolicyError(t *testing.T) {
+	const upstreamMessage = "内容不合规：「a painting of a woman wearing a yellow dress」，请修改提示词后重试"
+	app := newTestApp(t)
+	defer app.Close()
+	installHTTPTestImageStreamFunc(t, app, func(ctx context.Context, client *backend.Client, request protocol.ConversationRequest, index, total int) (<-chan protocol.ImageOutput, <-chan error) {
+		out := make(chan protocol.ImageOutput)
+		errCh := make(chan error, 1)
+		close(out)
+		errCh <- errors.New(upstreamMessage)
+		close(errCh)
+		return out, errCh
+	})
+	_, rawKey, err := app.auth.CreateAPIKey(service.AuthRoleUser, "image-user", service.AuthOwner{})
+	if err != nil {
+		t.Fatalf("CreateAPIKey() error = %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/images/generations", strings.NewReader(`{"prompt":"draw","model":"gpt-image-2","n":1}`))
+	req.Header.Set("Authorization", "Bearer "+rawKey)
+	res := httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("upstream policy status = %d body = %s", res.Code, res.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &body); err != nil {
+		t.Fatalf("upstream policy response json: %v", err)
+	}
+	errorBody := util.StringMap(body["error"])
+	if errorBody["code"] != "content_policy_violation" || errorBody["type"] != "invalid_request_error" || errorBody["param"] != "prompt" {
+		t.Fatalf("upstream policy response = %#v", body)
+	}
+	if errorBody["message"] != upstreamMessage {
+		t.Fatalf("message = %#v, want original upstream message", errorBody["message"])
+	}
+}
+
 func TestDirectImageEditAcceptsJSONImageURLInputs(t *testing.T) {
 	app := newTestApp(t)
 	defer app.Close()

@@ -1779,6 +1779,32 @@ func TestImageTaskServiceStoresTextOutputFromHandlerError(t *testing.T) {
 	}
 }
 
+func TestImageTaskServiceNormalizesUpstreamContentPolicyError(t *testing.T) {
+	const upstreamMessage = "内容不合规：「a painting of a woman wearing a yellow dress」，请修改提示词后重试"
+	handler := func(ctx context.Context, identity Identity, payload map[string]any) (map[string]any, error) {
+		return nil, errors.New(upstreamMessage)
+	}
+	svc := newTestImageTaskService(t, handler, handler, handler, func() int { return 30 })
+	identity := Identity{ID: "alice", Name: "Alice", Role: "user"}
+
+	if _, err := svc.SubmitGeneration(context.Background(), identity, "task-policy-upstream", "draw", "gpt-image-2", "1024x1024", "high", "https://base.test", 1, nil); err != nil {
+		t.Fatalf("SubmitGeneration() error = %v", err)
+	}
+	waitForTaskStatus(t, svc, identity, "task-policy-upstream", TaskStatusError)
+	got := svc.ListTasks(identity, []string{"task-policy-upstream"})
+	item := got["items"].([]map[string]any)[0]
+	if item["error"] != upstreamMessage {
+		t.Fatalf("error = %#v, want original message", item["error"])
+	}
+	if item["error_code"] != "content_policy_violation" || item["error_type"] != "invalid_request_error" || item["error_param"] != "prompt" {
+		t.Fatalf("error fields = %#v", item)
+	}
+	details := util.StringMap(item["error_details"])
+	if details["source"] != "upstream" {
+		t.Fatalf("error_details = %#v, want upstream source", details)
+	}
+}
+
 func TestImageTaskServiceRestoresUnfinishedTasksAsErrors(t *testing.T) {
 	backend := newTestStorageBackend(t)
 	raw := map[string]any{"tasks": []map[string]any{

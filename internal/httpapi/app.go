@@ -445,7 +445,7 @@ func (a *App) writeProtocol(w http.ResponseWriter, r *http.Request, result map[s
 			a.logCall(r.Context(), identity, summary, r.Method, endpoint, model, start, "failed", protocolErrorHTTPStatus(err), err.Error(), urls, requestCapture)
 			markRequestBusinessLogged(r)
 			fmt.Fprintf(w, "event: error\n")
-			fmt.Fprintf(w, "data: %s\n\n", jsonString(map[string]any{"type": "error", "error": map[string]any{"type": fmt.Sprintf("%T", err), "message": util.LocalizeErrorMessage(err.Error())}}))
+			fmt.Fprintf(w, "data: %s\n\n", jsonString(openAIErrorForStream(err)))
 			return
 		}
 		a.recordProtocolGeneratedImages(identity, recordURLs, visibility, imagePayloads...)
@@ -481,6 +481,7 @@ func (a *App) writeProtocol(w http.ResponseWriter, r *http.Request, result map[s
 }
 
 func protocolErrorHTTPStatus(err error) int {
+	err = service.NormalizeImageContentPolicyError(err)
 	var httpErr protocol.HTTPError
 	if errors.As(err, &httpErr) {
 		return httpErr.Status
@@ -505,6 +506,7 @@ func protocolErrorHTTPStatus(err error) int {
 }
 
 func (a *App) writeProtocolError(w http.ResponseWriter, err error) {
+	err = service.NormalizeImageContentPolicyError(err)
 	var httpErr protocol.HTTPError
 	if errors.As(err, &httpErr) {
 		writeOpenAIError(w, httpErr.Status, httpErr.Message)
@@ -2736,6 +2738,7 @@ func jsonString(v any) string {
 }
 
 func openAIErrorForStream(err error) map[string]any {
+	err = service.NormalizeImageContentPolicyError(err)
 	var policyErr service.ImageContentPolicyError
 	if errors.As(err, &policyErr) {
 		return util.LocalizeOpenAIErrorPayload(policyErr.OpenAIError())

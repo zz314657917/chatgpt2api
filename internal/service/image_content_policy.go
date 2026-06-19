@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"unicode"
@@ -14,9 +15,13 @@ const imageContentPolicyMessagePrefix = "image generation request rejected by co
 type ImageContentPolicyError struct {
 	Category string
 	Reason   string
+	Message  string
 }
 
 func (e ImageContentPolicyError) Error() string {
+	if text := strings.TrimSpace(e.Message); text != "" {
+		return text
+	}
 	if e.Reason == "" {
 		return imageContentPolicyMessagePrefix
 	}
@@ -30,6 +35,35 @@ func (e ImageContentPolicyError) OpenAIError() map[string]any {
 		"param":   "prompt",
 		"code":    "content_policy_violation",
 	}}
+}
+
+func NormalizeImageContentPolicyError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var policyErr ImageContentPolicyError
+	if strings.TrimSpace(err.Error()) == "" || errors.As(err, &policyErr) {
+		return err
+	}
+	if IsUpstreamImageContentPolicyMessage(err.Error()) {
+		return ImageContentPolicyError{Category: "upstream", Message: err.Error()}
+	}
+	return err
+}
+
+func IsUpstreamImageContentPolicyMessage(message string) bool {
+	text := strings.TrimSpace(message)
+	if text == "" {
+		return false
+	}
+	lower := strings.ToLower(text)
+	return strings.Contains(lower, "content policy") ||
+		strings.Contains(lower, "content_policy_violation") ||
+		strings.Contains(lower, "safety policy") ||
+		strings.Contains(text, "内容不合规") ||
+		strings.Contains(text, "内容违规") ||
+		strings.Contains(text, "安全策略") ||
+		(strings.Contains(text, "修改提示词") && strings.Contains(text, "重试"))
 }
 
 type imageContentPolicyRule struct {
