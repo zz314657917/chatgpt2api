@@ -249,6 +249,9 @@ func (e *ImageGenerationError) OpenAIError() map[string]any {
 }
 
 func NewImageGenerationError(message string) *ImageGenerationError {
+	if service.IsUpstreamImageContentPolicyMessage(message) {
+		return &ImageGenerationError{Message: message, StatusCode: 400, Type: "invalid_request_error", Code: "content_policy_violation", Param: "prompt"}
+	}
 	return &ImageGenerationError{Message: message, StatusCode: 502, Type: "server_error", Code: "upstream_error"}
 }
 
