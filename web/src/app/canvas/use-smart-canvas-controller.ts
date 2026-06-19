@@ -29,6 +29,7 @@ import {
   fetchTeamWorkspace,
   imageReferenceInputLimit,
   MANAGED_IMAGE_UNCLASSIFIED_COLLECTION_ID,
+  MIDJOURNEY_IMAGE_MODEL,
   supportsImageOutputCompression,
   supportsImageOutputControls,
   supportsImageQuality,
@@ -554,6 +555,9 @@ function generatorImageQuality(generator: SmartCanvasItem): ImageQuality | undef
 function generatorImageCount(generator: SmartCanvasItem) {
   if (generatorProStudioEnabled(generator)) {
     return generatorProStudioState(generator).settings.n;
+  }
+  if (generatorImageModel(generator) === MIDJOURNEY_IMAGE_MODEL) {
+    return 1;
   }
   return Math.max(1, Math.min(10, Number(generator.data?.n || 1)));
 }

@@ -96,6 +96,13 @@ export function isGeminiProImageModel(model?: string) {
   return GEMINI_PRO_IMAGE_MODELS.has(String(model || "").trim());
 }
 
+export function imageTaskSubmitCount(model: string | undefined, count: number) {
+  if (String(model || "").trim() === MIDJOURNEY_IMAGE_MODEL) {
+    return 1;
+  }
+  return Math.max(1, Math.floor(Number(count) || 1));
+}
+
 const IMAGE_PRICE_ESTIMATE_MULTIPLIER = 1.2;
 const IMAGE_PRICE_ESTIMATE_USD_CNY_RATE = 7;
 const IMAGE_BILLING_UNIT_SCALE = 1000;
@@ -2212,6 +2219,7 @@ export async function createImageGenerationTask(
   extraBody: Record<string, unknown> = {},
   publicImageUrls: string[] = [],
 ) {
+  const taskCount = imageTaskSubmitCount(model, count);
   const requestParameters = buildImageTaskRequestParameters({
     model,
     size,
@@ -2233,7 +2241,7 @@ export async function createImageGenerationTask(
       ...(frontendConversationId ? { frontend_conversation_id: frontendConversationId } : {}),
       ...(fallbackReferenceImage ? { fallback_reference_image: fallbackReferenceImage } : {}),
       visibility,
-      n: count,
+      n: taskCount,
     },
   });
 }
@@ -2288,6 +2296,7 @@ export async function createImageEditTask(
   publicImageUrls?: string[],
   extraBody: Record<string, unknown> = {},
 ) {
+  const taskCount = imageTaskSubmitCount(model, count);
   const formData = new FormData();
   const uploadFiles = Array.isArray(files) ? files : [files];
   const requestParameters = buildImageTaskRequestParameters({
@@ -2335,7 +2344,7 @@ export async function createImageEditTask(
     formData.append("fallback_reference_image", JSON.stringify(fallbackReferenceImage));
   }
   formData.append("visibility", visibility);
-  formData.append("n", String(count));
+  formData.append("n", String(taskCount));
 
   return httpRequest<CreationTask>("/api/creation-tasks/image-edits", {
     method: "POST",
@@ -2383,6 +2392,7 @@ export async function createImageEditTaskFromReferenceIds(
   publicImageUrls?: string[],
   extraBody: Record<string, unknown> = {},
 ) {
+  const taskCount = imageTaskSubmitCount(model, count);
   const requestParameters = buildImageTaskRequestParameters({
     model,
     size,
@@ -2405,7 +2415,7 @@ export async function createImageEditTaskFromReferenceIds(
       ...(frontendConversationId ? { frontend_conversation_id: frontendConversationId } : {}),
       ...(fallbackReferenceImage ? { fallback_reference_image: fallbackReferenceImage } : {}),
       visibility,
-      n: count,
+      n: taskCount,
     },
   });
 }

@@ -580,6 +580,10 @@ function normalizeRequestedImageCount(value: string | number) {
   return Math.max(1, Math.min(10, Number(value) || 1));
 }
 
+function requestedImageCountForModel(model: string | undefined, value: string | number) {
+  return model === MIDJOURNEY_IMAGE_MODEL ? 1 : normalizeRequestedImageCount(value);
+}
+
 function isInvalidCustomRatioSelection(sizeMode: ImageSizeMode, aspectRatio: ImageAspectRatio, customRatio: string) {
   return sizeMode === "ratio" && aspectRatio === CUSTOM_IMAGE_ASPECT_RATIO && !parseImageRatio(customRatio);
 }
@@ -1001,6 +1005,58 @@ function taskDataToStoredImage(image: StoredImage, task: CreationTask, dataIndex
     text_response: undefined,
     error: undefined,
   });
+}
+
+function storedImagesForTaskResult(taskImages: StoredImage[], task: CreationTask, fallbackVisibility?: ImageVisibility): StoredImage[] {
+  if (task.output_type === "text") {
+    const image = taskImages[0] || { id: `${task.id}-0`, taskId: task.id, status: "loading" as const };
+    return [taskDataToStoredImage({ ...image, taskId: task.id }, task, 0, fallbackVisibility)];
+  }
+  const outputCount = Math.max(1, taskImages.length, task.data?.length || 0, task.output_statuses?.length || 0);
+  const baseImage = taskImages[0] || { id: `${task.id}-0`, taskId: task.id, status: "loading" as const, visibility: fallbackVisibility };
+  return Array.from({ length: outputCount }, (_, index) =>
+    taskDataToStoredImage(
+      taskImages[index] || {
+        ...baseImage,
+        id: `${task.id}-${index}`,
+        taskId: task.id,
+        status: "loading" as const,
+        taskStatus: creationTaskImageStatus(task, index),
+        visibility: fallbackVisibility,
+      },
+      task,
+      index,
+      fallbackVisibility,
+    ),
+  );
+}
+
+function applyTaskMapToTurnImages(turn: ImageTurn, taskMap: Map<string, CreationTask>) {
+  const images: StoredImage[] = [];
+  const processedTaskIds = new Set<string>();
+  let changed = false;
+  for (const image of turn.images) {
+    const taskId = image.taskId || image.id;
+    const task = taskMap.get(taskId);
+    if (!task) {
+      images.push(image);
+      continue;
+    }
+    if (processedTaskIds.has(taskId)) {
+      continue;
+    }
+    processedTaskIds.add(taskId);
+    const taskImages = turn.images.filter((current) => (current.taskId || current.id) === taskId);
+    const nextImages = storedImagesForTaskResult(taskImages, task, turn.visibility);
+    if (nextImages.length !== taskImages.length || nextImages.some((next, index) => next !== taskImages[index])) {
+      changed = true;
+    }
+    images.push(...nextImages);
+  }
+  return {
+    images: changed ? images : turn.images,
+    changed,
+  };
 }
 
 function isActiveCreationTask(task: CreationTask) {
@@ -1804,21 +1860,7 @@ async function syncConversationCreationTasks(items: ImageConversation[]) {
         }
         return nextTurn;
       }
-      let turnChanged = false;
-      const images = turn.images.map((image, imageIndex) => {
-        if (image.status !== "loading" || !image.taskId) {
-          return image;
-        }
-        const task = taskMap.get(image.taskId);
-        if (!task) {
-          return image;
-        }
-        const nextImage = taskDataToStoredImage(image, task, imageDataIndexForTask(turn.images, imageIndex), turn.visibility);
-        if (nextImage !== image) {
-          turnChanged = true;
-        }
-        return nextImage;
-      });
+      const { images, changed: turnChanged } = applyTaskMapToTurnImages(turn, taskMap);
       if (!turnChanged) {
         return turn;
       }
@@ -2050,6 +2092,10 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
   const imageReferenceLimit = imageReferenceInputLimit(effectiveImageModel);
   const composerModel = composerMode === "chat" ? effectiveChatModel : effectiveImageModel;
   const composerModelOptions = composerMode === "chat" ? chatModelOptions : imageCreationModelOptions;
+  const composerImageCount = useMemo(
+    () => requestedImageCountForModel(effectiveImageModel, imageCount),
+    [effectiveImageModel, imageCount],
+  );
   const imageSize = useMemo(
     () => {
       const request = buildEffectiveImageSizeRequest(effectiveImageModel, {
@@ -2238,10 +2284,11 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
       (effectiveImageModel === "auto" || effectiveImageModel === "gpt-image-2"
         ? "1K"
         : imagePriceSizeFromRequest(estimateSizeRequest.size));
-    return imageBillingEstimate(composerModel, composerMode === "chat" ? 1 : parsedCount, estimateResolution, imageQuality);
+    return imageBillingEstimate(composerModel, composerMode === "chat" ? 1 : composerImageCount, estimateResolution, imageQuality);
   }, [
     composerMode,
     composerModel,
+    composerImageCount,
     effectiveImageModel,
     imageAspectRatio,
     imageCustomHeight,
@@ -2250,7 +2297,6 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     imageQuality,
     imageResolution,
     imageSizeMode,
-    parsedCount,
   ]);
   const estimatedBillingUnits = estimatedImageBilling.units;
   const billingBlocked = !hasEnoughBilling(session, estimatedBillingUnits);
@@ -2922,6 +2968,9 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
       return;
     }
     setImageModel(value);
+    if (value === MIDJOURNEY_IMAGE_MODEL) {
+      setImageCount("1");
+    }
   }, [composerMode]);
 
   const switchComposerToImageMode = useCallback(() => {
@@ -3731,7 +3780,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
       prompt: targetTurn.prompt,
       model: targetTurn.model || (targetTurn.mode === "chat" ? chatModelOptions[0]?.value || DEFAULT_CHAT_MODEL : imageCreationModelOptions[0]?.value || DEFAULT_IMAGE_MODEL),
       mode: targetTurn.mode,
-      count: targetTurn.mode === "chat" ? "1" : String(normalizeRequestedImageCount(targetTurn.count || targetTurn.images.length || 1)),
+      count: targetTurn.mode === "chat" ? "1" : String(requestedImageCountForModel(targetTurn.model, targetTurn.count || targetTurn.images.length || 1)),
       sizeMode: targetTurn.mode === "chat" ? "auto" : sizeSelection.mode,
       aspectRatio: targetTurn.mode === "chat" ? "" : sizeSelection.aspectRatio,
       resolution: targetTurn.mode === "chat" ? "auto" : sizeSelection.resolution,
@@ -4180,12 +4229,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
             if (turn.id !== activeTurn.id) {
               return turn;
             }
-            const images = turn.images.map((image, imageIndex) => {
-              const taskId = image.taskId || image.id;
-              const task = taskMap.get(taskId);
-              const taskImage = image.taskId === taskId ? image : { ...image, taskId };
-              return task ? taskDataToStoredImage(taskImage, task, imageDataIndexForTask(turn.images, imageIndex), turn.visibility) : image;
-            });
+            const { images } = applyTaskMapToTurnImages(turn, taskMap);
             const derived = deriveTurnStatusFromTaskMap(turn, images);
             const currentCounts = getImageTurnLoadingCounts(turn);
             const nextCounts = getImageTurnLoadingCounts({ images });
@@ -4694,15 +4738,12 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
             if (turn.id !== turnId) {
               return turn;
             }
-            const images = turn.images.map((image, imageIndex) => {
+            const { images: taskImages } = applyTaskMapToTurnImages(turn, taskMap);
+            const images = taskImages.map((image) => {
               if (image.status !== "loading") {
                 return image;
               }
               const taskId = image.taskId || image.id;
-              const task = taskMap.get(taskId);
-              if (task) {
-                return taskDataToStoredImage({ ...image, taskId }, task, imageDataIndexForTask(turn.images, imageIndex), turn.visibility);
-              }
               return {
                 ...image,
                 taskId,
@@ -5037,7 +5078,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
               return turn;
             }
 
-            const imageCount = turn.mode === "chat" ? 1 : normalizeRequestedImageCount(turn.count || turn.images.length || 1);
+            const imageCount = turn.mode === "chat" ? 1 : requestedImageCountForModel(turn.model, turn.count || turn.images.length || 1);
             const visibility = turn.mode === "chat" ? undefined : turn.visibility || "private";
             return {
               ...turn,
@@ -5089,7 +5130,6 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         return;
       }
 
-      const imageCount = draft.mode === "chat" ? 1 : normalizeRequestedImageCount(draft.count);
       const mode = draft.mode === "chat" ? "chat" : getComposerConversationMode("image", draft.referenceImages);
       const effectiveDraftModel =
         mode === "chat"
@@ -5099,6 +5139,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
           : hasMenuOption(imageCreationModelOptions, draft.model)
             ? draft.model
             : imageCreationModelOptions[0]?.value || DEFAULT_IMAGE_MODEL;
+      const imageCount = mode === "chat" ? 1 : requestedImageCountForModel(effectiveDraftModel, draft.count);
       const referenceImages = usesReferenceImages(mode) ? draft.referenceImages : [];
       const draftReferenceLimit = imageReferenceInputLimit(effectiveDraftModel);
       if (usesReferenceImages(mode) && referenceImages.length > draftReferenceLimit) {
@@ -5369,7 +5410,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         effectiveImageMode === "chat"
           ? pickMenuModel(chatModelOptions, chatModel, DEFAULT_CHAT_MODEL)
           : pickMenuModel(imageCreationModelOptions, imageModel, DEFAULT_IMAGE_MODEL);
-      const requestedCount = effectiveImageMode === "chat" ? 1 : parsedCount;
+      const requestedCount = effectiveImageMode === "chat" ? 1 : requestedImageCountForModel(effectiveModel, imageCount);
       const rawImageSizeSelection = {
         mode: imageSizeMode,
         aspectRatio: imageAspectRatio,
@@ -5643,19 +5684,21 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                   <div className={cn("grid grid-cols-1 gap-3", editingTurnDraft.mode === "chat" ? "sm:grid-cols-1" : "sm:grid-cols-2 lg:grid-cols-4")}>
                     {editingTurnDraft.mode !== "chat" ? (
                     <label className="flex flex-col gap-2 text-sm font-medium text-stone-700">
-                      张数
+                      {editingTurnDraft.model === MIDJOURNEY_IMAGE_MODEL ? "生成次数" : "张数"}
                       <Input
                         type="number"
                         inputMode="numeric"
                         min="1"
-                        max="10"
+                        max={editingTurnDraft.model === MIDJOURNEY_IMAGE_MODEL ? "1" : "10"}
                         step="1"
-                        value={editingTurnDraft.count}
+                        value={editingTurnDraft.model === MIDJOURNEY_IMAGE_MODEL ? "1" : editingTurnDraft.count}
+                        disabled={editingTurnDraft.model === MIDJOURNEY_IMAGE_MODEL}
                         onChange={(event) =>
                           setEditingTurnDraft((current) =>
                             current ? { ...current, count: event.target.value } : current,
                           )
                         }
+                        className={editingTurnDraft.model === MIDJOURNEY_IMAGE_MODEL ? "disabled:cursor-default disabled:opacity-100" : undefined}
                       />
                     </label>
                     ) : null}
@@ -5669,6 +5712,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                               ? {
                                   ...current,
                                   model: value,
+                                  count: value === MIDJOURNEY_IMAGE_MODEL ? "1" : current.count,
                                   background: supportsOfficialImageGenerationSettings(value) ? current.background || DEFAULT_IMAGE_BACKGROUND : undefined,
                                   moderation: supportsOfficialImageGenerationSettings(value) ? current.moderation || DEFAULT_IMAGE_MODERATION : undefined,
                                   inputImageMask: supportsImageMaskParameter(value) ? current.inputImageMask : undefined,
