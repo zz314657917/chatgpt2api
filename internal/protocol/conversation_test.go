@@ -929,6 +929,16 @@ func TestNewImageGenerationErrorNormalizesContentPolicy(t *testing.T) {
 	}
 }
 
+func TestNewImageGenerationErrorNormalizesImageTooLarge(t *testing.T) {
+	err := NewImageGenerationError("status_code=400, Part exceeded maximum size of 1024KB.")
+	if err.StatusCode != http.StatusBadRequest || err.Type != "invalid_request_error" || err.Code != "image_too_large" || err.Param != "image" {
+		t.Fatalf("ImageGenerationError = %#v", err)
+	}
+	if !strings.Contains(err.Message, "参考图片过大") {
+		t.Fatalf("message = %q, want user-facing size hint", err.Message)
+	}
+}
+
 func TestStreamResponsesImageOutputsCompletesWithUpstreamRefusalText(t *testing.T) {
 	const upstreamText = "非常抱歉，生成的图片可能违反了关于裸露、色情或情色内容的防护限制。如果你认为此判断有误，请重试或修改提示语。"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

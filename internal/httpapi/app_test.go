@@ -1557,6 +1557,42 @@ func TestDirectImageGenerationNormalizesUpstreamContentPolicyError(t *testing.T)
 	}
 }
 
+func TestDirectImageGenerationNormalizesUpstreamImageTooLargeError(t *testing.T) {
+	app := newTestApp(t)
+	defer app.Close()
+	installHTTPTestImageStreamFunc(t, app, func(ctx context.Context, client *backend.Client, request protocol.ConversationRequest, index, total int) (<-chan protocol.ImageOutput, <-chan error) {
+		out := make(chan protocol.ImageOutput)
+		errCh := make(chan error, 1)
+		close(out)
+		errCh <- errors.New("status_code=400, Part exceeded maximum size of 1024KB.")
+		close(errCh)
+		return out, errCh
+	})
+	_, rawKey, err := app.auth.CreateAPIKey(service.AuthRoleUser, "image-user", service.AuthOwner{})
+	if err != nil {
+		t.Fatalf("CreateAPIKey() error = %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/images/generations", strings.NewReader(`{"prompt":"draw","model":"gpt-image-2","n":1}`))
+	req.Header.Set("Authorization", "Bearer "+rawKey)
+	res := httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("upstream large image status = %d body = %s", res.Code, res.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &body); err != nil {
+		t.Fatalf("upstream large image response json: %v", err)
+	}
+	errorBody := util.StringMap(body["error"])
+	if errorBody["code"] != "image_too_large" || errorBody["type"] != "invalid_request_error" || errorBody["param"] != "image" {
+		t.Fatalf("upstream large image response = %#v", body)
+	}
+	if !strings.Contains(util.Clean(errorBody["message"]), "参考图片过大") {
+		t.Fatalf("message = %#v, want user-facing size hint", errorBody["message"])
+	}
+}
+
 func TestDirectImageEditAcceptsJSONImageURLInputs(t *testing.T) {
 	app := newTestApp(t)
 	defer app.Close()

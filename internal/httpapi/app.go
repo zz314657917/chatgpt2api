@@ -481,13 +481,17 @@ func (a *App) writeProtocol(w http.ResponseWriter, r *http.Request, result map[s
 }
 
 func protocolErrorHTTPStatus(err error) int {
-	err = service.NormalizeImageContentPolicyError(err)
+	err = service.NormalizeImageRequestError(err)
 	var httpErr protocol.HTTPError
 	if errors.As(err, &httpErr) {
 		return httpErr.Status
 	}
 	var policyErr service.ImageContentPolicyError
 	if errors.As(err, &policyErr) {
+		return http.StatusBadRequest
+	}
+	var tooLargeErr service.ImageTooLargeError
+	if errors.As(err, &tooLargeErr) {
 		return http.StatusBadRequest
 	}
 	var billingErr service.BillingLimitError
@@ -506,7 +510,7 @@ func protocolErrorHTTPStatus(err error) int {
 }
 
 func (a *App) writeProtocolError(w http.ResponseWriter, err error) {
-	err = service.NormalizeImageContentPolicyError(err)
+	err = service.NormalizeImageRequestError(err)
 	var httpErr protocol.HTTPError
 	if errors.As(err, &httpErr) {
 		writeOpenAIError(w, httpErr.Status, httpErr.Message)
@@ -515,6 +519,11 @@ func (a *App) writeProtocolError(w http.ResponseWriter, err error) {
 	var policyErr service.ImageContentPolicyError
 	if errors.As(err, &policyErr) {
 		util.WriteJSON(w, http.StatusBadRequest, util.LocalizeOpenAIErrorPayload(policyErr.OpenAIError()))
+		return
+	}
+	var tooLargeErr service.ImageTooLargeError
+	if errors.As(err, &tooLargeErr) {
+		util.WriteJSON(w, http.StatusBadRequest, util.LocalizeOpenAIErrorPayload(tooLargeErr.OpenAIError()))
 		return
 	}
 	var billingErr service.BillingLimitError
@@ -2738,10 +2747,14 @@ func jsonString(v any) string {
 }
 
 func openAIErrorForStream(err error) map[string]any {
-	err = service.NormalizeImageContentPolicyError(err)
+	err = service.NormalizeImageRequestError(err)
 	var policyErr service.ImageContentPolicyError
 	if errors.As(err, &policyErr) {
 		return util.LocalizeOpenAIErrorPayload(policyErr.OpenAIError())
+	}
+	var tooLargeErr service.ImageTooLargeError
+	if errors.As(err, &tooLargeErr) {
+		return util.LocalizeOpenAIErrorPayload(tooLargeErr.OpenAIError())
 	}
 	var billingErr service.BillingLimitError
 	if errors.As(err, &billingErr) {

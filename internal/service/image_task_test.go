@@ -1805,6 +1805,31 @@ func TestImageTaskServiceNormalizesUpstreamContentPolicyError(t *testing.T) {
 	}
 }
 
+func TestImageTaskServiceNormalizesUpstreamImageTooLargeError(t *testing.T) {
+	handler := func(ctx context.Context, identity Identity, payload map[string]any) (map[string]any, error) {
+		return nil, errors.New("status_code=400, Part exceeded maximum size of 1024KB.")
+	}
+	svc := newTestImageTaskService(t, handler, handler, handler, func() int { return 30 })
+	identity := Identity{ID: "alice", Name: "Alice", Role: "user"}
+
+	if _, err := svc.SubmitGeneration(context.Background(), identity, "task-large-image", "draw", "gpt-image-2", "1024x1024", "high", "https://base.test", 1, nil); err != nil {
+		t.Fatalf("SubmitGeneration() error = %v", err)
+	}
+	waitForTaskStatus(t, svc, identity, "task-large-image", TaskStatusError)
+	got := svc.ListTasks(identity, []string{"task-large-image"})
+	item := got["items"].([]map[string]any)[0]
+	if item["error"] != imageTooLargeMessage {
+		t.Fatalf("error = %#v, want image too large message", item["error"])
+	}
+	if item["error_code"] != "image_too_large" || item["error_type"] != "invalid_request_error" || item["error_param"] != "image" {
+		t.Fatalf("error fields = %#v", item)
+	}
+	details := util.StringMap(item["error_details"])
+	if details["source"] != "upstream" || details["limit"] != "1024KB" {
+		t.Fatalf("error_details = %#v, want upstream 1024KB limit", details)
+	}
+}
+
 func TestImageTaskServiceRestoresUnfinishedTasksAsErrors(t *testing.T) {
 	backend := newTestStorageBackend(t)
 	raw := map[string]any{"tasks": []map[string]any{

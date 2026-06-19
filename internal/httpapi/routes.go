@@ -1975,9 +1975,15 @@ func imageGenerationToolOptionsFromBody(model string, n int, body map[string]any
 }
 
 func writeCreationTaskSubmitError(w http.ResponseWriter, err error) {
+	err = service.NormalizeImageRequestError(err)
 	var policyErr service.ImageContentPolicyError
 	if errors.As(err, &policyErr) {
 		util.WriteJSON(w, http.StatusBadRequest, util.LocalizeOpenAIErrorPayload(policyErr.OpenAIError()))
+		return
+	}
+	var tooLargeErr service.ImageTooLargeError
+	if errors.As(err, &tooLargeErr) {
+		util.WriteJSON(w, http.StatusBadRequest, util.LocalizeOpenAIErrorPayload(tooLargeErr.OpenAIError()))
 		return
 	}
 	var billingErr service.BillingLimitError
