@@ -249,6 +249,9 @@ func (e *ImageGenerationError) OpenAIError() map[string]any {
 }
 
 func NewImageGenerationError(message string) *ImageGenerationError {
+	if service.IsUpstreamImageTooLargeMessage(message) {
+		return &ImageGenerationError{Message: service.ImageTooLargeError{}.Error(), StatusCode: 400, Type: "invalid_request_error", Code: "image_too_large", Param: "image"}
+	}
 	if service.IsUpstreamImageContentPolicyMessage(message) {
 		return &ImageGenerationError{Message: message, StatusCode: 400, Type: "invalid_request_error", Code: "content_policy_violation", Param: "prompt"}
 	}

@@ -901,7 +901,7 @@ func (s *ImageTaskService) runTask(ctx context.Context, key, mode string, identi
 		payload[imageOutputSlotAcquirerPayloadKey] = func(ctx context.Context, index int) (func(), error) {
 			release, err := s.AcquireCreationUnit(ctx, identity)
 			if err != nil {
-				return nil, NormalizeImageContentPolicyError(err)
+				return nil, NormalizeImageRequestError(err)
 			}
 			if !s.ensureTaskRunning(key) {
 				release()
@@ -916,7 +916,7 @@ func (s *ImageTaskService) runTask(ctx context.Context, key, mode string, identi
 	} else if mode == "chat" {
 		release, err := s.AcquireCreationUnit(runCtx, identity)
 		if err != nil {
-			err = NormalizeImageContentPolicyError(err)
+			err = NormalizeImageRequestError(err)
 			status := TaskStatusError
 			message := util.LocalizeErrorMessage(err.Error())
 			if ctx.Err() != nil {
@@ -938,7 +938,7 @@ func (s *ImageTaskService) runTask(ctx context.Context, key, mode string, identi
 	}
 	result, err := handler(runCtx, identity, payload)
 	if err != nil {
-		err = NormalizeImageContentPolicyError(err)
+		err = NormalizeImageRequestError(err)
 		status := TaskStatusError
 		message := util.LocalizeErrorMessage(err.Error())
 		if ctx.Err() != nil {
@@ -2080,6 +2080,14 @@ func mergeImageTaskErrorFields(updates map[string]any, err error) {
 			details["reason"] = reason
 		}
 		updates["error_details"] = details
+		return
+	}
+	var tooLargeErr ImageTooLargeError
+	if errors.As(err, &tooLargeErr) {
+		updates["error_code"] = "image_too_large"
+		updates["error_type"] = "invalid_request_error"
+		updates["error_param"] = "image"
+		updates["error_details"] = map[string]any{"source": "upstream", "limit": "1024KB"}
 		return
 	}
 }
