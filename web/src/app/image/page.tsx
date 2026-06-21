@@ -6095,7 +6095,6 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                   imageMaskUrl={imageMaskUrl}
                   midjourneySettings={midjourneySettings}
                   geminiFlashSettings={geminiFlashSettings}
-                  highResolutionHint={highResolutionHint}
                   billingBlocked={billingBlocked}
                   referenceImages={referenceImages}
                   mentionAssets={visibleAssets}

@@ -63,7 +63,6 @@ import {
   IMAGE_MODEL_ROUTE_DETAILS,
   MIDJOURNEY_IMAGE_MODEL,
   isGeminiProImageModel,
-  isOfficialImageModel,
   supportsImageQuality,
   supportsImageOutputControls,
   supportsImageResolutionPresets,
@@ -101,7 +100,6 @@ type ImageComposerProps = {
   imageMaskUrl: string;
   midjourneySettings: MidjourneySettingsPayload;
   geminiFlashSettings: GeminiFlashSettingsPayload;
-  highResolutionHint?: ReactNode;
   billingBlocked: boolean;
   referenceImages: Array<{ name: string; dataUrl: string }>;
   mentionAssets?: ManagedImageSummary[];
@@ -360,7 +358,6 @@ export function ImageComposer({
   imageMaskUrl,
   midjourneySettings,
   geminiFlashSettings,
-  highResolutionHint,
   billingBlocked,
   referenceImages,
   mentionAssets = [],
@@ -428,7 +425,6 @@ export function ImageComposer({
   const imageResolutionLabel =
     IMAGE_RESOLUTION_OPTIONS.find((option) => option.value === imageResolution)?.label || "Auto";
   const structuredImageParameters = supportsStructuredImageParameters(imageModel);
-  const officialImageGateway = isOfficialImageModel(imageModel);
   const resolutionPresetsSupported = supportsImageResolutionPresets(imageModel);
   const outputControlsSupported = supportsImageOutputControls(imageModel);
   const imageQualitySupported = supportsImageQuality(imageModel);
@@ -1138,17 +1134,6 @@ export function ImageComposer({
                             className="h-7 w-[36px] border-0 bg-transparent px-0 text-center text-xs font-semibold text-[#18181b] shadow-none focus-visible:ring-0 disabled:cursor-default disabled:opacity-100 dark:text-foreground"
                           />
                         </div>
-                        <div className={imageSettingsFieldClass}>
-                          <span className="shrink-0 font-medium text-[#45515e] dark:text-muted-foreground">
-                            画幅
-                          </span>
-                          <span className={cn(
-                            "min-w-0 truncate text-right text-xs font-semibold dark:text-foreground",
-                            structuredImageParameters && sizeIsHighResolution ? "text-amber-700 dark:text-amber-300" : "text-[#18181b]",
-                          )}>
-                            {sizePreviewLabel}
-                          </span>
-                        </div>
                         <div className="col-span-2 grid grid-cols-3 gap-1 rounded-full border border-[#e5e7eb] bg-white p-1 dark:border-border dark:bg-background/70 sm:col-span-3">
                           {availableImageSizeModeOptions.map((option) => {
                             const active = option.value === effectiveImageSizeMode;
@@ -1290,26 +1275,6 @@ export function ImageComposer({
                             structured={structuredImageParameters}
                             resolutionPreset={resolutionControlsVisible}
                           />
-                        ) : null}
-                        {resolutionControlsVisible && effectiveImageSizeMode !== "auto" && sizeIsHighResolution && highResolutionHint ? (
-                          <div className="col-span-2 rounded-xl border border-amber-100 bg-amber-50 px-3 py-1.5 text-[11px] leading-5 text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200 sm:col-span-3">
-                            {highResolutionHint}
-                          </div>
-                        ) : null}
-                        {composerMode === "image" ? (
-                          <p className="col-span-2 rounded-xl border border-sky-100 bg-sky-50 px-3 py-1.5 text-[11px] leading-5 text-sky-900 dark:border-sky-900/60 dark:bg-sky-950/30 dark:text-sky-100 sm:col-span-3">
-                            {structuredImageParameters
-                              ? "Codex 图片链路会下发目标尺寸；格式由后端保存结果时处理，压缩率仅适用于 JPEG。"
-                              : officialImageGateway && pixelIconSizeSelected
-                                ? "官方图片通道会按 1:1 提交；固定像素为本地输出尺寸。"
-                              : officialImageGateway
-                                ? "官方图片通道会提交分辨率预设和画幅；固定像素为本地输出尺寸，实际像素以结果为准。"
-                              : pixelIconSizeSelected
-                                ? "像素图标尺寸会作为目标尺寸提交，不叠加分辨率预设。"
-                              : resolutionControlsVisible
-                                ? "常规图片通道会提交分辨率预设，画幅仍作为构图偏好；实际像素以上游返回为准。"
-                                : "当前图片通道只会把比例作为构图偏好，实际像素以上游返回为准；格式由后端保存结果时处理。"}
-                          </p>
                         ) : null}
                         {modelSettingsSupported ? (
                           <div className="col-span-2 rounded-xl border border-[#dbe7ff] bg-[#f8fbff] px-3 py-2 dark:border-sky-900/60 dark:bg-sky-950/20 sm:col-span-3">
