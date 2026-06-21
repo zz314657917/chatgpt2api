@@ -710,7 +710,6 @@ function LogsTable({ logs, loading }: { logs: TeamAuditLog[]; loading: boolean }
             <TableRow key={item.id}>
               <TableCell>
                 <div className="font-medium text-foreground">{item.summary || item.action || "团队操作"}</div>
-                <div className="text-xs text-muted-foreground">{item.action || "--"}</div>
               </TableCell>
               <TableCell>{item.actor_name || "--"}</TableCell>
               <TableCell className="text-muted-foreground">{formatDateTime(item.created_at)}</TableCell>
