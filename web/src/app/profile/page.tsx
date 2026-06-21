@@ -92,7 +92,11 @@ function cleanText(value: unknown) {
 
 function firstRecordText(record: Sub2APIUsageRecord, keys: string[]) {
   for (const key of keys) {
-    const value = cleanText(record[key]);
+    const raw = record[key];
+    if (raw === undefined || raw === null || raw === "" || typeof raw === "object") {
+      continue;
+    }
+    const value = cleanText(raw);
     if (value) {
       return value;
     }
@@ -282,16 +286,36 @@ type UsageStatusView = {
   reason?: string;
 };
 
+function isSuccessUsageStatus(status: string) {
+  return ["success", "succeeded", "completed", "complete", "committed", "paid", "ok", "done", "finished_successfully"].includes(status);
+}
+
+function isFailedUsageStatus(status: string) {
+  return ["failed", "failure", "error", "cancelled", "canceled", "expired", "refunded"].includes(status);
+}
+
 function usageFailureReason(record: Sub2APIUsageRecord) {
-  return firstRecordText(record, ["error_message", "error", "failure_reason", "reason", "message", "detail", "status_message"]) || "暂无失败原因";
+  const direct = firstRecordText(record, ["error_message", "error", "failure_reason", "failed_reason", "reason", "message", "detail", "status_message"]);
+  if (direct) {
+    return direct;
+  }
+  const nestedError =
+    firstRecordText(recordObject(record.error), ["message", "detail", "reason"]) ||
+    firstRecordText(recordObject(record.failure), ["message", "detail", "reason"]) ||
+    firstRecordText(recordObject(record.result), ["error_message", "error", "message", "detail", "reason"]);
+  return nestedError || "暂无失败原因";
 }
 
 function usageStatus(record: Sub2APIUsageRecord): UsageStatusView {
-  const status = firstRecordText(record, ["status", "state", "result", "payment_status"]).toLowerCase();
-  if (["success", "succeeded", "completed", "complete", "committed", "paid", "ok", "done"].includes(status)) {
-    return { label: "查看", tone: "success" };
+  const status = (
+    firstRecordText(record, ["status", "state", "result", "payment_status"]) ||
+    firstRecordText(recordObject(record.result), ["status", "state", "result", "payment_status"]) ||
+    firstRecordText(recordObject(record.data), ["status", "state", "result", "payment_status"])
+  ).toLowerCase();
+  if (isSuccessUsageStatus(status)) {
+    return { label: "成功", tone: "success" };
   }
-  if (["failed", "failure", "error", "cancelled", "canceled", "expired", "refunded"].includes(status)) {
+  if (isFailedUsageStatus(status)) {
     return { label: "失败", tone: "failed", reason: usageFailureReason(record) };
   }
   if (cleanText(record.error) || cleanText(record.error_message)) {
@@ -300,7 +324,7 @@ function usageStatus(record: Sub2APIUsageRecord): UsageStatusView {
   const amount = amountValueFromRecord(record);
   const numeric = amount ? Number(amount.value) : NaN;
   if (Number.isFinite(numeric)) {
-    return numeric > 0 ? { label: "查看", tone: "success" } : { label: "失败", tone: "failed", reason: usageFailureReason(record) };
+    return numeric > 0 ? { label: "成功", tone: "success" } : { label: "失败", tone: "failed", reason: usageFailureReason(record) };
   }
   return { label: "--", tone: "neutral" };
 }
@@ -382,13 +406,14 @@ function UsageStatusBadge({ status }: { status: UsageStatusView }) {
     );
   }
   if (status.tone === "failed") {
+    const reason = status.reason || "暂无失败原因";
     return (
       <span
-        title={status.reason || "暂无失败原因"}
-        className="inline-flex items-center gap-1 rounded-md bg-rose-50 px-1.5 py-0.5 text-xs font-medium text-rose-700 dark:bg-rose-950/30 dark:text-rose-300"
+        title={reason}
+        className="inline-flex max-w-[180px] items-center gap-1 rounded-md bg-rose-50 px-1.5 py-0.5 text-xs font-medium text-rose-700 dark:bg-rose-950/30 dark:text-rose-300"
       >
-        <X className="size-3" />
-        {status.label}
+        <X className="size-3 shrink-0" />
+        <span className="min-w-0 truncate">{`${status.label}：${reason}`}</span>
       </span>
     );
   }
