@@ -316,6 +316,7 @@ func TestImageGatewayModelsMidjourneyImageEditTaskUsesDataURIReferences(t *testi
 		}
 		util.WriteJSON(w, http.StatusOK, map[string]any{
 			"created": 123,
+			"cost":    0.036,
 			"data":    []map[string]any{{"b64_json": sub2APITestPNGBase64}},
 		})
 	}))
@@ -376,6 +377,7 @@ func TestImageGatewayModelsMidjourneyImageEditTaskUsesDataURIReferences(t *testi
 		t.Fatalf("submit midjourney edit task status = %d body = %s", res.Code, res.Body.String())
 	}
 
+	var listed map[string]any
 	waitForHTTPTestCondition(t, func() bool {
 		req = httptest.NewRequest(http.MethodGet, "/api/creation-tasks?ids=sub2-midjourney-edit-task", nil)
 		req.Header.Set("Authorization", "Bearer "+sessionKey)
@@ -384,7 +386,6 @@ func TestImageGatewayModelsMidjourneyImageEditTaskUsesDataURIReferences(t *testi
 		if res.Code != http.StatusOK {
 			t.Fatalf("list midjourney edit task status = %d body = %s", res.Code, res.Body.String())
 		}
-		var listed map[string]any
 		if err := json.Unmarshal(res.Body.Bytes(), &listed); err != nil {
 			t.Fatalf("list midjourney edit task json: %v", err)
 		}
@@ -398,6 +399,10 @@ func TestImageGatewayModelsMidjourneyImageEditTaskUsesDataURIReferences(t *testi
 	urls := util.AsStringSlice(received["image_urls"])
 	if len(urls) != 1 || !strings.HasPrefix(urls[0], "data:image/png;base64,") {
 		t.Fatalf("midjourney edit image_urls = %#v", received["image_urls"])
+	}
+	items := util.AsMapSlice(listed["items"])
+	if len(items) != 1 || util.ToInt(items[0]["billing_consumed_amount"], 0) != 303 {
+		t.Fatalf("midjourney edit billing = %#v, want 303 in %#v", items, listed)
 	}
 }
 
@@ -488,6 +493,7 @@ func TestImageGatewayModelsGrokImagineGenerationTaskUsesGenerationGateway(t *tes
 		}
 		util.WriteJSON(w, http.StatusOK, map[string]any{
 			"created": 123,
+			"cost":    0.024,
 			"data":    []map[string]any{{"b64_json": sub2APITestPNGBase64}},
 		})
 	}))
@@ -523,6 +529,7 @@ func TestImageGatewayModelsGrokImagineGenerationTaskUsesGenerationGateway(t *tes
 		t.Fatalf("submit grok generation task status = %d body = %s", res.Code, res.Body.String())
 	}
 
+	var listed map[string]any
 	waitForHTTPTestCondition(t, func() bool {
 		req = httptest.NewRequest(http.MethodGet, "/api/creation-tasks?ids=sub2-grok-generation-task", nil)
 		req.Header.Set("Authorization", "Bearer "+sessionKey)
@@ -531,7 +538,6 @@ func TestImageGatewayModelsGrokImagineGenerationTaskUsesGenerationGateway(t *tes
 		if res.Code != http.StatusOK {
 			t.Fatalf("list grok generation task status = %d body = %s", res.Code, res.Body.String())
 		}
-		var listed map[string]any
 		if err := json.Unmarshal(res.Body.Bytes(), &listed); err != nil {
 			t.Fatalf("list grok generation task json: %v", err)
 		}
@@ -544,6 +550,10 @@ func TestImageGatewayModelsGrokImagineGenerationTaskUsesGenerationGateway(t *tes
 	}
 	if _, ok := received["image_urls"]; ok {
 		t.Fatalf("grok generation should not include image_urls: %#v", received)
+	}
+	items := util.AsMapSlice(listed["items"])
+	if len(items) != 1 || util.ToInt(items[0]["billing_consumed_amount"], 0) != 202 {
+		t.Fatalf("grok generation billing = %#v, want 202 in %#v", items, listed)
 	}
 }
 
