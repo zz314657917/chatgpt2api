@@ -171,6 +171,8 @@ type UploadedManagedImage struct {
 	Filename    string
 	ContentType string
 	Data        []byte
+	ObjectKey   string
+	ObjectURL   string
 }
 
 type UploadedTempReferenceImage struct {
@@ -191,6 +193,8 @@ type TempReferenceImage struct {
 	Filename          string
 	ContentType       string
 	Path              string
+	ObjectKey         string
+	ObjectURL         string
 	Size              int64
 	Width             int
 	Height            int
@@ -1379,6 +1383,7 @@ func (s *ImageService) StoreTempReferenceImage(upload UploadedTempReferenceImage
 	if err := os.WriteFile(target, upload.Data, 0o644); err != nil {
 		return TempReferenceImage{}, err
 	}
+	stored := s.uploadImageObject(filepath.ToSlash(filepath.Join(tempImageReferencePrefix, rel)), upload.Data, contentType)
 	ref := TempReferenceImage{
 		ID:                id,
 		OwnerID:           ownerID,
@@ -1388,6 +1393,8 @@ func (s *ImageService) StoreTempReferenceImage(upload UploadedTempReferenceImage
 		Filename:          firstNonEmptyString(strings.TrimSpace(upload.Filename), "reference"+ext),
 		ContentType:       contentType,
 		Path:              rel,
+		ObjectKey:         strings.TrimSpace(stored.Key),
+		ObjectURL:         strings.TrimSpace(stored.URL),
 		Size:              int64(len(upload.Data)),
 		Width:             config.Width,
 		Height:            config.Height,
@@ -1454,12 +1461,60 @@ func (s *ImageService) TempReferenceImageBytes(ids []string, ownerID string) ([]
 			Filename:    firstNonEmptyString(item.Filename, "reference.png"),
 			ContentType: contentType,
 			Data:        data,
+			ObjectKey:   item.ObjectKey,
+			ObjectURL:   item.ObjectURL,
 		})
 	}
 	if len(out) == 0 {
 		return nil, errors.New("reference_image_ids is required")
 	}
 	return out, nil
+}
+
+func (s *ImageService) TempReferenceImageSignedURLs(ids []string, ownerID string, expires time.Duration) ([]string, error) {
+	ownerID = strings.TrimSpace(ownerID)
+	if ownerID == "" {
+		return nil, errors.New("owner_id is required")
+	}
+	if len(ids) == 0 {
+		return nil, errors.New("reference_image_ids is required")
+	}
+	if expires <= 0 {
+		expires = defaultImageDownloadURLTTL
+	}
+	_ = s.CleanupTempReferenceImages()
+	items := s.loadTempReferenceImages()
+	byID := make(map[string]TempReferenceImage, len(items))
+	for _, item := range items {
+		byID[item.ID] = item
+	}
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		item, ok := byID[id]
+		if !ok {
+			return nil, errors.New("reference image not found")
+		}
+		if item.OwnerID != ownerID {
+			return nil, errors.New("permission denied")
+		}
+		if strings.TrimSpace(item.ObjectKey) == "" {
+			continue
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		u, enabled, err := imagestore.PresignGetDownloadURLFromEnv(ctx, item.ObjectKey, expires, firstNonEmptyString(item.Filename, "reference.png"))
+		cancel()
+		if err != nil {
+			return nil, err
+		}
+		if enabled && strings.TrimSpace(u) != "" {
+			out = append(out, strings.TrimSpace(u))
+		}
+	}
+	return dedupeStrings(out), nil
 }
 
 func (s *ImageService) CleanupTempReferenceImages() error {
@@ -1485,6 +1540,11 @@ func (s *ImageService) CleanupTempReferenceImages() error {
 					_ = os.Remove(path)
 					removeEmptyParentDirs(root, filepath.Dir(path))
 				}
+			}
+			if strings.TrimSpace(item.ObjectKey) != "" {
+				ctx, cancel := imagestore.DeleteTimeoutContext()
+				_ = imagestore.DeleteFromEnv(ctx, item.ObjectKey)
+				cancel()
 			}
 			continue
 		}
@@ -3224,6 +3284,8 @@ func (s *ImageService) loadTempReferenceImages() []TempReferenceImage {
 			Filename:          strings.TrimSpace(util.Clean(item["filename"])),
 			ContentType:       strings.TrimSpace(util.Clean(item["content_type"])),
 			Path:              strings.TrimSpace(util.Clean(item["path"])),
+			ObjectKey:         strings.TrimSpace(util.Clean(item["object_key"])),
+			ObjectURL:         strings.TrimSpace(util.Clean(item["object_url"])),
 			Size:              int64(util.ToInt(item["size"], 0)),
 			Width:             util.ToInt(item["width"], 0),
 			Height:            util.ToInt(item["height"], 0),
@@ -3269,6 +3331,8 @@ func (s *ImageService) saveTempReferenceImages(items []TempReferenceImage) error
 			"filename":            item.Filename,
 			"content_type":        item.ContentType,
 			"path":                item.Path,
+			"object_key":          item.ObjectKey,
+			"object_url":          item.ObjectURL,
 			"size":                item.Size,
 			"width":               item.Width,
 			"height":              item.Height,

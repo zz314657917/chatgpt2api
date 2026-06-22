@@ -1776,6 +1776,81 @@ func TestImageServiceTempReferenceImagesAreOwnerScopedAndIdempotent(t *testing.T
 	}
 }
 
+func TestImageServiceTempReferenceImageUploadsObjectAndSignsURL(t *testing.T) {
+	root := t.TempDir()
+	config := testImageConfig{root: root}
+	var uploadedPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPut:
+			uploadedPath = r.URL.Path
+			_, _ = io.Copy(io.Discard, r.Body)
+			w.WriteHeader(http.StatusOK)
+		case http.MethodGet:
+			if r.URL.Path != uploadedPath {
+				t.Errorf("GET path = %q, want %q", r.URL.Path, uploadedPath)
+			}
+			w.Header().Set("Content-Type", "image/png")
+			_, _ = w.Write([]byte("reference"))
+		default:
+			t.Errorf("method = %s", r.Method)
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	}))
+	defer server.Close()
+	t.Setenv(imagestore.EnvImageStorageBackend, "cos")
+	t.Setenv(imagestore.EnvImageObjectStorageEndpoint, server.URL)
+	t.Setenv(imagestore.EnvImageObjectStorageRegion, "ap-guangzhou")
+	t.Setenv(imagestore.EnvImageObjectStorageBucket, "bucket")
+	t.Setenv(imagestore.EnvImageObjectStorageAccessKeyID, "ak")
+	t.Setenv(imagestore.EnvImageObjectStorageSecretKey, "sk")
+	t.Setenv(imagestore.EnvImageObjectStorageForcePath, "true")
+
+	imagePath := filepath.Join(root, "reference.png")
+	if err := writeTestPNG(imagePath); err != nil {
+		t.Fatalf("writeTestPNG() error = %v", err)
+	}
+	data, err := os.ReadFile(imagePath)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+
+	service := NewImageService(config)
+	ref, err := service.StoreTempReferenceImage(UploadedTempReferenceImage{
+		ClientReferenceID: "client-object-1",
+		Filename:          "source.png",
+		ContentType:       "image/png",
+		Data:              data,
+	}, "owner-a")
+	if err != nil {
+		t.Fatalf("StoreTempReferenceImage() error = %v", err)
+	}
+	if ref.ObjectKey == "" || !strings.Contains(ref.ObjectKey, "temp-references/") {
+		t.Fatalf("temp reference object key = %q", ref.ObjectKey)
+	}
+	if uploadedPath == "" || !strings.Contains(uploadedPath, "/temp-references/") {
+		t.Fatalf("uploaded path = %q", uploadedPath)
+	}
+
+	urls, err := service.TempReferenceImageSignedURLs([]string{ref.ID}, "owner-a", time.Minute)
+	if err != nil {
+		t.Fatalf("TempReferenceImageSignedURLs() error = %v", err)
+	}
+	if len(urls) != 1 {
+		t.Fatalf("signed urls = %#v", urls)
+	}
+	parsed, err := url.Parse(urls[0])
+	if err != nil {
+		t.Fatalf("parse signed url: %v", err)
+	}
+	if parsed.Host == "" || parsed.Query().Get("X-Amz-Signature") == "" {
+		t.Fatalf("signed url = %q", urls[0])
+	}
+	if _, err := service.TempReferenceImageSignedURLs([]string{ref.ID}, "owner-b", time.Minute); err == nil {
+		t.Fatalf("TempReferenceImageSignedURLs(other owner) should fail")
+	}
+}
+
 func requireThumbnailURLPath(t *testing.T, value string) string {
 	t.Helper()
 	parsed, err := url.Parse(value)

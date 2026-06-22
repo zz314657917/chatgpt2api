@@ -282,6 +282,13 @@ func (a *App) callSub2APIImageEdits(ctx context.Context, identity service.Identi
 			return a.postSub2APIJSON(ctx, binding, "images/generations", body)
 		})
 	}
+	if len(util.AsStringSlice(payload["official_public_image_urls"])) > 0 {
+		return a.callSub2APIImageBatchesWithBinding(ctx, identity, payload, binding, func(ctx context.Context, batchPayload map[string]any) (map[string]any, error) {
+			body := sub2APIImageJSONPayload(batchPayload)
+			body["response_format"] = "b64_json"
+			return a.postSub2APIJSON(ctx, binding, "images/generations", body)
+		})
+	}
 	images := uploadedImagesFromPayload(payload["images"])
 	if len(images) == 0 {
 		return nil, protocol.HTTPError{Status: http.StatusBadRequest, Message: "image file is required"}
