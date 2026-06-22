@@ -3521,7 +3521,7 @@ func TestSub2APIOfficialImageEditTaskUsesJSONGatewayPayload(t *testing.T) {
 	}
 }
 
-func TestSub2APIGPTImageEditTaskUsesSignedTempReferenceURL(t *testing.T) {
+func TestSub2APIGPTImageEditTaskKeepsMultipartTempReference(t *testing.T) {
 	var objectPutPath string
 	objectServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
@@ -3552,16 +3552,36 @@ func TestSub2APIGPTImageEditTaskUsesSignedTempReferenceURL(t *testing.T) {
 	app := newTestApp(t)
 	defer app.Close()
 
-	var received map[string]any
+	var multipartFields map[string]string
+	var multipartImage []byte
 	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost || r.URL.Path != "/images/generations" {
+		if r.Method != http.MethodPost || r.URL.Path != "/images/edits" {
 			t.Fatalf("gateway request = %s %s", r.Method, r.URL.Path)
 		}
-		if !strings.Contains(r.Header.Get("Content-Type"), "application/json") {
-			t.Fatalf("gateway Content-Type = %q, want JSON", r.Header.Get("Content-Type"))
+		if !strings.Contains(r.Header.Get("Content-Type"), "multipart/form-data") {
+			t.Fatalf("gateway Content-Type = %q, want multipart", r.Header.Get("Content-Type"))
 		}
-		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
-			t.Fatalf("gateway json: %v", err)
+		if err := r.ParseMultipartForm(8 << 20); err != nil {
+			t.Fatalf("gateway multipart: %v", err)
+		}
+		multipartFields = map[string]string{}
+		for key, values := range r.MultipartForm.Value {
+			if len(values) > 0 {
+				multipartFields[key] = values[0]
+			}
+		}
+		files := r.MultipartForm.File["image"]
+		if len(files) != 1 {
+			t.Fatalf("gateway image files = %d", len(files))
+		}
+		file, err := files[0].Open()
+		if err != nil {
+			t.Fatalf("open gateway image: %v", err)
+		}
+		defer file.Close()
+		multipartImage, err = io.ReadAll(file)
+		if err != nil {
+			t.Fatalf("read gateway image: %v", err)
 		}
 		util.WriteJSON(w, http.StatusOK, map[string]any{
 			"created": 123,
@@ -3633,25 +3653,11 @@ func TestSub2APIGPTImageEditTaskUsesSignedTempReferenceURL(t *testing.T) {
 		return len(items) == 1 && items[0]["status"] == service.TaskStatusSuccess
 	})
 
-	if received["model"] != util.ImageModelGPT || received["size"] != "1536x864" {
-		t.Fatalf("gpt image gateway body = %#v", received)
+	if multipartFields["model"] != util.ImageModelGPT || multipartFields["size"] != "1536x864" {
+		t.Fatalf("gpt image gateway multipart fields = %#v", multipartFields)
 	}
-	urls := util.AsStringSlice(received["image_urls"])
-	if len(urls) != 1 {
-		t.Fatalf("gpt image image_urls = %#v", received["image_urls"])
-	}
-	if strings.HasPrefix(urls[0], "data:") {
-		t.Fatalf("gpt image image_urls should not contain data URL: %#v", urls)
-	}
-	parsed, err := url.Parse(urls[0])
-	if err != nil {
-		t.Fatalf("parse signed reference URL: %v", err)
-	}
-	if parsed.Host == "" || parsed.Query().Get("X-Amz-Signature") == "" || !strings.Contains(parsed.Path, "/temp-references/") {
-		t.Fatalf("signed reference URL = %q", urls[0])
-	}
-	if rawImages := util.AsMapSlice(received["images"]); len(rawImages) > 0 {
-		t.Fatalf("gateway body should not include uploaded images: %#v", received["images"])
+	if len(multipartImage) == 0 {
+		t.Fatalf("gateway multipart image is empty")
 	}
 }
 
