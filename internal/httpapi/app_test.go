@@ -3521,6 +3521,278 @@ func TestSub2APIOfficialImageEditTaskUsesJSONGatewayPayload(t *testing.T) {
 	}
 }
 
+func TestSub2APIGPTImageEditTaskUsesSignedTempReferenceURL(t *testing.T) {
+	var objectPutPath string
+	objectServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPut:
+			objectPutPath = r.URL.Path
+			_, _ = io.Copy(io.Discard, r.Body)
+			w.WriteHeader(http.StatusOK)
+		case http.MethodGet:
+			if r.URL.Path != objectPutPath {
+				t.Errorf("object GET path = %q, want %q", r.URL.Path, objectPutPath)
+			}
+			w.Header().Set("Content-Type", "image/png")
+			_, _ = w.Write([]byte("reference"))
+		default:
+			t.Errorf("object method = %s", r.Method)
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	}))
+	defer objectServer.Close()
+	t.Setenv(imagestore.EnvImageStorageBackend, "cos")
+	t.Setenv(imagestore.EnvImageObjectStorageEndpoint, objectServer.URL)
+	t.Setenv(imagestore.EnvImageObjectStorageRegion, "ap-guangzhou")
+	t.Setenv(imagestore.EnvImageObjectStorageBucket, "bucket")
+	t.Setenv(imagestore.EnvImageObjectStorageAccessKeyID, "ak")
+	t.Setenv(imagestore.EnvImageObjectStorageSecretKey, "sk")
+	t.Setenv(imagestore.EnvImageObjectStorageForcePath, "true")
+
+	app := newTestApp(t)
+	defer app.Close()
+
+	var received map[string]any
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/images/generations" {
+			t.Fatalf("gateway request = %s %s", r.Method, r.URL.Path)
+		}
+		if !strings.Contains(r.Header.Get("Content-Type"), "application/json") {
+			t.Fatalf("gateway Content-Type = %q, want JSON", r.Header.Get("Content-Type"))
+		}
+		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
+			t.Fatalf("gateway json: %v", err)
+		}
+		util.WriteJSON(w, http.StatusOK, map[string]any{
+			"created": 123,
+			"data":    []map[string]any{{"b64_json": sub2APITestPNGBase64}},
+		})
+	}))
+	defer gateway.Close()
+
+	owner := service.AuthOwner{ID: "sub2api:gpt-image-signed-ref-user", Name: "gpt-image-signed-ref", Provider: service.AuthProviderSub2API}
+	_, sessionKey, err := app.auth.UpsertSub2APISession(owner)
+	if err != nil {
+		t.Fatalf("UpsertSub2APISession() error = %v", err)
+	}
+	if err := app.sub2Bindings.Save(service.Sub2APIBinding{
+		OwnerID:        owner.ID,
+		Sub2APIUserID:  "gpt-image-signed-ref-user",
+		SessionToken:   "session-gpt-image-signed-ref-user",
+		APIKey:         "sub2-key",
+		GatewayBaseURL: gateway.URL,
+	}); err != nil {
+		t.Fatalf("Save(Sub2APIBinding) error = %v", err)
+	}
+	referenceBytes, err := base64.StdEncoding.DecodeString(sub2APITestPNGBase64)
+	if err != nil {
+		t.Fatalf("decode reference png: %v", err)
+	}
+	ref, err := app.images.StoreTempReferenceImage(service.UploadedTempReferenceImage{
+		ClientReferenceID: "client-gpt-signed-ref-1",
+		Filename:          "source.png",
+		ContentType:       "image/png",
+		Data:              referenceBytes,
+	}, owner.ID)
+	if err != nil {
+		t.Fatalf("StoreTempReferenceImage() error = %v", err)
+	}
+	if ref.ObjectKey == "" {
+		t.Fatalf("temp reference missing object key: %#v", ref)
+	}
+
+	body := jsonString(map[string]any{
+		"client_task_id":      "sub2-gpt-image-signed-ref-task",
+		"prompt":              "keep the product, change background",
+		"model":               util.ImageModelGPT,
+		"reference_image_ids": []string{ref.ID},
+		"size":                "16:9",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/creation-tasks/image-edits", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+sessionKey)
+	req.Header.Set("Content-Type", "application/json")
+	res := httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("submit gpt image edit task status = %d body = %s", res.Code, res.Body.String())
+	}
+
+	var listed map[string]any
+	waitForHTTPTestCondition(t, func() bool {
+		req = httptest.NewRequest(http.MethodGet, "/api/creation-tasks?ids=sub2-gpt-image-signed-ref-task", nil)
+		req.Header.Set("Authorization", "Bearer "+sessionKey)
+		res = httptest.NewRecorder()
+		app.Handler().ServeHTTP(res, req)
+		if res.Code != http.StatusOK {
+			t.Fatalf("list gpt image edit task status = %d body = %s", res.Code, res.Body.String())
+		}
+		if err := json.Unmarshal(res.Body.Bytes(), &listed); err != nil {
+			t.Fatalf("list gpt image edit task json: %v", err)
+		}
+		items := util.AsMapSlice(listed["items"])
+		return len(items) == 1 && items[0]["status"] == service.TaskStatusSuccess
+	})
+
+	if received["model"] != util.ImageModelGPT || received["size"] != "1536x864" {
+		t.Fatalf("gpt image gateway body = %#v", received)
+	}
+	urls := util.AsStringSlice(received["image_urls"])
+	if len(urls) != 1 {
+		t.Fatalf("gpt image image_urls = %#v", received["image_urls"])
+	}
+	if strings.HasPrefix(urls[0], "data:") {
+		t.Fatalf("gpt image image_urls should not contain data URL: %#v", urls)
+	}
+	parsed, err := url.Parse(urls[0])
+	if err != nil {
+		t.Fatalf("parse signed reference URL: %v", err)
+	}
+	if parsed.Host == "" || parsed.Query().Get("X-Amz-Signature") == "" || !strings.Contains(parsed.Path, "/temp-references/") {
+		t.Fatalf("signed reference URL = %q", urls[0])
+	}
+	if rawImages := util.AsMapSlice(received["images"]); len(rawImages) > 0 {
+		t.Fatalf("gateway body should not include uploaded images: %#v", received["images"])
+	}
+}
+
+func TestSub2APIOfficialImageEditTaskUsesSignedTempReferenceURL(t *testing.T) {
+	var objectPutPath string
+	objectServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPut:
+			objectPutPath = r.URL.Path
+			_, _ = io.Copy(io.Discard, r.Body)
+			w.WriteHeader(http.StatusOK)
+		case http.MethodGet:
+			if r.URL.Path != objectPutPath {
+				t.Errorf("object GET path = %q, want %q", r.URL.Path, objectPutPath)
+			}
+			w.Header().Set("Content-Type", "image/png")
+			_, _ = w.Write([]byte("reference"))
+		default:
+			t.Errorf("object method = %s", r.Method)
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	}))
+	defer objectServer.Close()
+	t.Setenv(imagestore.EnvImageStorageBackend, "cos")
+	t.Setenv(imagestore.EnvImageObjectStorageEndpoint, objectServer.URL)
+	t.Setenv(imagestore.EnvImageObjectStorageRegion, "ap-guangzhou")
+	t.Setenv(imagestore.EnvImageObjectStorageBucket, "bucket")
+	t.Setenv(imagestore.EnvImageObjectStorageAccessKeyID, "ak")
+	t.Setenv(imagestore.EnvImageObjectStorageSecretKey, "sk")
+	t.Setenv(imagestore.EnvImageObjectStorageForcePath, "true")
+
+	app := newTestApp(t)
+	defer app.Close()
+
+	var received map[string]any
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/images/generations" {
+			t.Fatalf("gateway request = %s %s", r.Method, r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer sub2-key" {
+			t.Fatalf("gateway Authorization = %q", got)
+		}
+		if !strings.Contains(r.Header.Get("Content-Type"), "application/json") {
+			t.Fatalf("gateway Content-Type = %q, want JSON", r.Header.Get("Content-Type"))
+		}
+		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
+			t.Fatalf("gateway json: %v", err)
+		}
+		util.WriteJSON(w, http.StatusOK, map[string]any{
+			"created": 123,
+			"data":    []map[string]any{{"b64_json": sub2APITestPNGBase64}},
+		})
+	}))
+	defer gateway.Close()
+
+	owner := service.AuthOwner{ID: "sub2api:official-signed-ref-user", Name: "official-signed-ref", Provider: service.AuthProviderSub2API}
+	_, sessionKey, err := app.auth.UpsertSub2APISession(owner)
+	if err != nil {
+		t.Fatalf("UpsertSub2APISession() error = %v", err)
+	}
+	if err := app.sub2Bindings.Save(service.Sub2APIBinding{
+		OwnerID:        owner.ID,
+		Sub2APIUserID:  "official-signed-ref-user",
+		SessionToken:   "session-official-signed-ref-user",
+		APIKey:         "sub2-key",
+		GatewayBaseURL: gateway.URL,
+	}); err != nil {
+		t.Fatalf("Save(Sub2APIBinding) error = %v", err)
+	}
+	referenceBytes, err := base64.StdEncoding.DecodeString(sub2APITestPNGBase64)
+	if err != nil {
+		t.Fatalf("decode reference png: %v", err)
+	}
+	ref, err := app.images.StoreTempReferenceImage(service.UploadedTempReferenceImage{
+		ClientReferenceID: "client-official-signed-ref-1",
+		Filename:          "source.png",
+		ContentType:       "image/png",
+		Data:              referenceBytes,
+	}, owner.ID)
+	if err != nil {
+		t.Fatalf("StoreTempReferenceImage() error = %v", err)
+	}
+	if ref.ObjectKey == "" {
+		t.Fatalf("temp reference missing object key: %#v", ref)
+	}
+
+	body := jsonString(map[string]any{
+		"client_task_id":      "sub2-official-signed-ref-task",
+		"prompt":              "edit image",
+		"model":               util.ImageModelGPTOfficial,
+		"reference_image_ids": []string{ref.ID},
+		"size":                "16:9",
+		"image_resolution":    "2k",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/creation-tasks/image-edits", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+sessionKey)
+	req.Header.Set("Content-Type", "application/json")
+	res := httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("submit official signed ref edit task status = %d body = %s", res.Code, res.Body.String())
+	}
+
+	var listed map[string]any
+	waitForHTTPTestCondition(t, func() bool {
+		req = httptest.NewRequest(http.MethodGet, "/api/creation-tasks?ids=sub2-official-signed-ref-task", nil)
+		req.Header.Set("Authorization", "Bearer "+sessionKey)
+		res = httptest.NewRecorder()
+		app.Handler().ServeHTTP(res, req)
+		if res.Code != http.StatusOK {
+			t.Fatalf("list official signed ref edit task status = %d body = %s", res.Code, res.Body.String())
+		}
+		if err := json.Unmarshal(res.Body.Bytes(), &listed); err != nil {
+			t.Fatalf("list official signed ref edit task json: %v", err)
+		}
+		items := util.AsMapSlice(listed["items"])
+		return len(items) == 1 && items[0]["status"] == service.TaskStatusSuccess
+	})
+
+	if received["model"] != util.ImageModelGPTOfficial || received["size"] != "16:9" || received["resolution"] != "2k" {
+		t.Fatalf("official signed ref gateway body = %#v", received)
+	}
+	urls := util.AsStringSlice(received["image_urls"])
+	if len(urls) != 1 {
+		t.Fatalf("official signed ref image_urls = %#v", received["image_urls"])
+	}
+	if strings.HasPrefix(urls[0], "data:") {
+		t.Fatalf("official signed ref image_urls should not contain data URL: %#v", urls)
+	}
+	parsed, err := url.Parse(urls[0])
+	if err != nil {
+		t.Fatalf("parse signed reference URL: %v", err)
+	}
+	if parsed.Host == "" || parsed.Query().Get("X-Amz-Signature") == "" || !strings.Contains(parsed.Path, "/temp-references/") {
+		t.Fatalf("signed reference URL = %q", urls[0])
+	}
+	if rawImages := util.AsMapSlice(received["images"]); len(rawImages) > 0 {
+		t.Fatalf("gateway body should not include uploaded images: %#v", received["images"])
+	}
+}
+
 func TestSub2APIGeminiImageEditTaskUsesDataURIReferences(t *testing.T) {
 	app := newTestApp(t)
 	defer app.Close()

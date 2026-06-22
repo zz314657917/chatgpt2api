@@ -2276,6 +2276,7 @@ func (a *App) readImageEditBody(r *http.Request, identity service.Identity) (map
 func (a *App) jsonImageEditUploads(ctx context.Context, body map[string]any, identity service.Identity) ([]protocol.UploadedImage, error) {
 	var images []protocol.UploadedImage
 	refs := util.AsStringSlice(body["reference_image_ids"])
+	var signedReferenceURLs []string
 	if len(refs) > 0 {
 		managedImages, err := a.images.TempReferenceImageBytes(refs, identityScope(identity))
 		if err != nil {
@@ -2288,20 +2289,25 @@ func (a *App) jsonImageEditUploads(ctx context.Context, body map[string]any, ide
 				Data:        image.Data,
 			})
 		}
+		signedReferenceURLs, err = a.images.TempReferenceImageSignedURLs(refs, identityScope(identity), 30*time.Minute)
+		if err != nil {
+			return nil, err
+		}
 	}
 	urls, err := jsonImageURLReferences(body)
 	if err != nil {
 		return nil, err
 	}
-	publicURLs := publicJSONImageURLs(urls)
+	publicURLs := dedupe(append(publicJSONImageURLs(urls), signedReferenceURLs...))
 	if len(publicURLs) > 0 {
 		body["official_public_image_urls"] = publicURLs
 	}
-	if sub2APIImageModel(body["model"]) == util.ImageModelGPTOfficial && len(publicURLs) > 0 {
-		for range publicURLs {
-			images = append(images, protocol.UploadedImage{})
-		}
-		return images, nil
+	usesSub2APIEdit := a.imageEditUsesSub2API(ctx, identity)
+	if len(signedReferenceURLs) > 0 && usesSub2APIEdit {
+		return make([]protocol.UploadedImage, len(publicURLs)), nil
+	}
+	if usesSub2APIEdit && sub2APIImageModel(body["model"]) == util.ImageModelGPTOfficial && len(publicURLs) > 0 {
+		return make([]protocol.UploadedImage, len(publicURLs)), nil
 	}
 	if (sub2APIImageModel(body["model"]) == util.ImageModelMidjourney || sub2APIImageModel(body["model"]) == util.ImageModelGrokImagine) && len(publicURLs) > 0 {
 		for _, rawURL := range urls {
@@ -2325,6 +2331,11 @@ func (a *App) jsonImageEditUploads(ctx context.Context, body map[string]any, ide
 		images = append(images, image)
 	}
 	return images, nil
+}
+
+func (a *App) imageEditUsesSub2API(ctx context.Context, identity service.Identity) bool {
+	_, ok := a.sub2APIBindingForMode(ctx, identity, "edit")
+	return ok
 }
 
 func publicJSONImageURLs(urls []string) []string {
