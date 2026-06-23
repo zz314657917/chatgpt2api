@@ -1392,6 +1392,18 @@ func (s *ImageTaskService) pendingTaskBillingSettlement(key string) (imageTaskBi
 	charged := util.ToInt(task[imageTaskBillingChargedAmountKey], 0)
 	externalCharged := imageTaskFloat(task[imageTaskExternalChargedAmountKey])
 	externalChargeUnit := imageTaskStoredExternalChargeUnit(task)
+	provider := util.Clean(task[imageTaskBillingProviderKey])
+	if provider == AuthProviderSub2API && externalCharged <= 0 {
+		if charged <= 0 {
+			charged = imageTaskEstimatedChargedAmount(task)
+		}
+		// Older queued tasks may only have the local precharge amount. Treat it as
+		// the already-reserved Sub2API balance so APIMart cost overrides settle by delta.
+		if charged > 0 {
+			externalCharged = float64(charged) / 1000
+			externalChargeUnit = imageTaskExternalAmountUnitBalance
+		}
+	}
 	consumed := 0
 	if task["status"] == TaskStatusSuccess {
 		consumed = billableTaskOutputCount(task)
@@ -1433,7 +1445,7 @@ func (s *ImageTaskService) pendingTaskBillingSettlement(key string) (imageTaskBi
 		taskID:                  taskID,
 		mode:                    mode,
 		model:                   model,
-		provider:                util.Clean(task[imageTaskBillingProviderKey]),
+		provider:                provider,
 		chargeKey:               chargeKey,
 		refundKey:               imageTaskBillingChargeKeyFor(owner, taskID, "refund"),
 		charged:                 charged,
@@ -1953,6 +1965,24 @@ func imageTaskExternalBillingModel(mode string, payload map[string]any) string {
 
 func imageTaskExternalBillingUnitAmount(mode string, payload map[string]any) float64 {
 	return float64(imageTaskBillingUnitAmount(payload)) / 1000
+}
+
+func imageTaskEstimatedChargedAmount(task map[string]any) int {
+	if task == nil || util.Clean(task[imageTaskBillingChargeKey]) == "" {
+		return 0
+	}
+	count := storedImageOutputCount(task)
+	if count <= 0 {
+		count = billableTaskOutputCount(task)
+	}
+	unitAmount := util.ToInt(task[imageTaskBillingUnitAmountKey], 0)
+	if unitAmount <= 0 {
+		unitAmount = imageTaskBillingUnitAmount(task)
+	}
+	if count <= 0 || unitAmount <= 0 {
+		return 0
+	}
+	return count * unitAmount
 }
 
 func imageTaskCostToBillingAmount(cost float64, unit string) int {
