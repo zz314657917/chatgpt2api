@@ -74,6 +74,7 @@ import {
   fetchManagedImages,
   fetchTeamWorkspace,
   imageReferenceInputLimit,
+  isHiddenImageModelOption,
   isImageCreationModel,
   isOfficialImageModel,
   uploadCreationTaskReferenceImage,
@@ -1091,13 +1092,13 @@ function mergeModelOptions(
   const seen = new Set<string>();
   const merged: ModelOption[] = [];
   for (const option of localOptions) {
-    if (!option.value || seen.has(option.value)) {
+    if (!option.value || seen.has(option.value) || isHiddenImageModelOption(option.value)) {
       continue;
     }
     seen.add(option.value);
     merged.push({ ...option, label: displayModelLabel(option.value, option.label) });
   }
-  if (selected && !seen.has(selected) && canKeepSelectedModel(selected)) {
+  if (selected && !seen.has(selected) && !isHiddenImageModelOption(selected) && canKeepSelectedModel(selected)) {
     merged.unshift({ value: selected, label: displayModelLabel(selected) });
   }
   return merged;

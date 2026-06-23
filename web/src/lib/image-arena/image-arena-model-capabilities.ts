@@ -2,6 +2,8 @@ import {
   GROK_IMAGINE_IMAGE_MODEL,
   IMAGE_CREATION_MODEL_OPTIONS,
   MIDJOURNEY_IMAGE_MODEL,
+  SEEDREAM_4_IMAGE_MODEL,
+  SEEDREAM_45_IMAGE_MODEL,
   imageReferenceInputLimit,
   supportsImageOutputCompression,
   supportsImageOutputControls,
@@ -26,6 +28,8 @@ export const IMAGE_ARENA_MODEL_IDS = [
   "gemini-3-pro-image-preview",
   MIDJOURNEY_IMAGE_MODEL,
   GROK_IMAGINE_IMAGE_MODEL,
+  SEEDREAM_4_IMAGE_MODEL,
+  SEEDREAM_45_IMAGE_MODEL,
 ] as const satisfies readonly ImageModel[];
 
 const IMAGE_ARENA_MODEL_ID_SET = new Set<string>(IMAGE_ARENA_MODEL_IDS);

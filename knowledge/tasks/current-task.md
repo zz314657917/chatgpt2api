@@ -1,12 +1,12 @@
 # Current Task
 
-最后更新：2026-06-16 13:10 +08:00
+最后更新：2026-06-22 23:55 +08:00
 
 ## 背景
 
 `chatgpt2api` 最近主线已从 `/canvas` 与图片任务稳定性，前移到“落叶创艺独立用户版”。本仓库已完成提交 `47c9f72 feat: add luoye independent studio mode`，定位改为面向普通用户的独立创作站：用户注册/登录、充值和余额真源统一走 Sub2API，站内直接进入创作，不再要求用户理解 API Key、Token、OpenAI-compatible 或 API 选择。
 
-Sub2API 对应桥接提交为 `fe2f80be1 feat: add studio bridge integration`。两边本地容器已重建并健康运行；但 2026-06-12 之后，默认续做入口已经不再只是“生产配置与真实闭环验证”，而是继续推进到“素材库 / `/canvas` / `ecommerce-suite` / team usage 共用同一创作底座”的 follow-up。
+Sub2API 对应桥接提交为 `fe2f80be1 feat: add studio bridge integration`。两边本地容器已重建并健康运行；但 2026-06-18 之后，默认续做入口又继续前移，不再只是“生产配置 + Pro Studio / `ecommerce-suite` 交付闭环”，而是先补进了 image gateway、统一模型设置面板、品牌收口和上游图片错误归一，随后在 2026-06-21~2026-06-22 继续前移到 image arena、账号级图片输入 URL 和签名临时参考图 URL 这条新的图片工作台 follow-up。
 
 ## 当前主线
 
@@ -20,6 +20,17 @@ Sub2API 对应桥接提交为 `fe2f80be1 feat: add studio bridge integration`。
   - 电商套图工作台不是独立系统，而是基于现有图片任务、素材能力和本地项目状态的前端工作台。
   - text assets 已成为电商工作台与创作结果编排的一部分，说明“创作底座”已经扩展到图片之外的文本资产组织。
   - `/canvas` 与 `/ecommerce-suite` 现在都已有 production mode，说明普通工作台与生产交付工作台已经并入同一默认产品面。
+- 图片模型与错误处理基线已进入新的默认产品面：
+  - `/image`、`/canvas`、`/ecommerce-suite` 开始共用更统一的模型设置心智，模型配置不再只是单页局部表单，而是跨工作台的一致交互层。
+  - image gateway model support 已进入默认实现边界；后续讨论图片模型支持时，不能再只按 `gpt-image-2` / official 路径理解。
+  - 上游图片内容策略错误、尺寸错误与 Midjourney 生成张数语义，已开始在后端做统一归一；后续排障不能继续把这些差异当成各页面各自处理的偶发问题。
+- 2026-06-21~2026-06-22 的默认续做入口又补进了“图片结果与引用图输入层”：
+  - `/image` 最近运行结果开始收口到更明确的 image arena 结果视图，不再只按平铺结果列表理解多图输出；收藏、加入画布和送电商入口开始围绕单轮 run 聚合。
+  - 账号级图片输入 URL 已进入默认产品面；后续再看参考图、继续编辑或跨页复用时，不能只按会话局部临时文件理解。
+  - 临时参考图 URL 现已支持签名安全路径，默认心智不再是“引用图地址天然长期可直连”。
+- profile / team 侧的图片使用状态也继续收口：
+  - profile usage status 现在更偏向图片工作台真实使用语义，而不再只是泛泛的账号统计文案。
+  - 团队页继续维持“共享额度/使用视图”的背景层，但当前高频排障更应优先回到图片工作台共享设置与图片输入来源。
 - 团队模式 v1 的后续验证重点继续前移到 team usage 收口：
   - 除了 `team_id`、`payer_user_id`、`actor_user_id`，现在还要确认团队页与新工作台默认按同一计费/展示语义工作。
 - UI 继续维持独立用户版语义：
@@ -60,17 +71,26 @@ Sub2API 对应桥接提交为 `fe2f80be1 feat: add studio bridge integration`。
 - 2026-06-16 Pro Studio 生产模式已进入稳定默认面：`/canvas` 与 `/ecommerce-suite` 都支持 production mode，显示用途、等级、高级 official 设置和 `gpt-image-2-official` 锁模；电商生产模式支持商品主图、电商横幅、详情页竖图、场景图和 SKU 批量图。
 - 2026-06-16 电商生产交付闭环已进入稳定默认面：ZIP 打包下载、文案保存为 text asset、已完成图片归入项目素材集，说明生产模式不再只是参数面板，而是实际交付链路。
 - 2026-06-16 Gemini 图片模型兼容边界已更新：Gemini 图片模型切到 preview 路由，并支持 reference uploads；后续再看模型兼容问题时，应按新 preview/reference 语义排查。
+- 2026-06-18~2026-06-19 图片模型设置基线继续收口：`/image`、`/canvas`、`/ecommerce-suite` 已继续接入和整理统一的 image model settings 面板；后续如果某个工作台的模型标签、参数区或默认值异常，优先按共享配置层排查，而不是先假设是单页 UI 独有问题。
+- 2026-06-18~2026-06-19 品牌与文案收口继续推进：模型标签默认隐藏上游品牌，工作台更偏向站内产品语义；后续知识入口不应再把“暴露上游品牌名”当成正常默认行为。
+- 2026-06-19 image gateway 模型支持已进入稳定候选面：这说明当前图片工作台不再只围绕 official/非 official 两条老路径，而是在向“多图片模型网关 + 统一设置/校验”演进。
+- 2026-06-19 上游错误归一已形成新的后端默认边界：图片内容策略错误、尺寸错误与 Midjourney generation count 已开始统一映射；后续如果前端提示文案、错误态或重试逻辑异常，应先查统一归一层而不是分散页面逻辑。
+- 2026-06-21 image arena 已进入新的稳定候选面：多图结果现在更适合按单个 run 的主图 + 缩略图切换、预览/下载/收藏/送电商动作聚合理解，而不是继续按长列表图片块理解。
+- 2026-06-22 临时参考图签名 URL 已进入新的稳定后端边界：后续任何“引用图突然失效/继续编辑拿不到图/跨页结果回填丢图”的问题，都要优先检查签名临时 URL 与过期语义。
 
 ## 下一步
 
 - 上线前先整理生产部署清单，确认两个站点域名、回跳 URL、充值 URL、内部密钥、默认分组、对象存储地域和 bucket 私有读写策略。
+- 如继续做图片工作台 follow-up，优先补一轮跨页面最小 smoke：`/image`、`/canvas`、`/ecommerce-suite` 至少各验证一次模型设置面板、模型标签隐藏、提交 payload、image arena 结果交互和错误提示是否一致。
 - 如继续做知识或验收，优先把 `/image`、`/canvas`、`/ecommerce-suite`、素材库和 team usage 当成同一条创作底座补最小浏览器闭环，而不是分散按单页验收。
+- 如继续做后端联调，优先补真实账号下的 account image input URL、signed temp reference image URL 与继续编辑/参考图回填闭环。
 - 对象存储生产配置建议改为私有读写：`CHATGPT2API_IMAGE_OBJECT_STORAGE_ACL=private` 或留空使用 bucket 默认私有；如配置 `CHATGPT2API_IMAGE_OBJECT_STORAGE_PUBLIC_BASE_URL`，必须同步配置 CDN TypeA 鉴权密钥和 TTL。
 - 使用真实账号做浏览器 E2E：注册、登录回跳、充值、创作成功/失败扣费、使用记录、团队创建/加入/团队扣费。
 - 使用真实账号下载个人、团队、公共图片各一次，验证 `/api/images/download-url` 返回短期签名 URL，浏览器下载流量直连对象存储域名，不走后端转发大文件。
 - CDN 生产验收需确认：下载 URL 为 CDN 域名且带 `sign`；去掉 `sign` 或等待过期后返回 403；直接访问 COS 原始对象地址失败；CDN 已具备回源私有 COS 的授权或等效配置。
 - 如继续核对团队使用记录，优先用真实团队账号提交一条对话和一条生图，验证团队表价格分别显示类似 `¥0.001` / `¥0.051`，Sub2API 使用记录同步存在对应 commit 记录。
 - 如继续开发，优先补生产联调脚本和 Playwright 最小闭环，而不是继续扩展新功能。
+- 如继续做真实上游回归，优先补 Midjourney generation count、image size validation 和内容策略错误归一的人工验证，确认统一错误映射没有误伤现有工作台提示文案。
 - 如继续素材库验收，入口链路和 `/image` 素材库 smoke 已通过；下一步优先用有真实图片的登录态浏览器跑 `/image-manager` 新建 `ui` 素材集、批量加入/移出、团队 manager 与普通成员权限、公共图库只读，以及 `/canvas` 从素材集加入画布。
 - 如继续新工作台验收，优先补 `ecommerce-suite` 与 Pro Studio 的最小浏览器闭环：进入工作台、切换 production mode、读取示例/项目状态、触发结果进入现有资产/输出链路，并确认团队页 usage 语义没有与旧页面脱节。
 - 如继续会话/余额同步，优先做真实浏览器人工切号测试：Sub2 账号 A -> 落叶 -> Sub2 切账号 B -> 回落叶，应跳 `/login` 后重新 launch，不能静默继续用账号 A。

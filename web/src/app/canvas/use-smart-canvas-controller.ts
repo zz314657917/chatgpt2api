@@ -42,6 +42,7 @@ import {
   type ImageVisibility,
   type ManagedImageCollection,
   type ManagedImageSummary,
+  type ManagedVideoAssetSummary,
   type TeamSummary,
 } from "@/lib/api";
 import { fetchAuthenticatedImageBlob } from "@/lib/authenticated-image";
@@ -92,6 +93,7 @@ import {
   createGeneratorNode,
   createHistoryEntry,
   createImageItem,
+  createVideoItem,
   createLlmNode,
   createLoopNode,
   createOutputNode,
@@ -99,6 +101,7 @@ import {
   createSmartEdge,
   createVideoGeneratorNode,
   creationTaskToOutput,
+  creationTasksToVideoAssets,
   canConnectSmartCanvasNodes,
   dedupeCanvasImageRefs,
   expandedCanvasImagesFromItem,
@@ -153,6 +156,7 @@ const DETAIL_ENHANCE_PROMPT = "请对这张图片进行细节增强和高清修�
 const AI_BACKGROUND_REMOVAL_PROMPT = "AI 抠图：自动识别图片中的主要主体，移除背景并输出透明背景 PNG。保持主体形状、纹理、颜色和像素细节，避免新增或重绘无关内容。注意：这是 AI 编辑，可能会重绘图片内容。";
 
 type SmartCanvasAssetLibraryScope = "mine" | "team";
+type SmartCanvasAssetMediaType = "image" | "video";
 
 type SmartCanvasNodeClipboard = {
   nodes: SmartCanvasItem[];
@@ -1034,6 +1038,10 @@ export function useSmartCanvasController() {
   const [hasMoreTeamAssets, setHasMoreTeamAssets] = useState(false);
   const [teamAssetsLoaded, setTeamAssetsLoaded] = useState(false);
   const [assetLibraryScope, setAssetLibraryScope] = useState<SmartCanvasAssetLibraryScope>("mine");
+  const [assetLibraryMediaType, setAssetLibraryMediaType] = useState<SmartCanvasAssetMediaType>("image");
+  const [videoAssets, setVideoAssets] = useState<ManagedVideoAssetSummary[]>([]);
+  const [videoAssetsLoaded, setVideoAssetsLoaded] = useState(false);
+  const [loadingVideoAssets, setLoadingVideoAssets] = useState(false);
   const [assetCollections, setAssetCollections] = useState<Record<SmartCanvasAssetLibraryScope, ManagedImageCollection[]>>({
     mine: [],
     team: [],
@@ -1107,6 +1115,7 @@ export function useSmartCanvasController() {
   const nodePasteOffsetRef = useRef(0);
   const assetsLoadingRequestRef = useRef(false);
   const teamAssetsLoadingRequestRef = useRef(false);
+  const videoAssetsLoadingRequestRef = useRef(false);
 
   const selectedItem = useMemo(
     () => canvas?.nodes.find((item) => item.id === selectedItemId) || null,
@@ -1409,6 +1418,24 @@ export function useSmartCanvasController() {
     }
   }, [activeTeam?.id]);
 
+  const loadVideoAssets = useCallback(async () => {
+    if (videoAssetsLoadingRequestRef.current) {
+      return;
+    }
+    videoAssetsLoadingRequestRef.current = true;
+    setLoadingVideoAssets(true);
+    try {
+      const result = await fetchCreationTasks([]);
+      setVideoAssets(creationTasksToVideoAssets(result.items || []).slice(0, 80));
+      setVideoAssetsLoaded(true);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "加载视频资源失败");
+    } finally {
+      videoAssetsLoadingRequestRef.current = false;
+      setLoadingVideoAssets(false);
+    }
+  }, []);
+
   useEffect(() => {
     if (assetSidebarActivated && assetLibraryScope === "team" && activeTeam?.id && !teamAssetsLoaded && !loadingPublicAssets) {
       void loadTeamAssets();
@@ -1433,11 +1460,14 @@ export function useSmartCanvasController() {
   }, []);
 
   const refreshAssetLibrary = useCallback(() => {
+    if (assetLibraryMediaType === "video") {
+      return loadVideoAssets();
+    }
     if (assetLibraryScope === "team") {
       return loadTeamAssets();
     }
     return loadAssets();
-  }, [assetLibraryScope, loadAssets, loadTeamAssets]);
+  }, [assetLibraryMediaType, assetLibraryScope, loadAssets, loadTeamAssets, loadVideoAssets]);
 
   useEffect(() => {
     if (!assetSidebarActivated) {
@@ -1458,6 +1488,12 @@ export function useSmartCanvasController() {
   }, [activeAssetCollectionId, assetSidebarActivated, assetLibraryScope, refreshAssetLibrary]);
 
   const ensureAssetLibraryLoaded = useCallback(() => {
+    if (assetLibraryMediaType === "video") {
+      if (!videoAssetsLoaded && !loadingVideoAssets && !videoAssetsLoadingRequestRef.current) {
+        void loadVideoAssets();
+      }
+      return;
+    }
     if (assetLibraryScope === "team") {
       if (!teamAssetsLoaded && !loadingPublicAssets && !teamAssetsLoadingRequestRef.current) {
         void loadTeamAssets();
@@ -1467,7 +1503,14 @@ export function useSmartCanvasController() {
     if (!assetsLoaded && !loadingAssets && !assetsLoadingRequestRef.current) {
       void loadAssets();
     }
-  }, [assetLibraryScope, assetsLoaded, loadAssets, loadTeamAssets, loadingAssets, loadingPublicAssets, teamAssetsLoaded]);
+  }, [assetLibraryMediaType, assetLibraryScope, assetsLoaded, loadAssets, loadTeamAssets, loadVideoAssets, loadingAssets, loadingPublicAssets, loadingVideoAssets, teamAssetsLoaded, videoAssetsLoaded]);
+
+  const setAssetLibraryVideoActive = useCallback((active: boolean) => {
+    setAssetLibraryMediaType(active ? "video" : "image");
+    if (active && !videoAssetsLoaded && !loadingVideoAssets && !videoAssetsLoadingRequestRef.current) {
+      void loadVideoAssets();
+    }
+  }, [loadVideoAssets, loadingVideoAssets, videoAssetsLoaded]);
 
   const activateAssetSidebar = useCallback(() => {
     setAssetSidebarActivated(true);
@@ -1482,11 +1525,14 @@ export function useSmartCanvasController() {
   }, [ensureAssetLibraryLoaded]);
 
   const loadMoreAssetLibrary = useCallback(() => {
+    if (assetLibraryMediaType === "video") {
+      return undefined;
+    }
     if (assetLibraryScope === "team") {
       return loadMoreTeamAssets();
     }
     return loadMoreAssets();
-  }, [assetLibraryScope, loadMoreAssets, loadMoreTeamAssets]);
+  }, [assetLibraryMediaType, assetLibraryScope, loadMoreAssets, loadMoreTeamAssets]);
 
   const reloadCanvases = useCallback(async () => {
     try {
@@ -4387,6 +4433,17 @@ export function useSmartCanvasController() {
     addImagesToComposer(managedImagesToRefs([asset]));
   }, [addImagesToComposer]);
 
+  const addVideoAssetToCanvas = useCallback((video: ManagedVideoAssetSummary) => {
+    const rect = boardRef.current?.getBoundingClientRect();
+    const world = rect
+      ? screenToWorld({ x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }, rect, viewportRef.current)
+      : { x: 120, y: 120 };
+    const offset = canvasItemCenterOffset("result");
+    const item = createVideoItem(video, { x: world.x + offset.x, y: world.y + offset.y });
+    updateCanvas((current) => ({ ...current, nodes: [...current.nodes, item] }), true, "添加视频资源");
+    selectSingleItem(item.id);
+  }, [selectSingleItem, updateCanvas]);
+
   const addMentionImageToPrompt = useCallback((nodeId: string, image: CanvasImageRef) => {
     updateCanvas((current) => ({
       ...current,
@@ -4497,8 +4554,10 @@ export function useSmartCanvasController() {
     models,
     activeTeam,
     assets: assetLibraryScope === "team" ? teamAssets : assets,
+    videoAssets,
     assetSidebarActivated,
     assetLibraryScope,
+    assetLibraryMediaType,
     assetLibraryTabs,
     assetCollections: activeAssetCollections,
     assetUnclassifiedCount: activeAssetUnclassifiedCount,
@@ -4519,6 +4578,7 @@ export function useSmartCanvasController() {
     loadingAssets: assetLibraryScope === "team" ? loadingPublicAssets : loadingAssets,
     loadingMoreAssets: assetLibraryScope === "team" ? loadingMorePublicAssets : loadingMoreAssets,
     hasMoreAssets: assetLibraryScope === "team" ? hasMoreTeamAssets : hasMoreAssets,
+    loadingVideoAssets,
     draggingImages,
     mentionOpen,
     mentionItems,
@@ -4556,6 +4616,7 @@ export function useSmartCanvasController() {
     setOnboardingOpen,
     setLeftRailCollapsed,
     setAssetLibraryScope: selectAssetLibraryScope,
+    setAssetLibraryVideoActive,
     setAssetCollection: selectAssetCollection,
     undoCanvas,
     redoCanvas,
@@ -4624,6 +4685,7 @@ export function useSmartCanvasController() {
     deleteImageFromItem,
     addAssetToCanvas,
     addAssetToComposer,
+    addVideoAssetToCanvas,
     activateAssetSidebar,
     handleAssetSidebarExpandedChange,
     addMentionImageToPrompt,

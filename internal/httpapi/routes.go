@@ -1920,6 +1920,8 @@ func validateImageReferenceLimit(body map[string]any, images []protocol.Uploaded
 		return nil
 	case sub2APIUsesGeminiImageGateway(body):
 		return validateImageReferenceCount(len(sub2APIGeminiImageURLs(payload)), 14, "Gemini")
+	case sub2APIUsesSeedreamGateway(body):
+		return validateSeedreamImageReferenceAndCount(body, len(sub2APISeedreamImageURLs(payload)))
 	case model == util.ImageModelGPT || model == util.ImageModelGPTOfficial:
 		return validateImageReferenceCount(len(sub2APIImageURLs(payload)), 16, "GPT-Image-2")
 	default:
@@ -1932,6 +1934,17 @@ func validateImageReferenceCount(count, limit int, label string) error {
 		return nil
 	}
 	return protocol.HTTPError{Status: http.StatusBadRequest, Message: fmt.Sprintf("%s 参考图最多支持 %d 张", label, limit)}
+}
+
+func validateSeedreamImageReferenceAndCount(body map[string]any, referenceCount int) error {
+	count := util.ToInt(body["n"], 1)
+	if count < 1 {
+		count = 1
+	}
+	if referenceCount+count <= sub2APISeedreamInputOutputLimit {
+		return nil
+	}
+	return protocol.HTTPError{Status: http.StatusBadRequest, Message: fmt.Sprintf("Seedream 参考图数量和生成数量合计最多支持 %d", sub2APISeedreamInputOutputLimit)}
 }
 
 func imageOutputOptionsFromBody(body map[string]any) service.ImageOutputOptions {

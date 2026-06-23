@@ -2,7 +2,7 @@
 title: Build And Verify
 type: build
 repo: chatgpt2api
-last_verified: 2026-06-18
+last_verified: 2026-06-19
 ---
 
 # 构建与验证
@@ -144,6 +144,19 @@ Gemini 图片模型路由、preview 切换或 reference upload 类修改：
 5. `git diff --check`
 6. 如本地预览环境可用，至少补 `/image` 或生产工作台最小回读，确认 Gemini 模型仍能提交 reference inputs
 
+image gateway 模型支持、统一 image settings 面板、模型标签隐藏或图片错误归一类修改：
+
+1. `go test ./internal/service ./internal/protocol ./internal/httpapi -count=1`
+2. `cd web && npm run lint`
+3. `cd web && npm run build`
+4. `go test ./...`
+5. `git diff --check`
+6. 如本地预览或容器环境可用，至少补一次跨工作台浏览器 smoke：
+   - `/image`、`/canvas`、`/ecommerce-suite` 至少各打开一次模型设置区
+   - 确认模型标签不再暴露不该展示的 upstream brand
+   - 确认同一模型在不同工作台的设置项命名和默认值没有明显漂移
+   - 至少触发一次图片尺寸或内容策略错误，确认前端提示走统一错误语义
+
 ## 当前稳定验证心智
 
 - 当前 image workspace 主线至少应覆盖：
@@ -203,6 +216,11 @@ Gemini 图片模型路由、preview 切换或 reference upload 类修改：
   - Gemini 图片模型走 preview 路由
   - reference uploads 仍可提交
   - 前后端 payload 不回退到旧字段或旧入口
+- 当前统一图片设置/错误归一主线至少应覆盖：
+  - `/image`、`/canvas`、`/ecommerce-suite` 的 image settings 面板能打开且主设置项含义一致
+  - 模型标签默认不暴露不该展示的 upstream brand
+  - image gateway 新模型不会让共享 payload、校验或展示层退回到单页特例处理
+  - Midjourney generation count、图片尺寸错误和内容策略错误的提示语义在不同工作台保持一致
 - 只跑前端 build 不足以证明 Sub2API launch/redeem 或图片任务链路正确；涉及登录态、任务、配置和存储时必须带后端测试。
 - 只跑 `go test ./...` 也不足以证明 `/image` 工作台 UI 没被破坏；涉及编辑器、拖拽和展示流时应至少补前端 build。
 - 只跑命令行构建也不足以证明 `/canvas` 交互没退化；涉及节点拖拽、连线、画布缩放、自动保存和运行状态时，应至少补浏览器侧最小回读。
@@ -211,6 +229,7 @@ Gemini 图片模型路由、preview 切换或 reference upload 类修改：
 - 只跑仓库内单边测试也不足以证明独立用户版桥接正常；涉及落叶创艺生产联调时，至少要确认 Sub2API 与 chatgpt2api 两边配置、回跳和扣费语义是一致的。
 - 只跑单个工作台 smoke 也不足以证明生产交付链路正常；涉及 Pro Studio、`ecommerce-suite` 或 Gemini reference upload 时，至少要确认 creation-task 元数据、素材归档和前端工作台展示没有脱节。
 - 只确认“能导出拼图”也不足以证明 `ecommerce-suite` 排版链路正常；还要确认参与图片选择、顺序调整、项目重开后的持久化，以及 AI 合成入口读取的是当前排版状态。
+- 只确认“模型能选中”也不足以证明 6/19 的图片工作台 follow-up 正常；还要确认跨工作台的 settings 命名、品牌展示、上游错误映射和 generation count 语义没有分叉。
 
 ## 当前验证缺口
 

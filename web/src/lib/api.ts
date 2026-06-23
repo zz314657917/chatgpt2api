@@ -27,6 +27,8 @@ export const IMAGE_MODEL_OPTIONS = [
   { value: "gpt-image-2-official", label: "gpt-image-2-official" },
   { value: "midjourney", label: "Midjourney" },
   { value: "grok-imagine-1.5", label: "grok-imagine-1.5" },
+  { value: "doubao-seedance-4-0", label: "doubao-seedance-4-0" },
+  { value: "doubao-seedance-4-5", label: "doubao-seedance-4-5" },
   { value: "gemini-3-pro-image-preview", label: "gemini-3-pro-image-preview" },
   { value: "gemini-3-pro-image-preview-official", label: "gemini-3-pro-image-preview-official" },
   { value: "gemini-3.1-flash-image-preview", label: "gemini-3.1-flash-image-preview" },
@@ -42,14 +44,18 @@ export const CODEX_IMAGE_MODEL: ImageModel = "codex-gpt-image-2";
 export const OFFICIAL_IMAGE_MODEL: ImageModel = "gpt-image-2-official";
 export const MIDJOURNEY_IMAGE_MODEL: ImageModel = "midjourney";
 export const GROK_IMAGINE_IMAGE_MODEL: ImageModel = "grok-imagine-1.5";
+export const SEEDREAM_4_IMAGE_MODEL: ImageModel = "doubao-seedance-4-0";
+export const SEEDREAM_45_IMAGE_MODEL: ImageModel = "doubao-seedance-4-5";
 const IMAGE_MODEL_VALUES = new Set<string>(IMAGE_MODEL_OPTIONS.map((option) => option.value));
 const GEMINI_FLASH_IMAGE_MODELS = new Set<string>(["gemini-3.1-flash-image-preview", "gemini-3.1-flash-image-preview-official"]);
 const GEMINI_PRO_IMAGE_MODELS = new Set<string>(["gemini-3-pro-image-preview", "gemini-3-pro-image-preview-official"]);
+const SEEDREAM_IMAGE_MODELS = new Set<string>([SEEDREAM_4_IMAGE_MODEL, SEEDREAM_45_IMAGE_MODEL]);
 const IMAGE_TASK_MODEL_VALUES = new Set<string>([
   "gpt-image-2",
   "gpt-image-2-official",
   MIDJOURNEY_IMAGE_MODEL,
   GROK_IMAGINE_IMAGE_MODEL,
+  ...SEEDREAM_IMAGE_MODELS,
   ...GEMINI_PRO_IMAGE_MODELS,
   ...GEMINI_FLASH_IMAGE_MODELS,
 ]);
@@ -94,6 +100,10 @@ export function isGeminiFlashImageModel(model?: string) {
 
 export function isGeminiProImageModel(model?: string) {
   return GEMINI_PRO_IMAGE_MODELS.has(String(model || "").trim());
+}
+
+export function isSeedreamImageModel(model?: string) {
+  return SEEDREAM_IMAGE_MODELS.has(String(model || "").trim());
 }
 
 export function imageTaskSubmitCount(model: string | undefined, count: number) {
@@ -351,6 +361,14 @@ export const IMAGE_MODEL_ROUTE_DETAILS: Partial<Record<
     routeLabel: "Grok Imagine 1.5",
     description: "Grok Imagine 1.5 通道，支持提示词和 1 张参考图。",
   },
+  "doubao-seedance-4-0": {
+    routeLabel: "Seedream 4.0",
+    description: "Seedream 4.0 图片通道，支持提示词和最多 14 张参考图。",
+  },
+  "doubao-seedance-4-5": {
+    routeLabel: "Seedream 4.5",
+    description: "Seedream 4.5 图片通道，支持提示词和最多 14 张参考图。",
+  },
   "gemini-3-pro-image-preview": {
     routeLabel: "Nano Banana Pro 标准版本",
     description: "Nano Banana Pro 标准版本。",
@@ -381,6 +399,14 @@ export function isImageCreationModel(value: unknown): value is ImageModel {
   return isImageTaskModel(value);
 }
 
+export function isHiddenImageModelOption(model: unknown) {
+  const normalized = String(model || "").trim().toLowerCase();
+  if (!normalized || normalized === CODEX_IMAGE_MODEL) {
+    return true;
+  }
+  return normalized === "grok-imagine-1.5-apimart" || normalized === "grok-imagine-1.5-edit-apimart";
+}
+
 export function isChatModel(value: unknown): value is ImageModel {
   return isImageModel(value) && (CHAT_MODEL_VALUES.has(value) || !modelIDLooksImageCapable(value));
 }
@@ -400,6 +426,8 @@ export function modelIDLooksImageCapable(model: string) {
     "dall-e",
     "midjourney",
     "grok-imagine",
+    "seedream",
+    "seedance",
     "kolors",
     "ideogram",
     "recraft",
@@ -488,6 +516,8 @@ export function imageReferenceInputLimit(model: ImageModel | string | undefined)
     case "gemini-3-pro-image-preview-official":
     case "gemini-3.1-flash-image-preview":
     case "gemini-3.1-flash-image-preview-official":
+    case SEEDREAM_4_IMAGE_MODEL:
+    case SEEDREAM_45_IMAGE_MODEL:
       return 14;
     default:
       return 16;
@@ -1245,6 +1275,14 @@ export type CanvasVideoRef = {
   url?: string;
   local_url?: string;
   name?: string;
+};
+
+export type ManagedVideoAssetSummary = CanvasVideoRef & {
+  id: string;
+  task_id: string;
+  model?: string;
+  created_at?: string;
+  updated_at?: string;
 };
 
 export type CanvasNodeOutput = {
@@ -2467,12 +2505,13 @@ export async function createChatCompletion(model: ImageModel, messages: Creation
   });
 }
 
-export async function fetchCreationTasks(ids: string[]) {
+export async function fetchCreationTasks(ids: string[], options: { signal?: AbortSignal } = {}) {
   const params = new URLSearchParams();
   if (ids.length > 0) {
     params.set("ids", ids.join(","));
   }
   const data = await httpRequest<CreationTaskListResponse>(`/api/creation-tasks${params.toString() ? `?${params.toString()}` : ""}`, {
+    signal: options.signal,
     headers: {
       "Cache-Control": "no-cache",
       Pragma: "no-cache",

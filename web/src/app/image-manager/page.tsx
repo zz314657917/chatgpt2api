@@ -1,7 +1,7 @@
 "use client";
 
 import { forwardRef, useCallback, useEffect, useMemo, useRef, useState, type HTMLAttributes } from "react";
-import { Check, Copy, Download, Eye, FileText, Folder, FolderPlus, ImageIcon, ImagePlus, Info, LoaderCircle, MoreHorizontal, Pencil, RefreshCw, Search, Send, SlidersHorizontal, Sparkles, Tag, Trash2, Type, Users, X } from "lucide-react";
+import { Check, Clapperboard, Copy, Download, Eye, FileText, Folder, FolderPlus, ImageIcon, ImagePlus, Info, LoaderCircle, MoreHorizontal, Pencil, RefreshCw, Search, Send, SlidersHorizontal, Sparkles, Tag, Trash2, Type, Users, X } from "lucide-react";
 import { VirtuosoGrid, type VirtuosoGridHandle } from "react-virtuoso";
 import { useLocation, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
@@ -36,6 +36,7 @@ import {
   deleteManagedImageCollection,
   deleteManagedTextAssetCollection,
   deleteManagedTextAsset,
+  fetchCreationTasks,
   fetchManagedImageDownloadURL,
   fetchManagedImageCollections,
   fetchManagedImageDetail,
@@ -56,6 +57,8 @@ import {
   type ManagedImageCollection,
   type ManagedImageDetail,
   type ManagedImageSummary,
+  type CreationTask,
+  type CreationTaskData,
   type ManagedTextAsset,
   type ManagedTextAssetCollection,
   type ManagedTextAssetListScope,
@@ -218,8 +221,25 @@ type ImageOrientationFilter = "all" | "landscape" | "portrait" | "square" | "unk
 type ImageResolutionFilter = "all" | "1080p" | "2k" | "4k" | "unknown";
 type ImageAspectRatioFilter = "all" | "1:1" | "4:3" | "3:4" | "16:9" | "9:16" | "other" | "unknown";
 type AutoRefreshMenuScope = "mobile" | "desktop";
-type AssetLibraryKind = "image" | "text";
+type AssetLibraryKind = "image" | "video" | "text";
 type TextAssetScope = ManagedTextAssetListScope;
+
+type ManagedVideoAsset = {
+  id: string;
+  task_id: string;
+  output_index: number;
+  url: string;
+  local_url: string;
+  name: string;
+  model: string;
+  size?: string;
+  duration?: number;
+  aspect_ratio?: string;
+  resolution?: string;
+  prompt?: string;
+  created_at: string;
+  updated_at: string;
+};
 
 type TextAssetEditorTarget =
   | { mode: "create" }
@@ -299,6 +319,115 @@ function formatTextAssetTime(value?: string) {
 
 function textAssetScopeLabel(scope: TextAssetScope) {
   return scope === "team" ? "团队" : "个人";
+}
+
+function videoAssetSource(item: ManagedVideoAsset) {
+  return item.local_url || item.url;
+}
+
+function videoAssetOwnerLabel() {
+  return "当前账号";
+}
+
+function videoAssetTime(value?: string) {
+  return formatTextAssetTime(value);
+}
+
+function videoAssetMeta(item: ManagedVideoAsset) {
+  return [
+    item.model || "未记录模型",
+    item.aspect_ratio || item.size || "",
+    item.resolution || "",
+    item.duration ? `${item.duration}s` : "",
+  ].filter(Boolean).join(" · ");
+}
+
+function buildVideoDownloadName(item: ManagedVideoAsset) {
+  const sourceName = item.name || item.url.split("?")[0]?.split("/").filter(Boolean).pop();
+  if (sourceName && /\.[a-z0-9]+$/i.test(sourceName)) {
+    return sourceName;
+  }
+  return `${sourceName || item.task_id || "video"}.mp4`;
+}
+
+function creationTaskDataVideoURL(item: CreationTaskData) {
+  return [item.video_url, item.local_url, item.url].map((value) => String(value || "").trim()).find(Boolean) || "";
+}
+
+function taskPrompt(task: CreationTask) {
+  const raw = task as CreationTask & { prompt?: string };
+  return String(raw.prompt || "").trim();
+}
+
+function taskDuration(task: CreationTask) {
+  const raw = task as CreationTask & { duration?: number | string };
+  const value = Number(raw.duration);
+  return Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+function taskAspectRatio(task: CreationTask) {
+  const raw = task as CreationTask & { aspect_ratio?: string };
+  return String(raw.aspect_ratio || task.size || "").trim();
+}
+
+function taskResolution(task: CreationTask) {
+  const raw = task as CreationTask & { resolution?: string };
+  return String(raw.resolution || "").trim();
+}
+
+function videoAssetName(task: CreationTask, data: CreationTaskData, index: number) {
+  const raw = data as CreationTaskData & { name?: string };
+  const name = String(raw.name || "").trim();
+  if (name) {
+    return name;
+  }
+  return `${task.model || "video"}-${String(index + 1).padStart(2, "0")}.mp4`;
+}
+
+function videoAssetsFromTasks(tasks: CreationTask[]) {
+  return tasks.flatMap((task) => {
+    if (task.mode !== "video" || task.status !== "success" || !Array.isArray(task.data)) {
+      return [];
+    }
+    return task.data.flatMap((data, index): ManagedVideoAsset[] => {
+      const url = creationTaskDataVideoURL(data);
+      if (!url) {
+        return [];
+      }
+      return [{
+        id: `${task.id}:${index}:${url}`,
+        task_id: task.id,
+        output_index: index,
+        url,
+        local_url: String(data.local_url || data.video_url || data.url || "").trim(),
+        name: videoAssetName(task, data, index),
+        model: String(task.model || "").trim(),
+        size: String(task.size || "").trim() || undefined,
+        duration: taskDuration(task),
+        aspect_ratio: taskAspectRatio(task) || undefined,
+        resolution: taskResolution(task) || data.resolution || undefined,
+        prompt: taskPrompt(task),
+        created_at: task.created_at,
+        updated_at: task.updated_at,
+      }];
+    });
+  });
+}
+
+function filterVideoAssets(items: ManagedVideoAsset[], query: string) {
+  const normalized = query.trim().toLowerCase();
+  if (!normalized) {
+    return items;
+  }
+  return items.filter((item) => [
+    item.name,
+    item.model,
+    item.prompt,
+    item.task_id,
+    item.url,
+    item.aspect_ratio,
+    item.resolution,
+  ].some((value) => String(value || "").toLowerCase().includes(normalized)));
 }
 
 function formatStorageBytes(bytes?: number) {
@@ -472,6 +601,7 @@ function ImageManagerContent({
   canUpdateTextAssets,
   canDeleteTextAssets,
   canManageTextAssetCollections,
+  canViewVideoAssets,
   isAdmin,
 }: {
   cacheScope: string;
@@ -485,6 +615,7 @@ function ImageManagerContent({
   canUpdateTextAssets: boolean;
   canDeleteTextAssets: boolean;
   canManageTextAssetCollections: boolean;
+  canViewVideoAssets: boolean;
   isAdmin: boolean;
 }) {
   const navigate = useNavigate();
@@ -493,6 +624,7 @@ function ImageManagerContent({
   const activeLoadRef = useRef<AbortController | null>(null);
   const autoRefreshAbortRef = useRef<AbortController | null>(null);
   const textAssetLoadRef = useRef<AbortController | null>(null);
+  const videoAssetLoadRef = useRef<AbortController | null>(null);
   const imageGridRef = useRef<VirtuosoGridHandle | null>(null);
   const imageGridScrollerRef = useRef<HTMLElement | null>(null);
   const [assetKind, setAssetKind] = useState<AssetLibraryKind>("image");
@@ -520,6 +652,12 @@ function ImageManagerContent({
   const [textAssetCollectionDeleteTarget, setTextAssetCollectionDeleteTarget] = useState<TextAssetCollectionDeleteTarget | null>(null);
   const [textAssetCollectionAssignTarget, setTextAssetCollectionAssignTarget] = useState<TextAssetCollectionAssignTarget | null>(null);
   const [textAssetCollectionMutating, setTextAssetCollectionMutating] = useState(false);
+  const [videoSearch, setVideoSearch] = useState("");
+  const [videoAssets, setVideoAssets] = useState<ManagedVideoAsset[]>([]);
+  const [isVideoLoading, setIsVideoLoading] = useState(false);
+  const [videoLoadError, setVideoLoadError] = useState("");
+  const [focusedVideoAssetId, setFocusedVideoAssetId] = useState<string | null>(null);
+  const [downloadingVideoId, setDownloadingVideoId] = useState<string | null>(null);
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
   const [selectedImageIds, setSelectedImageIds] = useState<Record<string, boolean>>({});
@@ -685,6 +823,16 @@ function ImageManagerContent({
     }
     return textAssets[0] || null;
   }, [focusedTextAssetId, textAssets]);
+  const visibleVideoAssets = useMemo(() => filterVideoAssets(videoAssets, videoSearch), [videoAssets, videoSearch]);
+  const focusedVideoAsset = useMemo(() => {
+    if (focusedVideoAssetId) {
+      const focused = visibleVideoAssets.find((item) => item.id === focusedVideoAssetId);
+      if (focused) {
+        return focused;
+      }
+    }
+    return visibleVideoAssets[0] || null;
+  }, [focusedVideoAssetId, visibleVideoAssets]);
   const canMutateCollections = canManageCollections && (galleryView === "mine" || Boolean(galleryView === "team" && teamManager && activeTeam?.id));
   const selectedRealCollection = selectedCollectionId && selectedCollectionId !== MANAGED_IMAGE_UNCLASSIFIED_COLLECTION_ID;
   const collectionReadOnlyHint = canMutateCollections
@@ -697,8 +845,9 @@ function ImageManagerContent({
   const libraryViewLabel = galleryView === "team" ? "团队" : galleryView === "all" ? "全部" : "个人";
   const imageCountLabel = hasMoreItems ? `已加载 ${items.length} 张` : `当前 ${items.length} 张`;
   const textAssetCountLabel = textAssetHasMore ? `已加载 ${textAssets.length} 条` : `当前 ${textAssets.length} 条`;
-  const activeLibraryScopeLabel = assetKind === "text" ? textAssetScopeLabel(textAssetScope) : libraryViewLabel;
-  const activeLibraryCountLabel = assetKind === "text" ? textAssetCountLabel : imageCountLabel;
+  const videoAssetCountLabel = `当前 ${visibleVideoAssets.length} 个`;
+  const activeLibraryScopeLabel = assetKind === "video" ? "视频" : assetKind === "text" ? textAssetScopeLabel(textAssetScope) : libraryViewLabel;
+  const activeLibraryCountLabel = assetKind === "video" ? videoAssetCountLabel : assetKind === "text" ? textAssetCountLabel : imageCountLabel;
   const selectedTextAssetCollectionLabel = !selectedTextAssetCollectionId
     ? "全部文本"
     : selectedTextAssetCollectionId === MANAGED_TEXT_ASSET_UNCLASSIFIED_COLLECTION_ID
@@ -717,6 +866,7 @@ function ImageManagerContent({
       ? "团队文本素材由 owner 或 manager 维护，团队成员可复用。"
       : "团队文本素材可查看，维护需要 owner 或 manager 权限。"
     : "个人文本素材可在画布和社媒运营中复用。";
+  const videoAssetHintText = "视频资源库来自当前账号的视频生成成功记录，刷新后会同步最近创作任务输出。";
   const textAssetCollectionHintText = canMutateTextAssetCollections
     ? "一条文本素材只能属于一个素材集，调整归类会替换原素材集。"
     : textAssetScope === "team"
@@ -755,6 +905,10 @@ function ImageManagerContent({
     setTextAssetNextCursor("");
     setTextAssetHasMore(false);
     setFocusedTextAssetId(null);
+  }, []);
+  const clearLoadedVideoAssets = useCallback(() => {
+    setVideoAssets([]);
+    setFocusedVideoAssetId(null);
   }, []);
   const clearTextAssetCollectionFilter = useCallback(() => {
     setSelectedTextAssetCollectionId("");
@@ -1358,6 +1512,37 @@ function ImageManagerContent({
     }
   }, [activeTeam?.id, canViewTextAssets, selectedTextAssetCollectionId, textAssetScope, textAssetSearch]);
 
+  const loadVideoAssets = useCallback(async () => {
+    if (!canViewVideoAssets) {
+      clearLoadedVideoAssets();
+      setVideoLoadError("当前账号没有查看创作任务权限");
+      return;
+    }
+    videoAssetLoadRef.current?.abort();
+    const controller = new AbortController();
+    videoAssetLoadRef.current = controller;
+    setIsVideoLoading(true);
+    setVideoLoadError("");
+    try {
+      const result = await fetchCreationTasks([], { signal: controller.signal });
+      const nextItems = videoAssetsFromTasks(result.items);
+      setVideoAssets(nextItems);
+      setFocusedVideoAssetId((current) => (current && nextItems.some((item) => item.id === current) ? current : null));
+    } catch (error) {
+      if (controller.signal.aborted || isRequestCanceled(error)) {
+        return;
+      }
+      const message = error instanceof Error ? error.message : "加载视频资源失败";
+      setVideoLoadError(message);
+      toast.error(message);
+    } finally {
+      if (videoAssetLoadRef.current === controller) {
+        videoAssetLoadRef.current = null;
+      }
+      setIsVideoLoading(false);
+    }
+  }, [canViewVideoAssets, clearLoadedVideoAssets]);
+
   const loadMoreTextAssets = useCallback(async () => {
     if (isTextAssetLoading || isTextAssetLoadingMore || !textAssetHasMore || !textAssetNextCursor) {
       return;
@@ -1413,6 +1598,11 @@ function ImageManagerContent({
   const updateTextAssetSearch = (value: string) => {
     setTextAssetSearch(value);
     clearLoadedTextAssetsForQueryChange();
+  };
+
+  const updateVideoSearch = (value: string) => {
+    setVideoSearch(value);
+    setFocusedVideoAssetId(null);
   };
 
   const updateVisibilityFilter = (value: ImageVisibilityFilter) => {
@@ -1473,6 +1663,11 @@ function ImageManagerContent({
   const clearTextAssetSearch = () => {
     setTextAssetSearch("");
     clearLoadedTextAssetsForQueryChange();
+  };
+
+  const clearVideoSearch = () => {
+    setVideoSearch("");
+    setFocusedVideoAssetId(null);
   };
 
   const toggleAutoRefresh = () => {
@@ -1794,6 +1989,35 @@ function ImageManagerContent({
     }
   };
 
+  const copyVideoURL = async (item: ManagedVideoAsset) => {
+    try {
+      await navigator.clipboard.writeText(videoAssetSource(item));
+      toast.success("视频地址已复制");
+    } catch {
+      toast.error("复制视频地址失败");
+    }
+  };
+
+  const downloadVideoAsset = async (item: ManagedVideoAsset) => {
+    if (downloadingVideoId) {
+      return;
+    }
+    setDownloadingVideoId(item.id);
+    try {
+      const link = document.createElement("a");
+      link.href = videoAssetSource(item);
+      link.download = buildVideoDownloadName(item);
+      link.rel = "noopener noreferrer";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "下载视频失败");
+    } finally {
+      setDownloadingVideoId(null);
+    }
+  };
+
   const openDeleteTextAssetConfirm = (item: ManagedTextAsset) => {
     if (!canDeleteTextAssetInScope) {
       toast.error(textAssetScope === "team" ? "团队文本素材需要 owner 或 manager 维护" : "当前账号没有删除文本素材权限");
@@ -1983,6 +2207,13 @@ function ImageManagerContent({
   }, [assetKind, loadTextAssetCollections, loadTextAssets]);
 
   useEffect(() => {
+    if (assetKind !== "video") {
+      return;
+    }
+    void loadVideoAssets();
+  }, [assetKind, loadVideoAssets]);
+
+  useEffect(() => {
     if (!focusedItem || focusedDetail) {
       return;
     }
@@ -2045,6 +2276,7 @@ function ImageManagerContent({
       activeLoadRef.current?.abort();
       autoRefreshAbortRef.current?.abort();
       textAssetLoadRef.current?.abort();
+      videoAssetLoadRef.current?.abort();
     };
   }, []);
 
@@ -2103,6 +2335,29 @@ function ImageManagerContent({
           type="button"
           className="absolute top-1/2 right-2 inline-flex size-6 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground transition hover:bg-muted hover:text-foreground"
           onClick={clearTextAssetSearch}
+          aria-label="清空搜索"
+          title="清空搜索"
+        >
+          <X className="size-3.5" />
+        </button>
+      ) : null}
+    </div>
+  );
+
+  const renderVideoSearch = () => (
+    <div className="relative min-w-0">
+      <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
+      <Input
+        value={videoSearch}
+        onChange={(event) => updateVideoSearch(event.target.value)}
+        placeholder="搜索视频名称、模型或提示词"
+        className="h-10 rounded-lg pr-9 pl-9"
+      />
+      {videoSearch ? (
+        <button
+          type="button"
+          className="absolute top-1/2 right-2 inline-flex size-6 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground transition hover:bg-muted hover:text-foreground"
+          onClick={clearVideoSearch}
           aria-label="清空搜索"
           title="清空搜索"
         >
@@ -2318,6 +2573,7 @@ function ImageManagerContent({
         <div className="inline-flex h-10 w-full shrink-0 items-center rounded-lg border border-border bg-muted/50 p-1">
           {[
             { value: "image" as const, label: "图片", icon: ImageIcon },
+            { value: "video" as const, label: "视频", icon: Clapperboard },
             { value: "text" as const, label: "文本", icon: FileText },
           ].map((option) => {
             const Icon = option.icon;
@@ -2344,6 +2600,12 @@ function ImageManagerContent({
             );
           })}
         </div>
+        {assetKind === "video" ? (
+          <div className="flex h-10 w-full shrink-0 items-center rounded-lg border border-border bg-muted/35 px-3 text-sm font-medium text-muted-foreground">
+            <Clapperboard className="mr-2 size-4 shrink-0" />
+            <span className="truncate">当前账号视频</span>
+          </div>
+        ) : (
         <div className="inline-flex h-10 w-full shrink-0 items-center rounded-lg border border-border bg-muted/50 p-1">
           {(assetKind === "text"
             ? [
@@ -2383,8 +2645,9 @@ function ImageManagerContent({
             );
           })}
         </div>
+        )}
         <div className="flex h-5 shrink-0 min-w-0 items-center gap-x-2 overflow-hidden text-sm leading-5 text-muted-foreground">
-          {assetKind === "text" ? <FileText className="size-4 shrink-0" /> : <ImageIcon className="size-4 shrink-0" />}
+          {assetKind === "video" ? <Clapperboard className="size-4 shrink-0" /> : assetKind === "text" ? <FileText className="size-4 shrink-0" /> : <ImageIcon className="size-4 shrink-0" />}
           <span className="shrink-0">{activeLibraryScopeLabel}</span>
           <span className="min-w-0 truncate">{activeLibraryCountLabel}</span>
         </div>
@@ -2507,6 +2770,29 @@ function ImageManagerContent({
           </div>
         ) : null}
       </div>
+      ) : assetKind === "video" ? (
+        <div className="flex min-w-0 flex-col gap-2 rounded-xl border border-border bg-background/70 p-2">
+          <div className="flex items-center justify-between gap-2">
+            <div className="inline-flex min-w-0 items-center gap-1.5 text-sm font-medium text-foreground">
+              <Clapperboard className="size-4 text-muted-foreground" />
+              <span>视频资源</span>
+            </div>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-7 shrink-0 rounded-lg px-2 text-xs"
+              disabled={isVideoLoading}
+              onClick={() => void loadVideoAssets()}
+            >
+              <RefreshCw className={cn("size-3.5", isVideoLoading && "animate-spin")} />
+              刷新
+            </Button>
+          </div>
+          <div className="rounded-lg border border-dashed border-border px-3 py-2 text-xs leading-5 text-muted-foreground">
+            {videoAssetHintText}
+          </div>
+        </div>
       ) : (
         <div className="flex min-w-0 flex-col gap-2 rounded-xl border border-border bg-background/70 p-2">
           <div className="flex items-center justify-between gap-2">
@@ -2641,6 +2927,8 @@ function ImageManagerContent({
     handleTextAssetScopeChange,
     hasTeamLibrary,
     items.length,
+    isVideoLoading,
+    loadVideoAssets,
     openCollectionEditor,
     openTextAssetCollectionEditor,
     selectedCollectionId,
@@ -2653,6 +2941,7 @@ function ImageManagerContent({
     unclassifiedCount,
     updateCollectionFilter,
     updateTextAssetCollectionFilter,
+    videoAssetHintText,
   ]);
 
   const mobileLibraryPanel = useMemo(
@@ -2778,6 +3067,37 @@ function ImageManagerContent({
               </div>
             </div>
           </div>
+          ) : assetKind === "video" ? (
+            <div className="flex min-w-0 flex-col gap-2">
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-sm font-medium text-foreground">视频筛选</div>
+                {videoSearch ? (
+                  <button
+                    type="button"
+                    className="inline-flex h-7 shrink-0 items-center gap-1 rounded-full px-2 text-xs text-muted-foreground transition hover:bg-muted hover:text-foreground"
+                    onClick={clearVideoSearch}
+                  >
+                    <X className="size-3.5" />
+                    清空
+                  </button>
+                ) : null}
+              </div>
+              {renderVideoSearch()}
+              <Button
+                type="button"
+                variant="outline"
+                className="h-10 min-w-0 rounded-lg"
+                disabled={isVideoLoading}
+                onClick={() => void loadVideoAssets()}
+              >
+                <RefreshCw className={cn("size-4", isVideoLoading && "animate-spin")} />
+                刷新
+              </Button>
+              <div className="flex min-h-9 min-w-0 items-center gap-1.5 rounded-xl border border-border bg-background/60 px-3 py-2 text-xs leading-5 text-muted-foreground">
+                <Info className="size-3.5 shrink-0" />
+                <span className="min-w-0">{videoAssetHintText}</span>
+              </div>
+            </div>
           ) : (
             <div className="flex min-w-0 flex-col gap-2">
               <div className="flex items-center justify-between gap-2">
@@ -2836,9 +3156,9 @@ function ImageManagerContent({
             >
               <Folder className="size-4 shrink-0 text-muted-foreground" />
               <span className="min-w-0 flex-1 truncate">
-                {assetKind === "text" ? `${textAssetScopeLabel(textAssetScope)} · ${selectedTextAssetCollectionLabel}` : `${libraryViewLabel} · ${selectedCollectionLabel}`}
+                {assetKind === "video" ? "当前账号 · 视频资源" : assetKind === "text" ? `${textAssetScopeLabel(textAssetScope)} · ${selectedTextAssetCollectionLabel}` : `${libraryViewLabel} · ${selectedCollectionLabel}`}
               </span>
-              <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">{assetKind === "text" ? textAssets.length : items.length}</span>
+              <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">{assetKind === "video" ? visibleVideoAssets.length : assetKind === "text" ? textAssets.length : items.length}</span>
             </button>
             {assetKind === "image" ? (
               <Button
@@ -2861,16 +3181,16 @@ function ImageManagerContent({
               variant="outline"
               size="icon"
               className="size-10 rounded-full"
-              disabled={assetKind === "text" ? isTextAssetLoading || isMutatingTextAssets : isLoading || isMutatingImages}
-              onClick={() => void (assetKind === "text" ? loadTextAssets({ force: true }) : loadImages({ force: true }))}
+              disabled={assetKind === "video" ? isVideoLoading : assetKind === "text" ? isTextAssetLoading || isMutatingTextAssets : isLoading || isMutatingImages}
+              onClick={() => void (assetKind === "video" ? loadVideoAssets() : assetKind === "text" ? loadTextAssets({ force: true }) : loadImages({ force: true }))}
               aria-label="刷新素材库"
               title="刷新素材库"
             >
-              <RefreshCw className={cn("size-4", (assetKind === "text" ? isTextAssetLoading : isLoading) && "animate-spin")} />
+              <RefreshCw className={cn("size-4", (assetKind === "video" ? isVideoLoading : assetKind === "text" ? isTextAssetLoading : isLoading) && "animate-spin")} />
             </Button>
           </div>
           <div className="flex items-center gap-2">
-            <div className="min-w-0 flex-1">{assetKind === "text" ? renderTextAssetSearch() : renderSearchFilter("搜索图片")}</div>
+            <div className="min-w-0 flex-1">{assetKind === "video" ? renderVideoSearch() : assetKind === "text" ? renderTextAssetSearch() : renderSearchFilter("搜索图片")}</div>
             {assetKind === "text" && canCreateTextAssetInScope ? (
               <Button
                 type="button"
@@ -3316,6 +3636,129 @@ function ImageManagerContent({
               </div>
             </div>
           ) : null}
+          {assetKind === "video" && isVideoLoading && visibleVideoAssets.length === 0 ? (
+            <div className="flex h-full flex-col items-center justify-center gap-3 px-6 py-14 text-center">
+              <div className="rounded-[16px] bg-[#edf4ff] p-4 text-[#1456f0] ring-1 ring-blue-100">
+                <LoaderCircle className="size-7 animate-spin" />
+              </div>
+              <div className="space-y-1">
+                <p className="text-sm font-medium text-foreground">正在加载视频资源</p>
+              </div>
+            </div>
+          ) : null}
+          {assetKind === "video" && videoLoadError && visibleVideoAssets.length === 0 ? (
+            <div className="flex h-full flex-col items-center justify-center gap-3 px-6 py-14 text-center">
+              <div className="rounded-[16px] bg-rose-50 p-4 text-rose-600 ring-1 ring-rose-100">
+                <Clapperboard className="size-7" />
+              </div>
+              <div className="space-y-1">
+                <p className="text-sm font-medium text-foreground">视频资源加载失败</p>
+                <p className="max-w-[32rem] text-sm leading-6 text-muted-foreground">{videoLoadError}</p>
+              </div>
+              <Button variant="outline" className="h-9 rounded-lg px-3" onClick={() => void loadVideoAssets()}>
+                <RefreshCw className="size-4" />
+                重试
+              </Button>
+            </div>
+          ) : null}
+          {assetKind === "video" && visibleVideoAssets.length > 0 ? (
+            <div className="h-full overflow-y-auto p-1">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+                {visibleVideoAssets.map((item) => {
+                  const active = focusedVideoAsset?.id === item.id;
+                  const src = videoAssetSource(item);
+                  return (
+                    <article
+                      key={item.id}
+                      className={cn(
+                        "group overflow-hidden rounded-[18px] border bg-background text-left shadow-[0_6px_20px_rgba(15,23,42,0.04)] transition hover:border-[#1456f0]/40 hover:shadow-[0_10px_28px_rgba(15,23,42,0.08)]",
+                        active && "border-[#1456f0] ring-2 ring-[#1456f0]/15",
+                      )}
+                      onFocus={() => setFocusedVideoAssetId(item.id)}
+                      onMouseEnter={() => setFocusedVideoAssetId(item.id)}
+                    >
+                      <button
+                        type="button"
+                        className="block w-full bg-black text-left"
+                        onClick={() => setFocusedVideoAssetId(item.id)}
+                        aria-label={`查看视频 ${item.name}`}
+                      >
+                        <video
+                          className="aspect-video w-full bg-black object-contain"
+                          src={src}
+                          muted
+                          preload="metadata"
+                          controls
+                          title={item.name}
+                        />
+                      </button>
+                      <div className="grid gap-3 p-4">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="line-clamp-2 text-sm font-semibold leading-5 text-foreground">{item.name || "视频资源"}</div>
+                            <div className="mt-1 flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
+                              <Clapperboard className="size-3.5 shrink-0" />
+                              <span className="truncate">{videoAssetOwnerLabel()}</span>
+                            </div>
+                          </div>
+                          <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
+                            {videoAssetTime(item.updated_at)}
+                          </span>
+                        </div>
+                        <div className="line-clamp-2 text-xs leading-5 text-muted-foreground">
+                          {videoAssetMeta(item) || "视频生成输出"}
+                        </div>
+                        {item.prompt ? (
+                          <div className="line-clamp-3 text-xs leading-5 text-muted-foreground">{item.prompt}</div>
+                        ) : null}
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="min-w-0 truncate text-[11px] text-muted-foreground">{item.task_id}</span>
+                          <div className="flex shrink-0 items-center gap-1">
+                            <Button
+                              type="button"
+                              size="icon"
+                              variant="ghost"
+                              className="size-7 rounded-lg"
+                              onClick={() => void copyVideoURL(item)}
+                              title="复制视频地址"
+                              aria-label="复制视频地址"
+                            >
+                              <Copy className="size-3.5" />
+                            </Button>
+                            <Button
+                              type="button"
+                              size="icon"
+                              variant="ghost"
+                              className="size-7 rounded-lg"
+                              onClick={() => void downloadVideoAsset(item)}
+                              disabled={downloadingVideoId !== null}
+                              title="下载视频"
+                              aria-label="下载视频"
+                            >
+                              {downloadingVideoId === item.id ? <LoaderCircle className="size-3.5 animate-spin" /> : <Download className="size-3.5" />}
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+            </div>
+          ) : null}
+          {assetKind === "video" && !isVideoLoading && !videoLoadError && visibleVideoAssets.length === 0 ? (
+            <div className="flex h-full flex-col items-center justify-center gap-4 px-6 py-14 text-center">
+              <div className="rounded-[16px] bg-muted p-4 text-muted-foreground">
+                <Clapperboard className="size-7" />
+              </div>
+              <div className="space-y-1">
+                <p className="text-sm font-medium text-foreground">暂无视频资源</p>
+                <p className="max-w-[32rem] text-sm leading-6 text-muted-foreground">
+                  {videoSearch ? "调整关键词后再试。" : "视频生成成功后会出现在这里。"}
+                </p>
+              </div>
+            </div>
+          ) : null}
           {assetKind === "text" && isTextAssetLoading && textAssets.length === 0 ? (
             <div className="flex h-full flex-col items-center justify-center gap-3 px-6 py-14 text-center">
               <div className="rounded-[16px] bg-[#edf4ff] p-4 text-[#1456f0] ring-1 ring-blue-100">
@@ -3519,7 +3962,7 @@ function ImageManagerContent({
             <div className="min-w-0">
               <div className="text-sm font-semibold text-foreground">素材详情</div>
               <div className="truncate text-xs text-muted-foreground">
-                {assetKind === "text" ? focusedTextAsset?.name || "选择一条文本素材查看详情" : focusedItem?.name || "选择一张素材查看详情"}
+                {assetKind === "video" ? focusedVideoAsset?.name || "选择一个视频资源查看详情" : assetKind === "text" ? focusedTextAsset?.name || "选择一条文本素材查看详情" : focusedItem?.name || "选择一张素材查看详情"}
               </div>
             </div>
             {assetKind === "image" && focusedItem ? (
@@ -3618,6 +4061,57 @@ function ImageManagerContent({
                 ) : null}
                 <Button type="button" variant="outline" className="col-span-2 h-9 rounded-lg text-xs" onClick={() => void downloadItems(focusedItem.path, [focusedItem])}>
                   {downloadingKey === focusedItem.path ? <LoaderCircle className="size-3.5 animate-spin" /> : <Download className="size-3.5" />}
+                  下载
+                </Button>
+              </div>
+            </>
+          ) : assetKind === "video" && focusedVideoAsset ? (
+            <>
+              <video
+                src={videoAssetSource(focusedVideoAsset)}
+                controls
+                className="aspect-video w-full rounded-xl bg-black object-contain"
+                title={focusedVideoAsset.name || "视频预览"}
+              />
+              <div className="space-y-2 text-xs">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-muted-foreground">模型</span>
+                  <span className="min-w-0 truncate font-medium text-foreground">{focusedVideoAsset.model || "未记录"}</span>
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-muted-foreground">比例</span>
+                  <span className="font-medium text-foreground">{focusedVideoAsset.aspect_ratio || focusedVideoAsset.size || "未知"}</span>
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-muted-foreground">分辨率</span>
+                  <span className="font-medium text-foreground">{focusedVideoAsset.resolution || "未记录"}</span>
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-muted-foreground">更新时间</span>
+                  <span className="font-medium text-foreground">{videoAssetTime(focusedVideoAsset.updated_at)}</span>
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-muted-foreground">任务</span>
+                  <span className="min-w-0 truncate font-medium text-foreground">{focusedVideoAsset.task_id}</span>
+                </div>
+              </div>
+              {focusedVideoAsset.prompt ? (
+                <div className="max-h-32 overflow-y-auto rounded-xl border border-border bg-muted/40 p-3 text-xs leading-5 text-muted-foreground">
+                  {focusedVideoAsset.prompt}
+                </div>
+              ) : (
+                <div className="rounded-xl border border-dashed border-border p-3 text-xs text-muted-foreground">暂无可展示提示词</div>
+              )}
+              <div className="rounded-xl border border-dashed border-border p-3 text-xs leading-5 text-muted-foreground">
+                {videoAssetHintText}
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <Button type="button" variant="outline" className="h-9 rounded-lg text-xs" onClick={() => void copyVideoURL(focusedVideoAsset)}>
+                  <Copy className="size-3.5" />
+                  复制地址
+                </Button>
+                <Button type="button" variant="outline" className="h-9 rounded-lg text-xs" onClick={() => void downloadVideoAsset(focusedVideoAsset)} disabled={downloadingVideoId !== null}>
+                  {downloadingVideoId === focusedVideoAsset.id ? <LoaderCircle className="size-3.5 animate-spin" /> : <Download className="size-3.5" />}
                   下载
                 </Button>
               </div>
@@ -4262,6 +4756,7 @@ export default function ImageManagerPage() {
     hasAPIPermission(session, "POST", "/api/text-asset-collections") &&
     hasAPIPermission(session, "PATCH", "/api/text-asset-collections") &&
     hasAPIPermission(session, "DELETE", "/api/text-asset-collections");
+  const canViewVideoAssets = hasAPIPermission(session, "GET", "/api/creation-tasks");
   return (
     <ImageManagerContent
       cacheScope={imageManagerCacheScope(session)}
@@ -4275,6 +4770,7 @@ export default function ImageManagerPage() {
       canUpdateTextAssets={canUpdateTextAssets}
       canDeleteTextAssets={canDeleteTextAssets}
       canManageTextAssetCollections={canManageTextAssetCollections}
+      canViewVideoAssets={canViewVideoAssets}
       isAdmin={session.role === "admin"}
     />
   );

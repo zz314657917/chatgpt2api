@@ -14,6 +14,8 @@ func TestImageGenerationModelSetExcludesTextModels(t *testing.T) {
 		ImageModelGeminiFlashPreviewOfficial,
 		ImageModelMidjourney,
 		ImageModelGrokImagine,
+		ImageModelSeedream40,
+		ImageModelSeedream45,
 	} {
 		if !IsImageGenerationModel(model) {
 			t.Fatalf("IsImageGenerationModel(%q) = false, want true", model)
@@ -63,6 +65,8 @@ func TestModelListIncludesTextAndImageModels(t *testing.T) {
 		ImageModelGeminiFlashPreviewOfficial,
 		ImageModelMidjourney,
 		ImageModelGrokImagine,
+		ImageModelSeedream40,
+		ImageModelSeedream45,
 		ImageModelAuto,
 		ImageModelGPT55,
 		ImageModelGPT54,
@@ -94,6 +98,8 @@ func TestModelListIncludesTextAndImageModels(t *testing.T) {
 		ImageModelGeminiFlashPreviewOfficial,
 		ImageModelMidjourney,
 		ImageModelGrokImagine,
+		ImageModelSeedream40,
+		ImageModelSeedream45,
 		ImageModelGPT55,
 		ImageModelGPT54,
 		ImageModelGPT54Mini,

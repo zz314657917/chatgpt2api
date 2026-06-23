@@ -270,6 +270,15 @@ export default function CanvasPage() {
             onCollectionChange={canvas.setAssetCollection}
             defaultExpanded
             onExpandedChange={canvas.handleAssetSidebarExpandedChange}
+            videoLibrary={{
+              videos: canvas.videoAssets,
+              count: canvas.videoAssets.length,
+              loadingVideos: canvas.loadingVideoAssets,
+              active: canvas.assetLibraryMediaType === "video",
+              onActiveChange: canvas.setAssetLibraryVideoActive,
+              onRefreshVideos: () => void canvas.refreshAssets(),
+              onAddVideoToCanvas: canvas.addVideoAssetToCanvas,
+            }}
           />
 
           {canvas.helpOpen ? (
