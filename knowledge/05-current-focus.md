@@ -2,7 +2,7 @@
 title: Current Focus
 type: status
 repo: chatgpt2api
-last_verified: 2026-06-18
+last_verified: 2026-06-22
 ---
 
 # 当前稳定心智模型
@@ -35,6 +35,15 @@ chatgpt2api 当前不应再被理解为单纯“ChatGPT 官网能力封装服务
   - 已完成图片不再只按固定顺序展示，而是允许在工作台里自定义参与排版的图片、上下调整顺序，并实时预览拼图结果。
   - 当前排版配置会持久化到项目本地状态；后续重新打开项目时，顺序、筛选、背景、适配模式和标题栏开关应被视为同一条稳定工作流，而不是一次性 UI 临时态。
   - “下载拼图”和“生成 AI 合成图”都依赖当前排版结果；后续排查交付链路时，不能再把 summary composite 当成与工作台排版无关的独立动作。
+- 2026-06-19 开始，默认图片工作台基线又补进了“统一模型设置 + 网关模型支持 + 上游错误归一”层：
+  - `/image`、`/canvas`、`/ecommerce-suite` 里的 image model settings 正在收口成共享心智，模型配置不再只是某个页面的局部交互。
+  - image gateway model support 已进入当前稳定候选面，后续图片模型支持不应再只按 official / 非 official 二分法理解。
+  - 图片内容策略错误、尺寸错误和 Midjourney generation count 已开始统一归一，后续验收与排障要优先从共享协议/服务层看，而不是先按单页提示分头解释。
+- 2026-06-21~2026-06-23 开始，默认图片工作台基线又补进了“结果视图 + 引用图输入安全”层：
+  - `/image` 最近运行结果开始收口成 image arena 结果视图：单个 run 的主图、缩略图切换、预览/下载/收藏/送电商动作被视为一组稳定交互，而不再只是线性结果列表。
+  - 图片输入 URL 已继续下沉到账号级能力层，后续对参考图来源、继续编辑和跨工作台复用的理解，不应再停留在单次会话临时文件语义。
+  - 临时参考图 URL 已切到签名安全路径；当前默认心智应假设引用图地址带有效期和后端鉴权边界，而不是前端长期直持裸 URL。
+  - 2026-06-23 又补上了 multipart references 继续编辑边界：图片编辑请求里引用图与 mask 的来源不能再只按“前端传了 multipart 就必定走本地文件上传”理解；若账号能力或签名临时 URL 语义要求改写，继续编辑链路也必须保住同一组 references，而不能在重试或二次编辑时静默丢图。
 
 ## 已稳定结论
 
@@ -48,6 +57,11 @@ chatgpt2api 当前不应再被理解为单纯“ChatGPT 官网能力封装服务
   - image workspace policies 已进一步 harden，不应再把早期宽松行为当默认。
 - 当前产品线里，`white label profile experience` 与旧 leaf login 更像背景层；真正需要优先理解的是独立用户版 bridge、钱包扣费语义和生产联调闭环。
 - 登录入口当前至少要区分普通本地登录与 leaf network / linux.do launch login，不应再把登录页当成纯静态表单。
+- 当前图片工作台默认也要区分“模型配置层”和“单页工作台层”：如果模型标签、参数分组、generation count 或错误提示回退，不要只在页面组件里找原因，优先回看共享 image gateway / payload / error normalize 语义。
+- 当前图片工作台默认还要区分“结果视图层”和“引用图输入层”：
+  - image arena 的结果展示、收藏、加入画布、送电商动作，已经开始成为 `/image` 默认体验的一部分；不要再把它误判成局部 UI 装饰。
+  - account image input URL 与 signed temp reference image URL 已开始影响继续编辑、参考图复用和后续生成链路；如果这些链路异常，优先回看 URL 签名/过期和账号级来源，而不是先怀疑前端图片组件。
+  - multipart references 继续编辑现在也属于这一层稳定边界：如果“继续编辑后只剩主图、参考图或 mask 丢失、重试后二次编辑拿不到原引用图”，应优先检查 references 在后端 request normalize / retry / edit path 里是否被完整保留，而不是先按前端 arena 选图问题排查。
 - 当前 embedded mode 默认还要满足以下会话约束：
   - stale token 或前端 store 失效后，允许从 cookie 恢复嵌入会话，而不是直接把用户打回匿名态。
   - 从 Sub2API launch 进入时，已绑定的 Sub2API API key 不应在 session 初始化过程中被覆盖、清空或误判成未绑定。
@@ -76,6 +90,8 @@ chatgpt2api 当前不应再被理解为单纯“ChatGPT 官网能力封装服务
   - `/ecommerce-suite` 生产模式支持商品主图、电商横幅、详情页竖图、场景图和 SKU 批量图，SKU `8/12` 张预览按 `4+4` / `4+4+4` 拆分。
   - ZIP 打包下载、文案保存为 text asset、已完成图片归入项目素材集，已经是当前工作台交付闭环的一部分。
   - 6/18 新增的 summary layout 说明，`/ecommerce-suite` 现在还包含“排版方式 + 参与图片选择 + 顺序编排 + 拼图导出/AI 合成”这一层稳定交付能力；后续不能只按 ZIP、素材归档和 text asset 理解它的输出链路。
+- 6/19 新增的统一模型设置说明，当前 `/ecommerce-suite` 与 `/canvas` 不再只是“各自拥有生产参数面板”的两个工作台；它们还共享同一条 image settings 组织方式、模型标签收口和上游错误归一边界。
+- 6/21~6/23 新增的结果/引用图说明，当前 `/image` 也不再只是“提交任务 -> 看结果”的单页；它同时承担 image arena 结果工作台、账号级图片输入来源，以及跨工作台继续编辑/送电商的前置入口。
 - 当前多工作台默认共用同一套 creation-task 与输出序列化语义：
   - `/image`
   - `/canvas`
@@ -112,10 +128,10 @@ chatgpt2api 当前不应再被理解为单纯“ChatGPT 官网能力封装服务
 
 ## 当前剩余重点
 
-1. 把 Pro Studio 生产模式、电商生产交付、6/18 的 summary layout 编排，以及 Gemini reference upload 的默认边界继续下沉到稳定专题知识，不要只留在 `current-task` 或 workflow 产物。
-2. 把 2026-06-09 之后的独立用户版主线继续下沉到稳定知识，包括生产域名/回跳 URL/bridge secret/默认分组、余额展示、充值入口、预扣确认退款和团队空间最小闭环。
-3. 如果继续推进 Sub2API 集成，继续把 launch/redeem、embedded session 恢复、bound key 保持、钱包扣费、图片任务、对象存储、`/image`、`/canvas` 与 `ecommerce-suite` 之间的关系固化到专题知识，而不是只留在提交历史。
-4. 如果准备公开说明能力边界，要显式区分“当前已支持的独立用户版、Sub2API 登录充值、image workspace、canvas workspace、Pro Studio 生产模式、电商生产交付、受绑定约束的视频节点、团队共享额度 v1”与“尚未支持的 Grok/xAI、ComfyUI、独立 GPU 工作流”。
+1. 把 6/19~6/22 形成的“统一 image settings + image gateway model support + upstream error normalize + image arena + signed temp reference image URL”补成稳定专题或验证清单，不要继续只埋在代码 diff 和本轮 current-task。
+2. 把 Pro Studio 生产模式、电商生产交付、6/18 的 summary layout 编排，以及 Gemini reference upload 的默认边界继续下沉到稳定专题知识，不要只留在 `current-task` 或 workflow 产物。
+3. 把 2026-06-09 之后的独立用户版主线继续下沉到稳定知识，包括生产域名/回跳 URL/bridge secret/默认分组、余额展示、充值入口、预扣确认退款、account image input URL 和团队空间最小闭环。
+4. 如果继续推进 Sub2API 集成，继续把 launch/redeem、embedded session 恢复、bound key 保持、钱包扣费、图片任务、对象存储、`/image`、`/canvas` 与 `ecommerce-suite` 之间的关系固化到专题知识，而不是只留在提交历史。
 
 ## 不要误判的点
 
@@ -131,4 +147,5 @@ chatgpt2api 当前不应再被理解为单纯“ChatGPT 官网能力封装服务
 - 不要把 Pro Studio 生产模式误判成单纯 UI 壳层；它已经牵涉 official 路由能力、batch 参数、结果序列化、素材归档和项目交付。
 - 不要把 `ecommerce-suite` 的 summary composite 误判成单独的“导出按钮”；它现在依赖项目里的排版模式、参与图片、顺序和持久化配置，属于工作台默认状态的一部分。
 - 不要把 Gemini 模型变更理解成纯命名调整；当前 preview 路由和 reference upload 已影响协议入口、前端 payload 和兼容验证基线。
+- 不要把 6/19 的 image settings / image gateway / error normalize 误判成“只是前端文案整理”；它们已经开始改变跨工作台的模型配置入口、错误展示语义和后续验收基线。
 - 仅看 README 和旧任务快照，容易漏掉独立用户版入口、Sub2API 钱包真源、团队共享额度 v1、per-user retention、continued edit、embedded session recovery、bound Sub2API key preservation、视频节点 fail-closed、`/canvas` 自研节点画布，以及 Pro Studio / `ecommerce-suite` 生产模式这些新默认约束。

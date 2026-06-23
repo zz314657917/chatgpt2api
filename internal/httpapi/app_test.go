@@ -4228,7 +4228,7 @@ func TestCanvasModelsUseSub2APIGatewayForBoundUser(t *testing.T) {
 		t.Fatalf("canvas models json: %v", err)
 	}
 	items := util.AsMapSlice(payload["items"])
-	if len(items) != 10 {
+	if len(items) != 12 {
 		t.Fatalf("canvas models items = %#v", items)
 	}
 	ids := map[string]string{}
@@ -4248,6 +4248,8 @@ func TestCanvasModelsUseSub2APIGatewayForBoundUser(t *testing.T) {
 		ids[util.ImageModelGeminiFlashPreviewOfficial] != "image" ||
 		ids[util.ImageModelMidjourney] != "image" ||
 		ids[util.ImageModelGrokImagine] != "image" ||
+		ids[util.ImageModelSeedream40] != "image" ||
+		ids[util.ImageModelSeedream45] != "image" ||
 		ids["sora-2"] != "video" {
 		t.Fatalf("canvas model kinds = %#v", ids)
 	}
@@ -4260,6 +4262,8 @@ func TestCanvasModelsUseSub2APIGatewayForBoundUser(t *testing.T) {
 		fmt.Sprint(capabilities[util.ImageModelGeminiFlashPreviewOfficial]) != "[image]" ||
 		fmt.Sprint(capabilities[util.ImageModelMidjourney]) != "[image]" ||
 		fmt.Sprint(capabilities[util.ImageModelGrokImagine]) != "[image]" ||
+		fmt.Sprint(capabilities[util.ImageModelSeedream40]) != "[image]" ||
+		fmt.Sprint(capabilities[util.ImageModelSeedream45]) != "[image]" ||
 		fmt.Sprint(capabilities["sora-2"]) != "[video]" {
 		t.Fatalf("canvas model capabilities = %#v", capabilities)
 	}
@@ -4272,6 +4276,8 @@ func TestCanvasModelsUseSub2APIGatewayForBoundUser(t *testing.T) {
 		!enabled[util.ImageModelGeminiFlashPreviewOfficial] ||
 		!enabled[util.ImageModelMidjourney] ||
 		!enabled[util.ImageModelGrokImagine] ||
+		!enabled[util.ImageModelSeedream40] ||
+		!enabled[util.ImageModelSeedream45] ||
 		enabled["sora-2"] {
 		t.Fatalf("canvas model enabled flags = %#v", enabled)
 	}
@@ -4337,7 +4343,7 @@ func TestCanvasModelsFallbackToSub2APIModelsForBoundUser(t *testing.T) {
 		t.Fatalf("canvas models json: %v", err)
 	}
 	items := util.AsMapSlice(payload["items"])
-	if len(items) != 9 {
+	if len(items) != 11 {
 		t.Fatalf("canvas models items = %#v", items)
 	}
 	ids := map[string]string{}
@@ -4352,7 +4358,9 @@ func TestCanvasModelsFallbackToSub2APIModelsForBoundUser(t *testing.T) {
 		ids[util.ImageModelGeminiFlashPreview] != "image" ||
 		ids[util.ImageModelGeminiFlashPreviewOfficial] != "image" ||
 		ids[util.ImageModelMidjourney] != "image" ||
-		ids[util.ImageModelGrokImagine] != "image" {
+		ids[util.ImageModelGrokImagine] != "image" ||
+		ids[util.ImageModelSeedream40] != "image" ||
+		ids[util.ImageModelSeedream45] != "image" {
 		t.Fatalf("canvas model kinds = %#v", ids)
 	}
 }
@@ -8387,6 +8395,124 @@ func TestLuoyeIndependentCanvasModelsSupplementCatalogWithGroupModels(t *testing
 		if util.Clean(item["id"]) == "claude-opus-4-6" && reflect.DeepEqual(util.AsStringSlice(item["group_modes"]), []string{"image"}) {
 			t.Fatalf("mixed-capability text model leaked into image group: %#v", body["items"])
 		}
+	}
+	expectedRequests := []string{
+		"chat-group:/model-catalog",
+		"chat-group:/models",
+		"image-group:/model-catalog",
+		"image-group:/models",
+		"video-group:/model-catalog",
+		"video-group:/models",
+	}
+	if !reflect.DeepEqual(requests, expectedRequests) {
+		t.Fatalf("gateway requests = %#v", requests)
+	}
+}
+
+func TestLuoyeIndependentCanvasModelsSupplementVideoGroupModelsByName(t *testing.T) {
+	requests := []string{}
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Sub2API-Studio-Secret") != "secret" {
+			t.Fatalf("gateway secret header = %q", r.Header.Get("X-Sub2API-Studio-Secret"))
+		}
+		if r.Header.Get("X-Sub2API-Studio-User-ID") != "42" {
+			t.Fatalf("gateway user header = %q", r.Header.Get("X-Sub2API-Studio-User-ID"))
+		}
+		groupID := r.Header.Get("X-Sub2API-Group-ID")
+		requests = append(requests, groupID+":"+r.URL.Path)
+		switch r.URL.Path {
+		case "/model-catalog":
+			switch groupID {
+			case "chat-group":
+				util.WriteJSON(w, http.StatusOK, map[string]any{"items": []map[string]any{
+					{"id": "gpt-5.4", "name": "gpt-5.4", "capabilities": []string{"chat"}, "enabled": true},
+				}})
+			case "image-group":
+				util.WriteJSON(w, http.StatusOK, map[string]any{"items": []map[string]any{
+					{"id": util.ImageModelGPT, "name": util.ImageModelGPT, "capabilities": []string{"image"}, "enabled": true},
+				}})
+			case "video-group":
+				util.WriteJSON(w, http.StatusOK, map[string]any{"items": []map[string]any{
+					{"id": "plain-text-label", "name": "Plain Text Label", "enabled": true},
+					{"id": "wan2.7", "name": "wan2.7", "capabilities": []string{"video"}, "enabled": false},
+					{"id": "kling-v2-6", "name": "kling-v2-6", "category": "video", "enabled": false},
+				}})
+			default:
+				t.Fatalf("unexpected catalog group header %q", groupID)
+			}
+		case "/models":
+			switch groupID {
+			case "chat-group":
+				util.WriteJSON(w, http.StatusOK, map[string]any{"data": []map[string]any{}})
+			case "image-group":
+				util.WriteJSON(w, http.StatusOK, map[string]any{"data": []map[string]any{}})
+			case "video-group":
+				util.WriteJSON(w, http.StatusOK, map[string]any{"data": []map[string]any{
+					{"id": "doubao-seedance-2.0"},
+					{"id": "sora-2"},
+				}})
+			default:
+				t.Fatalf("unexpected models group header %q", groupID)
+			}
+		default:
+			t.Fatalf("gateway request = %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer gateway.Close()
+
+	bridge := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/internal/redeem":
+			util.WriteJSON(w, http.StatusOK, map[string]any{"code": 0, "data": map[string]any{"user_id": 42, "email": "luoye@example.com", "username": "Luoye User", "default_chat_group": "chat-group", "default_image_group": "image-group", "default_video_group": "video-group", "gateway_base_url": gateway.URL}})
+		case "/internal/user-summary":
+			util.WriteJSON(w, http.StatusOK, map[string]any{"code": 0, "data": map[string]any{"user_id": 42, "balance": 99}})
+		default:
+			t.Fatalf("bridge request = %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer bridge.Close()
+
+	app := newIndependentTestApp(t, bridge.URL+"/internal/redeem", "secret", gateway.URL)
+	defer app.Close()
+	sessionKey := launchIndependentSub2APITestSession(t, app, "launch-token")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/canvas/models", nil)
+	req.Header.Set("Authorization", "Bearer "+sessionKey)
+	res := httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("canvas models status = %d body = %s", res.Code, res.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &body); err != nil {
+		t.Fatalf("canvas models json: %v", err)
+	}
+	kinds := map[string]string{}
+	groupModes := map[string][]string{}
+	enabled := map[string]bool{}
+	for _, item := range util.AsMapSlice(body["items"]) {
+		id := util.Clean(item["id"])
+		kinds[id] = util.Clean(item["kind"])
+		groupModes[id] = util.AsStringSlice(item["group_modes"])
+		enabled[id] = util.ToBool(item["enabled"])
+	}
+	if kinds["doubao-seedance-2.0"] != "video" || !reflect.DeepEqual(groupModes["doubao-seedance-2.0"], []string{"video"}) {
+		t.Fatalf("seedance video model missing or misclassified: kinds=%#v group_modes=%#v items=%#v", kinds, groupModes, body["items"])
+	}
+	if kinds["sora-2"] != "video" || !reflect.DeepEqual(groupModes["sora-2"], []string{"video"}) {
+		t.Fatalf("sora video model missing or misclassified: kinds=%#v group_modes=%#v items=%#v", kinds, groupModes, body["items"])
+	}
+	if kinds["wan2.7"] != "video" || !reflect.DeepEqual(groupModes["wan2.7"], []string{"video"}) {
+		t.Fatalf("disabled catalog wan video model should be available in video group: kinds=%#v group_modes=%#v items=%#v", kinds, groupModes, body["items"])
+	}
+	if kinds["kling-v2-6"] != "video" || !reflect.DeepEqual(groupModes["kling-v2-6"], []string{"video"}) {
+		t.Fatalf("disabled catalog kling video model should be available in video group: kinds=%#v group_modes=%#v items=%#v", kinds, groupModes, body["items"])
+	}
+	if !enabled["wan2.7"] || !enabled["kling-v2-6"] {
+		t.Fatalf("video group models should be frontend-selectable even when catalog reports enabled=false: %#v", enabled)
+	}
+	if _, ok := kinds["plain-text-label"]; ok {
+		t.Fatalf("catalog item without video capability should not be treated as video: %#v", body["items"])
 	}
 	expectedRequests := []string{
 		"chat-group:/model-catalog",

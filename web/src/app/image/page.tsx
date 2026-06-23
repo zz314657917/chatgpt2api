@@ -91,6 +91,7 @@ import {
   isGeminiFlashImageModel,
   isGeminiProImageModel,
   isChatModel,
+  isHiddenImageModelOption,
   isImageCreationModel,
   isImageModel,
   isOfficialImageModel,
@@ -232,7 +233,6 @@ const IMAGE_ASSET_PAGE_SIZE = 50;
 const IMAGE_ASSET_SIDEBAR_STORAGE_PREFIX = "image-composer-asset-sidebar";
 const activeConversationQueueIds = new Set<string>();
 const MISSING_RECOVERABLE_TASK_ID_ERROR = "页面刷新或任务中断，未找到可恢复的任务 ID";
-const HIDDEN_IMAGE_MODEL_VALUES = new Set(["codex-gpt-image-2"]);
 const IMAGE_ARENA_COLLECTION_NAME = "模型竞技场收藏";
 const IMAGE_ARENA_POLL_INTERVAL_MS = 2000;
 
@@ -1171,7 +1171,7 @@ function getStoredImageModel(): ImageModel {
     return DEFAULT_IMAGE_MODEL;
   }
   const storedModel = window.localStorage.getItem(IMAGE_MODEL_STORAGE_KEY);
-  return isImageCreationModel(storedModel) && !HIDDEN_IMAGE_MODEL_VALUES.has(storedModel)
+  return isImageCreationModel(storedModel) && !isHiddenImageModelOption(storedModel)
     ? storedModel
     : DEFAULT_IMAGE_MODEL;
 }
@@ -1181,7 +1181,7 @@ function getStoredChatModel(): ImageModel {
     return DEFAULT_CHAT_MODEL;
   }
   const storedModel = window.localStorage.getItem(CHAT_MODEL_STORAGE_KEY);
-  return isChatModel(storedModel) && !modelIDLooksImageCapable(storedModel) && !HIDDEN_IMAGE_MODEL_VALUES.has(storedModel)
+  return isChatModel(storedModel) && !modelIDLooksImageCapable(storedModel) && !isHiddenImageModelOption(storedModel)
     ? storedModel
     : DEFAULT_CHAT_MODEL;
 }
@@ -1660,7 +1660,7 @@ function mergeImageModelOptions(
   const merged: ImageModelMenuOption[] = [];
   const options = preferRemoteOnly && remoteOptions.length > 0 ? remoteOptions : [...remoteOptions, ...localOptions];
   for (const option of options) {
-    if (!option.value || seen.has(option.value) || HIDDEN_IMAGE_MODEL_VALUES.has(option.value)) {
+    if (!option.value || seen.has(option.value) || isHiddenImageModelOption(option.value)) {
       continue;
     }
     seen.add(option.value);
@@ -1671,7 +1671,7 @@ function mergeImageModelOptions(
     canKeepSelectedModel &&
     selectedModel &&
     !seen.has(selectedModel) &&
-    !HIDDEN_IMAGE_MODEL_VALUES.has(selectedModel) &&
+    !isHiddenImageModelOption(selectedModel) &&
     modelMatchesComposerMode(mode, selectedModel)
   ) {
     merged.unshift({ value: selectedModel, label: displayModelLabel(selectedModel) });

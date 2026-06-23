@@ -10,6 +10,7 @@ import type {
   ImageVisibility,
   ManagedImageDetail,
   ManagedImageSummary,
+  ManagedVideoAssetSummary,
 } from "@/lib/api";
 import { getManagedImagePathFromUrl, getManagedImagePreviewUrlFromPath, getManagedImageThumbnailUrlFromPath, getManagedImageUrlFromPath } from "@/lib/image-path";
 import {
@@ -25,6 +26,7 @@ import {
   IMAGE_CREATION_MODEL_OPTIONS,
   MIDJOURNEY_IMAGE_MODEL,
   isChatModel,
+  isHiddenImageModelOption,
   isImageCreationModel,
   modelIDLooksImageCapable,
   modelIDLooksTextOnly,
@@ -347,6 +349,21 @@ export function createOutputNode(position: { x: number; y: number }): SmartCanva
     data: {
       output: { images: [] },
       created_at: new Date().toISOString(),
+    },
+  };
+}
+
+export function createVideoItem(video: CanvasVideoRef, position: { x: number; y: number }): SmartCanvasItem {
+  const videos = dedupeCanvasVideoRefs([video]);
+  const now = new Date().toISOString();
+  return {
+    ...createOutputNode(position),
+    name: videos[0]?.name || "视频资源",
+    data: {
+      output: { videos },
+      videos,
+      created_at: now,
+      updated_at: now,
     },
   };
 }
@@ -781,7 +798,7 @@ export function imageFilesFromList(files: FileList | File[] | null | undefined) 
 }
 
 export function normalizeModelCatalog(models: CanvasModelOption[]): SmartCanvasModelCatalog {
-  const enabledModels = models.filter((model) => model.enabled !== false);
+  const enabledModels = models.filter((model) => model.enabled !== false && !isHiddenImageModelOption(model.id));
   const text = mergeCanvasModelOptions([
     ...enabledModels.filter((model) =>
       canvasModelMatchesGroupMode(model, "chat") ||
@@ -833,7 +850,7 @@ function mergeCanvasModelOptions(models: CanvasModelOption[]) {
   const seen = new Set<string>();
   const merged: CanvasModelOption[] = [];
   for (const model of models) {
-    if (!model.id || seen.has(model.id)) {
+    if (!model.id || seen.has(model.id) || isHiddenImageModelOption(model.id)) {
       continue;
     }
     seen.add(model.id);
@@ -1097,6 +1114,24 @@ export function canvasVideoSource(ref: CanvasVideoRef) {
   return cleanImageText(ref.local_url) || cleanImageText(ref.url);
 }
 
+export function creationTasksToVideoAssets(tasks: CreationTask[]) {
+  return tasks
+    .filter((task) => task.mode === "video" && task.status === "success")
+    .flatMap((task): ManagedVideoAssetSummary[] =>
+      (task.data || []).flatMap((item, index) =>
+        taskDataToVideoRef(item, task.mode).map((video) => ({
+          ...video,
+          id: `${task.id}:${canvasVideoKey(video) || index}`,
+          task_id: task.id,
+          model: task.model,
+          created_at: task.created_at,
+          updated_at: task.updated_at,
+          name: video.name || `视频 ${index + 1}`,
+        })),
+      ),
+    );
+}
+
 function taskDataToVideoRef(item: CreationTaskData, mode: CreationTask["mode"]): CanvasVideoRef[] {
   if (mode !== "video" && !item.video_url) {
     return [];
@@ -1109,6 +1144,7 @@ function taskDataToVideoRef(item: CreationTaskData, mode: CreationTask["mode"]):
   return [{
     url,
     local_url: localUrl,
+    name: item.revised_prompt,
   }];
 }
 

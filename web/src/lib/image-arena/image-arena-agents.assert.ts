@@ -14,6 +14,8 @@ const imageOptions = [
   { value: "gpt-image-2-official" as ImageModel, label: "gpt-image-2-official" },
   { value: "gemini-3.1-flash-image-preview" as ImageModel, label: "gemini-3.1-flash-image-preview" },
   { value: "gemini-3-pro-image-preview" as ImageModel, label: "gemini-3-pro-image-preview" },
+  { value: "doubao-seedance-4-0" as ImageModel, label: "doubao-seedance-4-0" },
+  { value: "doubao-seedance-4-5" as ImageModel, label: "doubao-seedance-4-5" },
 ];
 
 const chatOptions = [
@@ -30,6 +32,10 @@ assert.equal(
 assert.notEqual(
   imageAgentOptions.find((option) => option.value === "gpt-image-2-official")?.familyId,
   imageAgentOptions.find((option) => option.value === "gemini-3.1-flash-image-preview")?.familyId,
+);
+assert.equal(
+  imageAgentOptions.find((option) => option.value === "doubao-seedance-4-0")?.familyId,
+  imageAgentOptions.find((option) => option.value === "doubao-seedance-4-5")?.familyId,
 );
 
 const defaultImageSlots = defaultImageArenaAgentSlots("image", imageOptions);

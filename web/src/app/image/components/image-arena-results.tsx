@@ -1,6 +1,7 @@
 "use client";
 
 import { CircleStop, Download, Eye, FolderPlus, ImagePlus, LoaderCircle, RotateCcw, Send } from "lucide-react";
+import { useState } from "react";
 
 import { AuthenticatedImage } from "@/components/authenticated-image";
 import { MarkdownMessage } from "@/components/markdown-message";
@@ -80,6 +81,198 @@ function formatTokenCount(tokens?: number) {
     return `${Math.round(tokens / 1_000)}K`;
   }
   return new Intl.NumberFormat("zh-CN").format(tokens);
+}
+
+function ArenaRunImageGallery({
+  actionKey,
+  conversationId,
+  turnId,
+  run,
+  runModelLabel,
+  runModelIdLabel,
+  images,
+  lightboxImages,
+  onOpenLightbox,
+  onFavoriteImage,
+  onSendImageToEcommerce,
+}: {
+  actionKey: string;
+  conversationId: string;
+  turnId: string;
+  run: ImageArenaRun;
+  runModelLabel: string;
+  runModelIdLabel: string;
+  images: StoredImage[];
+  lightboxImages: ImageLightboxItem[];
+  onOpenLightbox: (images: ImageLightboxItem[], index: number) => void;
+  onFavoriteImage: (image: StoredImage) => void | Promise<void>;
+  onSendImageToEcommerce: (conversationId: string, turnId: string, run: ImageArenaRun, image: StoredImage) => void | Promise<void>;
+}) {
+  const [selectedIndex, setSelectedIndex] = useState(0);
+  const activeIndex = Math.min(selectedIndex, Math.max(0, images.length - 1));
+  const activeImage = images[activeIndex];
+  const activeSrc = activeImage ? imageSrc(activeImage) : "";
+
+  if (!activeImage || !activeSrc) {
+    return null;
+  }
+
+  if (images.length === 1) {
+    return (
+      <figure className="group relative overflow-hidden rounded-2xl bg-[#f0f0f0] dark:bg-muted/40">
+        <button
+          type="button"
+          className="block w-full"
+          onClick={() => onOpenLightbox(lightboxImages, activeIndex)}
+        >
+          <AuthenticatedImage
+            src={imagePreviewSrc(activeImage)}
+            alt={`${runModelLabel} 结果 ${activeIndex + 1}`}
+            className="aspect-square w-full object-cover transition group-hover:brightness-95"
+          />
+        </button>
+        <div className="absolute top-2 right-2 flex gap-1 opacity-0 transition group-hover:opacity-100">
+          <Button type="button" size="icon" variant="outline" className="size-7 bg-white/95" onClick={() => onOpenLightbox(lightboxImages, activeIndex)} title="预览">
+            <Eye className="size-3.5" />
+          </Button>
+          <Button
+            type="button"
+            size="icon"
+            variant="outline"
+            className="size-7 bg-white/95"
+            title="下载"
+            onClick={() =>
+              void downloadImageFile({
+                id: activeImage.id,
+                src: activeSrc,
+                path: activeImage.path || getManagedImagePathFromUrl(activeImage.localUrl || activeImage.url || ""),
+                fileName: lightboxImages[activeIndex]?.fileName || `image-arena-${runModelIdLabel}-${activeIndex + 1}.png`,
+              })
+            }
+          >
+            <Download className="size-3.5" />
+          </Button>
+        </div>
+        <div className="absolute right-2 bottom-2 flex gap-1 opacity-0 transition group-hover:opacity-100">
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="h-7 rounded-full bg-white/95 px-2 text-[11px]"
+            disabled={actionKey === `favorite:${activeImage.id}`}
+            onClick={() => void onFavoriteImage(activeImage)}
+          >
+            {actionKey === `favorite:${activeImage.id}` ? <LoaderCircle className="size-3 animate-spin" /> : <FolderPlus className="size-3" />}
+            收藏
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="h-7 rounded-full bg-white/95 px-2 text-[11px]"
+            disabled={actionKey === `commerce:${activeImage.id}`}
+            onClick={() => void onSendImageToEcommerce(conversationId, turnId, run, activeImage)}
+          >
+            <Send className="size-3" />
+            电商
+          </Button>
+        </div>
+      </figure>
+    );
+  }
+
+  return (
+    <div className="grid flex-1 grid-cols-[minmax(0,1fr)_68px] items-stretch gap-2 sm:grid-cols-[minmax(0,1fr)_76px]">
+      <figure className="group relative min-w-0 overflow-hidden rounded-2xl bg-[#f0f0f0] dark:bg-muted/40">
+        <button
+          type="button"
+          className="block w-full"
+          onClick={() => onOpenLightbox(lightboxImages, activeIndex)}
+        >
+          <AuthenticatedImage
+            src={imagePreviewSrc(activeImage)}
+            alt={`${runModelLabel} 结果 ${activeIndex + 1}`}
+            className="aspect-square w-full object-cover transition group-hover:brightness-95"
+          />
+        </button>
+        <div className="absolute top-2 right-2 flex gap-1 opacity-0 transition group-hover:opacity-100">
+          <Button type="button" size="icon" variant="outline" className="size-7 bg-white/95" onClick={() => onOpenLightbox(lightboxImages, activeIndex)} title="预览">
+            <Eye className="size-3.5" />
+          </Button>
+          <Button
+            type="button"
+            size="icon"
+            variant="outline"
+            className="size-7 bg-white/95"
+            title="下载"
+            onClick={() =>
+              void downloadImageFile({
+                id: activeImage.id,
+                src: activeSrc,
+                path: activeImage.path || getManagedImagePathFromUrl(activeImage.localUrl || activeImage.url || ""),
+                fileName: lightboxImages[activeIndex]?.fileName || `image-arena-${runModelIdLabel}-${activeIndex + 1}.png`,
+              })
+            }
+          >
+            <Download className="size-3.5" />
+          </Button>
+        </div>
+        <div className="absolute right-2 bottom-2 flex gap-1 opacity-0 transition group-hover:opacity-100">
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="h-7 rounded-full bg-white/95 px-2 text-[11px]"
+            disabled={actionKey === `favorite:${activeImage.id}`}
+            onClick={() => void onFavoriteImage(activeImage)}
+          >
+            {actionKey === `favorite:${activeImage.id}` ? <LoaderCircle className="size-3 animate-spin" /> : <FolderPlus className="size-3" />}
+            收藏
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="h-7 rounded-full bg-white/95 px-2 text-[11px]"
+            disabled={actionKey === `commerce:${activeImage.id}`}
+            onClick={() => void onSendImageToEcommerce(conversationId, turnId, run, activeImage)}
+          >
+            <Send className="size-3" />
+            电商
+          </Button>
+        </div>
+      </figure>
+
+      <div
+        className="grid min-h-0 gap-1.5 rounded-2xl bg-[#f7f7f8] p-1.5 dark:bg-background/70"
+        style={{ gridTemplateRows: `repeat(${images.length}, minmax(0, 1fr))` }}
+      >
+        {images.map((image, index) => (
+          <button
+            key={image.id}
+            type="button"
+            className={cn(
+              "group relative min-h-0 overflow-hidden rounded-xl border bg-[#f0f0f0] text-left transition dark:bg-muted/40",
+              index === activeIndex
+                ? "border-[#1456f0] shadow-[0_0_0_2px_rgba(20,86,240,0.15)]"
+                : "border-transparent hover:border-[#cfd7e6]",
+            )}
+            onClick={() => setSelectedIndex(index)}
+            aria-label={`切换到 ${runModelLabel} 结果 ${index + 1}`}
+          >
+            <AuthenticatedImage
+              src={imagePreviewSrc(image)}
+              alt={`${runModelLabel} 缩略图 ${index + 1}`}
+              className="h-full w-full object-cover transition group-hover:brightness-95"
+            />
+            <span className="absolute bottom-1 left-1 rounded-full bg-black/62 px-1.5 py-0.5 text-[10px] font-medium text-white">
+              {index + 1}
+            </span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 export function ImageArenaResults({
@@ -168,7 +361,6 @@ export function ImageArenaResults({
                         <ModelProviderIcon model={run.model} label={runModelLabel} size="lg" className="mt-0.5" />
                         <div className="min-w-0">
                           <div className="truncate text-sm font-semibold text-[#222222] dark:text-foreground">{runModelLabel}</div>
-                          <div className="mt-1 truncate text-[11px] text-[#8e8e93]">{runModelIdLabel}</div>
                         </div>
                       </div>
                       <span className={cn("shrink-0 rounded-full px-2.5 py-1 text-[11px] font-medium", statusClass(run.status))}>
@@ -190,72 +382,19 @@ export function ImageArenaResults({
                     ) : null}
 
                     {successImages.length > 0 ? (
-                      <div className="grid flex-1 grid-cols-1 gap-2">
-                        {successImages.map((image, index) => {
-                          const src = imageSrc(image);
-                          return (
-                            <figure key={image.id} className="group relative overflow-hidden rounded-2xl bg-[#f0f0f0]">
-                              <button
-                                type="button"
-                                className="block w-full"
-                                onClick={() => onOpenLightbox(lightboxImages, index)}
-                              >
-                                <AuthenticatedImage
-                                  src={imagePreviewSrc(image)}
-                                  alt={`${runModelLabel} 结果 ${index + 1}`}
-                                  className="aspect-square w-full object-cover transition group-hover:brightness-95"
-                                />
-                              </button>
-                              <div className="absolute top-2 right-2 flex gap-1 opacity-0 transition group-hover:opacity-100">
-                                <Button type="button" size="icon" variant="outline" className="size-7 bg-white/95" onClick={() => onOpenLightbox(lightboxImages, index)} title="预览">
-                                  <Eye className="size-3.5" />
-                                </Button>
-                                <Button
-                                  type="button"
-                                  size="icon"
-                                  variant="outline"
-                                  className="size-7 bg-white/95"
-                                  title="下载"
-                                  onClick={() =>
-                                    void downloadImageFile({
-                                      id: image.id,
-                                      src,
-                                      path: image.path || getManagedImagePathFromUrl(image.localUrl || image.url || ""),
-                                      fileName: lightboxImages[index]?.fileName || `image-arena-${runModelIdLabel}-${index + 1}.png`,
-                                    })
-                                  }
-                                >
-                                  <Download className="size-3.5" />
-                                </Button>
-                              </div>
-                              <div className="absolute right-2 bottom-2 flex gap-1 opacity-0 transition group-hover:opacity-100">
-                                <Button
-                                  type="button"
-                                  size="sm"
-                                  variant="outline"
-                                  className="h-7 rounded-full bg-white/95 px-2 text-[11px]"
-                                  disabled={actionKey === `favorite:${image.id}`}
-                                  onClick={() => void onFavoriteImage(image)}
-                                >
-                                  {actionKey === `favorite:${image.id}` ? <LoaderCircle className="size-3 animate-spin" /> : <FolderPlus className="size-3" />}
-                                  收藏
-                                </Button>
-                                <Button
-                                  type="button"
-                                  size="sm"
-                                  variant="outline"
-                                  className="h-7 rounded-full bg-white/95 px-2 text-[11px]"
-                                  disabled={actionKey === `commerce:${image.id}`}
-                                  onClick={() => void onSendImageToEcommerce(selectedConversation.id, turn.id, run, image)}
-                                >
-                                  <Send className="size-3" />
-                                  电商
-                                </Button>
-                              </div>
-                            </figure>
-                          );
-                        })}
-                      </div>
+                      <ArenaRunImageGallery
+                        actionKey={actionKey}
+                        conversationId={selectedConversation.id}
+                        turnId={turn.id}
+                        run={run}
+                        runModelLabel={runModelLabel}
+                        runModelIdLabel={runModelIdLabel}
+                        images={successImages}
+                        lightboxImages={lightboxImages}
+                        onOpenLightbox={onOpenLightbox}
+                        onFavoriteImage={onFavoriteImage}
+                        onSendImageToEcommerce={onSendImageToEcommerce}
+                      />
                     ) : null}
 
                     {run.error ? (
@@ -282,7 +421,7 @@ export function ImageArenaResults({
                               onClick={() => void onSendRunToCanvas(selectedConversation.id, turn.id, run)}
                             >
                               {actionKey === `canvas:${run.id}` ? <LoaderCircle className="size-3.5 animate-spin" /> : <ImagePlus className="size-3.5" />}
-                              Canvas
+                              加入画布
                             </Button>
                           ) : null}
                           <Button

@@ -16,24 +16,32 @@ func TestCanvasModelOptionsHideCodexImageRoute(t *testing.T) {
 	catalogItems := canvasModelOptionsFromCatalog(map[string]any{
 		"items": []map[string]any{
 			{"id": util.ImageModelCodex, "name": util.ImageModelCodex, "capabilities": []string{"image"}, "enabled": true},
+			{"id": "grok-imagine-1.5-apimart", "name": "grok-imagine-1.5-apimart", "capabilities": []string{"image"}, "enabled": true},
+			{"id": "grok-imagine-1.5-edit-apimart", "name": "grok-imagine-1.5-edit-apimart", "capabilities": []string{"image"}, "enabled": true},
 			{"id": util.ImageModelGPT, "name": util.ImageModelGPT, "capabilities": []string{"image"}, "enabled": true},
 		},
 	})
 	assertCanvasModelIDs(t, catalogItems, map[string]bool{
-		util.ImageModelCodex: false,
-		util.ImageModelGPT:   true,
+		util.ImageModelCodex:            false,
+		"grok-imagine-1.5-apimart":      false,
+		"grok-imagine-1.5-edit-apimart": false,
+		util.ImageModelGPT:              true,
 	})
 
 	modelListItems := canvasModelOptionsFromModelList(map[string]any{
 		"data": []map[string]any{
 			{"id": util.ImageModelCodex},
+			{"id": "grok-imagine-1.5-apimart"},
+			{"id": "grok-imagine-1.5-edit-apimart"},
 			{"id": "remote-image"},
 		},
 	}, true, false)
 	assertCanvasModelIDs(t, modelListItems, map[string]bool{
-		util.ImageModelCodex: false,
-		util.ImageModelGPT:   true,
-		"remote-image":       true,
+		util.ImageModelCodex:            false,
+		"grok-imagine-1.5-apimart":      false,
+		"grok-imagine-1.5-edit-apimart": false,
+		util.ImageModelGPT:              true,
+		"remote-image":                  true,
 	})
 }
 
@@ -55,6 +63,8 @@ func TestAddBuiltInCanvasImageModelsIncludesOfficialRoute(t *testing.T) {
 		util.ImageModelGeminiFlashPreviewOfficial: true,
 		util.ImageModelMidjourney:                 true,
 		util.ImageModelGrokImagine:                true,
+		util.ImageModelSeedream40:                 true,
+		util.ImageModelSeedream45:                 true,
 		util.ImageModelCodex:                      false,
 		"gpt-image-1.5":                           true,
 	})
@@ -65,10 +75,14 @@ func TestAddBuiltInCanvasImageModelsIncludesOfficialRoute(t *testing.T) {
 	assertCanvasModelCapabilities(t, items, util.ImageModelGeminiFlashPreviewOfficial, "image")
 	assertCanvasModelCapabilities(t, items, util.ImageModelMidjourney, "image")
 	assertCanvasModelCapabilities(t, items, util.ImageModelGrokImagine, "image")
+	assertCanvasModelCapabilities(t, items, util.ImageModelSeedream40, "image")
+	assertCanvasModelCapabilities(t, items, util.ImageModelSeedream45, "image")
 	assertCanvasModelName(t, items, util.ImageModelGeminiProPreview, util.ImageModelGeminiProPreview)
 	assertCanvasModelName(t, items, util.ImageModelGeminiFlashPreview, util.ImageModelGeminiFlashPreview)
 	assertCanvasModelName(t, items, util.ImageModelMidjourney, util.ImageModelMidjourney)
 	assertCanvasModelName(t, items, util.ImageModelGrokImagine, util.ImageModelGrokImagine)
+	assertCanvasModelName(t, items, util.ImageModelSeedream40, util.ImageModelSeedream40)
+	assertCanvasModelName(t, items, util.ImageModelSeedream45, util.ImageModelSeedream45)
 }
 
 func TestCanvasModelOptionsDoNotExposeVideoWithoutSub2APIBinding(t *testing.T) {
@@ -108,6 +122,24 @@ func TestCanvasModelOptionsAllowVideoForSub2APIModelList(t *testing.T) {
 	if modelListItems[0].Kind != "video" || !hasCanvasTestCapability(modelListItems[0].Capabilities, "video") {
 		t.Fatalf("model option = %#v, want video capability", modelListItems[0])
 	}
+}
+
+func TestCanvasModelOptionsDetectVideoFromCatalogMetadata(t *testing.T) {
+	catalogItems := canvasModelOptionsFromCatalog(map[string]any{
+		"items": []map[string]any{
+			{"id": "remote-veo", "name": "Remote VEO", "category": "video", "enabled": true},
+			{"id": "remote-seedance", "name": "Remote Seedance", "mode": "text-to-video", "enabled": true},
+			{"id": "remote-kling", "name": "Remote Kling", "task_types": []string{"image-to-video"}, "enabled": true},
+			{"id": "remote-image", "name": "Remote Image", "type": "image_generation", "enabled": true},
+			{"id": "remote-chat", "name": "Remote Chat", "model_type": "chat", "enabled": true},
+		},
+	})
+
+	assertCanvasModelCapabilities(t, catalogItems, "remote-veo", "video")
+	assertCanvasModelCapabilities(t, catalogItems, "remote-seedance", "video")
+	assertCanvasModelCapabilities(t, catalogItems, "remote-kling", "video")
+	assertCanvasModelCapabilities(t, catalogItems, "remote-image", "image")
+	assertCanvasModelCapabilities(t, catalogItems, "remote-chat", "chat")
 }
 
 func TestCanvasGenerationNodeUsesMaskAsInputImageMask(t *testing.T) {

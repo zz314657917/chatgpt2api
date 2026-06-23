@@ -166,6 +166,42 @@ func TestImageGatewayModelsGPTImagePayloadPassesReferenceURLs(t *testing.T) {
 	}
 }
 
+func TestImageGatewayModelsSeedreamPayloadUsesImageGateway(t *testing.T) {
+	payload, err := sub2APIImageGatewayJSONPayload(map[string]any{
+		"prompt":           "draw a product scene",
+		"model":            util.ImageModelSeedream45,
+		"size":             "16:9",
+		"image_resolution": "2K",
+		"n":                2,
+		"image_urls":       []string{"https://example.test/ref.png"},
+		"quality":          "high",
+		"background":       "transparent",
+		"watermark":        false,
+		"optimize_prompt_options": map[string]any{
+			"enable": true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("seedream payload error = %v", err)
+	}
+	if payload["model"] != util.ImageModelSeedream45 || payload["size"] != "1536x864" || payload["resolution"] != "2k" || payload["n"] != 2 {
+		t.Fatalf("seedream payload basics = %#v", payload)
+	}
+	if payload["watermark"] != false {
+		t.Fatalf("seedream watermark = %#v in %#v", payload["watermark"], payload)
+	}
+	if _, ok := payload["quality"]; ok {
+		t.Fatalf("seedream should not forward quality: %#v", payload)
+	}
+	if _, ok := payload["background"]; ok {
+		t.Fatalf("seedream should not forward background: %#v", payload)
+	}
+	urls := util.AsStringSlice(payload["image_urls"])
+	if len(urls) != 1 || urls[0] != "https://example.test/ref.png" {
+		t.Fatalf("seedream image_urls = %#v", payload["image_urls"])
+	}
+}
+
 func TestImageGatewayModelsImageToolOptionsAcceptsMaskURLAlias(t *testing.T) {
 	options := imageToolOptionsFromBody(map[string]any{
 		"mask_url": "https://cdn.example/mask.png",
@@ -196,6 +232,17 @@ func TestImageGatewayModelsReferenceLimits(t *testing.T) {
 		"image_urls": gptRefs,
 	}, nil); err == nil || !strings.Contains(err.Error(), "GPT-Image-2 参考图最多支持 16 张") {
 		t.Fatalf("gpt reference limit error = %v", err)
+	}
+
+	seedreamRefs := make([]string, 15)
+	for i := range seedreamRefs {
+		seedreamRefs[i] = "https://example.test/seedream-" + strconv.Itoa(i) + ".png"
+	}
+	if err := validateImageReferenceLimit(map[string]any{
+		"model":      util.ImageModelSeedream40,
+		"image_urls": seedreamRefs,
+	}, nil); err == nil || !strings.Contains(err.Error(), "Seedream 参考图数量和生成数量合计最多支持 15") {
+		t.Fatalf("seedream reference limit error = %v", err)
 	}
 }
 

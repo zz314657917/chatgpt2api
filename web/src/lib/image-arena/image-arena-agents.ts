@@ -32,6 +32,8 @@ const IMAGE_MODEL_FAMILIES: Record<string, string> = {
   "gemini-3.1-flash-image-preview-official": "image:gemini-3.1-flash",
   "gemini-3-pro-image-preview": "image:gemini-3-pro",
   "gemini-3-pro-image-preview-official": "image:gemini-3-pro",
+  "doubao-seedance-4-0": "image:doubao-seedance",
+  "doubao-seedance-4-5": "image:doubao-seedance",
 };
 
 const CHAT_MODEL_FAMILIES: Record<string, string> = {

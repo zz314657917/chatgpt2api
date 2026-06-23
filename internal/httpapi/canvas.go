@@ -618,16 +618,22 @@ func canvasModelOptionForGroupMode(item canvasModelOption, groupMode string) can
 	item.GroupModes = []string{groupMode}
 	item.Capabilities = []string{groupMode}
 	item.Kind = canvasModelKindFromCapabilities(item.Capabilities)
+	if groupMode == "video" {
+		item.Enabled = true
+	}
 	return item
 }
 
 func canvasModelAllowedForGroupMode(item canvasModelOption, groupMode string) bool {
-	if item.ID == "" || shouldHideCanvasModel(item.ID) || item.Enabled == false {
+	if item.ID == "" || shouldHideCanvasModel(item.ID) {
 		return false
 	}
 	groupMode = canvasModelGroupMode(groupMode)
 	switch groupMode {
 	case "chat":
+		if item.Enabled == false {
+			return false
+		}
 		return (canvasModelHasCapability(item.Capabilities, "chat") || canvasModelLooksTextOnly(item.ID)) &&
 			!canvasModelHasCapability(item.Capabilities, "video") &&
 			!canvasModelLooksLikeImage(item.ID) &&
@@ -635,6 +641,9 @@ func canvasModelAllowedForGroupMode(item canvasModelOption, groupMode string) bo
 	case "video":
 		return canvasModelHasCapability(item.Capabilities, "video")
 	default:
+		if item.Enabled == false {
+			return false
+		}
 		return (canvasModelHasCapability(item.Capabilities, "image") || canvasModelLooksLikeImage(item.ID)) &&
 			!canvasModelHasCapability(item.Capabilities, "video") &&
 			!canvasModelLooksTextOnly(item.ID) &&
@@ -657,7 +666,7 @@ func canvasModelOptionsFromCatalog(result map[string]any) []canvasModelOption {
 		if id == "" || shouldHideCanvasModel(id) {
 			continue
 		}
-		capabilities := canvasModelCapabilities(item["capabilities"], id)
+		capabilities := canvasModelCapabilitiesFromCatalogItem(item, id)
 		seen[id] = canvasModelOption{
 			ID:           id,
 			Name:         firstNonEmpty(util.Clean(item["name"]), util.Clean(item["display_name"]), id),
@@ -686,6 +695,8 @@ func addBuiltInCanvasImageModels(items []canvasModelOption) []canvasModelOption 
 		util.ImageModelGeminiFlashPreviewOfficial,
 		util.ImageModelMidjourney,
 		util.ImageModelGrokImagine,
+		util.ImageModelSeedream40,
+		util.ImageModelSeedream45,
 	} {
 		if _, ok := seen[id]; !ok {
 			seen[id] = newCanvasModelOption(id, canvasModelDisplayName(id), false)
@@ -715,7 +726,12 @@ func canvasModelOptionsFromModelList(result map[string]any, includeLocal bool, a
 }
 
 func shouldHideCanvasModel(id string) bool {
-	return strings.TrimSpace(id) == util.ImageModelCodex
+	switch strings.ToLower(strings.TrimSpace(id)) {
+	case util.ImageModelCodex, "grok-imagine-1.5-apimart", "grok-imagine-1.5-edit-apimart":
+		return true
+	default:
+		return false
+	}
 }
 
 func sortedCanvasModelOptions(seen map[string]canvasModelOption) []canvasModelOption {
@@ -932,7 +948,9 @@ func canvasModelCapabilitiesForModelList(id string, allowVideo bool) []string {
 		util.ImageModelGeminiFlashPreview,
 		util.ImageModelGeminiFlashPreviewOfficial,
 		util.ImageModelMidjourney,
-		util.ImageModelGrokImagine:
+		util.ImageModelGrokImagine,
+		util.ImageModelSeedream40,
+		util.ImageModelSeedream45:
 		return []string{"image"}
 	default:
 		if canvasModelLooksLikeImage(id) {
@@ -968,15 +986,7 @@ func canvasModelCapabilities(value any, id string) []string {
 	seen := map[string]struct{}{}
 	var capabilities []string
 	for _, capability := range util.AsStringSlice(value) {
-		normalized := normalizeCanvasModelCapability(capability)
-		if normalized == "" {
-			continue
-		}
-		if _, ok := seen[normalized]; ok {
-			continue
-		}
-		seen[normalized] = struct{}{}
-		capabilities = append(capabilities, normalized)
+		capabilities = appendCanvasModelCapability(capabilities, seen, capability)
 	}
 	if len(capabilities) > 0 {
 		return capabilities
@@ -992,7 +1002,9 @@ func canvasModelCapabilities(value any, id string) []string {
 		util.ImageModelGeminiFlashPreview,
 		util.ImageModelGeminiFlashPreviewOfficial,
 		util.ImageModelMidjourney,
-		util.ImageModelGrokImagine:
+		util.ImageModelGrokImagine,
+		util.ImageModelSeedream40,
+		util.ImageModelSeedream45:
 		return []string{"image"}
 	default:
 		if canvasModelLooksLikeVideo(id) {
@@ -1005,15 +1017,101 @@ func canvasModelCapabilities(value any, id string) []string {
 	}
 }
 
+func canvasModelCapabilitiesFromCatalogItem(item map[string]any, id string) []string {
+	seen := map[string]struct{}{}
+	var capabilities []string
+	for _, key := range []string{
+		"capabilities",
+		"capability",
+		"modalities",
+		"modalities_supported",
+		"input_modalities",
+		"output_modalities",
+		"features",
+		"supported_features",
+		"task_types",
+		"task_modes",
+		"modes",
+		"mode",
+		"type",
+		"kind",
+		"category",
+		"model_type",
+	} {
+		capabilities = appendCanvasModelCapabilitiesFromValue(capabilities, seen, item[key])
+	}
+	if len(capabilities) > 0 {
+		return capabilities
+	}
+	return canvasModelCapabilities(nil, id)
+}
+
+func appendCanvasModelCapabilitiesFromValue(capabilities []string, seen map[string]struct{}, value any) []string {
+	switch v := value.(type) {
+	case nil:
+		return capabilities
+	case string:
+		for _, part := range splitCanvasModelCapabilityText(v) {
+			capabilities = appendCanvasModelCapability(capabilities, seen, part)
+		}
+		return capabilities
+	case []string:
+		for _, item := range v {
+			capabilities = appendCanvasModelCapabilitiesFromValue(capabilities, seen, item)
+		}
+		return capabilities
+	case []any:
+		for _, item := range v {
+			capabilities = appendCanvasModelCapabilitiesFromValue(capabilities, seen, item)
+		}
+		return capabilities
+	default:
+		for _, item := range util.AsStringSlice(value) {
+			capabilities = appendCanvasModelCapabilitiesFromValue(capabilities, seen, item)
+		}
+		return capabilities
+	}
+}
+
+func splitCanvasModelCapabilityText(value string) []string {
+	return strings.FieldsFunc(value, func(r rune) bool {
+		switch r {
+		case ',', ';', '|', '/', '\\', ' ', '\t', '\n', '\r':
+			return true
+		default:
+			return false
+		}
+	})
+}
+
+func appendCanvasModelCapability(capabilities []string, seen map[string]struct{}, capability string) []string {
+	normalized := normalizeCanvasModelCapability(capability)
+	if normalized == "" {
+		return capabilities
+	}
+	if _, ok := seen[normalized]; ok {
+		return capabilities
+	}
+	seen[normalized] = struct{}{}
+	return append(capabilities, normalized)
+}
+
 func normalizeCanvasModelCapability(capability string) string {
-	switch strings.ToLower(strings.TrimSpace(capability)) {
-	case "text", "llm", "chat":
+	lower := strings.ToLower(strings.TrimSpace(capability))
+	switch lower {
+	case "text", "texts", "llm", "chat", "chats", "completion", "completions", "chat_completion", "chat-completion":
 		return "chat"
-	case "image", "images":
+	case "image", "images", "image_generation", "image-generation", "text_to_image", "text-to-image", "text2image", "txt2img", "t2i", "image_edit", "image-edit":
 		return "image"
-	case "video", "videos":
+	case "video", "videos", "video_generation", "video-generation", "text_to_video", "text-to-video", "text2video", "txt2video", "image_to_video", "image-to-video", "image2video", "t2v", "i2v":
 		return "video"
 	default:
+		if canvasModelLooksLikeVideo(lower) {
+			return "video"
+		}
+		if canvasModelLooksLikeImage(lower) {
+			return "image"
+		}
 		return ""
 	}
 }

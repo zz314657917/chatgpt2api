@@ -601,11 +601,14 @@ func sub2APIImageGatewayJSONPayload(payload map[string]any) (map[string]any, err
 	if sub2APIUsesGeminiImageGateway(payload) {
 		return sub2APIGeminiImageGatewayPayload(payload), nil
 	}
+	if sub2APIUsesSeedreamGateway(payload) {
+		return sub2APISeedreamImageGatewayPayload(payload), nil
+	}
 	return sub2APIImageJSONPayload(payload), nil
 }
 
 func sub2APIUsesImageGenerationsJSONGateway(payload map[string]any) bool {
-	return sub2APIUsesOfficialImageGateway(payload) || sub2APIUsesGeminiImageGateway(payload) || sub2APIUsesMidjourneyGateway(payload) || sub2APIUsesGrokImagineGateway(payload)
+	return sub2APIUsesOfficialImageGateway(payload) || sub2APIUsesGeminiImageGateway(payload) || sub2APIUsesMidjourneyGateway(payload) || sub2APIUsesGrokImagineGateway(payload) || sub2APIUsesSeedreamGateway(payload)
 }
 
 func sub2APIUsesOfficialImageGateway(payload map[string]any) bool {
@@ -630,6 +633,15 @@ func sub2APIUsesMidjourneyGateway(payload map[string]any) bool {
 
 func sub2APIUsesGrokImagineGateway(payload map[string]any) bool {
 	return sub2APIImageModel(payload["model"]) == util.ImageModelGrokImagine
+}
+
+func sub2APIUsesSeedreamGateway(payload map[string]any) bool {
+	switch sub2APIImageModel(payload["model"]) {
+	case util.ImageModelSeedream40, util.ImageModelSeedream45:
+		return true
+	default:
+		return false
+	}
 }
 
 func sub2APIImageJSONPayload(payload map[string]any) map[string]any {
@@ -666,6 +678,31 @@ func sub2APIImageJSONPayload(payload map[string]any) map[string]any {
 	for key, value := range out {
 		if value == "" {
 			delete(out, key)
+		}
+	}
+	return out
+}
+
+func sub2APISeedreamImageGatewayPayload(payload map[string]any) map[string]any {
+	out := sub2APIImageJSONPayload(payload)
+	delete(out, "quality")
+	delete(out, "background")
+	delete(out, "moderation")
+	delete(out, "style")
+	delete(out, "partial_images")
+	delete(out, "input_image_mask")
+	delete(out, "official_fallback")
+	if resolution := sub2APIImageResolution(payload); resolution != "" {
+		out["resolution"] = strings.ToLower(resolution)
+	} else {
+		delete(out, "resolution")
+	}
+	if urls := sub2APISeedreamImageURLs(payload); len(urls) > 0 {
+		out["image_urls"] = urls
+	}
+	for _, key := range []string{"watermark", "optimize_prompt_options", "sequential_image_generation", "sequential_image_generation_options"} {
+		if value := payload[key]; value != nil && util.Clean(value) != "" {
+			out[key] = value
 		}
 	}
 	return out
@@ -745,6 +782,8 @@ func sub2APIMidjourneyImageGatewayPayload(payload map[string]any) (map[string]an
 const sub2APIMidjourneyReferenceLimit = 4
 
 const sub2APIGrokImagineReferenceLimit = 1
+
+const sub2APISeedreamInputOutputLimit = 15
 
 func sub2APIGrokImagineImageGatewayPayload(payload map[string]any, edit bool) (map[string]any, error) {
 	out := map[string]any{
@@ -849,6 +888,10 @@ func sub2APIImageURLs(payload map[string]any) []string {
 		appendURL(sub2APIUploadedImageDataURL(image))
 	}
 	return dedupe(urls)
+}
+
+func sub2APISeedreamImageURLs(payload map[string]any) []string {
+	return sub2APIImageURLs(payload)
 }
 
 func sub2APIMidjourneyImagePayloadCount(payload map[string]any) int {
