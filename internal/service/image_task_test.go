@@ -208,7 +208,7 @@ func TestImageTaskServiceExternalBillingKeepsEstimatedBalanceUnit(t *testing.T) 
 	if err != nil {
 		t.Fatalf("SubmitEdit() error = %v", err)
 	}
-	waitForTaskStatus(t, svc, identity, "official-edit-cost", TaskStatusSuccess)
+	waitForTaskBillingConsumed(t, svc, identity, "official-edit-cost", 219)
 
 	if len(billing.reserveAmounts) == 0 || billing.reserveAmounts[0] != 0.219 {
 		t.Fatalf("first external reserve amount = %#v, want 0.219", billing.reserveAmounts)
@@ -253,7 +253,7 @@ func TestImageTaskServiceExternalBillingUsesTaskStatusCostOverride(t *testing.T)
 	if err != nil {
 		t.Fatalf("submit() error = %v", err)
 	}
-	waitForTaskStatus(t, svc, identity, "official-edit-status-cost", TaskStatusSuccess)
+	waitForTaskBillingConsumed(t, svc, identity, "official-edit-status-cost", 929)
 
 	if len(billing.commitAmounts) != 2 || billing.commitAmounts[0] != 0.219 || billing.commitAmounts[1] < 0.08447 || billing.commitAmounts[1] > 0.08449 {
 		t.Fatalf("external commit amounts = %#v, want [0.219 ~0.08448]", billing.commitAmounts)
@@ -268,6 +268,154 @@ func TestImageTaskServiceExternalBillingUsesTaskStatusCostOverride(t *testing.T)
 	item := got["items"].([]map[string]any)[0]
 	if util.ToInt(item["billing_consumed_amount"], -1) != 929 {
 		t.Fatalf("local consumed amount = %#v, want 929 in %#v", item["billing_consumed_amount"], item)
+	}
+}
+
+func TestImageTaskServiceExternalBillingCostOverrideSurchargesOnlyDeltaWhenStoredPrechargeMissingExternalAmount(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	handler := func(ctx context.Context, identity Identity, payload map[string]any) (map[string]any, error) {
+		close(started)
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		return map[string]any{
+			"external_billing_consumed_amount": 0.11055,
+			"external_billing_amount_unit":     imageTaskAmountUnitAPIMartCost,
+			"data": []map[string]any{
+				{"url": "https://example.test/image.png"},
+			},
+		}, nil
+	}
+	svc := newTestImageTaskService(t, handler, handler, handler, func() int { return 30 })
+	billing := &recordingExternalTaskBilling{}
+	svc.SetExternalBilling(billing)
+	identity := Identity{ID: "sub2api:42", OwnerID: "sub2api:42", Role: AuthRoleUser, Provider: AuthProviderSub2API}
+	taskID := "official-edit-status-cost-legacy-precharge"
+
+	_, err := svc.submit(context.Background(), identity, taskID, "edit", map[string]any{
+		"prompt":        "edit",
+		"model":         util.ImageModelGPTOfficial,
+		"size":          "16:9",
+		"quality":       "medium",
+		"images":        []any{"image"},
+		"output_format": "png",
+		"base_url":      "https://base.test",
+	})
+	if err != nil {
+		t.Fatalf("submit() error = %v", err)
+	}
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for task start")
+	}
+
+	svc.mu.Lock()
+	task := svc.tasks[taskKey(ownerID(identity), taskID)]
+	precharged := util.ToInt(task[imageTaskBillingChargedAmountKey], 0)
+	delete(task, imageTaskExternalChargedAmountKey)
+	delete(task, imageTaskExternalChargedUnitKey)
+	delete(task, imageTaskExternalUnitAmountKey)
+	task["updated_at"] = util.NowLocal()
+	_ = svc.saveLocked()
+	svc.mu.Unlock()
+	if precharged <= 0 {
+		t.Fatalf("precharged amount = %d, want positive", precharged)
+	}
+
+	close(release)
+	waitForTaskBillingConsumed(t, svc, identity, taskID, 929)
+
+	wantSurcharge := imageTaskExternalRawAmount(
+		imageTaskExternalBalanceAmount(0.11055, imageTaskAmountUnitAPIMartCost)-float64(precharged)/1000,
+		imageTaskAmountUnitAPIMartCost,
+	)
+	if len(billing.reserveAmounts) != 2 || billing.reserveAmounts[1] < wantSurcharge-1e-9 || billing.reserveAmounts[1] > wantSurcharge+1e-9 {
+		t.Fatalf("external reserve amounts = %#v, want second delta %.12f", billing.reserveAmounts, wantSurcharge)
+	}
+	if len(billing.commitAmounts) != 2 || billing.commitAmounts[1] < wantSurcharge-1e-9 || billing.commitAmounts[1] > wantSurcharge+1e-9 {
+		t.Fatalf("external commit amounts = %#v, want second delta %.12f", billing.commitAmounts, wantSurcharge)
+	}
+	if wantSurcharge >= 0.11055 {
+		t.Fatalf("test setup invalid: surcharge delta %.12f should be less than full cost", wantSurcharge)
+	}
+}
+
+func TestImageTaskServiceExternalBillingCostOverrideDoesNotSurchargeWhenStoredPrechargeAmountsMissing(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	handler := func(ctx context.Context, identity Identity, payload map[string]any) (map[string]any, error) {
+		close(started)
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		return map[string]any{
+			"external_billing_consumed_amount": 0.026,
+			"external_billing_amount_unit":     imageTaskAmountUnitAPIMartCost,
+			"data": []map[string]any{
+				{"url": "https://example.test/image.png"},
+			},
+		}, nil
+	}
+	svc := newTestImageTaskService(t, handler, handler, handler, func() int { return 30 })
+	billing := &recordingExternalTaskBilling{}
+	svc.SetExternalBilling(billing)
+	identity := Identity{ID: "sub2api:42", OwnerID: "sub2api:42", Role: AuthRoleUser, Provider: AuthProviderSub2API}
+	taskID := "official-edit-cost-lower-legacy-precharge"
+
+	_, err := svc.submit(context.Background(), identity, taskID, "edit", map[string]any{
+		"prompt":        "edit",
+		"model":         util.ImageModelGPTOfficial,
+		"size":          "16:9",
+		"quality":       "medium",
+		"images":        []any{"image"},
+		"output_format": "png",
+		"base_url":      "https://base.test",
+	})
+	if err != nil {
+		t.Fatalf("submit() error = %v", err)
+	}
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for task start")
+	}
+
+	svc.mu.Lock()
+	task := svc.tasks[taskKey(ownerID(identity), taskID)]
+	chargeKey := util.Clean(task[imageTaskBillingChargeKey])
+	delete(task, imageTaskBillingChargedAmountKey)
+	delete(task, imageTaskBillingUnitAmountKey)
+	delete(task, imageTaskExternalChargedAmountKey)
+	delete(task, imageTaskExternalChargedUnitKey)
+	delete(task, imageTaskExternalUnitAmountKey)
+	task["updated_at"] = util.NowLocal()
+	_ = svc.saveLocked()
+	svc.mu.Unlock()
+	if chargeKey == "" {
+		t.Fatal("test setup missing precharge key")
+	}
+
+	close(release)
+	waitForTaskBillingConsumed(t, svc, identity, taskID, 219)
+
+	if len(billing.reserveAmounts) != 1 || billing.reserveAmounts[0] != 0.219 {
+		t.Fatalf("external reserve amounts = %#v, want only original precharge 0.219", billing.reserveAmounts)
+	}
+	if len(billing.commitAmounts) != 1 || billing.commitAmounts[0] != 0.219 {
+		t.Fatalf("external commit amounts = %#v, want only original precharge commit 0.219", billing.commitAmounts)
+	}
+	wantRefund := 0.219 - imageTaskExternalBalanceAmount(0.026, imageTaskAmountUnitAPIMartCost)
+	if billing.refundAmount < wantRefund-1e-9 || billing.refundAmount > wantRefund+1e-9 {
+		t.Fatalf("external refund amount = %.12f, want %.12f", billing.refundAmount, wantRefund)
+	}
+	if !reflect.DeepEqual(billing.calls, []string{"reserve", "refund", "commit"}) {
+		t.Fatalf("external billing calls = %#v, want reserve/refund/commit without surcharge", billing.calls)
 	}
 }
 
@@ -298,7 +446,7 @@ func TestImageTaskServiceExternalBillingUsesCreditsCostOverrideForOfficial2K(t *
 	if err != nil {
 		t.Fatalf("submit() error = %v", err)
 	}
-	waitForTaskStatus(t, svc, identity, "official-2k-credits-cost", TaskStatusSuccess)
+	waitForTaskBillingConsumed(t, svc, identity, "official-2k-credits-cost", 730)
 
 	if len(billing.reserveAmounts) != 2 || billing.reserveAmounts[0] != 0.721 || billing.reserveAmounts[1] < 0.000982 || billing.reserveAmounts[1] > 0.000983 {
 		t.Fatalf("external reserve amounts = %#v, want [0.721 ~0.000983]", billing.reserveAmounts)
@@ -331,7 +479,7 @@ func TestImageTaskServiceAutoImageModelUsesResolvedBridgeCostModel(t *testing.T)
 	if err != nil {
 		t.Fatalf("SubmitGeneration() error = %v", err)
 	}
-	waitForTaskStatus(t, svc, identity, "auto-cost", TaskStatusSuccess)
+	waitForTaskBillingConsumed(t, svc, identity, "auto-cost", 51)
 
 	if len(billing.reserveAmounts) == 0 || billing.reserveAmounts[0] != 0.051 {
 		t.Fatalf("external reserve amount = %#v, want 0.051", billing.reserveAmounts)
@@ -2111,6 +2259,20 @@ func waitForTaskStatus(t *testing.T, svc *ImageTaskService, identity Identity, t
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("task %s did not reach status %s", taskID, want)
+}
+
+func waitForTaskBillingConsumed(t *testing.T, svc *ImageTaskService, identity Identity, taskID string, want int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		got := svc.ListTasks(identity, []string{taskID})
+		items := got["items"].([]map[string]any)
+		if len(items) == 1 && items[0]["status"] == TaskStatusSuccess && util.ToInt(items[0]["billing_consumed_amount"], -1) == want {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("task %s did not settle billing_consumed_amount=%d", taskID, want)
 }
 
 func waitForTaskData(t *testing.T, svc *ImageTaskService, identity Identity, taskID string, ok func([]map[string]any) bool) {
