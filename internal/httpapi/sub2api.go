@@ -296,7 +296,7 @@ func (a *App) callSub2APIImageEdits(ctx context.Context, identity service.Identi
 	return a.callSub2APIImageBatchesWithBinding(ctx, identity, payload, binding, func(ctx context.Context, batchPayload map[string]any) (map[string]any, error) {
 		var buf bytes.Buffer
 		writer := multipart.NewWriter(&buf)
-		for key, value := range sub2APIRequestBodyWithGroup(binding, sub2APIImageJSONPayload(batchPayload)) {
+		for key, value := range sub2APIRequestBodyWithGroup(binding, sub2APIImageMultipartPayload(batchPayload)) {
 			if value == nil {
 				continue
 			}
@@ -680,6 +680,12 @@ func sub2APIImageJSONPayload(payload map[string]any) map[string]any {
 			delete(out, key)
 		}
 	}
+	return out
+}
+
+func sub2APIImageMultipartPayload(payload map[string]any) map[string]any {
+	out := sub2APIImageJSONPayload(payload)
+	delete(out, "image_urls")
 	return out
 }
 

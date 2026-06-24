@@ -2302,6 +2302,7 @@ func (a *App) jsonImageEditUploads(ctx context.Context, body map[string]any, ide
 	if err != nil {
 		return nil, err
 	}
+	urlNative := jsonImageEditUsesPublicReferenceURLs(model)
 	publicURLs := dedupe(append(publicJSONImageURLs(urls), signedReferenceURLs...))
 	if len(publicURLs) > 0 {
 		body["official_public_image_urls"] = publicURLs
@@ -2330,12 +2331,26 @@ func (a *App) jsonImageEditUploads(ctx context.Context, body map[string]any, ide
 		}
 		images = append(images, image)
 	}
+	if !urlNative {
+		delete(body, "official_public_image_urls")
+		delete(body, "image_url")
+		delete(body, "image_urls")
+	}
 	return images, nil
 }
 
 func (a *App) imageEditUsesSub2API(ctx context.Context, identity service.Identity) bool {
 	_, ok := a.sub2APIBindingForMode(ctx, identity, "edit")
 	return ok
+}
+
+func jsonImageEditUsesPublicReferenceURLs(model string) bool {
+	switch model {
+	case util.ImageModelGPTOfficial, util.ImageModelMidjourney, util.ImageModelGrokImagine:
+		return true
+	default:
+		return false
+	}
 }
 
 func publicJSONImageURLs(urls []string) []string {

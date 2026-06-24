@@ -3661,6 +3661,107 @@ func TestSub2APIGPTImageEditTaskKeepsMultipartTempReference(t *testing.T) {
 	}
 }
 
+func TestSub2APIGPTImageEditTaskConvertsJSONURLToMultipartReference(t *testing.T) {
+	app := newTestApp(t)
+	defer app.Close()
+
+	var multipartFields map[string]string
+	var multipartImage []byte
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/images/edits" {
+			t.Fatalf("gateway request = %s %s", r.Method, r.URL.Path)
+		}
+		if !strings.Contains(r.Header.Get("Content-Type"), "multipart/form-data") {
+			t.Fatalf("gateway Content-Type = %q, want multipart", r.Header.Get("Content-Type"))
+		}
+		if err := r.ParseMultipartForm(8 << 20); err != nil {
+			t.Fatalf("gateway multipart: %v", err)
+		}
+		multipartFields = map[string]string{}
+		for key, values := range r.MultipartForm.Value {
+			if len(values) > 0 {
+				multipartFields[key] = values[0]
+			}
+		}
+		files := r.MultipartForm.File["image"]
+		if len(files) != 1 {
+			t.Fatalf("gateway image files = %d", len(files))
+		}
+		file, err := files[0].Open()
+		if err != nil {
+			t.Fatalf("open gateway image: %v", err)
+		}
+		defer file.Close()
+		multipartImage, err = io.ReadAll(file)
+		if err != nil {
+			t.Fatalf("read gateway image: %v", err)
+		}
+		util.WriteJSON(w, http.StatusOK, map[string]any{
+			"created": 123,
+			"data":    []map[string]any{{"b64_json": sub2APITestPNGBase64}},
+		})
+	}))
+	defer gateway.Close()
+
+	owner := service.AuthOwner{ID: "sub2api:gpt-image-json-ref-user", Name: "gpt-image-json-ref", Provider: service.AuthProviderSub2API}
+	_, sessionKey, err := app.auth.UpsertSub2APISession(owner)
+	if err != nil {
+		t.Fatalf("UpsertSub2APISession() error = %v", err)
+	}
+	if err := app.sub2Bindings.Save(service.Sub2APIBinding{
+		OwnerID:        owner.ID,
+		Sub2APIUserID:  "gpt-image-json-ref-user",
+		SessionToken:   "session-gpt-image-json-ref-user",
+		APIKey:         "sub2-key",
+		GatewayBaseURL: gateway.URL,
+	}); err != nil {
+		t.Fatalf("Save(Sub2APIBinding) error = %v", err)
+	}
+
+	referenceBytes := []byte("json-reference-bytes")
+	body := jsonString(map[string]any{
+		"client_task_id": "sub2-gpt-image-json-ref-task",
+		"prompt":         "keep the product, change background",
+		"model":          util.ImageModelGPT,
+		"image_urls":     []string{"data:image/png;base64," + base64.StdEncoding.EncodeToString(referenceBytes)},
+		"size":           "16:9",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/creation-tasks/image-edits", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+sessionKey)
+	req.Header.Set("Content-Type", "application/json")
+	res := httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("submit gpt image edit task status = %d body = %s", res.Code, res.Body.String())
+	}
+
+	waitForHTTPTestCondition(t, func() bool {
+		req = httptest.NewRequest(http.MethodGet, "/api/creation-tasks?ids=sub2-gpt-image-json-ref-task", nil)
+		req.Header.Set("Authorization", "Bearer "+sessionKey)
+		res = httptest.NewRecorder()
+		app.Handler().ServeHTTP(res, req)
+		if res.Code != http.StatusOK {
+			t.Fatalf("list gpt image edit task status = %d body = %s", res.Code, res.Body.String())
+		}
+		var listed map[string]any
+		if err := json.Unmarshal(res.Body.Bytes(), &listed); err != nil {
+			t.Fatalf("list gpt image edit task json: %v", err)
+		}
+		items := util.AsMapSlice(listed["items"])
+		return len(items) == 1 && items[0]["status"] == service.TaskStatusSuccess
+	})
+
+	if multipartFields["model"] != util.ImageModelGPT || multipartFields["size"] != "1536x864" {
+		t.Fatalf("gpt image gateway multipart fields = %#v", multipartFields)
+	}
+	if _, ok := multipartFields["image_urls"]; ok {
+		t.Fatalf("gpt image multipart should not forward image_urls: %#v", multipartFields)
+	}
+	if string(multipartImage) != string(referenceBytes) {
+		t.Fatalf("gateway multipart image = %q", string(multipartImage))
+	}
+}
+
 func TestSub2APIOfficialImageEditTaskUsesSignedTempReferenceURL(t *testing.T) {
 	var objectPutPath string
 	objectServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
