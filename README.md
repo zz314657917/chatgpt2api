@@ -35,12 +35,22 @@
 | 目标 | 入口 |
 | --- | --- |
 | 立即部署服务 | [快速部署](#快速部署) |
+| 了解当前默认产品主线 | `knowledge/tasks/current-task.md` / `knowledge/05-current-focus.md` |
 | 配置管理员、代理、并发、存储 | [配置说明](#配置说明) |
 | 创建 API Token 并调用接口 | [API 接入](#api-接入) |
 | 查看生图参数、异步任务和错误码 | [生图接口文档](./docs/image-generation-api.md) |
 | 本地改代码和验证构建 | [本地开发](#本地开发) |
 | 升级 Docker 镜像或 Release 二进制 | [升级与在线更新](#升级与在线更新) |
 | ChatGPT 官网生图协议研究 | [技术研究文档](#技术研究文档) / [jshook 索引](./jshook/README.md) |
+
+### 当前默认产品面
+
+- 默认语境已不只是“自托管 OpenAI-compatible 服务 + 管理后台”。
+- 当前高频主线是“落叶创艺独立用户版 + 多图片工作台共用创作底座”：
+  - `Sub2API` 负责用户、余额、充值、默认分组与扣费真源。
+  - `chatgpt2api` 提供 `/image`、`/canvas`、`/image-manager`、`/social`、`/ecommerce-suite` 等工作台。
+  - 多工作台共享登录态、素材输入、creation-task 输出、钱包扣费、统一图片模型设置、image arena 结果视图，以及账号级图片输入 URL / 签名临时参考图 URL 这类图片输入来源能力。
+- 如果只是要部署通用 API 网关，看本 README 即可；如果要继续当前产品主线或排查最近图片工作台问题，优先读 `knowledge/tasks/current-task.md` 和 `knowledge/05-current-focus.md`。
 
 ## 项目能力
 
@@ -72,6 +82,14 @@
 - Anthropic Messages 风格入口：`POST /v1/messages`。
 - 异步创作任务资源：`/api/creation-tasks`。
 - 支持 `gpt-image-2`、`codex-gpt-image-2`、`auto` 和多个 `gpt-5*` 文本/图片场景模型选项。
+
+### 当前图片工作台默认边界
+
+- `/image`、`/canvas`、`/ecommerce-suite` 已共用统一 image model settings 面板，不再按单页局部表单理解图片模型设置。
+- image gateway 已进入默认实现边界；讨论图片模型支持时，不能只按 official / 非 official 两条旧路径理解。
+- 上游图片错误归一已经是稳定后端边界：内容策略错误、尺寸错误与 Midjourney generation count 会统一映射。
+- 多图结果默认按 image arena 的“单轮 run + 主图/缩略图 + 动作聚合”理解，而不是长列表图片块。
+- 账号级图片输入 URL、签名临时参考图 URL 与 multipart references 继续编辑链路，已经进入默认图片输入来源语义；后续排障不能继续只按会话临时文件或长期直链理解引用图。
 
 ### 账号池与导入
 
