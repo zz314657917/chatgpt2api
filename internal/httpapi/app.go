@@ -2307,7 +2307,9 @@ func (a *App) jsonImageEditUploads(ctx context.Context, body map[string]any, ide
 	if len(publicURLs) > 0 {
 		body["official_public_image_urls"] = publicURLs
 	}
-	if usesSub2APIEdit && model == util.ImageModelGPTOfficial && len(publicURLs) > 0 {
+	publicURLRefs := publicJSONImageURLs(urls)
+	allJSONRefsPublic := len(publicURLRefs) == len(urls)
+	if usesSub2APIEdit && model == util.ImageModelGPTOfficial && len(publicURLs) > 0 && allJSONRefsPublic {
 		return make([]protocol.UploadedImage, len(publicURLs)), nil
 	}
 	if (model == util.ImageModelMidjourney || model == util.ImageModelGrokImagine) && len(publicURLs) > 0 {
@@ -2331,7 +2333,7 @@ func (a *App) jsonImageEditUploads(ctx context.Context, body map[string]any, ide
 		}
 		images = append(images, image)
 	}
-	if !urlNative {
+	if !urlNative || (usesSub2APIEdit && model == util.ImageModelGPTOfficial && !allJSONRefsPublic) {
 		delete(body, "official_public_image_urls")
 		delete(body, "image_url")
 		delete(body, "image_urls")
