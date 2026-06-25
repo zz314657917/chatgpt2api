@@ -631,7 +631,7 @@ function UsagePanel({ session }: { session: StoredAuthSession }) {
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div className="min-w-0">
             <CardTitle className="text-lg">使用记录</CardTitle>
-            <CardDescription>同步展示账户中心最近消费与充值流水。</CardDescription>
+            <CardDescription>同步展示账户中心最近消费记录。</CardDescription>
           </div>
           <div className="flex shrink-0 flex-wrap gap-2">
             <Button type="button" variant="outline" className="h-9 rounded-lg" onClick={loadUsage} disabled={isLoadingUsage}>
@@ -661,10 +661,7 @@ function UsagePanel({ session }: { session: StoredAuthSession }) {
             <LoaderCircle className="size-5 animate-spin" />
           </div>
         ) : (
-          <>
-            <UsageRecordTable title="最近消费" items={usage?.items || []} emptyText="暂无消费记录" fallbackTitle="消费记录" />
-            <UsageRecordTable title="充值记录" items={usage?.recent_recharges || []} emptyText="暂无充值记录" fallbackTitle="充值记录" />
-          </>
+          <UsageRecordTable title="最近消费" items={usage?.items || []} emptyText="暂无消费记录" fallbackTitle="消费记录" />
         )}
       </CardContent>
     </Card>
