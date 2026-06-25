@@ -521,6 +521,19 @@ function generatorImageSize(generator: SmartCanvasItem, hasInputImages = false) 
   return normalizeCanvasImageSize(generator.data?.size);
 }
 
+function generatorImagePreviewData(generator: SmartCanvasItem, hasInputImages = false) {
+  if (generator.type !== "image_generation") {
+    return {};
+  }
+  const size = generatorImageSize(generator, hasInputImages) || "";
+  return {
+    size,
+    size_user_modified: true,
+    image_resolution: size && isPixelIconSize(size) ? "" : generatorImageResolution(generator, hasInputImages) || "",
+    image_resolution_user_modified: true,
+  };
+}
+
 function generatorImageModel(generator: SmartCanvasItem): ImageModel {
   if (generatorProStudioEnabled(generator)) {
     return "gpt-image-2-official";
@@ -3504,6 +3517,7 @@ export function useSmartCanvasController() {
     if (outputNode) {
       outputIds = [outputNode.id];
     }
+    const loopImagePreviewData = generatorImagePreviewData(generator, sourceImages.length > 0);
 
     const slotStatuses: CreationTask["output_statuses"] = Array.from({ length: total }, () => "queued" as const);
     const updateLoopProgress = (
@@ -3570,6 +3584,7 @@ export function useSmartCanvasController() {
               data: {
                 ...item.data,
                 ...(isGenerator ? {} : { prompt: submittedPrompt }),
+                ...(isGenerator ? {} : loopImagePreviewData),
                 model: generator.data?.model || "auto",
                 input_images: loopMode === "images" ? [] : sourceImages,
                 output,
@@ -3591,6 +3606,7 @@ export function useSmartCanvasController() {
             data: {
               ...outputNode.data,
               prompt: submittedPrompt,
+              ...loopImagePreviewData,
               model: generator.data?.model || "auto",
               output,
               status,
@@ -3819,6 +3835,7 @@ export function useSmartCanvasController() {
     if (placeholderOutputNode) {
       outputIds = [placeholderOutputNode.id];
     }
+    const imagePreviewData = generatorImagePreviewData(generator, editInputRefs.length > 0);
     setRunning(true);
     try {
       updateCanvas((doc) => {
@@ -3847,6 +3864,7 @@ export function useSmartCanvasController() {
                 ...item.data,
                 prompt: submittedPrompt,
                 model: placeholderModel,
+                ...imagePreviewData,
                 output: placeholderOutput,
                 status: "running" as const,
                 error: "",
@@ -3867,6 +3885,7 @@ export function useSmartCanvasController() {
               ...placeholderOutputNode.data,
               prompt: submittedPrompt,
               model: placeholderModel,
+              ...imagePreviewData,
               output: placeholderOutput,
               status: "running",
               error: "",
@@ -3996,6 +4015,7 @@ export function useSmartCanvasController() {
             ...item.data,
             prompt: submittedPrompt,
             model: submittedModel,
+            ...imagePreviewData,
             output,
             status: task.status,
             error: task.error,

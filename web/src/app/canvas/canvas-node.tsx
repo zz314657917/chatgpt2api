@@ -127,6 +127,7 @@ import {
   smartCanvasRuns,
   statusLabel,
   normalizeCanvasImageResolution,
+  normalizeCanvasImageSize,
 } from "./canvas-utils";
 import type {
   SmartCanvasConnectState,
@@ -218,6 +219,16 @@ const canvasLabelClass = "text-muted-foreground dark:text-slate-400";
 const canvasAccentTextClass = "text-sky-700 dark:text-sky-200";
 const canvasDashedClass = "border-dashed border-border bg-muted/50 text-muted-foreground dark:border-slate-700 dark:bg-slate-950/40 dark:text-slate-500";
 const canvasGhostButtonClass = "border-border bg-background/70 text-foreground hover:bg-accent dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800";
+const canvasPixelatedImageStyle: CSSProperties = { imageRendering: "pixelated" };
+
+function isPixelatedCanvasImageSize(size?: string) {
+  return isPixelIconSize(normalizeCanvasImageSize(size));
+}
+
+function canvasImageDisplaySource(image: CanvasImageRef, pixelated = false) {
+  return pixelated ? canvasImageSource(image) || canvasImagePreviewSource(image) : canvasImagePreviewSource(image);
+}
+
 const canvasImageResolutionOptions = [
   { value: "unspecified", label: "默认清晰度" },
   ...IMAGE_RESOLUTION_OPTIONS.filter((option): option is Extract<(typeof IMAGE_RESOLUTION_OPTIONS)[number], { value: ImageResolution & ("1080p" | "2k" | "4k") }> => option.value !== "auto")
@@ -4409,6 +4420,7 @@ function GeneratorNodeBody({
           images={outputImages}
           onOpenImage={onOpenImage}
           lightweight={lightweightMedia}
+          pixelated={pixelIconSizeSelected}
         />
       ) : null}
       <CanvasRunInsight item={item} />
@@ -4710,6 +4722,7 @@ function OutputNodeBody({
   const images = item.data?.output?.images || item.data?.images || EMPTY_CANVAS_IMAGES;
   const videos = item.data?.output?.videos || item.data?.videos || EMPTY_CANVAS_VIDEOS;
   const loading = item.data?.status === "running" || item.data?.status === "queued";
+  const pixelated = isPixelatedCanvasImageSize(item.data?.size);
   const loopRaw = item.data?.output?.raw?.mode === "loop" ? item.data.output.raw : null;
   const startedAt = item.data?.started_at || item.data?.created_at || "";
   const downloadNodeId = itemIdForDownload(item);
@@ -4788,6 +4801,7 @@ function OutputNodeBody({
           selectedImageIds={selectedImageIds}
           downloadingImageIds={downloadingImageIds}
           lightweight={lightweight}
+          pixelated={pixelated}
         />
       ) : videos.length > 0 ? (
         <CanvasVideoStrip videos={videos} limit={2} />
@@ -4805,6 +4819,7 @@ function OutputNodeBody({
           className="grid-cols-4"
           large
           lightweight={lightweight}
+          pixelated={pixelated}
         />
       ) : loading ? (
         <CanvasGenerationLoading status={item.data?.status} onStop={onStopNode} />
@@ -4833,6 +4848,7 @@ function OutputNodeBody({
               selectedImageIds={selectedImageIds}
               downloadingImageIds={downloadingImageIds}
               className="grid-cols-2 sm:grid-cols-3 md:grid-cols-4"
+              pixelated={pixelated}
             />
           </div>
         </DialogContent>
@@ -5007,6 +5023,7 @@ function LoopOutputSlots({
   selectedImageIds,
   downloadingImageIds,
   lightweight,
+  pixelated,
 }: {
   images: CanvasImageRef[];
   raw: Record<string, unknown>;
@@ -5018,6 +5035,7 @@ function LoopOutputSlots({
   selectedImageIds?: Record<string, boolean>;
   downloadingImageIds?: Record<string, boolean>;
   lightweight: boolean;
+  pixelated?: boolean;
 }) {
   const total = Math.max(1, Math.min(40, loopRawNumber(raw, "total", images.length || 1)));
   const current = loopRawNumber(raw, "current", 0);
@@ -5048,6 +5066,7 @@ function LoopOutputSlots({
             selected={slot.image ? Boolean(selectedImageIds?.[canvasImageDownloadId(slot.image, slot.index)]) : false}
             downloading={slot.image ? Boolean(downloadingImageIds?.[canvasImageDownloadId(slot.image, slot.index)]) : false}
             lightweight={lightweight}
+            pixelated={pixelated}
           />
         ))}
       </div>
@@ -5070,6 +5089,7 @@ function LoopOutputSlot({
   selected,
   downloading,
   lightweight,
+  pixelated,
 }: {
   index: number;
   image?: CanvasImageRef;
@@ -5081,6 +5101,7 @@ function LoopOutputSlot({
   selected?: boolean;
   downloading?: boolean;
   lightweight: boolean;
+  pixelated?: boolean;
 }) {
   if (image) {
     return (
@@ -5103,7 +5124,12 @@ function LoopOutputSlot({
         {lightweight ? (
           <CanvasImagePlaceholder label={canvasImageLabel(image, index)} />
         ) : (
-          <AuthenticatedImage src={canvasImagePreviewSource(image)} alt={canvasImageLabel(image, index)} className="h-full w-full object-cover" />
+          <AuthenticatedImage
+            src={canvasImageDisplaySource(image, pixelated)}
+            alt={canvasImageLabel(image, index)}
+            className="h-full w-full object-cover"
+            style={pixelated ? canvasPixelatedImageStyle : undefined}
+          />
         )}
         {onToggleImageSelect ? (
           <span
@@ -5258,10 +5284,12 @@ function CanvasGeneratedImagePreview({
   images,
   onOpenImage,
   lightweight,
+  pixelated,
 }: {
   images: CanvasImageRef[];
   onOpenImage: (image: CanvasImageRef) => void;
   lightweight: boolean;
+  pixelated?: boolean;
 }) {
   const [activeKey, setActiveKey] = useState("");
   const activeIndex = Math.max(0, images.findIndex((image, index) => canvasGalleryImageKey(image, index) === activeKey));
@@ -5299,6 +5327,7 @@ function CanvasGeneratedImagePreview({
             src={activeSource}
             alt={canvasImageLabel(activeImage, activeIndex)}
             className="h-full w-full object-contain transition duration-150 group-hover:scale-[1.01]"
+            style={pixelated ? canvasPixelatedImageStyle : undefined}
             placeholderClassName="min-h-0 h-full bg-muted text-muted-foreground dark:bg-slate-900 dark:text-slate-500"
           />
         ) : (
@@ -5320,7 +5349,7 @@ function CanvasGeneratedImagePreview({
           {images.map((image, index) => {
             const key = canvasGalleryImageKey(image, index);
             const selected = index === activeIndex;
-            const thumbnailSource = canvasImagePreviewSource(image);
+            const thumbnailSource = canvasImageDisplaySource(image, pixelated);
             return (
               <button
                 key={key}
@@ -5347,6 +5376,7 @@ function CanvasGeneratedImagePreview({
                     src={thumbnailSource}
                     alt={canvasImageLabel(image, index)}
                     className="h-full w-full object-cover"
+                    style={pixelated ? canvasPixelatedImageStyle : undefined}
                     placeholderClassName="min-h-0 h-full bg-muted text-muted-foreground dark:bg-slate-900 dark:text-slate-500"
                   />
                 ) : (
@@ -5413,6 +5443,7 @@ export function CanvasImageStrip({
   large,
   lightweight,
   style,
+  pixelated,
 }: {
   images: CanvasImageRef[];
   limit?: number;
@@ -5427,6 +5458,7 @@ export function CanvasImageStrip({
   large?: boolean;
   lightweight?: boolean;
   style?: CSSProperties;
+  pixelated?: boolean;
 }) {
   const visible = images.slice(0, limit);
   const overflow = Math.max(0, images.length - visible.length);
@@ -5436,7 +5468,7 @@ export function CanvasImageStrip({
   return (
     <div className={cn("grid gap-2", className || "grid-cols-3", large && "h-full")} style={style}>
       {visible.map((image, index) => {
-        const src = canvasImagePreviewSource(image);
+        const src = canvasImageDisplaySource(image, pixelated);
         const imageId = canvasImageDownloadId(image, index);
         const selected = Boolean(selectedImageIds?.[imageId]);
         const downloading = Boolean(downloadingImageIds?.[imageId]);
@@ -5471,6 +5503,7 @@ export function CanvasImageStrip({
                 src={src}
                 alt={canvasImageLabel(image, index)}
                 className="h-full w-full object-cover transition duration-150 group-hover:scale-[1.03]"
+                style={pixelated ? canvasPixelatedImageStyle : undefined}
                 placeholderClassName="min-h-0 h-full bg-muted text-muted-foreground dark:bg-slate-900 dark:text-slate-500"
               />
             ) : (
