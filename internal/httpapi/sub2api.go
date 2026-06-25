@@ -272,7 +272,7 @@ func (a *App) callSub2APIImageEdits(ctx context.Context, identity service.Identi
 			return a.postSub2APIJSON(ctx, binding, "images/edits", body)
 		})
 	}
-	if sub2APIUsesImageGenerationsJSONGateway(payload) {
+	if sub2APIUsesImageGenerationsJSONGateway(payload) && sub2APIImageEditSupportsJSONGateway(payload) {
 		return a.callSub2APIImageBatchesWithBinding(ctx, identity, payload, binding, func(ctx context.Context, batchPayload map[string]any) (map[string]any, error) {
 			body, err := sub2APIImageGatewayJSONPayload(batchPayload)
 			if err != nil {
@@ -282,7 +282,10 @@ func (a *App) callSub2APIImageEdits(ctx context.Context, identity service.Identi
 			return a.postSub2APIJSON(ctx, binding, "images/generations", body)
 		})
 	}
-	if len(util.AsStringSlice(payload["official_public_image_urls"])) > 0 {
+	if sub2APIUsesOfficialImageGateway(payload) {
+		return nil, sub2APIOfficialPublicReferenceError()
+	}
+	if len(util.AsStringSlice(payload["official_public_image_urls"])) > 0 && len(nonEmptyUploadedImagesFromPayload(payload["images"])) == 0 {
 		return a.callSub2APIImageBatchesWithBinding(ctx, identity, payload, binding, func(ctx context.Context, batchPayload map[string]any) (map[string]any, error) {
 			body := sub2APIImageJSONPayload(batchPayload)
 			body["response_format"] = "b64_json"
@@ -611,6 +614,35 @@ func sub2APIUsesImageGenerationsJSONGateway(payload map[string]any) bool {
 	return sub2APIUsesOfficialImageGateway(payload) || sub2APIUsesGeminiImageGateway(payload) || sub2APIUsesMidjourneyGateway(payload) || sub2APIUsesGrokImagineGateway(payload) || sub2APIUsesSeedreamGateway(payload)
 }
 
+func sub2APIImageEditSupportsJSONGateway(payload map[string]any) bool {
+	model := sub2APIImageModel(payload["model"])
+	if model != util.ImageModelGPTOfficial {
+		return true
+	}
+	if len(nonEmptyUploadedImagesFromPayload(payload["images"])) > 0 {
+		return false
+	}
+	if len(util.AsStringSlice(payload["reference_image_ids"])) > 0 {
+		return false
+	}
+	rawURLs := sub2APIImageURLReferences(payload)
+	if len(rawURLs) == 0 {
+		return true
+	}
+	return len(publicJSONImageURLs(rawURLs)) == len(rawURLs)
+}
+
+func nonEmptyUploadedImagesFromPayload(value any) []protocol.UploadedImage {
+	images := uploadedImagesFromPayload(value)
+	out := make([]protocol.UploadedImage, 0, len(images))
+	for _, image := range images {
+		if len(image.Data) > 0 {
+			out = append(out, image)
+		}
+	}
+	return out
+}
+
 func sub2APIUsesOfficialImageGateway(payload map[string]any) bool {
 	return sub2APIImageModel(payload["model"]) == util.ImageModelGPTOfficial
 }
@@ -877,6 +909,10 @@ func sub2APIGrokImagineReferenceLimitError() error {
 }
 
 func sub2APIImageURLs(payload map[string]any) []string {
+	return sub2APIImageURLReferences(payload)
+}
+
+func sub2APIImageURLReferences(payload map[string]any) []string {
 	urls := make([]string, 0, 16)
 	appendURL := func(value string) {
 		if value = strings.TrimSpace(value); value != "" {

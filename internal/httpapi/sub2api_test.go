@@ -102,6 +102,35 @@ func TestSub2APIImagePayloadNormalizesDecimalRatio(t *testing.T) {
 	}
 }
 
+func TestSub2APIOfficialImageEditJSONGatewayRequiresPublicOnlyReferences(t *testing.T) {
+	if !sub2APIImageEditSupportsJSONGateway(map[string]any{
+		"model":                      util.ImageModelGPTOfficial,
+		"official_public_image_urls": []string{"https://cdn.example/source.png"},
+		"images":                     []protocol.UploadedImage{{}},
+	}) {
+		t.Fatal("official edit with public URL placeholders should support JSON gateway")
+	}
+
+	if sub2APIImageEditSupportsJSONGateway(map[string]any{
+		"model":                      util.ImageModelGPTOfficial,
+		"official_public_image_urls": []string{"https://cdn.example/source.png"},
+		"images": []protocol.UploadedImage{{
+			Filename:    "source.png",
+			ContentType: "image/png",
+			Data:        []byte("private"),
+		}},
+	}) {
+		t.Fatal("official edit with real uploaded image bytes should use multipart")
+	}
+
+	if sub2APIImageEditSupportsJSONGateway(map[string]any{
+		"model":      util.ImageModelGPTOfficial,
+		"image_urls": []string{"https://cdn.example/source.png", "data:image/png;base64,cHJpdmF0ZQ=="},
+	}) {
+		t.Fatal("official edit with mixed public and data URLs should not use JSON gateway")
+	}
+}
+
 func TestSub2APIOfficialImageSizePreservesSupportedRatios(t *testing.T) {
 	tests := []struct {
 		size string

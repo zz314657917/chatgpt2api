@@ -3521,6 +3521,83 @@ func TestSub2APIOfficialImageEditTaskUsesJSONGatewayPayload(t *testing.T) {
 	}
 }
 
+func TestSub2APIGPTImageEditUsesMultipartForMixedReferences(t *testing.T) {
+	var multipartFields map[string]string
+	var multipartImages [][]byte
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/images/edits" {
+			t.Fatalf("gateway request = %s %s", r.Method, r.URL.Path)
+		}
+		if !strings.Contains(r.Header.Get("Content-Type"), "multipart/form-data") {
+			t.Fatalf("gateway Content-Type = %q, want multipart", r.Header.Get("Content-Type"))
+		}
+		if err := r.ParseMultipartForm(8 << 20); err != nil {
+			t.Fatalf("gateway multipart: %v", err)
+		}
+		multipartFields = map[string]string{}
+		for key, values := range r.MultipartForm.Value {
+			if len(values) > 0 {
+				multipartFields[key] = values[0]
+			}
+		}
+		files := r.MultipartForm.File["image"]
+		if len(files) != 1 {
+			t.Fatalf("gateway image files = %d", len(files))
+		}
+		for _, header := range files {
+			file, err := header.Open()
+			if err != nil {
+				t.Fatalf("open gateway image: %v", err)
+			}
+			data, err := io.ReadAll(file)
+			_ = file.Close()
+			if err != nil {
+				t.Fatalf("read gateway image: %v", err)
+			}
+			multipartImages = append(multipartImages, data)
+		}
+		util.WriteJSON(w, http.StatusOK, map[string]any{
+			"created": 123,
+			"data":    []map[string]any{{"b64_json": sub2APITestPNGBase64}},
+		})
+	}))
+	defer gateway.Close()
+
+	app := &App{engine: &protocol.Engine{Config: testSub2APIImageConfig{root: t.TempDir()}}}
+	referenceBytes := []byte("private-json-reference")
+	result, err := app.callSub2APIImageEdits(context.Background(), service.Identity{}, map[string]any{
+		"prompt":                     "edit image",
+		"model":                      util.ImageModelGPT,
+		"official_public_image_urls": []string{"https://cdn.example/source.png"},
+		"images": []protocol.UploadedImage{{
+			Filename:    "reference.png",
+			ContentType: "image/png",
+			Data:        referenceBytes,
+		}},
+		"size":             "16:9",
+		"image_resolution": "2k",
+	}, service.Sub2APIBinding{
+		APIKey:         "sub2-key",
+		GatewayBaseURL: gateway.URL,
+	})
+	if err != nil {
+		t.Fatalf("callSub2APIImageEdits() error = %v", err)
+	}
+	if data := util.AsMapSlice(result["data"]); len(data) != 1 {
+		t.Fatalf("mixed gpt image result data = %#v", result["data"])
+	}
+
+	if multipartFields["model"] != util.ImageModelGPT || multipartFields["size"] != "1536x864" || multipartFields["resolution"] != "2k" {
+		t.Fatalf("gpt image mixed multipart fields = %#v", multipartFields)
+	}
+	if _, ok := multipartFields["image_urls"]; ok {
+		t.Fatalf("gpt image mixed multipart should not forward image_urls: %#v", multipartFields)
+	}
+	if len(multipartImages) != 1 || string(multipartImages[0]) != string(referenceBytes) {
+		t.Fatalf("gpt image mixed multipart images = %#v", multipartImages)
+	}
+}
+
 func TestSub2APIGPTImageEditTaskKeepsMultipartTempReference(t *testing.T) {
 	var objectPutPath string
 	objectServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
