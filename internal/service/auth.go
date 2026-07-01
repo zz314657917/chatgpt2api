@@ -1748,6 +1748,10 @@ func mergeDefaultManagedRole(roles []ManagedRole) []ManagedRole {
 				APIPermissionKey("POST", "/api/text-asset-collections"),
 				APIPermissionKey("PATCH", "/api/text-asset-collections"),
 				APIPermissionKey("DELETE", "/api/text-asset-collections"),
+				APIPermissionKey("GET", "/api/video-asset-collections"),
+				APIPermissionKey("POST", "/api/video-asset-collections"),
+				APIPermissionKey("PATCH", "/api/video-asset-collections"),
+				APIPermissionKey("DELETE", "/api/video-asset-collections"),
 			})
 			out = append(out, role)
 			seenDefault = true

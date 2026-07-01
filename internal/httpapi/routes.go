@@ -1566,7 +1566,7 @@ func (a *App) handleCreationTasks(w http.ResponseWriter, r *http.Request) {
 	}
 	parts := splitPath(r.URL.Path)
 	if r.URL.Path == "/api/creation-tasks" && r.Method == http.MethodGet {
-		util.WriteJSON(w, http.StatusOK, a.tasks.ListTasks(identity, util.ParseCommaList(r.URL.Query().Get("ids"))))
+		util.WriteJSON(w, http.StatusOK, a.decorateCreationTasks(identity, a.tasks.ListTasks(identity, util.ParseCommaList(r.URL.Query().Get("ids")))))
 		return
 	}
 	if len(parts) == 4 && parts[0] == "api" && parts[1] == "creation-tasks" && parts[3] == "cancel" {

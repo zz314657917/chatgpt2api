@@ -29,14 +29,17 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import {
+  createManagedVideoAssetCollection,
   createManagedTextAssetCollection,
   deleteManagedImages,
   createManagedTextAsset,
   createManagedImageCollection,
   deleteManagedImageCollection,
+  deleteManagedVideoAssetCollection,
   deleteManagedTextAssetCollection,
   deleteManagedTextAsset,
   fetchCreationTasks,
+  fetchManagedVideoAssetCollections,
   fetchManagedImageDownloadURL,
   fetchManagedImageCollections,
   fetchManagedImageDetail,
@@ -48,10 +51,13 @@ import {
   moveManagedImagesToTeamLibrary,
   MANAGED_IMAGE_UNCLASSIFIED_COLLECTION_ID,
   MANAGED_TEXT_ASSET_UNCLASSIFIED_COLLECTION_ID,
+  MANAGED_VIDEO_ASSET_UNCLASSIFIED_COLLECTION_ID,
   renameManagedImageCollection,
+  renameManagedVideoAssetCollection,
   renameManagedTextAssetCollection,
   updateManagedImageCollectionItems,
   updateManagedImageTags,
+  updateManagedVideoAssetCollectionItems,
   updateManagedTextAssetCollectionItems,
   updateManagedTextAsset,
   type ManagedImageCollection,
@@ -62,6 +68,7 @@ import {
   type ManagedTextAsset,
   type ManagedTextAssetCollection,
   type ManagedTextAssetListScope,
+  type ManagedVideoAssetCollection,
   type TeamImageStorageSummary,
   type TeamSummary,
 } from "@/lib/api";
@@ -231,6 +238,8 @@ type ManagedVideoAsset = {
   url: string;
   local_url: string;
   name: string;
+  collection_id?: string;
+  collection_name?: string;
   model: string;
   size?: string;
   duration?: number;
@@ -259,6 +268,19 @@ type TextAssetCollectionDeleteTarget = {
 
 type TextAssetCollectionAssignTarget = {
   item: ManagedTextAsset;
+  collectionId: string;
+};
+
+type VideoAssetCollectionEditTarget =
+  | { mode: "create" }
+  | { mode: "rename"; collection: ManagedVideoAssetCollection };
+
+type VideoAssetCollectionDeleteTarget = {
+  collection: ManagedVideoAssetCollection;
+};
+
+type VideoAssetCollectionAssignTarget = {
+  item: ManagedVideoAsset;
   collectionId: string;
 };
 
@@ -394,13 +416,16 @@ function videoAssetsFromTasks(tasks: CreationTask[]) {
       if (!url) {
         return [];
       }
+      const assetId = String(data.asset_id || `${task.id}:${index}`).trim();
       return [{
-        id: `${task.id}:${index}:${url}`,
+        id: assetId || `${task.id}:${index}`,
         task_id: task.id,
         output_index: index,
         url,
         local_url: String(data.local_url || data.video_url || data.url || "").trim(),
         name: videoAssetName(task, data, index),
+        collection_id: String(data.collection_id || "").trim() || undefined,
+        collection_name: String(data.collection_name || "").trim() || undefined,
         model: String(task.model || "").trim(),
         size: String(task.size || "").trim() || undefined,
         duration: taskDuration(task),
@@ -428,6 +453,14 @@ function filterVideoAssets(items: ManagedVideoAsset[], query: string) {
     item.aspect_ratio,
     item.resolution,
   ].some((value) => String(value || "").toLowerCase().includes(normalized)));
+}
+
+function normalizeVideoAssetCollectionsPayload(data: { items?: ManagedVideoAssetCollection[] | null; unclassified_count?: number | string | null }) {
+  const unclassifiedCount = Number(data.unclassified_count);
+  return {
+    items: Array.isArray(data.items) ? data.items : [],
+    unclassified_count: Number.isFinite(unclassifiedCount) ? Math.max(0, unclassifiedCount) : 0,
+  };
 }
 
 function formatStorageBytes(bytes?: number) {
@@ -658,6 +691,14 @@ function ImageManagerContent({
   const [videoLoadError, setVideoLoadError] = useState("");
   const [focusedVideoAssetId, setFocusedVideoAssetId] = useState<string | null>(null);
   const [downloadingVideoId, setDownloadingVideoId] = useState<string | null>(null);
+  const [videoAssetCollections, setVideoAssetCollections] = useState<ManagedVideoAssetCollection[]>([]);
+  const [videoAssetUnclassifiedCount, setVideoAssetUnclassifiedCount] = useState(0);
+  const [selectedVideoAssetCollectionId, setSelectedVideoAssetCollectionId] = useState("");
+  const [videoAssetCollectionEditTarget, setVideoAssetCollectionEditTarget] = useState<VideoAssetCollectionEditTarget | null>(null);
+  const [videoAssetCollectionNameInput, setVideoAssetCollectionNameInput] = useState("");
+  const [videoAssetCollectionDeleteTarget, setVideoAssetCollectionDeleteTarget] = useState<VideoAssetCollectionDeleteTarget | null>(null);
+  const [videoAssetCollectionAssignTarget, setVideoAssetCollectionAssignTarget] = useState<VideoAssetCollectionAssignTarget | null>(null);
+  const [videoAssetCollectionMutating, setVideoAssetCollectionMutating] = useState(false);
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
   const [selectedImageIds, setSelectedImageIds] = useState<Record<string, boolean>>({});
@@ -741,8 +782,8 @@ function ImageManagerContent({
     aspectRatioFilter !== "all" ? imageAspectRatioFilterLabel(aspectRatioFilter) : "",
     selectedCollectionId
       ? selectedCollectionId === MANAGED_IMAGE_UNCLASSIFIED_COLLECTION_ID
-        ? "素材集：未归类"
-        : `素材集：${collections.find((item) => item.id === selectedCollectionId)?.name || "未命名"}`
+        ? "分组：未归类"
+        : `分组：${collections.find((item) => item.id === selectedCollectionId)?.name || "未命名"}`
       : "",
     ...selectedTags.map((tag) => `标签：${tag}`),
   ].filter(Boolean);
@@ -823,7 +864,19 @@ function ImageManagerContent({
     }
     return textAssets[0] || null;
   }, [focusedTextAssetId, textAssets]);
-  const visibleVideoAssets = useMemo(() => filterVideoAssets(videoAssets, videoSearch), [videoAssets, videoSearch]);
+  const videoAssetCollectionFilterMatchesItem = useCallback((item: Pick<ManagedVideoAsset, "collection_id">) => {
+    if (!selectedVideoAssetCollectionId) {
+      return true;
+    }
+    if (selectedVideoAssetCollectionId === MANAGED_VIDEO_ASSET_UNCLASSIFIED_COLLECTION_ID) {
+      return !item.collection_id;
+    }
+    return item.collection_id === selectedVideoAssetCollectionId;
+  }, [selectedVideoAssetCollectionId]);
+  const visibleVideoAssets = useMemo(
+    () => filterVideoAssets(videoAssets, videoSearch).filter(videoAssetCollectionFilterMatchesItem),
+    [videoAssetCollectionFilterMatchesItem, videoAssets, videoSearch],
+  );
   const focusedVideoAsset = useMemo(() => {
     if (focusedVideoAssetId) {
       const focused = visibleVideoAssets.find((item) => item.id === focusedVideoAssetId);
@@ -836,9 +889,9 @@ function ImageManagerContent({
   const canMutateCollections = canManageCollections && (galleryView === "mine" || Boolean(galleryView === "team" && teamManager && activeTeam?.id));
   const selectedRealCollection = selectedCollectionId && selectedCollectionId !== MANAGED_IMAGE_UNCLASSIFIED_COLLECTION_ID;
   const collectionReadOnlyHint = canMutateCollections
-    ? "一张图只能属于一个素材集，调整归类会替换原素材集。"
+    ? "一张图只能属于一个分组，调整归类会替换原分组。"
     : galleryView === "team"
-        ? "团队普通成员可查看素材集，归类修改需要 owner 或 manager 权限。"
+        ? "团队普通成员可查看图片分组，归类修改需要 owner 或 manager 权限。"
         : "";
   const selectedCount = selectedItems.length;
   const allSelected = items.length > 0 && selectedCount === items.length;
@@ -854,10 +907,15 @@ function ImageManagerContent({
       ? "未归类"
       : textAssetCollections.find((item) => item.id === selectedTextAssetCollectionId)?.name || "未命名";
   const selectedCollectionLabel = !selectedCollectionId
-    ? "全部素材"
+    ? "全部图片"
     : selectedCollectionId === MANAGED_IMAGE_UNCLASSIFIED_COLLECTION_ID
       ? "未归类"
       : collections.find((item) => item.id === selectedCollectionId)?.name || "未命名";
+  const selectedVideoAssetCollectionLabel = !selectedVideoAssetCollectionId
+    ? "全部视频"
+    : selectedVideoAssetCollectionId === MANAGED_VIDEO_ASSET_UNCLASSIFIED_COLLECTION_ID
+      ? "未归类"
+      : videoAssetCollections.find((item) => item.id === selectedVideoAssetCollectionId)?.name || "未命名";
   const libraryHintText = galleryView === "team" && teamStorage
     ? `容量 ${formatStorageBytes(teamStorage.used_bytes)} / ${formatStorageBytes(teamStorage.limit_bytes)}，剩余 ${formatStorageBytes(teamStorage.remaining_bytes)}。`
     : `仅保留最近 ${imageRetentionDays} 天，过期图片会自动清理。`;
@@ -866,14 +924,16 @@ function ImageManagerContent({
       ? "团队文本素材由 owner 或 manager 维护，团队成员可复用。"
       : "团队文本素材可查看，维护需要 owner 或 manager 权限。"
     : "个人文本素材可在画布和社媒运营中复用。";
-  const videoAssetHintText = "视频资源库来自当前账号的视频生成成功记录，刷新后会同步最近创作任务输出。";
+  const videoAssetHintText = "视频素材来自当前账号的视频生成成功记录，刷新后会同步最近创作任务输出。";
   const textAssetCollectionHintText = canMutateTextAssetCollections
-    ? "一条文本素材只能属于一个素材集，调整归类会替换原素材集。"
+    ? "一条文本素材只能属于一个分组，调整归类会替换原分组。"
     : textAssetScope === "team"
-      ? "团队普通成员可查看文本素材集，归类修改需要 owner 或 manager 权限。"
+      ? "团队普通成员可查看文本分组，归类修改需要 owner 或 manager 权限。"
       : "";
+  const videoAssetCollectionHintText = "一个视频只能属于一个分组，调整归类会替换原分组。";
   const isMutatingImages = downloadingKey !== null || isDeleting || isMovingToTeam || tagMutatingPath !== null || collectionMutating;
   const isMutatingTextAssets = isTextAssetSaving || isTextAssetDeleting || textAssetCollectionMutating;
+  const isMutatingVideoAssets = videoAssetCollectionMutating;
   const textAssetCollectionFilterMatchesItem = useCallback((item: Pick<ManagedTextAsset, "collection_id">) => {
     if (!selectedTextAssetCollectionId) {
       return true;
@@ -1055,7 +1115,7 @@ function ImageManagerContent({
 
   const openCollectionEditor = useCallback((target: CollectionEditTarget) => {
     if (!canMutateCollections) {
-      toast.error("当前账号没有素材集管理权限");
+      toast.error("当前账号没有图片分组管理权限");
       return;
     }
     setCollectionEditTarget(target);
@@ -1068,7 +1128,7 @@ function ImageManagerContent({
     }
     const name = collectionNameInput.trim();
     if (!name) {
-      toast.error("请输入素材集名称");
+      toast.error("请输入图片分组名称");
       return;
     }
     setCollectionMutating(true);
@@ -1104,9 +1164,9 @@ function ImageManagerContent({
       }
       setCollectionEditTarget(null);
       setCollectionNameInput("");
-      toast.success(collectionEditTarget.mode === "create" ? "素材集已创建" : "素材集已重命名");
+      toast.success(collectionEditTarget.mode === "create" ? "图片分组已创建" : "图片分组已重命名");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "保存素材集失败");
+      toast.error(error instanceof Error ? error.message : "保存图片分组失败");
     } finally {
       setCollectionMutating(false);
     }
@@ -1148,9 +1208,9 @@ function ImageManagerContent({
         return next;
       });
       setCollectionDeleteTarget(null);
-      toast.success(data.cleared > 0 ? `素材集已删除，已移出 ${data.cleared} 张图片` : "素材集已删除");
+      toast.success(data.cleared > 0 ? `图片分组已删除，已移出 ${data.cleared} 张图片` : "图片分组已删除");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "删除素材集失败");
+      toast.error(error instanceof Error ? error.message : "删除图片分组失败");
     } finally {
       setCollectionMutating(false);
     }
@@ -1158,7 +1218,7 @@ function ImageManagerContent({
 
   const openCollectionAssign = (targetItems: ManagedImageSummary[], collectionId = "") => {
     if (!canMutateCollections) {
-      toast.error("当前账号没有素材集管理权限");
+      toast.error("当前账号没有图片分组管理权限");
       return;
     }
     if (targetItems.length === 0) {
@@ -1166,7 +1226,7 @@ function ImageManagerContent({
       return;
     }
     if (collections.length === 0 && collectionId) {
-      toast.error("当前没有可用素材集");
+      toast.error("当前没有可用图片分组");
       return;
     }
     setCollectionAssignTarget({ items: targetItems, collectionId });
@@ -1183,7 +1243,7 @@ function ImageManagerContent({
     }
     const collection = collections.find((item) => item.id === collectionAssignTarget.collectionId);
     if (collectionAssignTarget.collectionId && !collection) {
-      toast.error("请选择素材集");
+      toast.error("请选择图片分组");
       return;
     }
     setCollectionMutating(true);
@@ -1225,9 +1285,9 @@ function ImageManagerContent({
         return next;
       });
       setCollectionAssignTarget(null);
-      toast.success(collectionID ? `已加入素材集「${collectionName}」` : `已从素材集移出 ${data.updated} 张图片`);
+      toast.success(collectionID ? `已加入图片分组「${collectionName}」` : `已从图片分组移出 ${data.updated} 张图片`);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "更新素材集归类失败");
+      toast.error(error instanceof Error ? error.message : "更新图片分组失败");
     } finally {
       setCollectionMutating(false);
     }
@@ -1515,6 +1575,8 @@ function ImageManagerContent({
   const loadVideoAssets = useCallback(async () => {
     if (!canViewVideoAssets) {
       clearLoadedVideoAssets();
+      setVideoAssetCollections([]);
+      setVideoAssetUnclassifiedCount(0);
       setVideoLoadError("当前账号没有查看创作任务权限");
       return;
     }
@@ -1524,15 +1586,27 @@ function ImageManagerContent({
     setIsVideoLoading(true);
     setVideoLoadError("");
     try {
-      const result = await fetchCreationTasks([], { signal: controller.signal });
+      const [result, collectionResult] = await Promise.all([
+        fetchCreationTasks([], { signal: controller.signal }),
+        fetchManagedVideoAssetCollections(),
+      ]);
       const nextItems = videoAssetsFromTasks(result.items);
+      setVideoAssetCollections(collectionResult.items);
+      setVideoAssetUnclassifiedCount(collectionResult.unclassified_count);
       setVideoAssets(nextItems);
       setFocusedVideoAssetId((current) => (current && nextItems.some((item) => item.id === current) ? current : null));
+      if (
+        selectedVideoAssetCollectionId &&
+        selectedVideoAssetCollectionId !== MANAGED_VIDEO_ASSET_UNCLASSIFIED_COLLECTION_ID &&
+        !collectionResult.items.some((item) => item.id === selectedVideoAssetCollectionId)
+      ) {
+        setSelectedVideoAssetCollectionId("");
+      }
     } catch (error) {
       if (controller.signal.aborted || isRequestCanceled(error)) {
         return;
       }
-      const message = error instanceof Error ? error.message : "加载视频资源失败";
+      const message = error instanceof Error ? error.message : "加载视频素材失败";
       setVideoLoadError(message);
       toast.error(message);
     } finally {
@@ -1541,7 +1615,7 @@ function ImageManagerContent({
       }
       setIsVideoLoading(false);
     }
-  }, [canViewVideoAssets, clearLoadedVideoAssets]);
+  }, [canViewVideoAssets, clearLoadedVideoAssets, selectedVideoAssetCollectionId]);
 
   const loadMoreTextAssets = useCallback(async () => {
     if (isTextAssetLoading || isTextAssetLoadingMore || !textAssetHasMore || !textAssetNextCursor) {
@@ -1582,6 +1656,11 @@ function ImageManagerContent({
     setSelectedTextAssetCollectionId(collectionId);
     clearLoadedTextAssetsForQueryChange();
   }, [clearLoadedTextAssetsForQueryChange]);
+
+  const updateVideoAssetCollectionFilter = useCallback((collectionId: string) => {
+    setSelectedVideoAssetCollectionId(collectionId);
+    setFocusedVideoAssetId(null);
+  }, []);
 
   const updateCollectionFilter = useCallback((collectionId: string) => {
     setSelectedCollectionId(collectionId);
@@ -1792,7 +1871,7 @@ function ImageManagerContent({
 
   const openTextAssetCollectionEditor = useCallback((target: TextAssetCollectionEditTarget) => {
     if (!canMutateTextAssetCollections) {
-      toast.error(textAssetScope === "team" ? "团队文本素材集需要 owner 或 manager 维护" : "当前账号没有文本素材集管理权限");
+      toast.error(textAssetScope === "team" ? "团队文本分组需要 owner 或 manager 维护" : "当前账号没有文本分组管理权限");
       return;
     }
     setTextAssetCollectionEditTarget(target);
@@ -1805,7 +1884,7 @@ function ImageManagerContent({
     }
     const name = textAssetCollectionNameInput.trim();
     if (!name) {
-      toast.error("请输入文本素材集名称");
+      toast.error("请输入文本分组名称");
       return;
     }
     setTextAssetCollectionMutating(true);
@@ -1827,9 +1906,9 @@ function ImageManagerContent({
       }
       setTextAssetCollectionEditTarget(null);
       setTextAssetCollectionNameInput("");
-      toast.success(textAssetCollectionEditTarget.mode === "create" ? "文本素材集已创建" : "文本素材集已重命名");
+      toast.success(textAssetCollectionEditTarget.mode === "create" ? "文本分组已创建" : "文本分组已重命名");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "保存文本素材集失败");
+      toast.error(error instanceof Error ? error.message : "保存文本分组失败");
     } finally {
       setTextAssetCollectionMutating(false);
     }
@@ -1856,9 +1935,9 @@ function ImageManagerContent({
         setTextAssets((current) => current.map((item) => item.collection_id === collection.id ? { ...item, collection_id: "", collection_name: "" } : item));
       }
       setTextAssetCollectionDeleteTarget(null);
-      toast.success(data.cleared > 0 ? `文本素材集已删除，已移出 ${data.cleared} 条文本` : "文本素材集已删除");
+      toast.success(data.cleared > 0 ? `文本分组已删除，已移出 ${data.cleared} 条文本` : "文本分组已删除");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "删除文本素材集失败");
+      toast.error(error instanceof Error ? error.message : "删除文本分组失败");
     } finally {
       setTextAssetCollectionMutating(false);
     }
@@ -1866,11 +1945,11 @@ function ImageManagerContent({
 
   const openTextAssetCollectionAssign = (item: ManagedTextAsset, collectionId = "") => {
     if (!canMutateTextAssetCollections) {
-      toast.error(textAssetScope === "team" ? "团队文本素材集需要 owner 或 manager 维护" : "当前账号没有文本素材集管理权限");
+      toast.error(textAssetScope === "team" ? "团队文本分组需要 owner 或 manager 维护" : "当前账号没有文本分组管理权限");
       return;
     }
     if (collectionId && textAssetCollections.length === 0) {
-      toast.error("当前没有可用文本素材集");
+      toast.error("当前没有可用文本分组");
       return;
     }
     setTextAssetCollectionAssignTarget({ item, collectionId });
@@ -1882,7 +1961,7 @@ function ImageManagerContent({
     }
     const collection = textAssetCollections.find((item) => item.id === textAssetCollectionAssignTarget.collectionId);
     if (textAssetCollectionAssignTarget.collectionId && !collection) {
-      toast.error("请选择文本素材集");
+      toast.error("请选择文本分组");
       return;
     }
     const id = textAssetCollectionAssignTarget.item.id;
@@ -1901,9 +1980,9 @@ function ImageManagerContent({
         .map((item) => updatedIDs.has(item.id) ? { ...item, collection_id: collectionID, collection_name: collectionName } : item)
         .filter(textAssetCollectionFilterMatchesItem));
       setTextAssetCollectionAssignTarget(null);
-      toast.success(collectionID ? `已加入文本素材集「${collectionName}」` : "已从文本素材集移出");
+      toast.success(collectionID ? `已加入文本分组「${collectionName}」` : "已从文本分组移出");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "更新文本素材集归类失败");
+      toast.error(error instanceof Error ? error.message : "更新文本分组失败");
     } finally {
       setTextAssetCollectionMutating(false);
     }
@@ -1986,6 +2065,112 @@ function ImageManagerContent({
       toast.success("文本素材已复制");
     } catch {
       toast.error("复制文本素材失败");
+    }
+  };
+
+  const openVideoAssetCollectionEditor = useCallback((target: VideoAssetCollectionEditTarget) => {
+    setVideoAssetCollectionEditTarget(target);
+    setVideoAssetCollectionNameInput(target.mode === "rename" ? target.collection.name : "");
+  }, []);
+
+  const handleSaveVideoAssetCollection = async () => {
+    if (!videoAssetCollectionEditTarget || videoAssetCollectionMutating) {
+      return;
+    }
+    const name = videoAssetCollectionNameInput.trim();
+    if (!name) {
+      toast.error("请输入视频分组名称");
+      return;
+    }
+    setVideoAssetCollectionMutating(true);
+    try {
+      const data = videoAssetCollectionEditTarget.mode === "create"
+        ? await createManagedVideoAssetCollection(name)
+        : await renameManagedVideoAssetCollection(videoAssetCollectionEditTarget.collection.id, name);
+      const nextCollectionsResult = Array.isArray(data.items)
+        ? normalizeVideoAssetCollectionsPayload(data)
+        : await fetchManagedVideoAssetCollections();
+      setVideoAssetCollections(nextCollectionsResult.items);
+      setVideoAssetUnclassifiedCount(nextCollectionsResult.unclassified_count);
+      if (videoAssetCollectionEditTarget.mode === "create") {
+        setSelectedVideoAssetCollectionId(data.item.id);
+      } else {
+        setVideoAssets((current) => current.map((item) => item.collection_id === data.item.id ? { ...item, collection_name: data.item.name } : item));
+      }
+      setVideoAssetCollectionEditTarget(null);
+      setVideoAssetCollectionNameInput("");
+      toast.success(videoAssetCollectionEditTarget.mode === "create" ? "视频分组已创建" : "视频分组已重命名");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "保存视频分组失败");
+    } finally {
+      setVideoAssetCollectionMutating(false);
+    }
+  };
+
+  const handleDeleteVideoAssetCollection = async () => {
+    if (!videoAssetCollectionDeleteTarget || videoAssetCollectionMutating) {
+      return;
+    }
+    const collection = videoAssetCollectionDeleteTarget.collection;
+    setVideoAssetCollectionMutating(true);
+    try {
+      const data = await deleteManagedVideoAssetCollection(collection.id);
+      const nextCollectionsResult = Array.isArray(data.items)
+        ? normalizeVideoAssetCollectionsPayload(data)
+        : await fetchManagedVideoAssetCollections();
+      setVideoAssetCollections(nextCollectionsResult.items);
+      setVideoAssetUnclassifiedCount(nextCollectionsResult.unclassified_count);
+      if (selectedVideoAssetCollectionId === collection.id) {
+        setSelectedVideoAssetCollectionId("");
+      }
+      setVideoAssets((current) => current.map((item) => item.collection_id === collection.id ? { ...item, collection_id: "", collection_name: "" } : item));
+      setVideoAssetCollectionDeleteTarget(null);
+      toast.success(data.cleared > 0 ? `视频分组已删除，已移出 ${data.cleared} 个视频` : "视频分组已删除");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "删除视频分组失败");
+    } finally {
+      setVideoAssetCollectionMutating(false);
+    }
+  };
+
+  const openVideoAssetCollectionAssign = (item: ManagedVideoAsset, collectionId = "") => {
+    if (collectionId && videoAssetCollections.length === 0) {
+      toast.error("当前没有可用视频分组");
+      return;
+    }
+    setVideoAssetCollectionAssignTarget({ item, collectionId });
+  };
+
+  const handleConfirmAssignVideoAssetCollection = async () => {
+    if (!videoAssetCollectionAssignTarget || videoAssetCollectionMutating) {
+      return;
+    }
+    const collection = videoAssetCollections.find((item) => item.id === videoAssetCollectionAssignTarget.collectionId);
+    if (videoAssetCollectionAssignTarget.collectionId && !collection) {
+      toast.error("请选择视频分组");
+      return;
+    }
+    const id = videoAssetCollectionAssignTarget.item.id;
+    setVideoAssetCollectionMutating(true);
+    try {
+      const data = await updateManagedVideoAssetCollectionItems(videoAssetCollectionAssignTarget.collectionId, [id]);
+      const collectionID = data.collection_id || "";
+      const collectionName = data.collection_name || collection?.name || "";
+      const updatedIDs = new Set(data.asset_ids || [id]);
+      const nextCollectionsResult = Array.isArray(data.items)
+        ? normalizeVideoAssetCollectionsPayload(data)
+        : await fetchManagedVideoAssetCollections();
+      setVideoAssetCollections(nextCollectionsResult.items);
+      setVideoAssetUnclassifiedCount(nextCollectionsResult.unclassified_count);
+      setVideoAssets((current) => current
+        .map((item) => updatedIDs.has(item.id) ? { ...item, collection_id: collectionID, collection_name: collectionName } : item)
+        .filter(videoAssetCollectionFilterMatchesItem));
+      setVideoAssetCollectionAssignTarget(null);
+      toast.success(collectionID ? `已加入视频分组「${collectionName}」` : "已从视频分组移出");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "更新视频分组失败");
+    } finally {
+      setVideoAssetCollectionMutating(false);
     }
   };
 
@@ -2656,9 +2841,9 @@ function ImageManagerContent({
       {assetKind === "image" ? (
       <div className="flex min-w-0 flex-col gap-2 rounded-xl border border-border bg-background/70 p-2">
         <div className="flex items-center justify-between gap-2">
-          <div className="inline-flex min-w-0 items-center gap-1.5 text-sm font-medium text-foreground">
-            <Folder className="size-4 text-muted-foreground" />
-            <span>素材集</span>
+            <div className="inline-flex min-w-0 items-center gap-1.5 text-sm font-medium text-foreground">
+              <Folder className="size-4 text-muted-foreground" />
+            <span>图片分组</span>
           </div>
           {canMutateCollections ? (
             <Button
@@ -2689,7 +2874,7 @@ function ImageManagerContent({
               }
             }}
           >
-            <span className="min-w-0 truncate">全部素材</span>
+            <span className="min-w-0 truncate">全部图片</span>
             <span className="shrink-0 rounded-full bg-background px-2 py-0.5 text-[11px] text-muted-foreground">{items.length}</span>
           </button>
           <button
@@ -2740,8 +2925,8 @@ function ImageManagerContent({
                       type="button"
                       className="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition hover:bg-background hover:text-foreground"
                       onClick={() => openCollectionEditor({ mode: "rename", collection })}
-                      title="重命名素材集"
-                      aria-label="重命名素材集"
+                      title="重命名图片分组"
+                      aria-label="重命名图片分组"
                     >
                       <Pencil className="size-3.5" />
                     </button>
@@ -2749,8 +2934,8 @@ function ImageManagerContent({
                       type="button"
                       className="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition hover:bg-rose-50 hover:text-rose-600"
                       onClick={() => setCollectionDeleteTarget({ collection })}
-                      title="删除素材集"
-                      aria-label="删除素材集"
+                      title="删除图片分组"
+                      aria-label="删除图片分组"
                     >
                       <Trash2 className="size-3.5" />
                     </button>
@@ -2760,7 +2945,7 @@ function ImageManagerContent({
             );
           }) : (
             <div className="rounded-lg border border-dashed border-border px-3 py-2 text-xs text-muted-foreground">
-              {canMutateCollections ? "暂无素材集，可先新建角色、场景或风格分组。" : "暂无素材集"}
+              {canMutateCollections ? "暂无图片分组，可先新建角色、场景或风格分组。" : "暂无图片分组"}
             </div>
           )}
         </div>
@@ -2774,23 +2959,113 @@ function ImageManagerContent({
         <div className="flex min-w-0 flex-col gap-2 rounded-xl border border-border bg-background/70 p-2">
           <div className="flex items-center justify-between gap-2">
             <div className="inline-flex min-w-0 items-center gap-1.5 text-sm font-medium text-foreground">
-              <Clapperboard className="size-4 text-muted-foreground" />
-              <span>视频资源</span>
+              <Folder className="size-4 text-muted-foreground" />
+              <span>视频分组</span>
             </div>
             <Button
               type="button"
               variant="ghost"
               size="sm"
               className="h-7 shrink-0 rounded-lg px-2 text-xs"
-              disabled={isVideoLoading}
-              onClick={() => void loadVideoAssets()}
+              onClick={() => openVideoAssetCollectionEditor({ mode: "create" })}
             >
-              <RefreshCw className={cn("size-3.5", isVideoLoading && "animate-spin")} />
-              刷新
+              <FolderPlus className="size-3.5" />
+              新建
             </Button>
           </div>
+          <div className={cn("flex flex-col gap-1 overflow-y-auto pr-1", compact ? "max-h-[42dvh]" : "max-h-44")}>
+            <button
+              type="button"
+              className={cn(
+                "flex h-9 min-w-0 items-center justify-between gap-2 rounded-lg px-2 text-left text-sm transition",
+                !selectedVideoAssetCollectionId
+                  ? "bg-[#eef4ff] text-[#1456f0] dark:bg-sky-950/30 dark:text-sky-300"
+                  : "text-muted-foreground hover:bg-muted hover:text-foreground",
+              )}
+              onClick={() => {
+                updateVideoAssetCollectionFilter("");
+                if (closeAfterSelect) {
+                  closeDrawer();
+                }
+              }}
+            >
+              <span className="min-w-0 truncate">全部视频</span>
+              <span className="shrink-0 rounded-full bg-background px-2 py-0.5 text-[11px] text-muted-foreground">{videoAssets.length}</span>
+            </button>
+            <button
+              type="button"
+              className={cn(
+                "flex h-9 min-w-0 items-center justify-between gap-2 rounded-lg px-2 text-left text-sm transition",
+                selectedVideoAssetCollectionId === MANAGED_VIDEO_ASSET_UNCLASSIFIED_COLLECTION_ID
+                  ? "bg-[#eef4ff] text-[#1456f0] dark:bg-sky-950/30 dark:text-sky-300"
+                  : "text-muted-foreground hover:bg-muted hover:text-foreground",
+              )}
+              onClick={() => {
+                updateVideoAssetCollectionFilter(MANAGED_VIDEO_ASSET_UNCLASSIFIED_COLLECTION_ID);
+                if (closeAfterSelect) {
+                  closeDrawer();
+                }
+              }}
+            >
+              <span className="min-w-0 truncate">未归类</span>
+              <span className="shrink-0 rounded-full bg-background px-2 py-0.5 text-[11px] text-muted-foreground">{videoAssetUnclassifiedCount}</span>
+            </button>
+            {videoAssetCollections.length > 0 ? videoAssetCollections.map((collection) => {
+              const active = selectedVideoAssetCollectionId === collection.id;
+              return (
+                <div
+                  key={collection.id}
+                  className={cn(
+                    "group flex min-w-0 items-center gap-1 rounded-lg transition",
+                    active ? "bg-[#eef4ff] text-[#1456f0] dark:bg-sky-950/30 dark:text-sky-300" : "text-muted-foreground hover:bg-muted hover:text-foreground",
+                  )}
+                >
+                  <button
+                    type="button"
+                    className="flex h-9 min-w-0 flex-1 items-center justify-between gap-2 px-2 text-left text-sm"
+                    onClick={() => {
+                      updateVideoAssetCollectionFilter(collection.id);
+                      if (closeAfterSelect) {
+                        closeDrawer();
+                      }
+                    }}
+                    title={collection.name}
+                  >
+                    <span className="min-w-0 truncate">{collection.name}</span>
+                    <span className="shrink-0 rounded-full bg-background px-2 py-0.5 text-[11px] text-muted-foreground">{collection.videos_count}</span>
+                  </button>
+                  {active ? (
+                    <div className="flex shrink-0 items-center pr-1">
+                      <button
+                        type="button"
+                        className="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition hover:bg-background hover:text-foreground"
+                        onClick={() => openVideoAssetCollectionEditor({ mode: "rename", collection })}
+                        title="重命名视频分组"
+                        aria-label="重命名视频分组"
+                      >
+                        <Pencil className="size-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        className="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition hover:bg-rose-50 hover:text-rose-600"
+                        onClick={() => setVideoAssetCollectionDeleteTarget({ collection })}
+                        title="删除视频分组"
+                        aria-label="删除视频分组"
+                      >
+                        <Trash2 className="size-3.5" />
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
+              );
+            }) : (
+              <div className="rounded-lg border border-dashed border-border px-3 py-2 text-xs text-muted-foreground">
+                暂无视频分组，可先新建用途、项目或渠道分组。
+              </div>
+            )}
+          </div>
           <div className="rounded-lg border border-dashed border-border px-3 py-2 text-xs leading-5 text-muted-foreground">
-            {videoAssetHintText}
+            {videoAssetCollectionHintText}
           </div>
         </div>
       ) : (
@@ -2798,7 +3073,7 @@ function ImageManagerContent({
           <div className="flex items-center justify-between gap-2">
             <div className="inline-flex min-w-0 items-center gap-1.5 text-sm font-medium text-foreground">
               <Folder className="size-4 text-muted-foreground" />
-              <span>文本素材集</span>
+              <span>文本分组</span>
             </div>
             {canMutateTextAssetCollections ? (
               <Button
@@ -2880,8 +3155,8 @@ function ImageManagerContent({
                         type="button"
                         className="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition hover:bg-background hover:text-foreground"
                         onClick={() => openTextAssetCollectionEditor({ mode: "rename", collection })}
-                        title="重命名文本素材集"
-                        aria-label="重命名文本素材集"
+                        title="重命名文本分组"
+                        aria-label="重命名文本分组"
                       >
                         <Pencil className="size-3.5" />
                       </button>
@@ -2889,8 +3164,8 @@ function ImageManagerContent({
                         type="button"
                         className="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition hover:bg-rose-50 hover:text-rose-600"
                         onClick={() => setTextAssetCollectionDeleteTarget({ collection })}
-                        title="删除文本素材集"
-                        aria-label="删除文本素材集"
+                        title="删除文本分组"
+                        aria-label="删除文本分组"
                       >
                         <Trash2 className="size-3.5" />
                       </button>
@@ -2900,7 +3175,7 @@ function ImageManagerContent({
               );
             }) : (
               <div className="rounded-lg border border-dashed border-border px-3 py-2 text-xs text-muted-foreground">
-                {canMutateTextAssetCollections ? "暂无文本素材集，可先新建提示词、商品文案或运营素材分组。" : "暂无文本素材集"}
+                {canMutateTextAssetCollections ? "暂无文本分组，可先新建提示词、商品文案或运营素材分组。" : "暂无文本分组"}
               </div>
             )}
           </div>
@@ -2927,12 +3202,12 @@ function ImageManagerContent({
     handleTextAssetScopeChange,
     hasTeamLibrary,
     items.length,
-    isVideoLoading,
-    loadVideoAssets,
     openCollectionEditor,
     openTextAssetCollectionEditor,
+    openVideoAssetCollectionEditor,
     selectedCollectionId,
     selectedTextAssetCollectionId,
+    selectedVideoAssetCollectionId,
     textAssetCollectionHintText,
     textAssetCollections,
     textAssetScope,
@@ -2941,7 +3216,11 @@ function ImageManagerContent({
     unclassifiedCount,
     updateCollectionFilter,
     updateTextAssetCollectionFilter,
-    videoAssetHintText,
+    updateVideoAssetCollectionFilter,
+    videoAssetCollectionHintText,
+    videoAssetCollections,
+    videoAssetUnclassifiedCount,
+    videoAssets.length,
   ]);
 
   const mobileLibraryPanel = useMemo(
@@ -3156,7 +3435,7 @@ function ImageManagerContent({
             >
               <Folder className="size-4 shrink-0 text-muted-foreground" />
               <span className="min-w-0 flex-1 truncate">
-                {assetKind === "video" ? "当前账号 · 视频资源" : assetKind === "text" ? `${textAssetScopeLabel(textAssetScope)} · ${selectedTextAssetCollectionLabel}` : `${libraryViewLabel} · ${selectedCollectionLabel}`}
+                {assetKind === "video" ? `视频 · ${selectedVideoAssetCollectionLabel}` : assetKind === "text" ? `${textAssetScopeLabel(textAssetScope)} · ${selectedTextAssetCollectionLabel}` : `${libraryViewLabel} · ${selectedCollectionLabel}`}
               </span>
               <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">{assetKind === "video" ? visibleVideoAssets.length : assetKind === "text" ? textAssets.length : items.length}</span>
             </button>
@@ -3282,7 +3561,7 @@ function ImageManagerContent({
                       }}
                     >
                       <Folder className="size-4" />
-                      加入素材集 ({selectedCount})
+                      加入图片分组 ({selectedCount})
                     </Button>
                     {selectedRealCollection ? (
                       <Button
@@ -3296,7 +3575,7 @@ function ImageManagerContent({
                         }}
                       >
                         <X className="size-4" />
-                        移出当前素材集 ({selectedCount})
+                        移出当前图片分组 ({selectedCount})
                       </Button>
                     ) : null}
                   </>
@@ -3642,7 +3921,7 @@ function ImageManagerContent({
                 <LoaderCircle className="size-7 animate-spin" />
               </div>
               <div className="space-y-1">
-                <p className="text-sm font-medium text-foreground">正在加载视频资源</p>
+                <p className="text-sm font-medium text-foreground">正在加载视频素材</p>
               </div>
             </div>
           ) : null}
@@ -3652,7 +3931,7 @@ function ImageManagerContent({
                 <Clapperboard className="size-7" />
               </div>
               <div className="space-y-1">
-                <p className="text-sm font-medium text-foreground">视频资源加载失败</p>
+                <p className="text-sm font-medium text-foreground">视频素材加载失败</p>
                 <p className="max-w-[32rem] text-sm leading-6 text-muted-foreground">{videoLoadError}</p>
               </div>
               <Button variant="outline" className="h-9 rounded-lg px-3" onClick={() => void loadVideoAssets()}>
@@ -3695,7 +3974,7 @@ function ImageManagerContent({
                       <div className="grid gap-3 p-4">
                         <div className="flex items-start justify-between gap-3">
                           <div className="min-w-0">
-                            <div className="line-clamp-2 text-sm font-semibold leading-5 text-foreground">{item.name || "视频资源"}</div>
+                            <div className="line-clamp-2 text-sm font-semibold leading-5 text-foreground">{item.name || "视频素材"}</div>
                             <div className="mt-1 flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
                               <Clapperboard className="size-3.5 shrink-0" />
                               <span className="truncate">{videoAssetOwnerLabel()}</span>
@@ -3707,6 +3986,10 @@ function ImageManagerContent({
                         </div>
                         <div className="line-clamp-2 text-xs leading-5 text-muted-foreground">
                           {videoAssetMeta(item) || "视频生成输出"}
+                        </div>
+                        <div className="flex min-w-0 items-center justify-between gap-2 rounded-xl border border-border bg-muted/35 px-3 py-2 text-xs">
+                          <span className="shrink-0 text-muted-foreground">分组</span>
+                          <span className="min-w-0 truncate font-medium text-foreground">{item.collection_name || "未归类"}</span>
                         </div>
                         {item.prompt ? (
                           <div className="line-clamp-3 text-xs leading-5 text-muted-foreground">{item.prompt}</div>
@@ -3739,6 +4022,42 @@ function ImageManagerContent({
                             </Button>
                           </div>
                         </div>
+                        <div className="grid grid-cols-2 gap-2">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            className="h-8 rounded-lg text-xs"
+                            onClick={() => openVideoAssetCollectionAssign(item, item.collection_id || videoAssetCollections[0]?.id || "")}
+                            disabled={videoAssetCollections.length === 0 || isMutatingVideoAssets}
+                            title={videoAssetCollections.length === 0 ? "先新建视频分组后再归类" : "一个视频只能属于一个分组"}
+                          >
+                            <Folder className="size-3.5" />
+                            {item.collection_id ? "调整分组" : "加入分组"}
+                          </Button>
+                          {item.collection_id ? (
+                            <Button
+                              type="button"
+                              variant="outline"
+                              className="h-8 rounded-lg text-xs"
+                              onClick={() => openVideoAssetCollectionAssign(item, "")}
+                              disabled={isMutatingVideoAssets}
+                            >
+                              <X className="size-3.5" />
+                              移出分组
+                            </Button>
+                          ) : (
+                            <Button
+                              type="button"
+                              variant="outline"
+                              className="h-8 rounded-lg text-xs"
+                              onClick={() => openVideoAssetCollectionEditor({ mode: "create" })}
+                              disabled={isMutatingVideoAssets}
+                            >
+                              <FolderPlus className="size-3.5" />
+                              新建分组
+                            </Button>
+                          )}
+                        </div>
                       </div>
                     </article>
                   );
@@ -3752,9 +4071,9 @@ function ImageManagerContent({
                 <Clapperboard className="size-7" />
               </div>
               <div className="space-y-1">
-                <p className="text-sm font-medium text-foreground">暂无视频资源</p>
+                <p className="text-sm font-medium text-foreground">暂无视频素材</p>
                 <p className="max-w-[32rem] text-sm leading-6 text-muted-foreground">
-                  {videoSearch ? "调整关键词后再试。" : "视频生成成功后会出现在这里。"}
+                  {videoSearch || selectedVideoAssetCollectionId ? "调整关键词或分组后再试。" : "视频生成成功后会出现在这里。"}
                 </p>
               </div>
             </div>
@@ -3856,8 +4175,8 @@ function ImageManagerContent({
                                   event.stopPropagation();
                                   openTextAssetCollectionAssign(item, textAssetCollections[0]?.id || "");
                                 }}
-                                title="加入文本素材集"
-                                aria-label="加入文本素材集"
+                                title="加入文本分组"
+                                aria-label="加入文本分组"
                                 disabled={textAssetCollections.length === 0}
                               >
                                 <Folder className="size-3.5" />
@@ -3873,8 +4192,8 @@ function ImageManagerContent({
                                   event.stopPropagation();
                                   openTextAssetCollectionAssign(item, "");
                                 }}
-                                title="移出文本素材集"
-                                aria-label="移出文本素材集"
+                                title="移出文本分组"
+                                aria-label="移出文本分组"
                               >
                                 <X className="size-3.5" />
                               </Button>
@@ -3962,7 +4281,7 @@ function ImageManagerContent({
             <div className="min-w-0">
               <div className="text-sm font-semibold text-foreground">素材详情</div>
               <div className="truncate text-xs text-muted-foreground">
-                {assetKind === "video" ? focusedVideoAsset?.name || "选择一个视频资源查看详情" : assetKind === "text" ? focusedTextAsset?.name || "选择一条文本素材查看详情" : focusedItem?.name || "选择一张素材查看详情"}
+                {assetKind === "video" ? focusedVideoAsset?.name || "选择一个视频素材查看详情" : assetKind === "text" ? focusedTextAsset?.name || "选择一条文本素材查看详情" : focusedItem?.name || "选择一张素材查看详情"}
               </div>
             </div>
             {assetKind === "image" && focusedItem ? (
@@ -3993,7 +4312,7 @@ function ImageManagerContent({
               />
               <div className="space-y-2 text-xs">
                 <div className="flex items-center justify-between gap-3">
-                  <span className="text-muted-foreground">素材集</span>
+                  <span className="text-muted-foreground">分组</span>
                   <span className="min-w-0 truncate font-medium text-foreground">{focusedItem.collection_name || "未归类"}</span>
                 </div>
                 <div className="flex items-center justify-between gap-3">
@@ -4054,9 +4373,9 @@ function ImageManagerContent({
                   复制提示词
                 </Button>
                 {canMutateCollections ? (
-                <Button type="button" variant="outline" className="col-span-2 h-9 rounded-lg text-xs" onClick={() => openCollectionAssign([focusedItem], focusedItem.collection_id || collections[0]?.id || "")} disabled={collections.length === 0} title={collections.length === 0 ? "先新建素材集后再归类" : "一张图只能属于一个素材集"}>
+                <Button type="button" variant="outline" className="col-span-2 h-9 rounded-lg text-xs" onClick={() => openCollectionAssign([focusedItem], focusedItem.collection_id || collections[0]?.id || "")} disabled={collections.length === 0} title={collections.length === 0 ? "先新建图片分组后再归类" : "一张图只能属于一个分组"}>
                   <Folder className="size-3.5" />
-                  {focusedItem.collection_id ? "调整素材集" : "加入素材集"}
+                  {focusedItem.collection_id ? "调整分组" : "加入分组"}
                 </Button>
                 ) : null}
                 <Button type="button" variant="outline" className="col-span-2 h-9 rounded-lg text-xs" onClick={() => void downloadItems(focusedItem.path, [focusedItem])}>
@@ -4091,6 +4410,10 @@ function ImageManagerContent({
                   <span className="font-medium text-foreground">{videoAssetTime(focusedVideoAsset.updated_at)}</span>
                 </div>
                 <div className="flex items-center justify-between gap-3">
+                  <span className="text-muted-foreground">分组</span>
+                  <span className="min-w-0 truncate font-medium text-foreground">{focusedVideoAsset.collection_name || "未归类"}</span>
+                </div>
+                <div className="flex items-center justify-between gap-3">
                   <span className="text-muted-foreground">任务</span>
                   <span className="min-w-0 truncate font-medium text-foreground">{focusedVideoAsset.task_id}</span>
                 </div>
@@ -4103,7 +4426,7 @@ function ImageManagerContent({
                 <div className="rounded-xl border border-dashed border-border p-3 text-xs text-muted-foreground">暂无可展示提示词</div>
               )}
               <div className="rounded-xl border border-dashed border-border p-3 text-xs leading-5 text-muted-foreground">
-                {videoAssetHintText}
+                {videoAssetCollectionHintText}
               </div>
               <div className="grid grid-cols-2 gap-2">
                 <Button type="button" variant="outline" className="h-9 rounded-lg text-xs" onClick={() => void copyVideoURL(focusedVideoAsset)}>
@@ -4114,6 +4437,16 @@ function ImageManagerContent({
                   {downloadingVideoId === focusedVideoAsset.id ? <LoaderCircle className="size-3.5 animate-spin" /> : <Download className="size-3.5" />}
                   下载
                 </Button>
+                <Button type="button" variant="outline" className="col-span-2 h-9 rounded-lg text-xs" onClick={() => openVideoAssetCollectionAssign(focusedVideoAsset, focusedVideoAsset.collection_id || videoAssetCollections[0]?.id || "")} disabled={videoAssetCollections.length === 0 || isMutatingVideoAssets} title={videoAssetCollections.length === 0 ? "先新建视频分组后再归类" : "一个视频只能属于一个分组"}>
+                  <Folder className="size-3.5" />
+                  {focusedVideoAsset.collection_id ? "调整分组" : "加入分组"}
+                </Button>
+                {focusedVideoAsset.collection_id ? (
+                  <Button type="button" variant="outline" className="col-span-2 h-9 rounded-lg text-xs" onClick={() => openVideoAssetCollectionAssign(focusedVideoAsset, "")} disabled={isMutatingVideoAssets}>
+                    <X className="size-3.5" />
+                    移出分组
+                  </Button>
+                ) : null}
               </div>
             </>
           ) : assetKind === "text" && focusedTextAsset ? (
@@ -4135,7 +4468,7 @@ function ImageManagerContent({
                   <span className="font-medium text-foreground">{focusedTextAsset.library_scope === "team" ? "团队素材" : "个人素材"}</span>
                 </div>
                 <div className="flex items-center justify-between gap-3">
-                  <span className="text-muted-foreground">素材集</span>
+                  <span className="text-muted-foreground">分组</span>
                   <span className="min-w-0 truncate font-medium text-foreground">{focusedTextAsset.collection_name || "未归类"}</span>
                 </div>
                 <div className="flex items-center justify-between gap-3">
@@ -4165,15 +4498,15 @@ function ImageManagerContent({
                   </Button>
                 ) : null}
                 {canMutateTextAssetCollections ? (
-                  <Button type="button" variant="outline" className="col-span-2 h-9 rounded-lg text-xs" onClick={() => openTextAssetCollectionAssign(focusedTextAsset, focusedTextAsset.collection_id || textAssetCollections[0]?.id || "")} disabled={textAssetCollections.length === 0} title={textAssetCollections.length === 0 ? "先新建文本素材集后再归类" : "一条文本素材只能属于一个素材集"}>
+                  <Button type="button" variant="outline" className="col-span-2 h-9 rounded-lg text-xs" onClick={() => openTextAssetCollectionAssign(focusedTextAsset, focusedTextAsset.collection_id || textAssetCollections[0]?.id || "")} disabled={textAssetCollections.length === 0} title={textAssetCollections.length === 0 ? "先新建文本分组后再归类" : "一条文本素材只能属于一个分组"}>
                     <Folder className="size-3.5" />
-                    {focusedTextAsset.collection_id ? "调整文本素材集" : "加入文本素材集"}
+                    {focusedTextAsset.collection_id ? "调整分组" : "加入分组"}
                   </Button>
                 ) : null}
                 {canMutateTextAssetCollections && focusedTextAsset.collection_id ? (
                   <Button type="button" variant="outline" className="col-span-2 h-9 rounded-lg text-xs" onClick={() => openTextAssetCollectionAssign(focusedTextAsset, "")}>
                     <X className="size-3.5" />
-                    移出文本素材集
+                    移出分组
                   </Button>
                 ) : null}
                 {canDeleteTextAssetInScope ? (
@@ -4292,9 +4625,9 @@ function ImageManagerContent({
         <Dialog open onOpenChange={(open) => (!open && !textAssetCollectionMutating ? setTextAssetCollectionEditTarget(null) : null)}>
           <DialogContent showCloseButton={false} className="rounded-2xl p-6">
             <DialogHeader className="gap-2">
-              <DialogTitle>{textAssetCollectionEditTarget.mode === "create" ? "新建文本素材集" : "重命名文本素材集"}</DialogTitle>
+              <DialogTitle>{textAssetCollectionEditTarget.mode === "create" ? "新建文本分组" : "重命名文本分组"}</DialogTitle>
               <DialogDescription className="text-sm leading-6">
-                文本素材集用于把提示词、商品文案或运营文本按项目和用途组织起来。
+                文本分组用于把提示词、商品文案或运营文本按项目和用途组织起来。
               </DialogDescription>
             </DialogHeader>
             <Input
@@ -4332,7 +4665,7 @@ function ImageManagerContent({
         <Dialog open onOpenChange={(open) => (!open && !textAssetCollectionMutating ? setTextAssetCollectionDeleteTarget(null) : null)}>
           <DialogContent showCloseButton={false} className="rounded-2xl p-6">
             <DialogHeader className="gap-2">
-              <DialogTitle>删除文本素材集</DialogTitle>
+              <DialogTitle>删除文本分组</DialogTitle>
               <DialogDescription className="text-sm leading-6">
                 删除「{textAssetCollectionDeleteTarget.collection.name}」只会移除文本归类，不会删除文本素材。
               </DialogDescription>
@@ -4364,7 +4697,7 @@ function ImageManagerContent({
         <Dialog open onOpenChange={(open) => (!open && !textAssetCollectionMutating ? setTextAssetCollectionAssignTarget(null) : null)}>
           <DialogContent showCloseButton={false} className="rounded-2xl p-6">
             <DialogHeader className="gap-2">
-              <DialogTitle>{textAssetCollectionAssignTarget.collectionId ? "加入文本素材集" : "移出文本素材集"}</DialogTitle>
+              <DialogTitle>{textAssetCollectionAssignTarget.collectionId ? "加入文本分组" : "移出文本分组"}</DialogTitle>
               <DialogDescription className="text-sm leading-6">
                 当前文本素材：{textAssetCollectionAssignTarget.item.name || "文本素材"}。归类变更不会修改正文内容。
               </DialogDescription>
@@ -4376,7 +4709,7 @@ function ImageManagerContent({
                 disabled={textAssetCollectionMutating}
               >
                 <SelectTrigger className="h-10 rounded-xl">
-                  <SelectValue placeholder="选择文本素材集" />
+                  <SelectValue placeholder="选择文本分组" />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectGroup>
@@ -4390,7 +4723,7 @@ function ImageManagerContent({
               </Select>
             ) : (
               <div className="rounded-xl border border-dashed border-border p-3 text-sm text-muted-foreground">
-                确认把这条文本素材从当前文本素材集中移出。
+                确认把这条文本素材从当前文本分组中移出。
               </div>
             )}
             <DialogFooter>
@@ -4410,6 +4743,134 @@ function ImageManagerContent({
                 disabled={textAssetCollectionMutating || (textAssetCollectionAssignTarget.collectionId !== "" && textAssetCollections.length === 0)}
               >
                 {textAssetCollectionMutating ? <LoaderCircle className="size-4 animate-spin" /> : <Folder className="size-4" />}
+                确认
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      ) : null}
+      {videoAssetCollectionEditTarget ? (
+        <Dialog open onOpenChange={(open) => (!open && !videoAssetCollectionMutating ? setVideoAssetCollectionEditTarget(null) : null)}>
+          <DialogContent showCloseButton={false} className="rounded-2xl p-6">
+            <DialogHeader className="gap-2">
+              <DialogTitle>{videoAssetCollectionEditTarget.mode === "create" ? "新建视频分组" : "重命名视频分组"}</DialogTitle>
+              <DialogDescription className="text-sm leading-6">
+                视频分组用于把生成视频按项目、用途或渠道组织起来，不会复制或移动视频文件。
+              </DialogDescription>
+            </DialogHeader>
+            <Input
+              value={videoAssetCollectionNameInput}
+              onChange={(event) => setVideoAssetCollectionNameInput(event.target.value)}
+              placeholder="例如：商品短片、广告素材、社媒投放"
+              className="h-10 rounded-xl"
+              disabled={videoAssetCollectionMutating}
+              autoFocus
+            />
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                className="h-10 rounded-xl border-stone-200 bg-white px-5 text-stone-700 hover:bg-stone-50"
+                onClick={() => setVideoAssetCollectionEditTarget(null)}
+                disabled={videoAssetCollectionMutating}
+              >
+                取消
+              </Button>
+              <Button
+                type="button"
+                className="h-10 rounded-xl px-5"
+                onClick={() => void handleSaveVideoAssetCollection()}
+                disabled={videoAssetCollectionMutating}
+              >
+                {videoAssetCollectionMutating ? <LoaderCircle className="size-4 animate-spin" /> : <Folder className="size-4" />}
+                保存
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      ) : null}
+      {videoAssetCollectionDeleteTarget ? (
+        <Dialog open onOpenChange={(open) => (!open && !videoAssetCollectionMutating ? setVideoAssetCollectionDeleteTarget(null) : null)}>
+          <DialogContent showCloseButton={false} className="rounded-2xl p-6">
+            <DialogHeader className="gap-2">
+              <DialogTitle>删除视频分组</DialogTitle>
+              <DialogDescription className="text-sm leading-6">
+                删除「{videoAssetCollectionDeleteTarget.collection.name}」只会移除视频归类，不会删除视频素材。
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                className="h-10 rounded-xl border-stone-200 bg-white px-5 text-stone-700 hover:bg-stone-50"
+                onClick={() => setVideoAssetCollectionDeleteTarget(null)}
+                disabled={videoAssetCollectionMutating}
+              >
+                取消
+              </Button>
+              <Button
+                type="button"
+                className="h-10 rounded-xl bg-rose-600 px-5 text-white hover:bg-rose-700"
+                onClick={() => void handleDeleteVideoAssetCollection()}
+                disabled={videoAssetCollectionMutating}
+              >
+                {videoAssetCollectionMutating ? <LoaderCircle className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
+                删除
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      ) : null}
+      {videoAssetCollectionAssignTarget ? (
+        <Dialog open onOpenChange={(open) => (!open && !videoAssetCollectionMutating ? setVideoAssetCollectionAssignTarget(null) : null)}>
+          <DialogContent showCloseButton={false} className="rounded-2xl p-6">
+            <DialogHeader className="gap-2">
+              <DialogTitle>{videoAssetCollectionAssignTarget.collectionId ? "加入视频分组" : "移出视频分组"}</DialogTitle>
+              <DialogDescription className="text-sm leading-6">
+                当前视频：{videoAssetCollectionAssignTarget.item.name || "视频素材"}。归类变更不会修改生成任务或视频文件。
+              </DialogDescription>
+            </DialogHeader>
+            {videoAssetCollectionAssignTarget.collectionId ? (
+              <Select
+                value={videoAssetCollectionAssignTarget.collectionId}
+                onValueChange={(value) => setVideoAssetCollectionAssignTarget((current) => current ? { ...current, collectionId: value } : current)}
+                disabled={videoAssetCollectionMutating}
+              >
+                <SelectTrigger className="h-10 rounded-xl">
+                  <SelectValue placeholder="选择视频分组" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    {videoAssetCollections.map((collection) => (
+                      <SelectItem key={collection.id} value={collection.id}>
+                        {collection.name}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+            ) : (
+              <div className="rounded-xl border border-dashed border-border p-3 text-sm text-muted-foreground">
+                确认把这个视频从当前视频分组中移出。
+              </div>
+            )}
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                className="h-10 rounded-xl border-stone-200 bg-white px-5 text-stone-700 hover:bg-stone-50"
+                onClick={() => setVideoAssetCollectionAssignTarget(null)}
+                disabled={videoAssetCollectionMutating}
+              >
+                取消
+              </Button>
+              <Button
+                type="button"
+                className="h-10 rounded-xl px-5"
+                onClick={() => void handleConfirmAssignVideoAssetCollection()}
+                disabled={videoAssetCollectionMutating || (videoAssetCollectionAssignTarget.collectionId !== "" && videoAssetCollections.length === 0)}
+              >
+                {videoAssetCollectionMutating ? <LoaderCircle className="size-4 animate-spin" /> : <Folder className="size-4" />}
                 确认
               </Button>
             </DialogFooter>
@@ -4607,9 +5068,9 @@ function ImageManagerContent({
         <Dialog open onOpenChange={(open) => (!open && !collectionMutating ? setCollectionEditTarget(null) : null)}>
           <DialogContent showCloseButton={false} className="rounded-2xl p-6">
             <DialogHeader className="gap-2">
-              <DialogTitle>{collectionEditTarget.mode === "create" ? "新建素材集" : "重命名素材集"}</DialogTitle>
+              <DialogTitle>{collectionEditTarget.mode === "create" ? "新建图片分组" : "重命名图片分组"}</DialogTitle>
               <DialogDescription className="text-sm leading-6">
-                素材集用于把图片按角色、场景、风格或项目组织起来，不会复制或移动原始图片文件。
+                图片分组用于把图片按角色、场景、风格或项目组织起来，不会复制或移动原始图片文件。
               </DialogDescription>
             </DialogHeader>
             <Input
@@ -4647,7 +5108,7 @@ function ImageManagerContent({
         <Dialog open onOpenChange={(open) => (!open && !collectionMutating ? setCollectionDeleteTarget(null) : null)}>
           <DialogContent showCloseButton={false} className="rounded-2xl p-6">
             <DialogHeader className="gap-2">
-              <DialogTitle>删除素材集</DialogTitle>
+              <DialogTitle>删除图片分组</DialogTitle>
               <DialogDescription className="text-sm leading-6">
                 删除「{collectionDeleteTarget.collection.name}」只会移除图片归类，不会删除图片。
               </DialogDescription>
@@ -4679,9 +5140,9 @@ function ImageManagerContent({
         <Dialog open onOpenChange={(open) => (!open && !collectionMutating ? setCollectionAssignTarget(null) : null)}>
           <DialogContent showCloseButton={false} className="rounded-2xl p-6">
             <DialogHeader className="gap-2">
-              <DialogTitle>{collectionAssignTarget.collectionId ? "加入素材集" : "移出素材集"}</DialogTitle>
+              <DialogTitle>{collectionAssignTarget.collectionId ? "加入图片分组" : "移出图片分组"}</DialogTitle>
               <DialogDescription className="text-sm leading-6">
-                本次处理 {collectionAssignTarget.items.length} 张图片。一张图只能属于一个素材集，归类变更不会影响标签或原图文件。
+                本次处理 {collectionAssignTarget.items.length} 张图片。一张图只能属于一个分组，归类变更不会影响标签或原图文件。
               </DialogDescription>
             </DialogHeader>
             {collectionAssignTarget.collectionId ? (
@@ -4691,7 +5152,7 @@ function ImageManagerContent({
                 disabled={collectionMutating}
               >
                 <SelectTrigger className="h-10 rounded-xl">
-                  <SelectValue placeholder="选择素材集" />
+                  <SelectValue placeholder="选择图片分组" />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectGroup>
@@ -4705,7 +5166,7 @@ function ImageManagerContent({
               </Select>
             ) : (
               <div className="rounded-xl border border-dashed border-border p-3 text-sm text-muted-foreground">
-                确认把所选图片从当前素材集中移出。
+                确认把所选图片从当前图片分组中移出。
               </div>
             )}
             <DialogFooter>

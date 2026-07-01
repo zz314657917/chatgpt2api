@@ -146,7 +146,7 @@ func TestImageTagPermissionsAreDefaultAndExplicit(t *testing.T) {
 	}
 }
 
-func TestTextAssetPermissionsAreDefaultAndSubtree(t *testing.T) {
+func TestAssetCollectionPermissionsAreDefaultAndSubtree(t *testing.T) {
 	defaults := DefaultPermissionSetForRole(AuthRoleUser)
 	for _, tc := range []struct {
 		method string
@@ -160,14 +160,18 @@ func TestTextAssetPermissionsAreDefaultAndSubtree(t *testing.T) {
 		{"POST", "/api/text-asset-collections"},
 		{"PATCH", "/api/text-asset-collections/items"},
 		{"DELETE", "/api/text-asset-collections/tcol_123"},
+		{"GET", "/api/video-asset-collections"},
+		{"POST", "/api/video-asset-collections"},
+		{"PATCH", "/api/video-asset-collections/items"},
+		{"DELETE", "/api/video-asset-collections/vcol_123"},
 	} {
 		if !HasAPIPermission(defaults, tc.method, tc.path) {
-			t.Fatalf("missing default text asset permission for %s %s in %#v", tc.method, tc.path, defaults.APIPermissions)
+			t.Fatalf("missing default asset collection permission for %s %s in %#v", tc.method, tc.path, defaults.APIPermissions)
 		}
 	}
 }
 
-func TestMergeDefaultManagedRoleAddsTextAssetPermissions(t *testing.T) {
+func TestMergeDefaultManagedRoleAddsAssetCollectionPermissions(t *testing.T) {
 	roles := mergeDefaultManagedRole([]ManagedRole{{
 		ID:             DefaultManagedRoleID,
 		Name:           "普通用户",
@@ -191,9 +195,13 @@ func TestMergeDefaultManagedRoleAddsTextAssetPermissions(t *testing.T) {
 		{"POST", "/api/text-asset-collections"},
 		{"PATCH", "/api/text-asset-collections/items"},
 		{"DELETE", "/api/text-asset-collections/tcol_123"},
+		{"GET", "/api/video-asset-collections"},
+		{"POST", "/api/video-asset-collections"},
+		{"PATCH", "/api/video-asset-collections/items"},
+		{"DELETE", "/api/video-asset-collections/vcol_123"},
 	} {
 		if !HasAPIPermission(permissions, tc.method, tc.path) {
-			t.Fatalf("merged default role missing text asset permission for %s %s in %#v", tc.method, tc.path, roles[0].APIPermissions)
+			t.Fatalf("merged default role missing asset collection permission for %s %s in %#v", tc.method, tc.path, roles[0].APIPermissions)
 		}
 	}
 }

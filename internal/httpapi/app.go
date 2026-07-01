@@ -56,6 +56,7 @@ type App struct {
 	engine       *protocol.Engine
 	images       *service.ImageService
 	textAssets   *service.TextAssetService
+	videoAssets  *service.VideoAssetService
 	tasks        *service.ImageTaskService
 	analytics    *service.AnalyticsService
 	canvases     *service.CanvasService
@@ -123,7 +124,7 @@ func NewApp() (*App, error) {
 	})
 	images := service.NewImageService(cfg, storageBackend)
 	images.SetLogger(logger)
-	app := &App{config: cfg, auth: auth, accounts: accounts, billing: billing, logs: logs, logger: logger, proxy: proxy, engine: engine, images: images, textAssets: service.NewTextAssetService(storageBackend), analytics: service.NewAnalyticsService(storageBackend), canvases: service.NewCanvasService(storageBackend), social: service.NewSocialProjectService(storageBackend), announce: service.NewAnnouncementService(storageBackend), prompts: service.NewPromptFavoriteService(storageBackend), cpa: service.NewCPAConfig(storageBackend), sub2: service.NewSub2APIConfig(storageBackend), sub2Bindings: sub2Bindings, teams: teams, update: newUpdateService(cfg), cancel: cancel}
+	app := &App{config: cfg, auth: auth, accounts: accounts, billing: billing, logs: logs, logger: logger, proxy: proxy, engine: engine, images: images, textAssets: service.NewTextAssetService(storageBackend), videoAssets: service.NewVideoAssetService(storageBackend), analytics: service.NewAnalyticsService(storageBackend), canvases: service.NewCanvasService(storageBackend), social: service.NewSocialProjectService(storageBackend), announce: service.NewAnnouncementService(storageBackend), prompts: service.NewPromptFavoriteService(storageBackend), cpa: service.NewCPAConfig(storageBackend), sub2: service.NewSub2APIConfig(storageBackend), sub2Bindings: sub2Bindings, teams: teams, update: newUpdateService(cfg), cancel: cancel}
 	app.cpaImport = service.NewCPAImportService(app.cpa, accounts, proxy)
 	app.sub2Import = service.NewSub2APIService(app.sub2, accounts)
 	app.sub2Launch = service.NewSub2APILaunchService(auth, sub2Bindings, cfg)
@@ -1433,6 +1434,191 @@ func (a *App) handleImageCollectionItems(w http.ResponseWriter, r *http.Request,
 	result["items"] = collections.Items
 	result["unclassified_count"] = collections.UnclassifiedCount
 	util.WriteJSON(w, http.StatusOK, result)
+}
+
+func (a *App) handleVideoAssetCollections(w http.ResponseWriter, r *http.Request) {
+	identity, ok := a.requireIdentity(w, r, "")
+	if !ok {
+		return
+	}
+	cleanPath := strings.Trim(strings.TrimPrefix(path.Clean(r.URL.Path), "/api/video-asset-collections"), "/")
+	if cleanPath == "." {
+		cleanPath = ""
+	}
+	if cleanPath == "items" {
+		a.handleVideoAssetCollectionItems(w, r, identity)
+		return
+	}
+	scope := a.videoAssetScope(identity)
+	assetIDs := a.currentVideoAssetIDs(identity)
+	switch r.Method {
+	case http.MethodGet:
+		collections := a.videoAssets.ListVideoAssetCollectionsResult(scope, assetIDs)
+		util.WriteJSON(w, http.StatusOK, map[string]any{"items": collections.Items, "unclassified_count": collections.UnclassifiedCount})
+	case http.MethodPost:
+		if cleanPath != "" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		body, err := readJSONMap(r)
+		if err != nil {
+			util.WriteError(w, http.StatusBadRequest, "invalid json body")
+			return
+		}
+		item, err := a.videoAssets.CreateVideoAssetCollection(util.Clean(body["name"]), scope)
+		if err != nil {
+			util.WriteError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		collections := a.videoAssets.ListVideoAssetCollectionsResult(scope, assetIDs)
+		util.WriteJSON(w, http.StatusOK, map[string]any{"item": item, "items": collections.Items, "unclassified_count": collections.UnclassifiedCount})
+	case http.MethodPatch:
+		if cleanPath == "" {
+			util.WriteError(w, http.StatusBadRequest, "collection id is required")
+			return
+		}
+		body, err := readJSONMap(r)
+		if err != nil {
+			util.WriteError(w, http.StatusBadRequest, "invalid json body")
+			return
+		}
+		item, err := a.videoAssets.RenameVideoAssetCollection(cleanPath, util.Clean(body["name"]), scope)
+		if err != nil {
+			status := http.StatusBadRequest
+			if err.Error() == "collection not found" {
+				status = http.StatusNotFound
+			}
+			util.WriteError(w, status, err.Error())
+			return
+		}
+		collections := a.videoAssets.ListVideoAssetCollectionsResult(scope, assetIDs)
+		util.WriteJSON(w, http.StatusOK, map[string]any{"item": item, "items": collections.Items, "unclassified_count": collections.UnclassifiedCount})
+	case http.MethodDelete:
+		if cleanPath == "" {
+			util.WriteError(w, http.StatusBadRequest, "collection id is required")
+			return
+		}
+		result, err := a.videoAssets.DeleteVideoAssetCollection(cleanPath, scope)
+		if err != nil {
+			status := http.StatusBadRequest
+			if err.Error() == "collection not found" {
+				status = http.StatusNotFound
+			}
+			util.WriteError(w, status, err.Error())
+			return
+		}
+		collections := a.videoAssets.ListVideoAssetCollectionsResult(scope, assetIDs)
+		result["items"] = collections.Items
+		result["unclassified_count"] = collections.UnclassifiedCount
+		util.WriteJSON(w, http.StatusOK, result)
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func (a *App) handleVideoAssetCollectionItems(w http.ResponseWriter, r *http.Request, identity service.Identity) {
+	if r.Method != http.MethodPatch {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	body, err := readJSONMap(r)
+	if err != nil {
+		util.WriteError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	scope := a.videoAssetScope(identity)
+	assetIDs := util.AsStringSlice(body["asset_ids"])
+	currentAssetIDs := a.currentVideoAssetIDs(identity)
+	allowed := service.VideoAssetIDSet(currentAssetIDs)
+	for _, assetID := range assetIDs {
+		if _, ok := allowed[service.NormalizeVideoAssetID(assetID)]; !ok {
+			util.WriteError(w, http.StatusNotFound, "video asset not found")
+			return
+		}
+	}
+	result, err := a.videoAssets.UpdateVideoAssetCollectionItems(util.Clean(body["collection_id"]), assetIDs, scope)
+	if err != nil {
+		status := http.StatusBadRequest
+		if err.Error() == "collection not found" {
+			status = http.StatusNotFound
+		}
+		util.WriteError(w, status, err.Error())
+		return
+	}
+	collections := a.videoAssets.ListVideoAssetCollectionsResult(scope, currentAssetIDs)
+	result["items"] = collections.Items
+	result["unclassified_count"] = collections.UnclassifiedCount
+	util.WriteJSON(w, http.StatusOK, result)
+}
+
+func (a *App) videoAssetScope(identity service.Identity) service.VideoAssetAccessScope {
+	return service.VideoAssetAccessScope{
+		OwnerID:   identityScope(identity),
+		OwnerName: identityDisplayName(identity),
+	}
+}
+
+func (a *App) currentVideoAssetIDs(identity service.Identity) []string {
+	result := a.tasks.ListTasks(identity, nil)
+	return videoAssetIDsFromTasks(util.AsMapSlice(result["items"]))
+}
+
+func videoAssetIDsFromTasks(tasks []map[string]any) []string {
+	ids := make([]string, 0)
+	for _, task := range tasks {
+		if util.Clean(task["mode"]) != "video" || util.Clean(task["status"]) != service.TaskStatusSuccess {
+			continue
+		}
+		for index, data := range util.AsMapSlice(task["data"]) {
+			if !creationTaskDataHasVideo(data) {
+				continue
+			}
+			ids = append(ids, util.Clean(task["id"])+":"+strconv.Itoa(index))
+		}
+	}
+	return service.NormalizeVideoAssetIDs(ids)
+}
+
+func (a *App) decorateCreationTasks(identity service.Identity, result map[string]any) map[string]any {
+	items := util.AsMapSlice(result["items"])
+	if len(items) == 0 {
+		return result
+	}
+	assetIDs := videoAssetIDsFromTasks(items)
+	collectionByID := a.videoAssets.CollectionMap(a.videoAssetScope(identity), assetIDs)
+	for taskIndex, task := range items {
+		if util.Clean(task["mode"]) != "video" || util.Clean(task["status"]) != service.TaskStatusSuccess {
+			continue
+		}
+		dataItems := util.AsMapSlice(task["data"])
+		changed := false
+		for dataIndex, data := range dataItems {
+			assetID := service.NormalizeVideoAssetID(util.Clean(task["id"]) + ":" + strconv.Itoa(dataIndex))
+			if assetID == "" || !creationTaskDataHasVideo(data) {
+				continue
+			}
+			data = util.CopyMap(data)
+			data["asset_id"] = assetID
+			if collection := collectionByID[assetID]; collection != nil {
+				data["collection_id"] = collection["collection_id"]
+				data["collection_name"] = collection["collection_name"]
+			}
+			dataItems[dataIndex] = data
+			changed = true
+		}
+		if changed {
+			task = util.CopyMap(task)
+			task["data"] = dataItems
+			items[taskIndex] = task
+		}
+	}
+	result = util.CopyMap(result)
+	result["items"] = items
+	return result
+}
+
+func creationTaskDataHasVideo(item map[string]any) bool {
+	return firstNonEmpty(util.Clean(item["video_url"]), util.Clean(item["local_url"]), util.Clean(item["url"])) != ""
 }
 
 func (a *App) handleImageDetail(w http.ResponseWriter, r *http.Request) {

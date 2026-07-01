@@ -4259,8 +4259,114 @@ func TestSub2APIVideoCreationTaskUsesApimartTasksEndpoint(t *testing.T) {
 	}
 	items := util.AsMapSlice(listed["items"])
 	data := util.AsMapSlice(items[0]["data"])
-	if len(data) != 1 || util.Clean(data[0]["video_url"]) != "https://cdn.example/video.mp4" {
+	if len(data) != 1 || util.Clean(data[0]["video_url"]) != "https://cdn.example/video.mp4" || util.Clean(data[0]["asset_id"]) != "sub2-video-task:0" {
 		t.Fatalf("sub2api video task data = %#v", items[0])
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/video-asset-collections", strings.NewReader(`{"name":"广告视频"}`))
+	req.Header.Set("Authorization", "Bearer "+sessionKey)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("create video collection status = %d body = %s", res.Code, res.Body.String())
+	}
+	var createPayload map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &createPayload); err != nil {
+		t.Fatalf("create video collection json: %v", err)
+	}
+	collection := util.StringMap(createPayload["item"])
+	collectionID := util.Clean(collection["id"])
+	if collectionID == "" || collection["name"] != "广告视频" || util.ToInt(createPayload["unclassified_count"], -1) != 1 {
+		t.Fatalf("created video collection = %#v", createPayload)
+	}
+
+	req = httptest.NewRequest(http.MethodPatch, "/api/video-asset-collections/items", strings.NewReader(jsonString(map[string]any{
+		"collection_id": collectionID,
+		"asset_ids":     []string{"sub2-video-task:0"},
+	})))
+	req.Header.Set("Authorization", "Bearer "+sessionKey)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("assign video collection status = %d body = %s", res.Code, res.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/video-asset-collections", nil)
+	req.Header.Set("Authorization", "Bearer "+sessionKey)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("list video collections status = %d body = %s", res.Code, res.Body.String())
+	}
+	var listCollections map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &listCollections); err != nil {
+		t.Fatalf("list video collections json: %v", err)
+	}
+	collectionItems := util.AsMapSlice(listCollections["items"])
+	if len(collectionItems) != 1 || util.ToInt(collectionItems[0]["videos_count"], 0) != 1 || util.ToInt(listCollections["unclassified_count"], -1) != 0 {
+		t.Fatalf("list video collections = %#v", listCollections)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/creation-tasks?ids=sub2-video-task", nil)
+	req.Header.Set("Authorization", "Bearer "+sessionKey)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("list decorated video task status = %d body = %s", res.Code, res.Body.String())
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &listed); err != nil {
+		t.Fatalf("list decorated video task json: %v", err)
+	}
+	items = util.AsMapSlice(listed["items"])
+	data = util.AsMapSlice(items[0]["data"])
+	if util.Clean(data[0]["collection_id"]) != collectionID || util.Clean(data[0]["collection_name"]) != "广告视频" {
+		t.Fatalf("decorated video task data = %#v", data[0])
+	}
+
+	req = httptest.NewRequest(http.MethodPatch, "/api/video-asset-collections/items", strings.NewReader(jsonString(map[string]any{
+		"collection_id": collectionID,
+		"asset_ids":     []string{},
+	})))
+	req.Header.Set("Authorization", "Bearer "+sessionKey)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("assign empty video asset ids status = %d body = %s", res.Code, res.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodPatch, "/api/video-asset-collections/items", strings.NewReader(jsonString(map[string]any{
+		"collection_id": collectionID,
+		"asset_ids":     []string{"https://cdn.example/video.mp4"},
+	})))
+	req.Header.Set("Authorization", "Bearer "+sessionKey)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusNotFound {
+		t.Fatalf("assign url video asset id status = %d body = %s", res.Code, res.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodPatch, "/api/video-asset-collections/items", strings.NewReader(jsonString(map[string]any{
+		"collection_id": collectionID,
+		"asset_ids":     []string{"missing-task:0"},
+	})))
+	req.Header.Set("Authorization", "Bearer "+sessionKey)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusNotFound {
+		t.Fatalf("assign missing video asset status = %d body = %s", res.Code, res.Body.String())
+	}
+
+	otherOwner := service.AuthOwner{ID: "sub2api:video-other", Name: "sub2api-other", Provider: service.AuthProviderSub2API}
+	_, otherSession, err := app.auth.UpsertSub2APISession(otherOwner)
+	if err != nil {
+		t.Fatalf("UpsertSub2APISession(other) error = %v", err)
+	}
+	req = httptest.NewRequest(http.MethodDelete, "/api/video-asset-collections/"+url.PathEscape(collectionID), nil)
+	req.Header.Set("Authorization", "Bearer "+otherSession)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusNotFound {
+		t.Fatalf("delete other video collection status = %d body = %s", res.Code, res.Body.String())
 	}
 }
 

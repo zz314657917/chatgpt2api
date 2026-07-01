@@ -893,6 +893,17 @@ export type ManagedTextAsset = {
   updated_at: string;
 };
 
+export type ManagedVideoAssetCollection = {
+  id: string;
+  name: string;
+  library_scope: "personal" | string;
+  owner_id?: string;
+  owner_name?: string;
+  created_at: string;
+  updated_at: string;
+  videos_count: number;
+};
+
 export type ManagedTextAssetListFilters = {
   scope?: ManagedTextAssetListScope;
   team_id?: string;
@@ -945,6 +956,7 @@ export type ManagedImageCollection = {
 
 export const MANAGED_IMAGE_UNCLASSIFIED_COLLECTION_ID = "__unclassified__";
 export const MANAGED_TEXT_ASSET_UNCLASSIFIED_COLLECTION_ID = MANAGED_IMAGE_UNCLASSIFIED_COLLECTION_ID;
+export const MANAGED_VIDEO_ASSET_UNCLASSIFIED_COLLECTION_ID = MANAGED_IMAGE_UNCLASSIFIED_COLLECTION_ID;
 
 export type ManagedImageCollectionsResult = {
   items: ManagedImageCollection[];
@@ -965,6 +977,11 @@ export type ManagedTextAssetCollection = {
 
 export type ManagedTextAssetCollectionsResult = {
   items: ManagedTextAssetCollection[];
+  unclassified_count: number;
+};
+
+export type ManagedVideoAssetCollectionsResult = {
+  items: ManagedVideoAssetCollection[];
   unclassified_count: number;
 };
 
@@ -1184,10 +1201,13 @@ export type ImageResponse = {
 };
 
 export type CreationTaskData = {
+  asset_id?: string;
   b64_json?: string;
   url?: string;
   local_url?: string;
   video_url?: string;
+  collection_id?: string;
+  collection_name?: string;
   revised_prompt?: string;
   text_response?: string;
   width?: number;
@@ -2893,6 +2913,60 @@ export async function updateManagedTextAssetCollectionItems(
   }>("/api/text-asset-collections/items", {
     method: "PATCH",
     body: { collection_id: collectionId, ids, ...(options.scope ? { scope: options.scope } : {}), ...(options.team_id ? { team_id: options.team_id } : {}) },
+  });
+}
+
+export async function fetchManagedVideoAssetCollections() {
+  const data = await httpRequest<{ items?: ManagedVideoAssetCollection[] | null; unclassified_count?: number | string | null }>(
+    "/api/video-asset-collections",
+  );
+  const unclassifiedCount = Number(data.unclassified_count);
+  return {
+    items: Array.isArray(data.items) ? data.items : [],
+    unclassified_count: Number.isFinite(unclassifiedCount) ? Math.max(0, unclassifiedCount) : 0,
+  };
+}
+
+export async function createManagedVideoAssetCollection(name: string) {
+  return httpRequest<{ item: ManagedVideoAssetCollection; items?: ManagedVideoAssetCollection[] | null; unclassified_count?: number | string | null }>(
+    "/api/video-asset-collections",
+    {
+      method: "POST",
+      body: { name },
+    },
+  );
+}
+
+export async function renameManagedVideoAssetCollection(id: string, name: string) {
+  return httpRequest<{ item: ManagedVideoAssetCollection; items?: ManagedVideoAssetCollection[] | null; unclassified_count?: number | string | null }>(
+    `/api/video-asset-collections/${encodeURIComponent(id)}`,
+    {
+      method: "PATCH",
+      body: { name },
+    },
+  );
+}
+
+export async function deleteManagedVideoAssetCollection(id: string) {
+  return httpRequest<{ deleted: boolean; collection_id: string; cleared: number; items?: ManagedVideoAssetCollection[] | null; unclassified_count?: number | string | null }>(
+    `/api/video-asset-collections/${encodeURIComponent(id)}`,
+    { method: "DELETE" },
+  );
+}
+
+export async function updateManagedVideoAssetCollectionItems(
+  collectionId: string,
+  assetIds: string[],
+) {
+  return httpRequest<{
+    asset_ids: string[];
+    collection_id: string;
+    collection_name?: string;
+    items?: ManagedVideoAssetCollection[] | null;
+    unclassified_count?: number | string | null;
+  }>("/api/video-asset-collections/items", {
+    method: "PATCH",
+    body: { collection_id: collectionId, asset_ids: assetIds },
   });
 }
 
