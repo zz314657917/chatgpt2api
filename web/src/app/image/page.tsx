@@ -96,7 +96,6 @@ import {
   isImageCreationModel,
   isImageModel,
   isOfficialImageModel,
-  midjourneyVersionSupportsStop,
   modelIDLooksImageCapable,
   modelIDLooksTextOnly,
   MANAGED_IMAGE_UNCLASSIFIED_COLLECTION_ID,
@@ -122,7 +121,7 @@ import {
   type ManagedImageSummary,
   type TeamSummary,
 } from "@/lib/api";
-import { compactImageModelSettings, imageModelHasSettings, imageModelSettingsToTaskFields, type ImageModelSettingsState } from "@/lib/image-model-settings";
+import { compactImageModelSettings, imageModelHasSettings, imageModelSettingsToTaskFields, normalizeImageModelSettings, type ImageModelSettingsState } from "@/lib/image-model-settings";
 import type { ImageTaskToolOptions } from "@/lib/image-task-request";
 import {
   isImageOutputFormat,
@@ -212,7 +211,7 @@ const DEFAULT_IMAGE_QUALITY: ImageQuality = "auto";
 const DEFAULT_IMAGE_BACKGROUND = "auto";
 const DEFAULT_IMAGE_MODERATION = "auto";
 const DEFAULT_MIDJOURNEY_SETTINGS: Required<Pick<MidjourneySettingsPayload, "version" | "speed" | "stylize" | "chaos" | "weird" | "quality">> &
-  Pick<MidjourneySettingsPayload, "niji" | "raw" | "tile"> = {
+  Pick<MidjourneySettingsPayload, "niji" | "raw" | "tile" | "draft" | "hd"> = {
     version: "8.1",
     speed: "relax",
     stylize: 100,
@@ -222,6 +221,8 @@ const DEFAULT_MIDJOURNEY_SETTINGS: Required<Pick<MidjourneySettingsPayload, "ver
     niji: false,
     raw: false,
     tile: false,
+    draft: false,
+    hd: false,
   };
 const DEFAULT_GEMINI_FLASH_SETTINGS: Required<GeminiFlashSettingsPayload> = {
   google_search: true,
@@ -1408,34 +1409,11 @@ function imageBillingEstimate(model: ImageModel, count: number, sizeOrResolution
   };
 }
 
-function clampIntegerSetting(value: unknown, fallback: number, min: number, max: number) {
-	const parsed = Math.round(Number(value));
-	if (!Number.isFinite(parsed)) {
-		return fallback;
-	}
-	return Math.min(max, Math.max(min, parsed));
-}
-
 function normalizeMidjourneySettings(value: unknown): MidjourneySettingsPayload {
-  const source = value && typeof value === "object" ? value as Record<string, unknown> : {};
-  const version = typeof source.version === "string" && source.version.trim() ? source.version.trim() : DEFAULT_MIDJOURNEY_SETTINGS.version;
-  const speed = typeof source.speed === "string" && source.speed.trim() ? source.speed.trim() : DEFAULT_MIDJOURNEY_SETTINGS.speed;
-  const quality = typeof source.quality === "string" && source.quality.trim() ? source.quality.trim() : DEFAULT_MIDJOURNEY_SETTINGS.quality;
-  const out: MidjourneySettingsPayload = {
-    version,
-    speed,
-    stylize: clampIntegerSetting(source.stylize, DEFAULT_MIDJOURNEY_SETTINGS.stylize, 0, 1000),
-    chaos: clampIntegerSetting(source.chaos, DEFAULT_MIDJOURNEY_SETTINGS.chaos, 0, 100),
-    weird: clampIntegerSetting(source.weird, DEFAULT_MIDJOURNEY_SETTINGS.weird, 0, 3000),
-    quality,
-    niji: source.niji === true || version.toLowerCase().startsWith("niji"),
-    raw: source.raw === true,
-    tile: source.tile === true,
-  };
-  if (midjourneyVersionSupportsStop(version)) {
-    out.stop = clampIntegerSetting(source.stop, 100, 10, 100);
-  }
-  return out;
+  return normalizeImageModelSettings(MIDJOURNEY_IMAGE_MODEL, {
+    ...DEFAULT_MIDJOURNEY_SETTINGS,
+    ...(value && typeof value === "object" ? value as Record<string, unknown> : {}),
+  }).midjourney || DEFAULT_MIDJOURNEY_SETTINGS;
 }
 
 function getStoredMidjourneySettings() {

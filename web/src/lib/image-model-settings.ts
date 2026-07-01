@@ -67,6 +67,14 @@ function clampIntegerSetting(value: unknown, fallback: number, min: number, max:
   return Math.min(max, Math.max(min, parsed));
 }
 
+function clampNumberSetting(value: unknown, fallback: number | undefined, min: number, max: number) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  return Math.min(max, Math.max(min, parsed));
+}
+
 function trimOptionalString(value: unknown) {
   const text = typeof value === "string" ? value.trim() : "";
   return text || undefined;
@@ -76,21 +84,74 @@ function isMidjourneyImageModel(model: ImageModel | string) {
   return String(model || "").trim().toLowerCase() === MIDJOURNEY_IMAGE_MODEL;
 }
 
+function normalizeMidjourneyVersion(value: string, nijiValue: unknown) {
+  let version = value.trim();
+  let niji = nijiValue === true;
+  const normalized = version.toLowerCase();
+  if (normalized.startsWith("niji")) {
+    niji = true;
+    const parsed = normalized
+      .replace(/^niji\s*[:\-\s]?/i, "")
+      .replace(/^v/, "")
+      .trim();
+    version = parsed === "6" || parsed === "7" ? parsed : "7";
+  }
+  if (niji) {
+    const parsed = version.toLowerCase().replace(/^v/, "").trim();
+    version = parsed === "6" || parsed === "7" ? parsed : "7";
+  }
+  return { version, niji };
+}
+
 export function normalizeMidjourneyModelSettings(value: unknown): MidjourneySettingsPayload {
   const source = sourceRecord(value);
   const defaults = DEFAULT_IMAGE_MODEL_SETTINGS_STATE.midjourney || {};
-  const version = trimOptionalString(source.version) || defaults.version || "8.1";
+  const requestedVersion = trimOptionalString(source.version) || defaults.version || "8.1";
+  const { version, niji } = normalizeMidjourneyVersion(requestedVersion, source.niji);
   const out: MidjourneySettingsPayload = {
     version,
     speed: trimOptionalString(source.speed) || defaults.speed || "relax",
     quality: trimOptionalString(source.quality) || defaults.quality || "1",
+    style: trimOptionalString(source.style),
     stylize: clampIntegerSetting(source.stylize, defaults.stylize ?? 100, 0, 1000),
     chaos: clampIntegerSetting(source.chaos, defaults.chaos ?? 0, 0, 100),
     weird: clampIntegerSetting(source.weird, defaults.weird ?? 0, 0, 3000),
-    niji: source.niji === true || version.toLowerCase().startsWith("niji"),
+    niji,
     raw: source.raw === true,
     tile: source.tile === true,
+    draft: source.draft === true,
+    hd: source.hd === true,
   };
+  const seed = clampIntegerSetting(source.seed, -1, 0, 4294967295);
+  if (seed >= 0) {
+    out.seed = seed;
+  }
+  const repeat = clampIntegerSetting(source.repeat, -1, 2, 40);
+  if (repeat >= 2) {
+    out.repeat = repeat;
+  }
+  const iw = clampNumberSetting(source.iw, undefined, 0, 3);
+  if (iw !== undefined) {
+    out.iw = iw;
+  }
+  const dw = clampNumberSetting(source.dw, undefined, 0, 100);
+  if (dw !== undefined) {
+    out.dw = dw;
+  }
+  const cw = clampIntegerSetting(source.cw, -1, 0, 100);
+  if (cw >= 0) {
+    out.cw = cw;
+  }
+  const sw = clampIntegerSetting(source.sw, -1, 0, 1000);
+  if (sw >= 0) {
+    out.sw = sw;
+  }
+  for (const key of ["negative_prompt", "cref", "sref", "dref", "extra"] as const) {
+    const text = trimOptionalString(source[key]);
+    if (text) {
+      out[key] = text;
+    }
+  }
   if (midjourneyVersionSupportsStop(version)) {
     out.stop = clampIntegerSetting(source.stop, 100, 10, 100);
   }

@@ -71,14 +71,28 @@ export const CHAT_MODEL_OPTIONS = IMAGE_MODEL_OPTIONS.filter((option) => CHAT_MO
 export type MidjourneySettingsPayload = {
   version?: string;
   speed?: string;
+  style?: string;
   stylize?: number;
   chaos?: number;
   weird?: number;
   quality?: string;
+  seed?: number;
+  negative_prompt?: string;
+  iw?: number;
+  cw?: number;
+  sw?: number;
+  cref?: string;
+  sref?: string;
+  dref?: string;
+  dw?: number;
+  repeat?: number;
   niji?: boolean;
   raw?: boolean;
   tile?: boolean;
+  draft?: boolean;
+  hd?: boolean;
   stop?: number;
+  extra?: string;
 };
 
 export type GeminiFlashSettingsPayload = {

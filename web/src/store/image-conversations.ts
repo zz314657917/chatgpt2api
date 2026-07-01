@@ -478,12 +478,12 @@ function normalizeMidjourneySettings(value: unknown): MidjourneySettingsPayload 
   }
   const source = value as Record<string, unknown>;
   const out: MidjourneySettingsPayload = {};
-  for (const key of ["version", "speed", "quality"] as const) {
+  for (const key of ["version", "speed", "quality", "style", "negative_prompt", "cref", "sref", "dref", "extra"] as const) {
     if (typeof source[key] === "string" && source[key].trim()) {
       out[key] = source[key].trim();
     }
   }
-  for (const key of ["stylize", "chaos", "weird", "stop"] as const) {
+  for (const key of ["stylize", "chaos", "weird", "stop", "seed", "repeat", "cw", "sw"] as const) {
     if (key === "stop" && !midjourneyVersionSupportsStop(out.version)) {
       continue;
     }
@@ -492,7 +492,13 @@ function normalizeMidjourneySettings(value: unknown): MidjourneySettingsPayload 
       out[key] = Math.round(numberValue);
     }
   }
-  for (const key of ["niji", "raw", "tile"] as const) {
+  for (const key of ["iw", "dw"] as const) {
+    const numberValue = Number(source[key]);
+    if (Number.isFinite(numberValue)) {
+      out[key] = numberValue;
+    }
+  }
+  for (const key of ["niji", "raw", "tile", "draft", "hd"] as const) {
     if (source[key] === true) {
       out[key] = true;
     }

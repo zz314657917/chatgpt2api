@@ -38,7 +38,6 @@ func TestImageGatewayModelsMidjourneyPayloadPassesSettingsAndReferences(t *testi
 			"dref":            "https://example.test/diversity.png",
 			"dw":              40,
 			"repeat":          2,
-			"niji":            true,
 			"raw":             true,
 			"tile":            true,
 			"draft":           true,
@@ -53,7 +52,7 @@ func TestImageGatewayModelsMidjourneyPayloadPassesSettingsAndReferences(t *testi
 	if err != nil {
 		t.Fatalf("midjourney payload error = %v", err)
 	}
-	if payload["model"] != util.ImageModelMidjourney || payload["size"] != "16:9" || payload["n"] != 2 {
+	if payload["model"] != nil || payload["n"] != nil || payload["size"] != "16:9" {
 		t.Fatalf("midjourney payload basics = %#v", payload)
 	}
 	for key, want := range map[string]any{
@@ -74,7 +73,6 @@ func TestImageGatewayModelsMidjourneyPayloadPassesSettingsAndReferences(t *testi
 		"dref":            "https://example.test/diversity.png",
 		"dw":              float64(40),
 		"repeat":          2,
-		"niji":            true,
 		"raw":             true,
 		"tile":            true,
 		"draft":           true,
@@ -106,6 +104,27 @@ func TestImageGatewayModelsMidjourneyPayloadDropsUnsupportedStop(t *testing.T) {
 	}
 	if _, ok := payload["stop"]; ok {
 		t.Fatalf("midjourney v8.1 should not forward stop: %#v", payload)
+	}
+}
+
+func TestImageGatewayModelsMidjourneyPayloadNormalizesNijiVersion(t *testing.T) {
+	payload, err := sub2APIImageGatewayJSONPayload(map[string]any{
+		"prompt": "draw anime",
+		"model":  util.ImageModelMidjourney,
+		"midjourney_settings": map[string]any{
+			"version": "8.1",
+			"niji":    true,
+			"stop":    80,
+		},
+	})
+	if err != nil {
+		t.Fatalf("midjourney payload error = %v", err)
+	}
+	if payload["version"] != "7" || payload["niji"] != true {
+		t.Fatalf("midjourney niji version = %#v", payload)
+	}
+	if _, ok := payload["stop"]; ok {
+		t.Fatalf("midjourney niji v7 should not forward stop: %#v", payload)
 	}
 }
 
@@ -440,7 +459,7 @@ func TestImageGatewayModelsMidjourneyImageEditTaskUsesDataURIReferences(t *testi
 		return len(items) == 1 && items[0]["status"] == service.TaskStatusSuccess
 	})
 
-	if received["model"] != util.ImageModelMidjourney || received["size"] != "16:9" || received["stylize"] != float64(120) || received["raw"] != true || received["tile"] != true {
+	if received["model"] != nil || received["n"] != nil || received["size"] != "16:9" || received["stylize"] != float64(120) || received["raw"] != true || received["tile"] != true {
 		t.Fatalf("midjourney edit gateway body = %#v", received)
 	}
 	urls := util.AsStringSlice(received["image_urls"])

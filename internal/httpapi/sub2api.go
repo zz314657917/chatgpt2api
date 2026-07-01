@@ -859,9 +859,7 @@ func sub2APIGeminiImageGatewayPayload(payload map[string]any) map[string]any {
 
 func sub2APIMidjourneyImageGatewayPayload(payload map[string]any) (map[string]any, error) {
 	out := map[string]any{
-		"model":  util.ImageModelMidjourney,
 		"prompt": util.Clean(payload["prompt"]),
-		"n":      sub2APIMidjourneyImagePayloadCount(payload),
 	}
 	if size := sub2APIMidjourneyImageSize(payload); size != "" {
 		out["size"] = size

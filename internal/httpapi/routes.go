@@ -1791,6 +1791,7 @@ func normalizeMidjourneySettings(value any, withDefaults ...bool) map[string]any
 			out[key] = text
 		}
 	}
+	normalizeMidjourneyVersionAndNiji(out, raw, includeDefaults)
 	for _, key := range []string{"style", "negative_prompt", "cref", "sref", "dref", "extra"} {
 		if text := strings.TrimSpace(util.Clean(raw[key])); text != "" {
 			out[key] = text
@@ -1825,7 +1826,7 @@ func normalizeMidjourneySettings(value any, withDefaults ...bool) map[string]any
 		min, max int
 	}{
 		{key: "seed", min: 0, max: 4294967295},
-		{key: "repeat", min: 1, max: 40},
+		{key: "repeat", min: 2, max: 40},
 	} {
 		if _, ok := raw[rule.key]; !ok {
 			continue
@@ -1877,7 +1878,7 @@ func normalizeMidjourneySettings(value any, withDefaults ...bool) map[string]any
 	} else {
 		delete(out, "stop")
 	}
-	for _, key := range []string{"niji", "raw", "tile", "draft", "hd"} {
+	for _, key := range []string{"raw", "tile", "draft", "hd"} {
 		if _, ok := raw[key]; ok {
 			out[key] = util.ToBool(raw[key])
 		} else if includeDefaults {
@@ -1888,6 +1889,52 @@ func normalizeMidjourneySettings(value any, withDefaults ...bool) map[string]any
 		return nil
 	}
 	return out
+}
+
+func normalizeMidjourneyVersionAndNiji(out map[string]any, raw map[string]any, includeDefaults bool) {
+	version := strings.TrimSpace(util.Clean(out["version"]))
+	nijiSet := false
+	niji := false
+	if _, ok := raw["niji"]; ok {
+		nijiSet = true
+		niji = util.ToBool(raw["niji"])
+	}
+	if parsed, ok := parseMidjourneyNijiVersion(version); ok {
+		version = parsed
+		out["version"] = version
+		nijiSet = true
+		niji = true
+	}
+	if !niji {
+		if nijiSet || includeDefaults {
+			out["niji"] = false
+		}
+		return
+	}
+	switch strings.TrimPrefix(strings.ToLower(strings.TrimSpace(version)), "v") {
+	case "6", "7":
+		out["version"] = strings.TrimPrefix(strings.ToLower(strings.TrimSpace(version)), "v")
+	default:
+		out["version"] = "7"
+	}
+	out["niji"] = true
+}
+
+func parseMidjourneyNijiVersion(version string) (string, bool) {
+	normalized := strings.TrimSpace(strings.ToLower(version))
+	if !strings.HasPrefix(normalized, "niji") {
+		return "", false
+	}
+	normalized = strings.TrimSpace(strings.TrimPrefix(normalized, "niji"))
+	normalized = strings.TrimSpace(strings.TrimPrefix(normalized, ":"))
+	normalized = strings.TrimSpace(strings.TrimPrefix(normalized, "-"))
+	normalized = strings.TrimPrefix(normalized, "v")
+	switch normalized {
+	case "6", "7":
+		return normalized, true
+	default:
+		return "7", true
+	}
 }
 
 func midjourneyVersionSupportsStop(version string) bool {

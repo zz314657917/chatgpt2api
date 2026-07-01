@@ -23,9 +23,21 @@ import {
 } from "@/lib/image-model-settings";
 import { cn } from "@/lib/utils";
 
-const MIDJOURNEY_VERSION_OPTIONS = ["8.1", "7", "6.1", "6", "5.2", "5.1", "5"];
+const MIDJOURNEY_VERSION_OPTIONS = [
+  { value: "8.2", label: "V8.2" },
+  { value: "8.1", label: "V8.1" },
+  { value: "7", label: "V7" },
+  { value: "6.1", label: "V6.1" },
+  { value: "6", label: "V6" },
+  { value: "5.2", label: "V5.2" },
+  { value: "5.1", label: "V5.1" },
+  { value: "5", label: "V5" },
+  { value: "niji:7", label: "Niji 7" },
+  { value: "niji:6", label: "Niji 6" },
+];
 const MIDJOURNEY_SPEED_OPTIONS = ["relax", "fast", "turbo"];
 const MIDJOURNEY_QUALITY_OPTIONS = ["0.25", "0.5", "1", "2"];
+const MIDJOURNEY_STYLE_OPTIONS = ["", "raw"];
 
 type ImageModelSettingsButtonProps = {
   model: ImageModel | string;
@@ -47,6 +59,14 @@ type ImageModelSettingsPanelProps = {
 
 function settingNumber(value: unknown, fallback: number, min: number, max: number) {
   const parsed = Math.round(Number(value));
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  return Math.min(max, Math.max(min, parsed));
+}
+
+function settingFloat(value: unknown, fallback: number, min: number, max: number) {
+  const parsed = Number(value);
   if (!Number.isFinite(parsed)) {
     return fallback;
   }
@@ -203,16 +223,24 @@ function MidjourneySettingsPanel({
   const updateNumber = (key: "stylize" | "chaos" | "weird" | "stop", value: string, min: number, max: number, fallback: number) => {
     update({ [key]: settingNumber(value, fallback, min, max) });
   };
+  const updateOptionalNumber = (key: "seed" | "repeat" | "cw" | "sw", value: string, min: number, max: number, fallback: number) => {
+    update({ [key]: value.trim() ? settingNumber(value, fallback, min, max) : undefined });
+  };
+  const updateOptionalFloat = (key: "iw" | "dw", value: string, min: number, max: number, fallback: number) => {
+    update({ [key]: value.trim() ? settingFloat(value, fallback, min, max) : undefined });
+  };
 
   return (
-    <div className="grid grid-cols-2 gap-1.5 text-[11px]">
+    <div className="grid grid-cols-2 gap-1.5 text-[11px] sm:grid-cols-3">
       <label className="space-y-1">
         <span className={fieldLabelClassName()}>版本</span>
         <select
-          value={settings.version || "8.1"}
+          value={settings.niji ? `niji:${settings.version || "7"}` : settings.version || "8.1"}
           onChange={(event) => {
-            const version = event.target.value;
-            const next = { ...settings, version, niji: version.toLowerCase().startsWith("niji") };
+            const value = event.target.value;
+            const niji = value.startsWith("niji:");
+            const version = niji ? value.slice("niji:".length) : value;
+            const next = { ...settings, version, niji };
             if (!midjourneyVersionSupportsStop(version)) {
               delete next.stop;
             }
@@ -220,7 +248,7 @@ function MidjourneySettingsPanel({
           }}
           className={selectClassName()}
         >
-          {MIDJOURNEY_VERSION_OPTIONS.map((version) => <option key={version} value={version}>V{version}</option>)}
+          {MIDJOURNEY_VERSION_OPTIONS.map((version) => <option key={version.value} value={version.value}>{version.label}</option>)}
         </select>
       </label>
       <label className="space-y-1">
@@ -233,6 +261,12 @@ function MidjourneySettingsPanel({
         <span className={fieldLabelClassName()}>画质</span>
         <select value={settings.quality || "1"} onChange={(event) => update({ quality: event.target.value })} className={selectClassName()}>
           {MIDJOURNEY_QUALITY_OPTIONS.map((quality) => <option key={quality} value={quality}>{quality}</option>)}
+        </select>
+      </label>
+      <label className="space-y-1">
+        <span className={fieldLabelClassName()}>风格</span>
+        <select value={settings.style || ""} onChange={(event) => update({ style: event.target.value || undefined })} className={selectClassName()}>
+          {MIDJOURNEY_STYLE_OPTIONS.map((style) => <option key={style || "default"} value={style}>{style || "默认"}</option>)}
         </select>
       </label>
       {[
@@ -256,9 +290,68 @@ function MidjourneySettingsPanel({
         </label>
       ))}
       {[
+        { key: "seed" as const, label: "种子", min: 0, max: 4294967295, fallback: 0, placeholder: "随机" },
+        { key: "repeat" as const, label: "重复", min: 2, max: 40, fallback: 2, placeholder: "关闭" },
+        { key: "cw" as const, label: "角色权重", min: 0, max: 100, fallback: 100, placeholder: "0-100" },
+        { key: "sw" as const, label: "风格权重", min: 0, max: 1000, fallback: 100, placeholder: "0-1000" },
+      ].map((item) => (
+        <label key={item.key} className="space-y-1">
+          <span className={fieldLabelClassName()}>{item.label}</span>
+          <Input
+            type="number"
+            inputMode="numeric"
+            min={item.min}
+            max={item.max}
+            step="1"
+            value={settings[item.key] ?? ""}
+            placeholder={item.placeholder}
+            onChange={(event) => updateOptionalNumber(item.key, event.target.value, item.min, item.max, item.fallback)}
+            className={inputClassName()}
+          />
+        </label>
+      ))}
+      {[
+        { key: "iw" as const, label: "图片权重", min: 0, max: 3, fallback: 1, step: "0.1" },
+        { key: "dw" as const, label: "深度权重", min: 0, max: 100, fallback: 50, step: "0.1" },
+      ].map((item) => (
+        <label key={item.key} className="space-y-1">
+          <span className={fieldLabelClassName()}>{item.label}</span>
+          <Input
+            type="number"
+            inputMode="decimal"
+            min={item.min}
+            max={item.max}
+            step={item.step}
+            value={settings[item.key] ?? ""}
+            placeholder={String(item.fallback)}
+            onChange={(event) => updateOptionalFloat(item.key, event.target.value, item.min, item.max, item.fallback)}
+            className={inputClassName()}
+          />
+        </label>
+      ))}
+      {[
+        { key: "negative_prompt" as const, label: "负面词", placeholder: "ugly, blurry" },
+        { key: "cref" as const, label: "角色参考", placeholder: "https://..." },
+        { key: "sref" as const, label: "风格参考", placeholder: "https://..." },
+        { key: "dref" as const, label: "深度参考", placeholder: "https://..." },
+        { key: "extra" as const, label: "追加参数", placeholder: "--profile ..." },
+      ].map((item) => (
+        <label key={item.key} className="space-y-1 sm:col-span-3">
+          <span className={fieldLabelClassName()}>{item.label}</span>
+          <Input
+            value={settings[item.key] || ""}
+            placeholder={item.placeholder}
+            onChange={(event) => update({ [item.key]: event.target.value.trim() || undefined })}
+            className={inputClassName()}
+          />
+        </label>
+      ))}
+      {[
         { key: "niji" as const, label: "Niji" },
         { key: "raw" as const, label: "Raw" },
         { key: "tile" as const, label: "平铺" },
+        { key: "draft" as const, label: "草图" },
+        { key: "hd" as const, label: "HD" },
       ].map((item) => (
         <label key={item.key} className={checkboxFieldClassName()}>
           <Checkbox checked={settings[item.key] === true} onCheckedChange={(checked) => update({ [item.key]: checked === true })} className="size-3.5" />

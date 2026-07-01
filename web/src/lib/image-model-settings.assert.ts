@@ -22,12 +22,22 @@ assert.equal(midjourneyV61?.stylize, 1000);
 assert.equal(midjourneyV61?.chaos, 0);
 
 const midjourneyV81Fields = imageModelSettingsToTaskFields("midjourney", {
-  midjourney: { version: "8.1", stop: 80, seed: 123, extra: "--foo" } as unknown as NonNullable<ReturnType<typeof defaultImageModelSettings>["midjourney"]>,
+  midjourney: { version: "8.1", stop: 80, seed: 123, extra: "--foo", repeat: 1, draft: true, hd: true } as unknown as NonNullable<ReturnType<typeof defaultImageModelSettings>["midjourney"]>,
 }).extraBody?.midjourney_settings as Record<string, unknown>;
 assert.equal(midjourneyV81Fields.version, "8.1");
 assert.equal(midjourneyV81Fields.stop, undefined);
-assert.equal(midjourneyV81Fields.seed, undefined);
-assert.equal(midjourneyV81Fields.extra, undefined);
+assert.equal(midjourneyV81Fields.seed, 123);
+assert.equal(midjourneyV81Fields.extra, "--foo");
+assert.equal(midjourneyV81Fields.repeat, undefined);
+assert.equal(midjourneyV81Fields.draft, true);
+assert.equal(midjourneyV81Fields.hd, true);
+
+const midjourneyNijiFields = imageModelSettingsToTaskFields("midjourney", {
+  midjourney: { version: "8.1", niji: true, stop: 80 },
+}).extraBody?.midjourney_settings as Record<string, unknown>;
+assert.equal(midjourneyNijiFields.version, "7");
+assert.equal(midjourneyNijiFields.niji, true);
+assert.equal(midjourneyNijiFields.stop, undefined);
 
 const geminiFlashFields = imageModelSettingsToTaskFields("gemini-3.1-flash-image-preview", {
   geminiFlash: { google_image_search: true },
