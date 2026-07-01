@@ -14,12 +14,14 @@ import (
 	"net/http"
 	"net/textproto"
 	"net/url"
+	"path"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"chatgpt2api/internal/imagestore"
 	"chatgpt2api/internal/protocol"
 	"chatgpt2api/internal/service"
 	"chatgpt2api/internal/util"
@@ -253,6 +255,11 @@ func (a *App) callSub2APIImageGenerations(ctx context.Context, identity service.
 }
 
 func (a *App) callSub2APIImageEdits(ctx context.Context, identity service.Identity, payload map[string]any, binding service.Sub2APIBinding) (map[string]any, error) {
+	if prepared, err := sub2APIPrepareOfficialImageEditPayload(ctx, payload); err != nil {
+		return nil, err
+	} else {
+		payload = prepared
+	}
 	if sub2APIUsesMidjourneyGateway(payload) {
 		return a.callSub2APIImageBatchesWithBinding(ctx, identity, payload, binding, func(ctx context.Context, batchPayload map[string]any) (map[string]any, error) {
 			body, err := sub2APIMidjourneyImageGatewayPayload(batchPayload)
@@ -316,6 +323,73 @@ func (a *App) callSub2APIImageEdits(ctx context.Context, identity service.Identi
 		}
 		return a.postSub2APIMultipart(ctx, binding, "images/edits", writer.FormDataContentType(), &buf)
 	})
+}
+
+func sub2APIPrepareOfficialImageEditPayload(ctx context.Context, payload map[string]any) (map[string]any, error) {
+	if !sub2APIUsesOfficialImageGateway(payload) || len(nonEmptyUploadedImagesFromPayload(payload["images"])) == 0 {
+		return payload, nil
+	}
+	publicURLs := sub2APIOfficialPublicImageURLs(payload)
+	images := nonEmptyUploadedImagesFromPayload(payload["images"])
+	uploadedURLs, err := sub2APIUploadOfficialReferenceImages(ctx, images)
+	if err != nil {
+		return nil, err
+	}
+	publicURLs = dedupe(append(publicURLs, uploadedURLs...))
+	if len(publicURLs) == 0 {
+		return nil, sub2APIOfficialPublicReferenceError()
+	}
+	prepared := util.CopyMap(payload)
+	prepared["official_public_image_urls"] = publicURLs
+	prepared["images"] = make([]protocol.UploadedImage, len(publicURLs))
+	return prepared, nil
+}
+
+func sub2APIUploadOfficialReferenceImages(ctx context.Context, images []protocol.UploadedImage) ([]string, error) {
+	store, enabled, err := imagestore.NewFromEnv(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("准备官方参考图对象存储失败：%w", err)
+	}
+	if !enabled {
+		return nil, sub2APIOfficialPublicReferenceError()
+	}
+	urls := make([]string, 0, len(images))
+	now := time.Now().UTC()
+	for index, image := range images {
+		if len(image.Data) == 0 {
+			continue
+		}
+		contentType := sub2APIImageContentType(image)
+		rel := path.Join("official-references", now.Format("2006/01/02"), fmt.Sprintf("%d_%s%s", now.UnixNano(), util.NewHex(12), sub2APIImageExtension(image)))
+		key, err := store.ObjectKey(rel)
+		if err != nil {
+			return nil, fmt.Errorf("准备官方参考图对象路径失败：%w", err)
+		}
+		if _, err := store.UploadBytes(ctx, key, image.Data, contentType); err != nil {
+			return nil, fmt.Errorf("上传官方参考图到对象存储失败：%w", err)
+		}
+		u, err := store.PresignGetDownloadURL(ctx, key, 30*time.Minute, firstNonEmpty(image.Filename, fmt.Sprintf("reference-%d%s", index+1, sub2APIImageExtension(image))))
+		if err != nil {
+			return nil, fmt.Errorf("签名官方参考图对象链接失败：%w", err)
+		}
+		if url := sub2APIOfficialPublicURL(u); url != "" {
+			urls = append(urls, url)
+		}
+	}
+	return dedupe(urls), nil
+}
+
+func sub2APIImageExtension(image protocol.UploadedImage) string {
+	switch strings.ToLower(strings.TrimSpace(sub2APIImageContentType(image))) {
+	case "image/jpeg", "image/jpg":
+		return ".jpg"
+	case "image/webp":
+		return ".webp"
+	case "image/gif":
+		return ".gif"
+	default:
+		return ".png"
+	}
 }
 
 const (

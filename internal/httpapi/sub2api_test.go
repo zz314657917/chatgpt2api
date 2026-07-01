@@ -2,14 +2,21 @@ package httpapi
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 
+	"chatgpt2api/internal/imagestore"
 	"chatgpt2api/internal/protocol"
 	"chatgpt2api/internal/service"
 	"chatgpt2api/internal/util"
@@ -128,6 +135,67 @@ func TestSub2APIOfficialImageEditJSONGatewayRequiresPublicOnlyReferences(t *test
 		"image_urls": []string{"https://cdn.example/source.png", "data:image/png;base64,cHJpdmF0ZQ=="},
 	}) {
 		t.Fatal("official edit with mixed public and data URLs should not use JSON gateway")
+	}
+}
+
+func TestSub2APIPrepareOfficialImageEditPayloadUploadsReferencesToObjectURLs(t *testing.T) {
+	var objectPutPath string
+	objectServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPut:
+			objectPutPath = r.URL.Path
+			_, _ = io.Copy(io.Discard, r.Body)
+			w.WriteHeader(http.StatusOK)
+		case http.MethodGet:
+			w.WriteHeader(http.StatusOK)
+		default:
+			t.Errorf("object method = %s", r.Method)
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	}))
+	defer objectServer.Close()
+	t.Setenv(imagestore.EnvImageStorageBackend, "cos")
+	t.Setenv(imagestore.EnvImageObjectStorageEndpoint, objectServer.URL)
+	t.Setenv(imagestore.EnvImageObjectStorageRegion, "ap-guangzhou")
+	t.Setenv(imagestore.EnvImageObjectStorageBucket, "bucket")
+	t.Setenv(imagestore.EnvImageObjectStorageAccessKeyID, "ak")
+	t.Setenv(imagestore.EnvImageObjectStorageSecretKey, "sk")
+	t.Setenv(imagestore.EnvImageObjectStorageForcePath, "true")
+
+	referenceBytes, err := base64.StdEncoding.DecodeString(sub2APITestPNGBase64)
+	if err != nil {
+		t.Fatalf("decode reference png: %v", err)
+	}
+	prepared, err := sub2APIPrepareOfficialImageEditPayload(context.Background(), map[string]any{
+		"model": util.ImageModelGPTOfficial,
+		"images": []protocol.UploadedImage{{
+			Filename:    "source.png",
+			ContentType: "image/png",
+			Data:        referenceBytes,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("sub2APIPrepareOfficialImageEditPayload() error = %v", err)
+	}
+	urls := util.AsStringSlice(prepared["official_public_image_urls"])
+	if len(urls) != 1 {
+		t.Fatalf("official_public_image_urls = %#v", prepared["official_public_image_urls"])
+	}
+	parsed, err := url.Parse(urls[0])
+	if err != nil {
+		t.Fatalf("parse signed URL: %v", err)
+	}
+	if parsed.Host == "" || parsed.Query().Get("X-Amz-Signature") == "" || !strings.Contains(parsed.Path, "/official-references/") {
+		t.Fatalf("signed URL = %q", urls[0])
+	}
+	if !strings.Contains(objectPutPath, "/official-references/") {
+		t.Fatalf("object PUT path = %q", objectPutPath)
+	}
+	if !sub2APIImageEditSupportsJSONGateway(prepared) {
+		t.Fatalf("prepared official payload should support JSON gateway: %#v", prepared)
+	}
+	if len(nonEmptyUploadedImagesFromPayload(prepared["images"])) > 0 {
+		t.Fatalf("prepared payload should replace uploaded image bytes with placeholders: %#v", prepared["images"])
 	}
 }
 
