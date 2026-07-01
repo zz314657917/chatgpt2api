@@ -50,6 +50,7 @@ import {
   formatImageSizeDisplay,
   getActiveImageAspectRatio,
   getImageSizeRequirementLabel,
+  imageRequestSizeSupportMessage,
   isHighResolutionImageSize,
   isPixelIconSize,
   parseImageRatio,
@@ -302,12 +303,14 @@ function ImageSizePreviewPanel({
   label,
   detail,
   highResolution,
+  warning,
   structured,
   resolutionPreset,
 }: {
   label: string;
   detail: string;
   highResolution: boolean;
+  warning?: boolean;
   structured: boolean;
   resolutionPreset: boolean;
 }) {
@@ -320,7 +323,11 @@ function ImageSizePreviewPanel({
         <span
           className={cn(
             "min-w-0 truncate text-right font-mono text-sm font-semibold dark:text-foreground",
-            highResolution ? "text-amber-700 dark:text-amber-300" : "text-[#18181b]",
+            warning
+              ? "text-red-600 dark:text-red-300"
+              : highResolution
+                ? "text-amber-700 dark:text-amber-300"
+                : "text-[#18181b]",
           )}
         >
           {label}
@@ -331,6 +338,11 @@ function ImageSizePreviewPanel({
         {highResolution ? (
           <span className="shrink-0 rounded-full bg-amber-50 px-2 py-0.5 font-medium text-amber-700 ring-1 ring-amber-100 dark:bg-amber-950/30 dark:text-amber-300 dark:ring-amber-800">
             高分辨率目标
+          </span>
+        ) : null}
+        {warning ? (
+          <span className="shrink-0 rounded-full bg-red-50 px-2 py-0.5 font-medium text-red-700 ring-1 ring-red-100 dark:bg-red-950/30 dark:text-red-300 dark:ring-red-800">
+            需调整
           </span>
         ) : null}
       </div>
@@ -466,7 +478,6 @@ export function ImageComposer({
   const resolutionControlsVisible = resolutionPresetsSupported && !pixelIconSizeSelected;
   const effectiveImageResolution = resolutionControlsVisible ? imageResolution : "auto";
   const submitLabel = composerMode === "chat" ? "发送对话" : referenceImages.length > 0 ? "编辑图片" : "生成图片";
-  const submitTitle = billingBlocked ? "用户余额或配额不足" : submitLabel;
   const computedImageSize = useMemo(
     () =>
       buildImageSize({
@@ -485,6 +496,8 @@ export function ImageComposer({
   });
   const isCustomRatioInvalid =
     effectiveImageSizeMode === "ratio" && imageAspectRatio === CUSTOM_IMAGE_ASPECT_RATIO && !parseImageRatio(imageCustomRatio);
+  const sizeSupportMessage = imageRequestSizeSupportMessage(computedImageSize);
+  const sizeSupportWarning = Boolean(sizeSupportMessage);
   const hasResolutionPreset = effectiveImageResolution !== "auto";
   const sizePreviewLabel = hasResolutionPreset && !structuredImageParameters
     ? `${imageResolutionLabel} / ${activeImageAspectRatio || "Auto"}`
@@ -499,6 +512,8 @@ export function ImageComposer({
     effectiveImageSizeMode === "ratio"
       ? isCustomRatioInvalid
         ? "比例需要填写为宽:高"
+        : sizeSupportWarning
+          ? sizeSupportMessage
         : isPixelIconSize(imageAspectRatio)
           ? `目标尺寸 ${formatImageSizeDisplay(imageAspectRatio)}，像素图标快捷尺寸`
         : effectiveImageResolution === "auto"
@@ -519,6 +534,8 @@ export function ImageComposer({
             : "当前链路不支持手动宽高"
           : "宽高需要填写正整数"
         : "不指定画幅或尺寸";
+  const submitDisabled = !prompt.trim() || billingBlocked || sizeSupportWarning;
+  const submitTitle = billingBlocked ? "用户余额或配额不足" : sizeSupportWarning ? sizeSupportMessage : submitLabel;
   const mentionAssetItems = useMemo(() => mentionAssets.slice(0, 18), [mentionAssets]);
   const promptTextareaStyle: CSSProperties = isMobilePromptLayout
     ? {
@@ -919,7 +936,9 @@ export function ImageComposer({
             onKeyDown={(event) => {
               if (event.key === "Enter" && !event.shiftKey) {
                 event.preventDefault();
-                void onSubmit();
+                if (!submitDisabled) {
+                  void onSubmit();
+                }
               }
             }}
             className="min-h-[48px] resize-none rounded-none border-0 bg-transparent px-5 pt-4 pb-1 text-[16px] leading-6 text-[#222222] shadow-none placeholder:text-[#8e8e93] focus-visible:ring-0 dark:text-foreground dark:placeholder:text-muted-foreground sm:min-h-0 sm:px-5 sm:py-4 sm:text-[15px] sm:leading-6"
@@ -1262,6 +1281,7 @@ export function ImageComposer({
                               label={sizePreviewLabel}
                               detail={sizePreviewDetail}
                               highResolution={sizeIsHighResolution}
+                              warning={sizeSupportWarning}
                               structured={structuredImageParameters || pixelIconSizeSelected}
                               resolutionPreset={resolutionControlsVisible}
                             />
@@ -1272,6 +1292,7 @@ export function ImageComposer({
                             label={sizePreviewLabel}
                             detail={sizePreviewDetail}
                             highResolution={sizeIsHighResolution}
+                            warning={sizeSupportWarning}
                             structured={structuredImageParameters}
                             resolutionPreset={resolutionControlsVisible}
                           />
@@ -1350,7 +1371,7 @@ export function ImageComposer({
                 <button
                   type="button"
                   onClick={() => void onSubmit()}
-                  disabled={!prompt.trim() || billingBlocked}
+                  disabled={submitDisabled}
                   className="inline-flex size-11 shrink-0 items-center justify-center rounded-full bg-[#181e25] text-white shadow-[0_4px_10px_rgba(24,30,37,0.12)] transition hover:bg-[#2a323d] disabled:cursor-not-allowed disabled:bg-[#e1e2e4] disabled:text-[#73777f] dark:bg-foreground dark:text-background dark:hover:bg-foreground/90 dark:disabled:bg-muted dark:disabled:text-muted-foreground sm:size-10"
                   aria-label={submitLabel}
                   title={submitTitle}

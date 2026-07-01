@@ -70,6 +70,8 @@ const MAX_ASPECT_RATIO = 3;
 const MIN_PIXELS = 655_360;
 const MAX_PIXELS = 8_294_400;
 const HIGH_RESOLUTION_PIXEL_THRESHOLD = 1_577_536;
+const RATIO_SEPARATOR_PATTERN = /[:xX×]/;
+const DECIMAL_RATIO_PATTERN = /\d+\.\d+/;
 export const DEFAULT_IMAGE_CUSTOM_WIDTH = "1024";
 export const DEFAULT_IMAGE_CUSTOM_HEIGHT = "1024";
 
@@ -250,6 +252,30 @@ export function imageSizePixels(size: string) {
 
 export function isHighResolutionImageSize(size: string) {
   return imageSizePixels(size) > HIGH_RESOLUTION_PIXEL_THRESHOLD;
+}
+
+function parseImageRequestRatio(size: string) {
+  const trimmed = size.trim();
+  if (!trimmed || (SIZE_PATTERN.test(trimmed) && !trimmed.includes(":"))) {
+    return null;
+  }
+  if (!trimmed.includes(":") && (!RATIO_SEPARATOR_PATTERN.test(trimmed) || !DECIMAL_RATIO_PATTERN.test(trimmed))) {
+    return null;
+  }
+  return parseImageRatio(trimmed);
+}
+
+export function imageRequestSizeSupportMessage(size: string) {
+  const ratio = parseImageRequestRatio(size);
+  if (!ratio) {
+    return "";
+  }
+  const ratioScale = Math.max(ratio.width / ratio.height, ratio.height / ratio.width);
+  if (ratioScale <= MAX_ASPECT_RATIO) {
+    return "";
+  }
+  const suggestedRatio = ratio.width > ratio.height ? "21:9" : "9:21";
+  return `当前比例 ${size.trim()} 过于极端，图片通道可能拒绝；请改为 ${suggestedRatio}、1:3/3:1，或选择 Auto。`;
 }
 
 export function parseImageRatio(ratio: string) {

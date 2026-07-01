@@ -23,6 +23,7 @@ import {
   getActiveImageAspectRatio,
   getImageSizeSelectionFromSize,
   getImageSizeRequirementLabel,
+  imageRequestSizeSupportMessage,
   isHighResolutionImageSize,
   isImageAspectRatio,
   isImageQuality,
@@ -586,6 +587,10 @@ function requestedImageCountForModel(model: string | undefined, value: string | 
 
 function isInvalidCustomRatioSelection(sizeMode: ImageSizeMode, aspectRatio: ImageAspectRatio, customRatio: string) {
   return sizeMode === "ratio" && aspectRatio === CUSTOM_IMAGE_ASPECT_RATIO && !parseImageRatio(customRatio);
+}
+
+function imageSizeSupportToastMessage(size: string) {
+  return imageRequestSizeSupportMessage(size).replace("图片通道可能拒绝；", "图片通道可能拒绝，");
 }
 
 function imagePriceSizeFromRequest(size: string) {
@@ -2179,6 +2184,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         editingDraftEffectiveSizeSelection.customRatio,
       )
     : false;
+  const editingDraftSizeSupportMessage = editingDraftImageSize ? imageRequestSizeSupportMessage(editingDraftImageSize) : "";
   const editingDraftSizePreviewLabel =
     editingTurnDraft && editingTurnDraft.mode !== "chat" && editingDraftEffectiveSizeSelection
       ? editingDraftResolutionControlsVisible && !editingDraftStructuredParameters && editingDraftEffectiveSizeSelection.resolution !== "auto"
@@ -2198,6 +2204,8 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     editingDraftEffectiveSizeSelection?.mode === "ratio"
       ? editingDraftCustomRatioInvalid
         ? "比例需要填写为宽:高"
+        : editingDraftSizeSupportMessage
+          ? editingDraftSizeSupportMessage
         : isPixelIconSize(editingDraftEffectiveSizeSelection.aspectRatio)
           ? isOfficialImageModel(editingTurnDraft?.model)
             ? `本地输出尺寸 ${formatImageSizeDisplay(editingDraftEffectiveSizeSelection.aspectRatio)}，官方图片通道按 1:1 提交后处理`
@@ -5180,6 +5188,11 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         toast.error("请填写有效的宽度和高度");
         return;
       }
+      const draftSizeSupportMessage = mode === "chat" ? "" : imageSizeSupportToastMessage(draftImageSize);
+      if (draftSizeSupportMessage) {
+        toast.error(draftSizeSupportMessage);
+        return;
+      }
       const draftOutputFormat =
         mode === "chat" ? undefined : imageOutputFormatForModel(effectiveDraftModel, draft.outputFormat);
       const draftOutputCompression =
@@ -5318,6 +5331,13 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         const currentImageSizeRequest = arenaMode === "image"
           ? buildEffectiveImageSizeRequest(arenaSlots[0]?.model || effectiveImageModel, rawImageSizeSelection)
           : null;
+        const currentImageSizeSupportMessage = arenaMode === "image"
+          ? imageSizeSupportToastMessage(currentImageSizeRequest?.size || "")
+          : "";
+        if (currentImageSizeSupportMessage) {
+          toast.error(currentImageSizeSupportMessage);
+          return;
+        }
         const storedSizeSelection = currentImageSizeRequest ? serializeImageSizeSelection(currentImageSizeRequest.selection) : undefined;
         const minReferenceLimit = arenaMode === "image"
           ? Math.min(...arenaSlots.map((slot) => imageReferenceInputLimit(slot.model)))
@@ -5444,6 +5464,11 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         return;
       }
       const currentImageSize = currentImageSizeRequest?.size ?? "";
+      const currentImageSizeSupportMessage = effectiveImageMode === "chat" ? "" : imageSizeSupportToastMessage(currentImageSize);
+      if (currentImageSizeSupportMessage) {
+        toast.error(currentImageSizeSupportMessage);
+        return;
+      }
       const currentImageSizeSelection = currentImageSizeRequest
         ? serializeImageSizeSelection(currentImageSizeRequest.selection)
         : undefined;
@@ -5951,7 +5976,11 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                                 </span>
                                 <span className={cn(
                                   "min-w-0 truncate text-right font-mono font-semibold",
-                                  editingDraftSizeIsHighResolution ? "text-amber-700" : "text-stone-900",
+                                  editingDraftSizeSupportMessage
+                                    ? "text-red-600"
+                                    : editingDraftSizeIsHighResolution
+                                      ? "text-amber-700"
+                                      : "text-stone-900",
                                 )}>
                                   {editingDraftSizePreviewLabel}
                                 </span>
@@ -5961,6 +5990,11 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                                 {editingDraftSizeIsHighResolution ? (
                                   <span className="shrink-0 rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700 ring-1 ring-amber-100">
                                     高分辨率目标
+                                  </span>
+                                ) : null}
+                                {editingDraftSizeSupportMessage ? (
+                                  <span className="shrink-0 rounded-full bg-red-50 px-2 py-0.5 text-[11px] font-medium text-red-700 ring-1 ring-red-100">
+                                    需调整
                                   </span>
                                 ) : null}
                               </div>
@@ -5981,10 +6015,10 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                 <Button variant="outline" onClick={() => setEditingTurnDraft(null)}>
                   取消
                 </Button>
-                <Button variant="outline" onClick={() => void handleSaveEditingTurn(false)}>
+                <Button variant="outline" onClick={() => void handleSaveEditingTurn(false)} disabled={Boolean(editingDraftSizeSupportMessage)}>
                   保存
                 </Button>
-                <Button onClick={() => void handleSaveEditingTurn(true)}>
+                <Button onClick={() => void handleSaveEditingTurn(true)} disabled={Boolean(editingDraftSizeSupportMessage)}>
                   {editingTurnDraft.mode === "chat" ? "保存并重新发送" : "保存并重新生成"}
                 </Button>
               </DialogFooter>
