@@ -192,6 +192,33 @@ func (a *App) runLoggedSub2APIChatTask(ctx context.Context, identity service.Ide
 	payload["owner_id"] = identityScope(identity)
 	payload["owner_name"] = identityDisplayName(identity)
 	payload["stream"] = false
+	if prepared, err := a.prepareChatPayloadWithWebSearch(ctx, payload, true); err != nil {
+		model := firstNonEmpty(util.Clean(payload["model"]), util.DefaultChatModel)
+		a.logCall(ctx, identity, "文本生成", http.MethodPost, "/api/creation-tasks/chat-completions", model, start, "failed", protocolErrorHTTPStatus(err), err.Error(), nil, requestCapture)
+		return nil, err
+	} else {
+		payload = prepared
+	}
+	if util.ToBool(payload["web_search_native"]) {
+		body := sub2APIResponsesPayload(payload)
+		if binding.SystemDefault {
+			body["model"] = a.sub2APIChatModelForBinding(ctx, binding, body["model"])
+		}
+		model := util.Clean(body["model"])
+		result, err := a.callSub2APIResponsesWithBody(ctx, body, binding)
+		if err != nil {
+			a.logCall(ctx, identity, "文本生成", http.MethodPost, "/api/creation-tasks/chat-completions", model, start, "failed", protocolErrorHTTPStatus(err), err.Error(), nil, requestCapture)
+			return result, err
+		}
+		text := responseResultText(result)
+		if text == "" {
+			err = errors.New("模型没有返回文本内容")
+			a.logCall(ctx, identity, "文本生成", http.MethodPost, "/api/creation-tasks/chat-completions", model, start, "failed", http.StatusBadGateway, err.Error(), nil, requestCapture)
+			return result, err
+		}
+		a.logCall(ctx, identity, "文本生成", http.MethodPost, "/api/creation-tasks/chat-completions", model, start, "success", http.StatusOK, "", nil, requestCapture)
+		return sub2APIResponseTaskResult(result, text, model), nil
+	}
 	body := sub2APIChatPayload(payload)
 	if binding.SystemDefault {
 		body["model"] = a.sub2APIChatModelForBinding(ctx, binding, body["model"])
@@ -222,6 +249,10 @@ func (a *App) callSub2APIChatCompletions(ctx context.Context, payload map[string
 
 func (a *App) callSub2APIChatCompletionsWithBody(ctx context.Context, body map[string]any, binding service.Sub2APIBinding) (map[string]any, error) {
 	return a.postSub2APIJSON(ctx, binding, "chat/completions", body)
+}
+
+func (a *App) callSub2APIResponsesWithBody(ctx context.Context, body map[string]any, binding service.Sub2APIBinding) (map[string]any, error) {
+	return a.postSub2APIJSON(ctx, binding, "responses", body)
 }
 
 func (a *App) callSub2APIImageGenerations(ctx context.Context, identity service.Identity, payload map[string]any, binding service.Sub2APIBinding) (map[string]any, error) {
@@ -1500,7 +1531,78 @@ func sub2APIChatPayload(payload map[string]any) map[string]any {
 	if n := util.ToInt(payload["n"], 1); n > 1 {
 		out["n"] = n
 	}
+	if tools := anyList(payload["tools"]); len(tools) > 0 {
+		out["tools"] = tools
+	}
+	if choice := payload["tool_choice"]; choice != nil {
+		out["tool_choice"] = choice
+	}
+	if options := util.StringMap(payload["web_search_options"]); len(options) > 0 || util.ToBool(payload["web_search_native"]) {
+		out["web_search_options"] = util.CopyMap(options)
+	}
 	return out
+}
+
+func sub2APIResponsesPayload(payload map[string]any) map[string]any {
+	out := map[string]any{
+		"model":  sub2APIChatModel(payload["model"]),
+		"input":  sub2APIResponsesInput(payload),
+		"stream": false,
+	}
+	if tools := anyList(payload["tools"]); len(tools) > 0 {
+		out["tools"] = tools
+	}
+	if choice := payload["tool_choice"]; choice != nil {
+		out["tool_choice"] = choice
+	}
+	if options := util.StringMap(payload["web_search_options"]); len(options) > 0 {
+		out["web_search_options"] = util.CopyMap(options)
+	}
+	return out
+}
+
+func sub2APIResponsesInput(payload map[string]any) any {
+	messages := util.AsMapSlice(payload["messages"])
+	if len(messages) == 0 {
+		if prompt := strings.TrimSpace(util.Clean(payload["prompt"])); prompt != "" {
+			return prompt
+		}
+		return ""
+	}
+	out := make([]map[string]any, 0, len(messages))
+	for _, message := range protocol.NormalizeMessages(messages, nil) {
+		content := responseInputContent(message["content"])
+		if content == nil {
+			continue
+		}
+		out = append(out, map[string]any{
+			"role":    firstNonEmpty(util.Clean(message["role"]), "user"),
+			"content": content,
+		})
+	}
+	if len(out) == 0 {
+		return ""
+	}
+	return out
+}
+
+func responseInputContent(content any) any {
+	if text := strings.TrimSpace(util.Clean(content)); text != "" {
+		return []map[string]any{{"type": "input_text", "text": text}}
+	}
+	parts := make([]map[string]any, 0)
+	for _, raw := range anyList(content) {
+		item := util.StringMap(raw)
+		text := strings.TrimSpace(util.Clean(item["text"]))
+		if text == "" {
+			continue
+		}
+		parts = append(parts, map[string]any{"type": "input_text", "text": text})
+	}
+	if len(parts) == 0 {
+		return nil
+	}
+	return parts
 }
 
 func sub2APIChatModel(value any) string {
@@ -1556,6 +1658,42 @@ func sub2APIChatTaskResult(result map[string]any, text string, model string) map
 		out["usage"] = util.CopyMap(usage)
 	}
 	return out
+}
+
+func sub2APIResponseTaskResult(result map[string]any, text string, model string) map[string]any {
+	if result == nil {
+		result = map[string]any{}
+	}
+	created := int64(util.ToInt(firstNonNil(result["created_at"], result["created"]), int(time.Now().Unix())))
+	model = firstNonEmpty(util.Clean(result["model"]), model)
+	out := map[string]any{
+		"created":     created,
+		"output_type": "text",
+		"model":       model,
+		"data":        []map[string]any{{"text_response": text}},
+	}
+	if usage := util.StringMap(result["usage"]); len(usage) > 0 {
+		out["usage"] = util.CopyMap(usage)
+	}
+	return out
+}
+
+func responseResultText(result map[string]any) string {
+	if text := strings.TrimSpace(util.Clean(result["output_text"])); text != "" {
+		return text
+	}
+	var parts []string
+	for _, item := range util.AsMapSlice(result["output"]) {
+		for _, content := range util.AsMapSlice(item["content"]) {
+			switch util.Clean(content["type"]) {
+			case "output_text", "text":
+				if text := strings.TrimSpace(util.Clean(content["text"])); text != "" {
+					parts = append(parts, text)
+				}
+			}
+		}
+	}
+	return strings.TrimSpace(strings.Join(parts, "\n"))
 }
 
 func sub2APIImageModel(value any) string {

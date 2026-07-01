@@ -32,6 +32,7 @@ import (
 	"chatgpt2api/internal/util"
 	"chatgpt2api/internal/version"
 	frontend "chatgpt2api/internal/web"
+	"chatgpt2api/internal/websearch"
 
 	_ "github.com/HugoSmits86/nativewebp"
 )
@@ -72,6 +73,7 @@ type App struct {
 	teams        *service.TeamService
 	register     *service.RegisterService
 	update       *service.UpdateService
+	webSearch    *websearch.Client
 	cancel       context.CancelFunc
 }
 
@@ -124,7 +126,7 @@ func NewApp() (*App, error) {
 	})
 	images := service.NewImageService(cfg, storageBackend)
 	images.SetLogger(logger)
-	app := &App{config: cfg, auth: auth, accounts: accounts, billing: billing, logs: logs, logger: logger, proxy: proxy, engine: engine, images: images, textAssets: service.NewTextAssetService(storageBackend), videoAssets: service.NewVideoAssetService(storageBackend), analytics: service.NewAnalyticsService(storageBackend), canvases: service.NewCanvasService(storageBackend), social: service.NewSocialProjectService(storageBackend), announce: service.NewAnnouncementService(storageBackend), prompts: service.NewPromptFavoriteService(storageBackend), cpa: service.NewCPAConfig(storageBackend), sub2: service.NewSub2APIConfig(storageBackend), sub2Bindings: sub2Bindings, teams: teams, update: newUpdateService(cfg), cancel: cancel}
+	app := &App{config: cfg, auth: auth, accounts: accounts, billing: billing, logs: logs, logger: logger, proxy: proxy, engine: engine, images: images, textAssets: service.NewTextAssetService(storageBackend), videoAssets: service.NewVideoAssetService(storageBackend), analytics: service.NewAnalyticsService(storageBackend), canvases: service.NewCanvasService(storageBackend), social: service.NewSocialProjectService(storageBackend), announce: service.NewAnnouncementService(storageBackend), prompts: service.NewPromptFavoriteService(storageBackend), cpa: service.NewCPAConfig(storageBackend), sub2: service.NewSub2APIConfig(storageBackend), sub2Bindings: sub2Bindings, teams: teams, update: newUpdateService(cfg), webSearch: websearch.NewClient(cfg.WebSearch()), cancel: cancel}
 	app.cpaImport = service.NewCPAImportService(app.cpa, accounts, proxy)
 	app.sub2Import = service.NewSub2APIService(app.sub2, accounts)
 	app.sub2Launch = service.NewSub2APILaunchService(auth, sub2Bindings, cfg)
@@ -3613,6 +3615,12 @@ func (a *App) runLoggedChatTask(ctx context.Context, identity service.Identity, 
 	payload["owner_name"] = identityDisplayName(identity)
 	payload["stream"] = false
 	model := firstNonEmpty(util.Clean(payload["model"]), util.ImageModelAuto)
+	if prepared, err := a.prepareChatPayloadWithWebSearch(ctx, payload, false); err != nil {
+		a.logCall(ctx, identity, "文本生成", http.MethodPost, "/api/creation-tasks/chat-completions", model, start, "failed", protocolErrorHTTPStatus(err), err.Error(), nil, requestCapture)
+		return nil, err
+	} else {
+		payload = prepared
+	}
 	result, stream, err := a.engine.HandleChatCompletions(ctx, payload)
 	if stream != nil {
 		err = errors.New("chat task streaming is not supported")
@@ -3637,6 +3645,79 @@ func (a *App) runLoggedChatTask(ctx context.Context, identity service.Identity, 
 		taskResult["usage"] = util.CopyMap(usage)
 	}
 	return taskResult, nil
+}
+
+func (a *App) prepareChatPayloadWithWebSearch(ctx context.Context, payload map[string]any, allowNative bool) (map[string]any, error) {
+	if !util.ToBool(payload["web_search"]) {
+		return payload, nil
+	}
+	query := strings.TrimSpace(firstNonEmpty(util.Clean(payload["web_search_query"]), util.Clean(payload["prompt"])))
+	if query == "" {
+		return nil, protocol.HTTPError{Status: http.StatusBadRequest, Message: "联网搜索关键词为空"}
+	}
+	cfg := config.WebSearchConfig{}
+	if a != nil && a.config != nil {
+		cfg = a.config.WebSearch()
+	}
+	if cfg.Native() {
+		if allowNative {
+			return prepareChatPayloadWithNativeWebSearch(payload), nil
+		}
+		if a == nil || a.webSearch == nil || !a.webSearch.Ready() {
+			return nil, protocol.HTTPError{Status: http.StatusPreconditionRequired, Message: "当前 ChatGPT Web 文本路由暂未验证上游原生联网搜索；请使用 Sub2API/OpenAI 兼容绑定，或设置 CHATGPT2API_WEB_SEARCH_MODE=external 和 CHATGPT2API_WEB_SEARCH_URL"}
+		}
+	} else if !cfg.External() {
+		return nil, protocol.HTTPError{Status: http.StatusPreconditionRequired, Message: "网络搜索已关闭：CHATGPT2API_WEB_SEARCH_MODE=off"}
+	}
+	if a == nil || a.webSearch == nil || !a.webSearch.Ready() {
+		return nil, protocol.HTTPError{Status: http.StatusPreconditionRequired, Message: "网络搜索未配置：请设置 CHATGPT2API_WEB_SEARCH_URL"}
+	}
+	results, err := a.webSearch.Search(ctx, query)
+	if err != nil {
+		return nil, protocol.HTTPError{Status: http.StatusBadGateway, Message: err.Error()}
+	}
+	searchContext := websearch.PromptContext(results)
+	prepared := util.CopyMap(payload)
+	prepared["messages"] = websearch.InjectMessages(util.AsMapSlice(payload["messages"]), searchContext)
+	prepared["web_search_result_count"] = len(results)
+	return prepared, nil
+}
+
+func prepareChatPayloadWithNativeWebSearch(payload map[string]any) map[string]any {
+	prepared := util.CopyMap(payload)
+	prepared["web_search_native"] = true
+	prepared["web_search_options"] = nativeWebSearchOptions(payload["web_search_options"])
+	prepared["tools"] = appendNativeWebSearchPreviewTool(prepared["tools"])
+	return prepared
+}
+
+func nativeWebSearchOptions(value any) map[string]any {
+	options := util.StringMap(value)
+	if len(options) == 0 {
+		return map[string]any{}
+	}
+	return util.CopyMap(options)
+}
+
+func appendNativeWebSearchPreviewTool(tools any) []any {
+	out := make([]any, 0)
+	hasSearch := false
+	for _, item := range anyList(tools) {
+		if nativeWebSearchTool(item) {
+			hasSearch = true
+		}
+		out = append(out, item)
+	}
+	if hasSearch {
+		return out
+	}
+	return append(out, map[string]any{"type": "web_search_preview"})
+}
+
+func nativeWebSearchTool(value any) bool {
+	tool := util.StringMap(value)
+	toolType := strings.ToLower(strings.TrimSpace(util.Clean(tool["type"])))
+	return toolType == "web_search" || toolType == "web_search_preview"
 }
 
 func chatCompletionResultText(result map[string]any) string {

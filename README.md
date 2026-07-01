@@ -514,6 +514,21 @@ Authorization: Bearer <session-or-api-token>
 
 权限系统中，异步创作任务对应的 API 权限为 `GET /api/creation-tasks` 和 `POST /api/creation-tasks`，并按子路径生效。
 
+### 创作台联网搜索
+
+创作台对话支持 `web_search: true`。默认模式下，后端会在 Sub2API/OpenAI 兼容绑定路径中把联网对话改走上游 `/v1/responses`，并携带 `tools: [{ "type": "web_search_preview" }]`，让支持 OpenAI Responses web search 的上游自行联网搜索，不需要配置搜索 URL。
+
+普通 ChatGPT Web 文本逆向路由暂未验证上游原生搜索开关。若未使用 Sub2API/OpenAI 兼容绑定，或上游不支持原生搜索工具，可以切换到外部搜索模式：后端先调用外部搜索服务，再把搜索结果作为本轮系统上下文注入给聊天模型。
+
+可选环境变量：
+
+- `CHATGPT2API_WEB_SEARCH_MODE`：`native`、`external` 或 `off`，默认 `native`。
+- `CHATGPT2API_WEB_SEARCH_URL`：外部搜索模式的搜索服务 JSON 接口。GET 模式下可使用 `{query}` 占位符，或由系统自动追加 `q=<query>`。
+- `CHATGPT2API_WEB_SEARCH_METHOD`：`GET` 或 `POST`，默认 `GET`。
+- `CHATGPT2API_WEB_SEARCH_HEADER_NAME` / `CHATGPT2API_WEB_SEARCH_HEADER_VALUE`：需要鉴权时附加一个请求头。
+- `CHATGPT2API_WEB_SEARCH_MAX_RESULTS`：注入给模型的结果数，默认 `5`，范围 `1..10`。
+- `CHATGPT2API_WEB_SEARCH_TIMEOUT_SECONDS`：搜索超时，默认 `8` 秒，范围 `1..30`。
+
 ### `GET /v1/models`
 
 ```bash

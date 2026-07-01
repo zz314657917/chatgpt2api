@@ -132,6 +132,7 @@ export type ImageTurn = {
   background?: string;
   moderation?: string;
   inputImageMask?: string;
+  webSearch?: boolean;
   partialImages?: number;
   midjourneySettings?: MidjourneySettingsPayload;
   geminiFlashSettings?: GeminiFlashSettingsPayload;
@@ -672,6 +673,7 @@ function normalizeTurn(turn: ImageTurn & Record<string, unknown>): ImageTurn {
     background: typeof turn.background === "string" && turn.background ? turn.background : undefined,
     moderation: typeof turn.moderation === "string" && turn.moderation ? turn.moderation : undefined,
     inputImageMask,
+    webSearch: Boolean(turn.webSearch || turn.web_search),
     partialImages: normalizePositiveInt(turn.partialImages),
     midjourneySettings: normalizeMidjourneySettings(turn.midjourneySettings),
     geminiFlashSettings: normalizeGeminiFlashSettings(turn.geminiFlashSettings),

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -87,6 +88,16 @@ type LinuxDoOAuthConfig struct {
 	UserInfoEmailPath    string
 	UserInfoIDPath       string
 	UserInfoUsernamePath string
+}
+
+type WebSearchConfig struct {
+	EndpointURL string
+	Mode        string
+	Method      string
+	HeaderName  string
+	HeaderValue string
+	MaxResults  int
+	Timeout     time.Duration
 }
 
 func NewStore() (*Store, error) {
@@ -342,6 +353,54 @@ func (s *Store) Sub2APIDefaultImageGroupID() string {
 
 func (s *Store) Sub2APIDefaultVideoGroupID() string {
 	return strings.TrimSpace(os.Getenv("CHATGPT2API_SUB2API_DEFAULT_VIDEO_GROUP_ID"))
+}
+
+func (s *Store) WebSearch() WebSearchConfig {
+	timeoutSeconds := envInt("CHATGPT2API_WEB_SEARCH_TIMEOUT_SECONDS", 8)
+	if timeoutSeconds < 1 {
+		timeoutSeconds = 1
+	}
+	if timeoutSeconds > 30 {
+		timeoutSeconds = 30
+	}
+	maxResults := envInt("CHATGPT2API_WEB_SEARCH_MAX_RESULTS", 5)
+	if maxResults < 1 {
+		maxResults = 1
+	}
+	if maxResults > 10 {
+		maxResults = 10
+	}
+	method := strings.ToUpper(envString("CHATGPT2API_WEB_SEARCH_METHOD", http.MethodGet))
+	if method != http.MethodGet && method != http.MethodPost {
+		method = http.MethodGet
+	}
+	mode := strings.ToLower(strings.TrimSpace(envString("CHATGPT2API_WEB_SEARCH_MODE", "native")))
+	switch mode {
+	case "native", "external", "off":
+	default:
+		mode = "native"
+	}
+	return WebSearchConfig{
+		EndpointURL: strings.TrimSpace(os.Getenv("CHATGPT2API_WEB_SEARCH_URL")),
+		Mode:        mode,
+		Method:      method,
+		HeaderName:  strings.TrimSpace(os.Getenv("CHATGPT2API_WEB_SEARCH_HEADER_NAME")),
+		HeaderValue: strings.TrimSpace(os.Getenv("CHATGPT2API_WEB_SEARCH_HEADER_VALUE")),
+		MaxResults:  maxResults,
+		Timeout:     time.Duration(timeoutSeconds) * time.Second,
+	}
+}
+
+func (c WebSearchConfig) Ready() bool {
+	return strings.TrimSpace(c.EndpointURL) != ""
+}
+
+func (c WebSearchConfig) Native() bool {
+	return strings.TrimSpace(c.Mode) == "" || strings.EqualFold(strings.TrimSpace(c.Mode), "native")
+}
+
+func (c WebSearchConfig) External() bool {
+	return strings.EqualFold(strings.TrimSpace(c.Mode), "external")
 }
 
 func (s *Store) Proxy() string {
@@ -938,6 +997,15 @@ func envBool(key string, fallback bool) bool {
 	if value, ok := os.LookupEnv(key); ok {
 		value = strings.ToLower(strings.TrimSpace(value))
 		return value == "1" || value == "true" || value == "yes" || value == "on"
+	}
+	return fallback
+}
+
+func envInt(key string, fallback int) int {
+	if value, ok := os.LookupEnv(key); ok {
+		if parsed, err := strconv.Atoi(strings.TrimSpace(value)); err == nil {
+			return parsed
+		}
 	}
 	return fallback
 }

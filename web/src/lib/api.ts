@@ -1263,6 +1263,7 @@ export type CreationTask = {
   style?: string;
   partial_images?: number;
   input_image_mask?: string;
+  web_search?: boolean;
   created_at: string;
   updated_at: string;
   data?: CreationTaskData[];

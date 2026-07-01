@@ -32,6 +32,7 @@ import (
 	"chatgpt2api/internal/storage"
 	"chatgpt2api/internal/util"
 	"chatgpt2api/internal/version"
+	"chatgpt2api/internal/websearch"
 )
 
 func TestAppAuthAndSPACompatibility(t *testing.T) {
@@ -2926,6 +2927,204 @@ func TestCreationTaskChatCompletionDefaultsToChatModel(t *testing.T) {
 		}
 	default:
 		t.Fatal("chat task handler was not called")
+	}
+}
+
+func TestCreationTaskChatCompletionStoresWebSearchFlag(t *testing.T) {
+	app := newTestApp(t)
+	defer app.Close()
+	searchServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"results":[{"title":"News","url":"https://example.test/news","snippet":"Today"}]}`)
+	}))
+	defer searchServer.Close()
+	t.Setenv("CHATGPT2API_WEB_SEARCH_MODE", "external")
+	t.Setenv("CHATGPT2API_WEB_SEARCH_URL", searchServer.URL+"/search")
+	app.webSearch = websearch.NewClient(app.config.WebSearch())
+
+	user, rawKey, err := app.auth.CreateAPIKey(service.AuthRoleUser, "chat-web-search", service.AuthOwner{})
+	if err != nil {
+		t.Fatalf("CreateAPIKey() error = %v", err)
+	}
+	ownerID := util.Clean(user["id"])
+	seenPayload := make(chan map[string]any, 1)
+	app.tasks = service.NewStoredImageTaskService(testJSONStoreFromApp(t, app),
+		failingHTTPImageTaskHandler,
+		failingHTTPImageTaskHandler,
+		func(ctx context.Context, identity service.Identity, payload map[string]any) (map[string]any, error) {
+			seenPayload <- payload
+			return map[string]any{"output_type": "text", "data": []map[string]any{{"text_response": "ok"}}}, nil
+		},
+		func() int { return 30 },
+	)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/creation-tasks/chat-completions", strings.NewReader(`{"client_task_id":"chat-search-flag","prompt":"查一下今天新闻","model":"gpt-5.5","web_search":true,"messages":[{"role":"user","content":"查一下今天新闻"}]}`))
+	req.Header.Set("Authorization", "Bearer "+rawKey)
+	res := httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("submit chat task status = %d body = %s", res.Code, res.Body.String())
+	}
+	waitForHTTPTestCondition(t, func() bool {
+		task, ok := app.tasks.GetTask(service.Identity{ID: ownerID, Role: service.AuthRoleUser}, "chat-search-flag")
+		return ok && task["status"] == service.TaskStatusSuccess && task["web_search"] == true
+	})
+	select {
+	case payload := <-seenPayload:
+		if payload["web_search"] != true {
+			t.Fatalf("handler web_search = %#v, want true", payload["web_search"])
+		}
+	default:
+		t.Fatal("chat task handler was not called")
+	}
+}
+
+func TestPrepareChatPayloadWithWebSearchUsesNativeToolByDefault(t *testing.T) {
+	app := newTestApp(t)
+	defer app.Close()
+
+	prepared, err := app.prepareChatPayloadWithWebSearch(context.Background(), map[string]any{
+		"model":      "gpt-5.5",
+		"prompt":     "latest release",
+		"web_search": true,
+		"messages":   []any{map[string]any{"role": "user", "content": "latest release"}},
+	}, true)
+	if err != nil {
+		t.Fatalf("prepareChatPayloadWithWebSearch() error = %v", err)
+	}
+	if prepared["web_search_native"] != true {
+		t.Fatalf("web_search_native = %#v, want true", prepared["web_search_native"])
+	}
+	if _, ok := prepared["web_search_options"].(map[string]any); !ok {
+		t.Fatalf("web_search_options = %T, want map[string]any", prepared["web_search_options"])
+	}
+	tools := anyList(prepared["tools"])
+	if len(tools) != 1 || util.StringMap(tools[0])["type"] != "web_search_preview" {
+		t.Fatalf("tools = %#v, want web_search_preview tool", prepared["tools"])
+	}
+	messages := util.AsMapSlice(prepared["messages"])
+	if len(messages) != 1 || messages[0]["role"] != "user" {
+		t.Fatalf("native search should not inject local search context: %#v", messages)
+	}
+}
+
+func TestPrepareChatPayloadWithWebSearchRejectsNativeWithoutCompatibleUpstream(t *testing.T) {
+	app := newTestApp(t)
+	defer app.Close()
+
+	_, err := app.prepareChatPayloadWithWebSearch(context.Background(), map[string]any{
+		"model":      "gpt-5.5",
+		"prompt":     "latest release",
+		"web_search": true,
+		"messages":   []any{map[string]any{"role": "user", "content": "latest release"}},
+	}, false)
+	if err == nil || !strings.Contains(err.Error(), "Sub2API/OpenAI") {
+		t.Fatalf("prepareChatPayloadWithWebSearch() error = %v, want compatible upstream message", err)
+	}
+}
+
+func TestRunLoggedChatTaskInjectsExternalWebSearchResults(t *testing.T) {
+	app := newTestApp(t)
+	defer app.Close()
+
+	searchServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("q") != "latest release" {
+			t.Fatalf("search query = %q, want latest release", r.URL.Query().Get("q"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"results":[{"title":"Release note","url":"https://example.test/release","snippet":"Version details"}]}`)
+	}))
+	defer searchServer.Close()
+	t.Setenv("CHATGPT2API_WEB_SEARCH_MODE", "external")
+	t.Setenv("CHATGPT2API_WEB_SEARCH_URL", searchServer.URL+"/search")
+	app.webSearch = websearch.NewClient(app.config.WebSearch())
+
+	prepared, err := app.prepareChatPayloadWithWebSearch(context.Background(), map[string]any{
+		"model":      "gpt-5.5",
+		"prompt":     "latest release",
+		"web_search": true,
+		"messages":   []any{map[string]any{"role": "user", "content": "latest release"}},
+	}, false)
+	if err != nil {
+		t.Fatalf("prepareChatPayloadWithWebSearch() error = %v", err)
+	}
+	messages := util.AsMapSlice(prepared["messages"])
+	if len(messages) < 2 || messages[0]["role"] != "system" || !strings.Contains(util.Clean(messages[0]["content"]), "https://example.test/release") {
+		t.Fatalf("messages missing web search context: %#v", messages)
+	}
+	if util.ToInt(prepared["web_search_result_count"], 0) != 1 {
+		t.Fatalf("web_search_result_count = %#v, want 1", prepared["web_search_result_count"])
+	}
+}
+
+func TestSub2APIChatPayloadCarriesNativeWebSearch(t *testing.T) {
+	payload := prepareChatPayloadWithNativeWebSearch(map[string]any{
+		"model":      "gpt-5.5",
+		"messages":   []any{map[string]any{"role": "user", "content": "news"}},
+		"web_search": true,
+	})
+
+	body := sub2APIResponsesPayload(payload)
+	tools := anyList(body["tools"])
+	if len(tools) != 1 || util.StringMap(tools[0])["type"] != "web_search_preview" {
+		t.Fatalf("sub2api tools = %#v, want web_search_preview tool", body["tools"])
+	}
+	if body["web_search_options"] != nil {
+		t.Fatalf("web_search_options = %#v, want omitted when empty for Responses", body["web_search_options"])
+	}
+	input := util.AsMapSlice(body["input"])
+	if len(input) != 1 || input[0]["role"] != "user" {
+		t.Fatalf("input = %#v, want Responses user input", body["input"])
+	}
+}
+
+func TestRunLoggedSub2APIChatTaskUsesResponsesForNativeWebSearch(t *testing.T) {
+	app := newTestApp(t)
+	defer app.Close()
+
+	var path string
+	var body map[string]any
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path = r.URL.Path
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode sub2api request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"resp_test","object":"response","created_at":123,"model":"gpt-5.5","output":[{"type":"message","content":[{"type":"output_text","text":"searched answer"}]}]}`)
+	}))
+	defer gateway.Close()
+
+	result, err := app.runLoggedSub2APIChatTask(context.Background(), service.Identity{
+		ID:       "sub2api:user-1",
+		Role:     service.AuthRoleUser,
+		Provider: service.AuthProviderSub2API,
+	}, map[string]any{
+		"model":      "gpt-5.5",
+		"prompt":     "today news",
+		"web_search": true,
+		"messages":   []any{map[string]any{"role": "user", "content": "today news"}},
+	}, service.Sub2APIBinding{
+		OwnerID:        "sub2api:user-1",
+		SessionToken:   "session",
+		APIKey:         "sk-test",
+		GatewayBaseURL: gateway.URL + "/v1",
+	})
+	if err != nil {
+		t.Fatalf("runLoggedSub2APIChatTask() error = %v", err)
+	}
+	if path != "/v1/responses" {
+		t.Fatalf("sub2api path = %q, want /v1/responses", path)
+	}
+	tools := anyList(body["tools"])
+	if len(tools) != 1 || util.StringMap(tools[0])["type"] != "web_search_preview" {
+		t.Fatalf("tools = %#v, want web_search_preview", body["tools"])
+	}
+	if util.Clean(result["output_type"]) != "text" {
+		t.Fatalf("result = %#v, want text output", result)
+	}
+	data := util.AsMapSlice(result["data"])
+	if len(data) != 1 || util.Clean(data[0]["text_response"]) != "searched answer" {
+		t.Fatalf("data = %#v, want searched answer", result["data"])
 	}
 }
 

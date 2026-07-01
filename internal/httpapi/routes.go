@@ -1759,6 +1759,12 @@ func imageTaskRequestMetadata(body map[string]any) map[string]any {
 	if publicImageURLs := publicJSONImageURLs(util.AsStringSlice(body["image_urls"])); len(publicImageURLs) > 0 {
 		metadata["official_public_image_urls"] = publicImageURLs
 	}
+	if util.ToBool(body["web_search"]) {
+		metadata["web_search"] = true
+		if query := util.Clean(body["web_search_query"]); query != "" {
+			metadata["web_search_query"] = query
+		}
+	}
 	if compression, ok := service.NormalizeImageOutputCompressionValue(body["output_compression"]); ok {
 		metadata["raw_output_compression"] = compression
 	}

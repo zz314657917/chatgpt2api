@@ -2,7 +2,7 @@
 
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { ImagePlus, LoaderCircle, Plus, Trash2, X } from "lucide-react";
+import { Globe2, ImagePlus, LoaderCircle, Plus, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { ImageArenaComposer } from "@/app/image/components/image-arena-composer";
@@ -260,6 +260,7 @@ type EditingTurnDraft = {
   background?: string;
   moderation?: string;
   inputImageMask?: string;
+  webSearch?: boolean;
   midjourneySettings?: MidjourneySettingsPayload;
   geminiFlashSettings?: GeminiFlashSettingsPayload;
   visibility: ImageVisibility;
@@ -2009,6 +2010,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
   const [imageBackground, setImageBackground] = useState(getStoredImageBackground);
   const [imageModeration, setImageModeration] = useState(getStoredImageModeration);
   const [imageMaskUrl, setImageMaskUrl] = useState("");
+  const [webSearchEnabled, setWebSearchEnabled] = useState(false);
   const [midjourneySettings, setMidjourneySettings] = useState<MidjourneySettingsPayload>(getStoredMidjourneySettings);
   const [geminiFlashSettings, setGeminiFlashSettings] = useState<GeminiFlashSettingsPayload>(getStoredGeminiFlashSettings);
   const [defaultImageVisibility, setDefaultImageVisibility] = useState<ImageVisibility>("private");
@@ -3782,6 +3784,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
       background: targetTurn.background,
       moderation: targetTurn.moderation,
       inputImageMask: targetTurn.inputImageMask,
+      webSearch: targetTurn.webSearch,
       midjourneySettings: targetTurn.midjourneySettings,
       geminiFlashSettings: targetTurn.geminiFlashSettings,
       visibility: targetTurn.visibility || "private",
@@ -3982,7 +3985,10 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                 run.model,
                 taskMessages,
                 activeTurn.referenceImages.map((img) => ({ name: img.name, dataUrl: img.dataUrl })),
-                baseExtraBody(run),
+                {
+                  ...baseExtraBody(run),
+                  ...(activeTurn.webSearch ? { web_search: true } : {}),
+                },
               );
             } else {
               const settings = {
@@ -4315,6 +4321,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         const activeTurnExtraBody = {
           ...activeTurnMidjourneyBody,
           ...activeTurnGeminiFlashBody,
+          ...(activeTurn.mode === "chat" && activeTurn.webSearch ? { web_search: true } : {}),
         };
         const pendingTaskGroups = activeTurn.images.reduce<Array<{ taskId: string; count: number }>>(
           (groups, image, imageIndex) => {
@@ -4341,9 +4348,10 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                 activeTurn.model,
                 taskMessages,
                 activeTurn.referenceImages.map((img) => ({ name: img.name, dataUrl: img.dataUrl })),
+                activeTurnExtraBody,
               );
             }
-            return createChatCompletionTask(group.taskId, activeTurn.prompt, activeTurn.model, taskMessages);
+            return createChatCompletionTask(group.taskId, activeTurn.prompt, activeTurn.model, taskMessages, undefined, activeTurnExtraBody);
           }
           if (usesReferenceImages(activeTurn.mode)) {
             return createImageEditTaskFromReferenceIds(
@@ -5218,6 +5226,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
               background: mode === "chat" ? undefined : draft.background,
               moderation: mode === "chat" ? undefined : draft.moderation,
               inputImageMask: mode === "chat" ? undefined : draft.inputImageMask,
+              webSearch: mode === "chat" ? Boolean(draft.webSearch) : undefined,
               visibility: mode === "chat" ? "private" : draft.visibility,
             };
             if (!regenerate) {
@@ -5499,6 +5508,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         background: effectiveToolOptions?.background,
         moderation: effectiveToolOptions?.moderation,
         inputImageMask: effectiveToolOptions?.inputImageMask,
+        webSearch: effectiveImageMode === "chat" ? webSearchEnabled : undefined,
         visibility: effectiveImageMode === "chat" ? "private" : defaultImageVisibility,
         images: Array.from({ length: requestedCount }, (_, index): StoredImage => {
           const imageId = `${turnId}-${index}`;
@@ -5738,6 +5748,24 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                         </SelectContent>
                       </Select>
                     </label>
+                    {editingTurnDraft.mode === "chat" ? (
+                      <button
+                        type="button"
+                        className={cn(
+                          "inline-flex h-10 items-center justify-center gap-2 rounded-md border border-input bg-background px-3 text-sm font-medium text-stone-700 transition hover:bg-accent hover:text-accent-foreground",
+                          editingTurnDraft.webSearch && "border-sky-200 bg-sky-50 text-sky-700 hover:bg-sky-100",
+                        )}
+                        aria-pressed={Boolean(editingTurnDraft.webSearch)}
+                        onClick={() =>
+                          setEditingTurnDraft((current) =>
+                            current ? { ...current, webSearch: !current.webSearch } : current,
+                          )
+                        }
+                      >
+                        <Globe2 className="size-4" />
+                        {editingTurnDraft.webSearch ? "联网搜索已开" : "联网搜索"}
+                      </button>
+                    ) : null}
                     {editingTurnDraft.mode !== "chat" && editingDraftEffectiveSizeSelection ? (
                       <>
                         <div className="rounded-2xl border border-sky-100 bg-sky-50 px-3 py-2 text-xs leading-5 text-sky-900 sm:col-span-2 lg:col-span-4">
@@ -6105,6 +6133,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                   imageBackground={imageBackground}
                   imageModeration={imageModeration}
                   imageMaskUrl={imageMaskUrl}
+                  webSearch={webSearchEnabled}
                   midjourneySettings={midjourneySettings}
                   geminiFlashSettings={geminiFlashSettings}
                   billingBlocked={billingBlocked}
@@ -6128,6 +6157,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                   onImageBackgroundChange={(value) => setImageBackground(normalizeImageBackground(value))}
                   onImageModerationChange={(value) => setImageModeration(normalizeImageModeration(value))}
                   onImageMaskUrlChange={setImageMaskUrl}
+                  onWebSearchChange={setWebSearchEnabled}
                   onMidjourneySettingsChange={(settings) => setMidjourneySettings(normalizeMidjourneySettings(settings))}
                   onGeminiFlashSettingsChange={(settings) => setGeminiFlashSettings(normalizeGeminiFlashSettings(settings))}
                   onSubmit={handleSubmit}

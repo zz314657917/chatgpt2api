@@ -2478,6 +2478,12 @@ func mergeImageTaskMetadata(payload map[string]any, metadata map[string]any) {
 	if settings := util.StringMap(metadata["official_settings"]); len(settings) > 0 {
 		payload["official_settings"] = settings
 	}
+	if util.ToBool(metadata["web_search"]) {
+		payload["web_search"] = true
+		if query := util.Clean(metadata["web_search_query"]); query != "" {
+			payload["web_search_query"] = query
+		}
+	}
 	if settings := util.StringMap(metadata["midjourney_settings"]); len(settings) > 0 {
 		payload["midjourney_settings"] = settings
 	}
@@ -2555,6 +2561,9 @@ func mergePublicImageToolTaskFields(target, source map[string]any) {
 		if value := util.Clean(source[key]); value != "" {
 			target[key] = value
 		}
+	}
+	if util.ToBool(source["web_search"]) {
+		target["web_search"] = true
 	}
 	if util.ToBool(source["professional_mode"]) {
 		target["professional_mode"] = true

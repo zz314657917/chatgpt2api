@@ -5,6 +5,7 @@ import {
   ChevronDown,
   Eraser,
   FolderOpen,
+  Globe2,
   Image as ImageIcon,
   ImagePlus,
   LoaderCircle,
@@ -99,6 +100,7 @@ type ImageComposerProps = {
   imageBackground: string;
   imageModeration: string;
   imageMaskUrl: string;
+  webSearch: boolean;
   midjourneySettings: MidjourneySettingsPayload;
   geminiFlashSettings: GeminiFlashSettingsPayload;
   billingBlocked: boolean;
@@ -122,6 +124,7 @@ type ImageComposerProps = {
   onImageBackgroundChange: (value: string) => void;
   onImageModerationChange: (value: string) => void;
   onImageMaskUrlChange: (value: string) => void;
+  onWebSearchChange: (enabled: boolean) => void;
   onMidjourneySettingsChange: (settings: MidjourneySettingsPayload) => void;
   onGeminiFlashSettingsChange: (settings: GeminiFlashSettingsPayload) => void;
   onSubmit: () => void | Promise<void>;
@@ -368,6 +371,7 @@ export function ImageComposer({
   imageBackground,
   imageModeration,
   imageMaskUrl,
+  webSearch,
   midjourneySettings,
   geminiFlashSettings,
   billingBlocked,
@@ -391,6 +395,7 @@ export function ImageComposer({
   onImageBackgroundChange,
   onImageModerationChange,
   onImageMaskUrlChange,
+  onWebSearchChange,
   onMidjourneySettingsChange,
   onGeminiFlashSettingsChange,
   onSubmit,
@@ -1354,6 +1359,22 @@ export function ImageComposer({
                     </PopoverContent>
                   </Popover>
                   ) : null}
+                {composerMode === "chat" ? (
+                  <button
+                    type="button"
+                    className={cn(
+                      "inline-flex size-9 shrink-0 items-center justify-center gap-1.5 rounded-full text-[#686b73] transition hover:bg-black/[0.05] dark:text-muted-foreground dark:hover:bg-accent/60 dark:hover:text-foreground sm:h-8 sm:w-auto sm:border sm:border-[#e5e7eb] sm:bg-white sm:px-3 sm:text-xs sm:font-medium sm:text-[#45515e] sm:dark:border-border sm:dark:bg-background/70 sm:dark:text-muted-foreground",
+                      webSearch && "bg-[#eef4ff] text-[#1456f0] dark:bg-sky-950/30 dark:text-sky-300 sm:border-[#bfdbfe] sm:bg-[#eef4ff] sm:text-[#1456f0] sm:dark:border-sky-900/70 sm:dark:bg-sky-950/30 sm:dark:text-sky-300",
+                    )}
+                    aria-pressed={webSearch}
+                    aria-label={webSearch ? "关闭联网搜索" : "开启联网搜索"}
+                    title={webSearch ? "联网搜索已开启" : "联网搜索"}
+                    onClick={() => onWebSearchChange(!webSearch)}
+                  >
+                    <Globe2 className="size-5 sm:size-3.5" />
+                    <span className="hidden sm:inline">联网</span>
+                  </button>
+                ) : null}
               </div>
 
               <div className="flex shrink-0 items-center gap-2">

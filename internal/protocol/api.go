@@ -512,15 +512,36 @@ func (e *Engine) HandleChatCompletions(ctx context.Context, body map[string]any)
 	if err != nil {
 		return nil, nil, err
 	}
-	text, err := e.collectTextWithTokenRetry(ctx, ConversationRequest{Model: model, Messages: messages, Tools: body["tools"], ToolChoice: body["tool_choice"]})
+	localTools := localFunctionTools(body["tools"])
+	text, err := e.collectTextWithTokenRetry(ctx, ConversationRequest{Model: model, Messages: messages, Tools: localTools, ToolChoice: body["tool_choice"]})
 	if err != nil {
 		return nil, nil, err
 	}
-	result, err := CompletionResponseWithTools(model, text, 0, messages, body["tools"], body["tool_choice"])
+	result, err := CompletionResponseWithTools(model, text, 0, messages, localTools, body["tool_choice"])
 	if err != nil {
 		return nil, nil, err
 	}
 	return result, nil, nil
+}
+
+func localFunctionTools(tools any) any {
+	items := anyList(tools)
+	if len(items) == 0 {
+		return nil
+	}
+	out := make([]any, 0, len(items))
+	for _, item := range items {
+		tool := util.StringMap(item)
+		toolType := strings.ToLower(strings.TrimSpace(util.Clean(tool["type"])))
+		if toolType != "" && toolType != "function" {
+			continue
+		}
+		out = append(out, item)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func CompletionChunk(model string, delta map[string]any, finishReason any, completionID string, created int64) map[string]any {
@@ -741,11 +762,12 @@ func (e *Engine) StreamTextChatCompletion(ctx context.Context, messages []map[st
 }
 
 func (e *Engine) StreamTextChatCompletionWithTools(ctx context.Context, messages []map[string]any, model string, tools any, choice any) (<-chan map[string]any, <-chan error) {
-	if err := preflightToolChoiceWithoutToolsError(tooladapter.PolicyFromToolChoice(choice), tooladapter.ToolNames(tools)); err != nil {
+	localTools := localFunctionTools(tools)
+	if err := preflightToolChoiceWithoutToolsError(tooladapter.PolicyFromToolChoice(choice), tooladapter.ToolNames(localTools)); err != nil {
 		return streamHTTPError(err)
 	}
-	deltas, errCh := e.streamTextDeltasWithTokenRetry(ctx, ConversationRequest{Model: model, Messages: messages, Tools: tools, ToolChoice: choice})
-	return streamChatCompletionEvents(ctx, model, deltas, errCh, tools, choice)
+	deltas, errCh := e.streamTextDeltasWithTokenRetry(ctx, ConversationRequest{Model: model, Messages: messages, Tools: localTools, ToolChoice: choice})
+	return streamChatCompletionEvents(ctx, model, deltas, errCh, localTools, choice)
 }
 
 func (e *Engine) StreamVisionChatCompletion(ctx context.Context, messages []map[string]any, model string, images []UploadedImage) (<-chan map[string]any, <-chan error) {
@@ -753,7 +775,8 @@ func (e *Engine) StreamVisionChatCompletion(ctx context.Context, messages []map[
 }
 
 func (e *Engine) StreamVisionChatCompletionWithTools(ctx context.Context, messages []map[string]any, model string, images []UploadedImage, tools any, choice any) (<-chan map[string]any, <-chan error) {
-	if err := preflightToolChoiceWithoutToolsError(tooladapter.PolicyFromToolChoice(choice), tooladapter.ToolNames(tools)); err != nil {
+	localTools := localFunctionTools(tools)
+	if err := preflightToolChoiceWithoutToolsError(tooladapter.PolicyFromToolChoice(choice), tooladapter.ToolNames(localTools)); err != nil {
 		return streamHTTPError(err)
 	}
 	visionImages := make([]backend.VisionImage, len(images))
@@ -765,7 +788,7 @@ func (e *Engine) StreamVisionChatCompletionWithTools(ctx context.Context, messag
 		}
 	}
 	deltas, errCh := e.streamVisionDeltasWithTokenRetry(ctx, messages, model, visionImages)
-	return streamChatCompletionEvents(ctx, model, deltas, errCh, tools, choice)
+	return streamChatCompletionEvents(ctx, model, deltas, errCh, localTools, choice)
 }
 
 func (e *Engine) VisionChatResponse(ctx context.Context, body map[string]any, model string, messages []map[string]any, images []UploadedImage) (map[string]any, error) {
