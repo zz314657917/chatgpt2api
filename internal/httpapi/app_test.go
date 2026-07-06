@@ -8689,6 +8689,7 @@ func TestLuoyeIndependentSub2APIDefaultGroupAndBilling(t *testing.T) {
 	var generationGroupHeader string
 	var generationUserHeader string
 	var reserveAmount any
+	var commitPayload map[string]any
 	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("X-Sub2API-Studio-Secret") != "secret" {
 			t.Fatalf("gateway secret header = %q", r.Header.Get("X-Sub2API-Studio-Secret"))
@@ -8730,6 +8731,9 @@ func TestLuoyeIndependentSub2APIDefaultGroupAndBilling(t *testing.T) {
 			call := strings.TrimPrefix(r.URL.Path, "/internal/charges/")
 			if call == "reserve" {
 				reserveAmount = payload["amount"]
+			}
+			if call == "commit" {
+				commitPayload = util.CopyMap(payload)
 			}
 			calls = append(calls, call)
 			util.WriteJSON(w, http.StatusOK, map[string]any{"code": 0, "data": map[string]any{"ok": true}})
@@ -8787,6 +8791,9 @@ func TestLuoyeIndependentSub2APIDefaultGroupAndBilling(t *testing.T) {
 	}
 	if !reflect.DeepEqual(calls, []string{"reserve", "commit"}) {
 		t.Fatalf("billing calls = %#v", calls)
+	}
+	if util.ToInt(commitPayload["image_count"], 0) != 1 || commitPayload["image_size"] != "2K" || commitPayload["image_size_source"] != "default" {
+		t.Fatalf("commit image metadata = %#v", commitPayload)
 	}
 }
 

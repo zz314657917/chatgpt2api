@@ -1,6 +1,7 @@
 package service
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
@@ -168,7 +169,12 @@ func TestSub2APIBindingFromRedeemBodyRequiresEmail(t *testing.T) {
 func TestSub2APIChargePayloadUsesRawAmount(t *testing.T) {
 	svc := &Sub2APILaunchService{}
 
-	payload := svc.chargePayload("sub2api:42", "sub2api:99", "team-1", "task-1", "generate", "gpt-image-2", "charge-1", 0.05, "apimart_cost")
+	payload := svc.chargePayload("sub2api:42", "sub2api:99", "team-1", "task-1", "generate", "gpt-image-2", "charge-1", 0.05, "apimart_cost", map[string]any{
+		"image_count":          4,
+		"image_size":           "1K",
+		"image_size_source":    "input",
+		"image_size_breakdown": map[string]any{"1K": 4},
+	})
 
 	if got := payload["amount"]; got != 0.05 {
 		t.Fatalf("payload amount = %#v, want 0.05", got)
@@ -179,8 +185,14 @@ func TestSub2APIChargePayloadUsesRawAmount(t *testing.T) {
 	if payload["task_id"] != "task-1" || payload["mode"] != "generate" || payload["model"] != "gpt-image-2" || payload["actor_user_id"] != "sub2api:99" || payload["team_id"] != "team-1" {
 		t.Fatalf("payload missing structured metadata: %#v", payload)
 	}
+	if payload["image_count"] != 4 || payload["image_size"] != "1K" || payload["image_size_source"] != "input" {
+		t.Fatalf("payload missing image metadata: %#v", payload)
+	}
+	if got := payload["image_size_breakdown"]; !reflect.DeepEqual(got, map[string]int{"1K": 4}) {
+		t.Fatalf("payload image_size_breakdown = %#v, want 1K:4", got)
+	}
 
-	payload = svc.chargePayload("sub2api:42", "", "", "task-2", "generate", "dall-e-3", "charge-2", 0.5, "")
+	payload = svc.chargePayload("sub2api:42", "", "", "task-2", "generate", "dall-e-3", "charge-2", 0.5, "", nil)
 	if _, ok := payload["amount_unit"]; ok {
 		t.Fatalf("payload should omit empty amount_unit: %#v", payload)
 	}

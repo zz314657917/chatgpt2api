@@ -1771,25 +1771,107 @@ func (a *App) ReserveTask(ctx context.Context, identity service.Identity, task m
 	if a == nil || a.sub2Launch == nil || amount <= 0 {
 		return nil
 	}
-	return a.sub2Launch.Reserve(ctx, taskPayerUserID(task, identity), taskActorUserID(task, identity), util.Clean(task["team_id"]), util.Clean(task["id"]), util.Clean(task["mode"]), taskBillingModel(task, ref), ref.ChargeKey, amount, ref.AmountUnit)
+	return a.sub2Launch.Reserve(ctx, taskPayerUserID(task, identity), taskActorUserID(task, identity), util.Clean(task["team_id"]), util.Clean(task["id"]), util.Clean(task["mode"]), taskBillingModel(task, ref), ref.ChargeKey, amount, ref.AmountUnit, taskBillingMetadata(task, ref))
 }
 
 func (a *App) CommitTask(ctx context.Context, identity service.Identity, task map[string]any, consumed float64, ref service.BillingReference) error {
 	if a == nil || a.sub2Launch == nil || consumed <= 0 {
 		return nil
 	}
-	return a.sub2Launch.Commit(ctx, taskPayerUserID(task, identity), taskActorUserID(task, identity), util.Clean(task["team_id"]), util.Clean(task["id"]), util.Clean(task["mode"]), taskBillingModel(task, ref), ref.ChargeKey, consumed, ref.AmountUnit)
+	return a.sub2Launch.Commit(ctx, taskPayerUserID(task, identity), taskActorUserID(task, identity), util.Clean(task["team_id"]), util.Clean(task["id"]), util.Clean(task["mode"]), taskBillingModel(task, ref), ref.ChargeKey, consumed, ref.AmountUnit, taskBillingMetadata(task, ref))
 }
 
 func (a *App) RefundTask(ctx context.Context, identity service.Identity, task map[string]any, amount float64, ref service.BillingReference) error {
 	if a == nil || a.sub2Launch == nil || amount <= 0 {
 		return nil
 	}
-	return a.sub2Launch.Refund(ctx, taskPayerUserID(task, identity), taskActorUserID(task, identity), util.Clean(task["team_id"]), util.Clean(task["id"]), util.Clean(task["mode"]), taskBillingModel(task, ref), ref.ChargeKey, ref.RefundForKey, amount, ref.AmountUnit)
+	return a.sub2Launch.Refund(ctx, taskPayerUserID(task, identity), taskActorUserID(task, identity), util.Clean(task["team_id"]), util.Clean(task["id"]), util.Clean(task["mode"]), taskBillingModel(task, ref), ref.ChargeKey, ref.RefundForKey, amount, ref.AmountUnit, taskBillingMetadata(task, ref))
 }
 
 func taskBillingModel(task map[string]any, ref service.BillingReference) string {
 	return firstNonEmpty(util.Clean(ref.Model), util.Clean(task["model"]))
+}
+
+func taskBillingMetadata(task map[string]any, ref service.BillingReference) map[string]any {
+	metadata := util.CopyMap(ref.Metadata)
+	if metadata == nil {
+		metadata = map[string]any{}
+	}
+	if !isImageBillingMetadataTask(task) {
+		return metadata
+	}
+	if count := util.ToInt(task["count"], 0); count > 0 && metadata["image_count"] == nil {
+		metadata["image_count"] = count
+	}
+	if _, exists := metadata["image_size"]; !exists {
+		if size := taskImageBillingSize(task); size != "" {
+			metadata["image_size"] = size
+		}
+	}
+	if _, exists := metadata["image_size_source"]; !exists {
+		if _, ok := metadata["image_size"]; ok {
+			metadata["image_size_source"] = taskImageBillingSizeSource(task)
+		}
+	}
+	if _, exists := metadata["image_size_breakdown"]; !exists {
+		if count := util.ToInt(metadata["image_count"], 0); count > 0 {
+			if size := util.Clean(metadata["image_size"]); size != "" {
+				metadata["image_size_breakdown"] = map[string]int{size: count}
+			}
+		}
+	}
+	return metadata
+}
+
+func isImageBillingMetadataTask(task map[string]any) bool {
+	switch util.Clean(task["mode"]) {
+	case "generate", "edit":
+		return true
+	default:
+		return false
+	}
+}
+
+func taskImageBillingSize(task map[string]any) string {
+	if task == nil {
+		return ""
+	}
+	switch service.NormalizeImageResolutionPreset(util.Clean(task["image_resolution"])) {
+	case "2k":
+		return "2K"
+	case "4k":
+		return "4K"
+	}
+	if size := util.Clean(task["requested_size"]); size != "" {
+		return normalizeSub2APIBridgeImageSize(size)
+	}
+	if size := util.Clean(task["size"]); size != "" {
+		return normalizeSub2APIBridgeImageSize(size)
+	}
+	return "2K"
+}
+
+func taskImageBillingSizeSource(task map[string]any) string {
+	if task == nil {
+		return ""
+	}
+	if service.NormalizeImageResolutionPreset(util.Clean(task["image_resolution"])) != "" || util.Clean(task["requested_size"]) != "" || util.Clean(task["size"]) != "" {
+		return "input"
+	}
+	return "default"
+}
+
+func normalizeSub2APIBridgeImageSize(size string) string {
+	switch strings.ToLower(strings.TrimSpace(size)) {
+	case "1k", "1024x1024", "512x512", "128x128", "64x64", "32x32", "16x16", "8x8":
+		return "1K"
+	case "2k", "2048x2048", "2048x1152", "1536x864", "864x1536":
+		return "2K"
+	case "4k", "3840x2160", "2160x3840":
+		return "4K"
+	default:
+		return strings.TrimSpace(size)
+	}
 }
 
 func taskPayerUserID(task map[string]any, identity service.Identity) string {

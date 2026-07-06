@@ -44,6 +44,7 @@ type BillingReference struct {
 	OutputIndex    int
 	Amount         float64
 	AmountUnit     string
+	Metadata       map[string]any
 }
 
 type BillingChargeResult struct {

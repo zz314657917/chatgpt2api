@@ -466,30 +466,30 @@ func sub2APIUsageAmount(item map[string]any) (any, bool) {
 	return nil, false
 }
 
-func (s *Sub2APILaunchService) Reserve(ctx context.Context, payerUserID, actorUserID, teamID, taskID, mode, model, chargeKey string, amount float64, amountUnit string) error {
+func (s *Sub2APILaunchService) Reserve(ctx context.Context, payerUserID, actorUserID, teamID, taskID, mode, model, chargeKey string, amount float64, amountUnit string, metadata map[string]any) error {
 	if amount <= 0 {
 		return nil
 	}
-	_, err := s.postSub2APIInternal(ctx, "charges/reserve", s.chargePayload(payerUserID, actorUserID, teamID, taskID, mode, model, chargeKey, amount, amountUnit))
+	_, err := s.postSub2APIInternal(ctx, "charges/reserve", s.chargePayload(payerUserID, actorUserID, teamID, taskID, mode, model, chargeKey, amount, amountUnit, metadata))
 	return err
 }
 
-func (s *Sub2APILaunchService) Commit(ctx context.Context, payerUserID, actorUserID, teamID, taskID, mode, model, chargeKey string, amount float64, amountUnit string) error {
+func (s *Sub2APILaunchService) Commit(ctx context.Context, payerUserID, actorUserID, teamID, taskID, mode, model, chargeKey string, amount float64, amountUnit string, metadata map[string]any) error {
 	if amount <= 0 {
 		return nil
 	}
-	_, err := s.postSub2APIInternal(ctx, "charges/commit", s.chargePayload(payerUserID, actorUserID, teamID, taskID, mode, model, chargeKey, amount, amountUnit))
+	_, err := s.postSub2APIInternal(ctx, "charges/commit", s.chargePayload(payerUserID, actorUserID, teamID, taskID, mode, model, chargeKey, amount, amountUnit, metadata))
 	return err
 }
 
-func (s *Sub2APILaunchService) Refund(ctx context.Context, payerUserID, actorUserID, teamID, taskID, mode, model, chargeKey, refundForKey string, amount float64, amountUnit string) error {
+func (s *Sub2APILaunchService) Refund(ctx context.Context, payerUserID, actorUserID, teamID, taskID, mode, model, chargeKey, refundForKey string, amount float64, amountUnit string, metadata map[string]any) error {
 	if amount <= 0 {
 		return nil
 	}
 	if chargeKey == "" {
 		chargeKey = refundForKey
 	}
-	payload := s.chargePayload(payerUserID, actorUserID, teamID, taskID, mode, model, chargeKey, amount, amountUnit)
+	payload := s.chargePayload(payerUserID, actorUserID, teamID, taskID, mode, model, chargeKey, amount, amountUnit, metadata)
 	if refundForKey = util.Clean(refundForKey); refundForKey != "" {
 		payload["refund_for_charge_key"] = refundForKey
 	}
@@ -554,7 +554,7 @@ func (s *Sub2APILaunchService) userSummary(ctx context.Context, binding Sub2APIB
 	})
 }
 
-func (s *Sub2APILaunchService) chargePayload(payerUserID, actorUserID, teamID, taskID, mode, model, chargeKey string, amount float64, amountUnit string) map[string]any {
+func (s *Sub2APILaunchService) chargePayload(payerUserID, actorUserID, teamID, taskID, mode, model, chargeKey string, amount float64, amountUnit string, metadata map[string]any) map[string]any {
 	userID, _ := strconv.ParseInt(strings.TrimPrefix(strings.TrimSpace(payerUserID), "sub2api:"), 10, 64)
 	taskID = util.Clean(taskID)
 	mode = util.Clean(mode)
@@ -588,7 +588,36 @@ func (s *Sub2APILaunchService) chargePayload(payerUserID, actorUserID, teamID, t
 	if amountUnit != "" {
 		payload["amount_unit"] = amountUnit
 	}
+	mergeSub2APIChargeMetadata(payload, metadata)
 	return payload
+}
+
+func mergeSub2APIChargeMetadata(payload map[string]any, metadata map[string]any) {
+	if payload == nil || len(metadata) == 0 {
+		return
+	}
+	if count := util.ToInt(metadata["image_count"], 0); count > 0 {
+		payload["image_count"] = count
+	}
+	if size := util.Clean(metadata["image_size"]); size != "" {
+		payload["image_size"] = size
+	}
+	if source := util.Clean(metadata["image_size_source"]); source != "" {
+		payload["image_size_source"] = source
+	}
+	if breakdown := util.StringMap(metadata["image_size_breakdown"]); len(breakdown) > 0 {
+		cleaned := map[string]int{}
+		for key, value := range breakdown {
+			name := util.Clean(key)
+			count := util.ToInt(value, 0)
+			if name != "" && count > 0 {
+				cleaned[name] = count
+			}
+		}
+		if len(cleaned) > 0 {
+			payload["image_size_breakdown"] = cleaned
+		}
+	}
 }
 
 func (s *Sub2APILaunchService) postSub2APIInternal(ctx context.Context, endpoint string, payload map[string]any) (map[string]any, error) {

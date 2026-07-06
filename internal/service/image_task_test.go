@@ -503,6 +503,139 @@ func TestImageTaskServiceAutoImageModelUsesResolvedBridgeCostModel(t *testing.T)
 	}
 }
 
+func TestImageTaskServiceRepairDiagnosticsRetriesPendingExternalBilling(t *testing.T) {
+	handler := func(context.Context, Identity, map[string]any) (map[string]any, error) {
+		return map[string]any{"data": []map[string]any{{"url": "https://example.test/image.png"}}}, nil
+	}
+	svc := newTestImageTaskService(t, handler, handler, handler, func() int { return 30 })
+	billing := &recordingExternalTaskBilling{commitFailures: 1}
+	svc.SetExternalBilling(billing)
+	identity := Identity{ID: "sub2api:42", OwnerID: "sub2api:42", Role: AuthRoleUser, Provider: AuthProviderSub2API}
+
+	_, err := svc.SubmitGeneration(context.Background(), identity, "pending-bridge-commit", "draw", util.ImageModelGPT, "1024x1024", "high", "https://base.test", 1, nil)
+	if err != nil {
+		t.Fatalf("SubmitGeneration() error = %v", err)
+	}
+	waitForTaskStatus(t, svc, identity, "pending-bridge-commit", TaskStatusSuccess)
+	waitForExternalCommitAttempts(t, billing, 1)
+
+	got := svc.ListTasks(identity, []string{"pending-bridge-commit"})
+	item := got["items"].([]map[string]any)[0]
+	if util.ToInt(item["billing_consumed_amount"], -1) != -1 || util.ToInt(item[imageTaskBillingChargedAmountKey], 0) != 51 {
+		t.Fatalf("task should remain pending billing after failed commit: %#v", item)
+	}
+	summary := svc.DiagnosticsSummary()
+	if summary.PendingBillingTasks != 1 || len(summary.SuspiciousTasks) != 1 || !summary.SuspiciousTasks[0].PendingBilling {
+		t.Fatalf("diagnostics summary = %#v", summary)
+	}
+
+	result := svc.RepairDiagnostics(ImageTaskRepairOptions{})
+	if result.RetriedBillingSettlements != 1 || result.SettledBillingSettlements != 1 || result.After.PendingBillingTasks != 0 {
+		t.Fatalf("repair diagnostics result = %#v", result)
+	}
+	got = svc.ListTasks(identity, []string{"pending-bridge-commit"})
+	item = got["items"].([]map[string]any)[0]
+	if util.ToInt(item["billing_consumed_amount"], -1) != 51 {
+		t.Fatalf("task should be settled after repair: %#v", item)
+	}
+	if !reflect.DeepEqual(billing.calls, []string{"reserve", "commit", "commit"}) {
+		t.Fatalf("external billing calls = %#v", billing.calls)
+	}
+}
+
+func TestImageTaskServiceDiagnosticsDetectsLegacyPendingBillingChargeKey(t *testing.T) {
+	svc := newTestImageTaskService(t, failingImageTaskHandler, failingImageTaskHandler, failingImageTaskHandler, func() int { return 30 })
+	billing := &recordingExternalTaskBilling{}
+	svc.SetExternalBilling(billing)
+	identity := Identity{ID: "sub2api:42", OwnerID: "sub2api:42", Role: AuthRoleUser, Provider: AuthProviderSub2API}
+	taskID := "legacy-pending-bridge-commit"
+
+	svc.mu.Lock()
+	svc.tasks[taskKey(ownerID(identity), taskID)] = map[string]any{
+		"id":                          taskID,
+		"owner_id":                    ownerID(identity),
+		"status":                      TaskStatusSuccess,
+		"mode":                        "generate",
+		"model":                       util.ImageModelGPT,
+		"size":                        "1024x1024",
+		"quality":                     "high",
+		"count":                       1,
+		"data":                        []map[string]any{{"url": "https://example.test/image.png"}},
+		imageTaskBillingProviderKey:   AuthProviderSub2API,
+		imageTaskBillingChargeKey:     imageTaskBillingChargeKeyFor(ownerID(identity), taskID, "precharge"),
+		imageTaskBillingUnitAmountKey: 51,
+		"created_at":                  util.NowLocal(),
+		"updated_at":                  util.NowLocal(),
+	}
+	_ = svc.saveLocked()
+	svc.mu.Unlock()
+
+	summary := svc.DiagnosticsSummary()
+	if summary.PendingBillingTasks != 1 {
+		t.Fatalf("diagnostics summary = %#v", summary)
+	}
+	result := svc.RepairDiagnostics(ImageTaskRepairOptions{})
+	if result.RetriedBillingSettlements != 1 || result.SettledBillingSettlements != 1 || billing.commitAmount != 0.051 {
+		t.Fatalf("repair result = %#v billing=%#v", result, billing)
+	}
+	got := svc.ListTasks(identity, []string{taskID})
+	item := got["items"].([]map[string]any)[0]
+	if util.ToInt(item["billing_consumed_amount"], -1) != 51 {
+		t.Fatalf("legacy pending task should be settled: %#v", item)
+	}
+}
+
+func TestImageTaskServiceRepairDiagnosticsCanTargetPendingBillingIDs(t *testing.T) {
+	svc := newTestImageTaskService(t, failingImageTaskHandler, failingImageTaskHandler, failingImageTaskHandler, func() int { return 30 })
+	billing := &recordingExternalTaskBilling{}
+	svc.SetExternalBilling(billing)
+	identity := Identity{ID: "sub2api:42", OwnerID: "sub2api:42", Role: AuthRoleUser, Provider: AuthProviderSub2API}
+
+	for _, taskID := range []string{"target-pending", "other-pending"} {
+		svc.mu.Lock()
+		svc.tasks[taskKey(ownerID(identity), taskID)] = map[string]any{
+			"id":                              taskID,
+			"owner_id":                        ownerID(identity),
+			"status":                          TaskStatusSuccess,
+			"mode":                            "generate",
+			"model":                           util.ImageModelGPT,
+			"size":                            "1024x1024",
+			"quality":                         "high",
+			"count":                           1,
+			"data":                            []map[string]any{{"url": "https://example.test/image.png"}},
+			imageTaskBillingProviderKey:       AuthProviderSub2API,
+			imageTaskBillingChargedAmountKey:  51,
+			imageTaskBillingChargeKey:         imageTaskBillingChargeKeyFor(ownerID(identity), taskID, "precharge"),
+			imageTaskBillingUnitAmountKey:     51,
+			imageTaskExternalChargedAmountKey: 0.051,
+			imageTaskExternalChargedUnitKey:   imageTaskExternalAmountUnitBalance,
+			"created_at":                      util.NowLocal(),
+			"updated_at":                      util.NowLocal(),
+		}
+		_ = svc.saveLocked()
+		svc.mu.Unlock()
+	}
+
+	result := svc.RepairDiagnostics(ImageTaskRepairOptions{TaskIDs: []string{"target-pending"}})
+	if result.RetriedBillingSettlements != 1 || result.SettledBillingSettlements != 1 || result.After.PendingBillingTasks != 1 {
+		t.Fatalf("targeted repair result = %#v", result)
+	}
+	got := svc.ListTasks(identity, []string{"target-pending", "other-pending"})
+	items := got["items"].([]map[string]any)
+	for _, item := range items {
+		switch item["id"] {
+		case "target-pending":
+			if util.ToInt(item["billing_consumed_amount"], -1) != 51 {
+				t.Fatalf("target task should be settled: %#v", item)
+			}
+		case "other-pending":
+			if util.ToInt(item["billing_consumed_amount"], -1) != -1 {
+				t.Fatalf("other task should remain pending: %#v", item)
+			}
+		}
+	}
+}
+
 func TestImageTaskServiceRejectsBlankPromptBeforeQueueing(t *testing.T) {
 	svc := newTestImageTaskService(t, failingImageTaskHandler, failingImageTaskHandler, failingImageTaskHandler, func() int { return 30 })
 	identity := Identity{ID: "alice", Name: "Alice", Role: "user"}
@@ -1602,7 +1735,7 @@ func TestImageTaskServiceBillingSuccessFailureCancelAndTextOutput(t *testing.T) 
 		svc.mu.Unlock()
 
 		result := svc.RepairDiagnostics(ImageTaskRepairOptions{FinalizeActive: true, StaleThreshold: 10 * time.Minute})
-		if result.FinalizedActiveTasks != 1 || result.SkippedActiveTasks != 0 {
+		if result.FinalizedActiveTasks != 1 || result.SkippedActiveTasks != 0 || result.RetriedBillingSettlements != 1 || result.SettledBillingSettlements != 1 {
 			t.Fatalf("repair diagnostics result = %#v", result)
 		}
 		got := svc.ListTasks(user, []string{"diagnostics-finalize"})
@@ -2194,6 +2327,7 @@ type recordingExternalTaskBilling struct {
 	commitModel    string
 	commitUnit     string
 	commitTask     map[string]any
+	commitFailures int
 }
 
 func (b *recordingExternalTaskBilling) ReserveTask(_ context.Context, _ Identity, _ map[string]any, amount float64, ref BillingReference) error {
@@ -2207,6 +2341,10 @@ func (b *recordingExternalTaskBilling) ReserveTask(_ context.Context, _ Identity
 
 func (b *recordingExternalTaskBilling) CommitTask(_ context.Context, _ Identity, task map[string]any, amount float64, ref BillingReference) error {
 	b.calls = append(b.calls, "commit")
+	if b.commitFailures > 0 {
+		b.commitFailures--
+		return errors.New("forced commit failure")
+	}
 	b.commitAmount = amount
 	b.commitAmounts = append(b.commitAmounts, amount)
 	b.commitModel = ref.Model
@@ -2273,6 +2411,24 @@ func waitForTaskBillingConsumed(t *testing.T, svc *ImageTaskService, identity Id
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("task %s did not settle billing_consumed_amount=%d", taskID, want)
+}
+
+func waitForExternalCommitAttempts(t *testing.T, billing *recordingExternalTaskBilling, want int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		count := 0
+		for _, call := range billing.calls {
+			if call == "commit" {
+				count++
+			}
+		}
+		if count >= want {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("external commit attempts = %#v, want at least %d", billing.calls, want)
 }
 
 func waitForTaskData(t *testing.T, svc *ImageTaskService, identity Identity, taskID string, ok func([]map[string]any) bool) {

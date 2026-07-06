@@ -1702,6 +1702,7 @@ func (a *App) handleCreationTaskDiagnostics(w http.ResponseWriter, r *http.Reque
 		result := a.tasks.RepairDiagnostics(service.ImageTaskRepairOptions{
 			FinalizeActive: util.ToBool(body["finalize_active"]),
 			StaleThreshold: staleThreshold,
+			TaskIDs:        creationTaskDiagnosticsRepairIDs(body, r),
 		})
 		util.WriteJSON(w, http.StatusOK, map[string]any{
 			"repair":      result,
@@ -1710,6 +1711,37 @@ func (a *App) handleCreationTaskDiagnostics(w http.ResponseWriter, r *http.Reque
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
+}
+
+func creationTaskDiagnosticsRepairIDs(body map[string]any, r *http.Request) []string {
+	var ids []string
+	ids = appendCreationTaskDiagnosticsRepairIDValue(ids, body["ids"])
+	ids = appendCreationTaskDiagnosticsRepairIDValue(ids, body["task_ids"])
+	if r != nil && r.URL != nil {
+		ids = appendCreationTaskDiagnosticsRepairIDs(ids, r.URL.Query().Get("ids"))
+		ids = appendCreationTaskDiagnosticsRepairIDs(ids, r.URL.Query().Get("task_ids"))
+	}
+	return ids
+}
+
+func appendCreationTaskDiagnosticsRepairIDValue(ids []string, value any) []string {
+	if text := util.Clean(value); text != "" {
+		return appendCreationTaskDiagnosticsRepairIDs(ids, text)
+	}
+	for _, item := range util.AsStringSlice(value) {
+		ids = appendCreationTaskDiagnosticsRepairIDs(ids, item)
+	}
+	return ids
+}
+
+func appendCreationTaskDiagnosticsRepairIDs(ids []string, value string) []string {
+	for _, part := range strings.Split(value, ",") {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			ids = append(ids, part)
+		}
+	}
+	return ids
 }
 
 func imageTaskRequestMetadata(body map[string]any) map[string]any {
