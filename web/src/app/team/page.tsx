@@ -545,6 +545,8 @@ function MembersTable({
 }) {
   const members = team?.members || [];
   const canManageMembers = team?.member_role === "owner" || team?.member_role === "manager";
+  const canViewRemarks = canManageMembers;
+  const emptyColSpan = canViewRemarks ? 6 : 5;
   const isOwnerView = team?.member_role === "owner";
   const isManagerView = team?.member_role === "manager";
   return (
@@ -553,7 +555,7 @@ function MembersTable({
         <TableHeader className={stickyTableHeaderClassName}>
           <TableRow>
             <TableHead>成员信息</TableHead>
-            <TableHead>备注</TableHead>
+            {canViewRemarks ? <TableHead>备注</TableHead> : null}
             <TableHead>身份</TableHead>
             <TableHead>每日额度</TableHead>
             <TableHead>加入时间</TableHead>
@@ -563,7 +565,7 @@ function MembersTable({
         <TableBody>
           {members.length === 0 ? (
             <TableRow>
-              <TableCell colSpan={6} className="h-28 text-center text-muted-foreground">暂无团队成员</TableCell>
+              <TableCell colSpan={emptyColSpan} className="h-28 text-center text-muted-foreground">暂无团队成员</TableCell>
             </TableRow>
           ) : members.map((member) => {
             const owner = member.role === "owner";
@@ -578,18 +580,20 @@ function MembersTable({
                   <div className="font-medium text-foreground">{displayName}</div>
                   {detailText ? <div className="text-xs text-muted-foreground">{detailText}</div> : null}
                 </TableCell>
-                <TableCell>
-                  {!canEditMember ? (
-                    <span className="text-muted-foreground">{member.remark || "--"}</span>
-                  ) : (
-                    <RemarkControl
-                      member={member}
-                      disabled={pending?.type === "remark" && pending.id === member.user_id}
-                      pending={pending?.type === "remark" && pending.id === member.user_id}
-                      onSave={onRemarkChange}
-                    />
-                  )}
-                </TableCell>
+                {canViewRemarks ? (
+                  <TableCell>
+                    {!canEditMember ? (
+                      <span className="text-muted-foreground">{member.remark || "--"}</span>
+                    ) : (
+                      <RemarkControl
+                        member={member}
+                        disabled={pending?.type === "remark" && pending.id === member.user_id}
+                        pending={pending?.type === "remark" && pending.id === member.user_id}
+                        onSave={onRemarkChange}
+                      />
+                    )}
+                  </TableCell>
+                ) : null}
                 <TableCell>
                   {!canEditMember ? (
                     <Badge variant={roleBadgeVariant(member.role)} className="rounded-md">{roleLabel(member.role)}</Badge>

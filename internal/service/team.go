@@ -982,13 +982,18 @@ func publicTeamForActor(team map[string]any, actor string) map[string]any {
 
 func (s *TeamService) publicTeamForActorLocked(team map[string]any, actor string) map[string]any {
 	out := publicTeamForActor(team, actor)
+	role := normalizeTeamMemberRole(util.Clean(out["member_role"]))
+	canViewRemarks := role == TeamRoleOwner || role == TeamRoleManager
 	if members := util.AsMapSlice(out["members"]); len(members) > 0 {
 		for _, member := range members {
 			member["name"] = firstNonEmpty(s.memberDisplayNameLocked(member), util.Clean(member["user_id"]))
+			if !canViewRemarks {
+				delete(member, "remark")
+			}
 		}
 		out["members"] = members
 	}
-	if normalizeTeamMemberRole(util.Clean(out["member_role"])) != TeamRoleOwner {
+	if role != TeamRoleOwner {
 		return out
 	}
 	invites := make([]map[string]any, 0)

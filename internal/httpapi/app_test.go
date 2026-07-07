@@ -9915,6 +9915,27 @@ func TestTeamMemberRemarkAndDisplayName(t *testing.T) {
 	if !foundName {
 		t.Fatalf("member display name or remark not refreshed: %#v", teams[0])
 	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/teams", nil)
+	req.Header.Set("Authorization", "Bearer "+memberSession)
+	res = httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("member teams status = %d body = %s", res.Code, res.Body.String())
+	}
+	var memberWorkspace map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &memberWorkspace); err != nil {
+		t.Fatalf("member teams json: %v", err)
+	}
+	memberTeams := util.AsMapSlice(memberWorkspace["teams"])
+	if len(memberTeams) != 1 {
+		t.Fatalf("member teams = %#v", memberWorkspace)
+	}
+	for _, item := range util.AsMapSlice(memberTeams[0]["members"]) {
+		if _, ok := item["remark"]; ok {
+			t.Fatalf("member response should not expose remark: %#v", memberTeams[0])
+		}
+	}
 }
 
 func TestTeamMembersCanLeaveButOwnerCannot(t *testing.T) {
