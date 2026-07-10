@@ -1419,6 +1419,8 @@ func (s *ImageTaskService) pendingTaskBillingSettlement(key string) (imageTaskBi
 	externalCharged := imageTaskFloat(task[imageTaskExternalChargedAmountKey])
 	externalChargeUnit := imageTaskStoredExternalChargeUnit(task)
 	provider := util.Clean(task[imageTaskBillingProviderKey])
+	model := firstNonEmpty(util.Clean(task["model"]), util.ImageModelAuto)
+	externalModel := firstNonEmpty(util.Clean(task[imageTaskExternalModelKey]), model)
 	if provider == AuthProviderSub2API && externalCharged <= 0 {
 		if charged <= 0 {
 			charged = imageTaskEstimatedChargedAmount(task)
@@ -1444,8 +1446,13 @@ func (s *ImageTaskService) pendingTaskBillingSettlement(key string) (imageTaskBi
 		}
 	}
 	externalConsumed := 0.0
+	externalConsumedUnit := imageTaskNormalizeAmountUnit(util.Clean(task[imageTaskExternalAmountUnitKey]))
 	if task["status"] == TaskStatusSuccess {
 		externalConsumed = imageTaskFloat(task[imageTaskExternalConsumedAmountKey])
+		if !imageTaskShouldApplyCostOverride(externalModel, externalConsumedUnit) {
+			externalConsumed = 0
+			externalConsumedUnit = ""
+		}
 		if externalConsumed <= 0 {
 			externalConsumed = float64(billableTaskOutputCount(task)) * imageTaskFloat(task[imageTaskExternalUnitAmountKey])
 		}
@@ -1453,15 +1460,12 @@ func (s *ImageTaskService) pendingTaskBillingSettlement(key string) (imageTaskBi
 			externalConsumed = float64(consumed) / 1000
 		}
 	}
-	externalConsumedUnit := imageTaskNormalizeAmountUnit(util.Clean(task[imageTaskExternalAmountUnitKey]))
 	externalChargedBalance := imageTaskExternalBalanceAmount(externalCharged, externalChargeUnit)
 	externalConsumedBalance := imageTaskExternalBalanceAmount(externalConsumed, externalConsumedUnit)
 	externalRefundBalance := maxImageTaskFloat(0, externalChargedBalance-externalConsumedBalance)
 	externalSurchargeBalance := maxImageTaskFloat(0, externalConsumedBalance-externalChargedBalance)
 	owner := util.Clean(task["owner_id"])
 	taskID := util.Clean(task["id"])
-	model := firstNonEmpty(util.Clean(task["model"]), util.ImageModelAuto)
-	externalModel := firstNonEmpty(util.Clean(task[imageTaskExternalModelKey]), model)
 	chargeKey := util.Clean(task[imageTaskBillingChargeKey])
 	if chargeKey == "" && charged > 0 {
 		chargeKey = imageTaskBillingChargeKeyFor(owner, taskID, "precharge")
@@ -1498,8 +1502,11 @@ func (s *ImageTaskService) finishTaskBillingSettlement(key string, consumed int)
 	}
 	if externalConsumed := imageTaskFloat(task[imageTaskExternalConsumedAmountKey]); externalConsumed > 0 {
 		unit := imageTaskNormalizeAmountUnit(util.Clean(task[imageTaskExternalAmountUnitKey]))
-		if amount := imageTaskCostToBillingAmount(externalConsumed, unit); amount > 0 {
-			consumed = amount
+		model := firstNonEmpty(util.Clean(task[imageTaskExternalModelKey]), util.Clean(task["model"]), util.ImageModelAuto)
+		if imageTaskShouldApplyCostOverride(model, unit) {
+			if amount := imageTaskCostToBillingAmount(externalConsumed, unit); amount > 0 {
+				consumed = amount
+			}
 		}
 	}
 	delete(task, imageTaskBillingChargedAmountKey)
@@ -2086,6 +2093,11 @@ func imageTaskNormalizeAmountUnit(unit string) string {
 	default:
 		return ""
 	}
+}
+
+func imageTaskShouldApplyCostOverride(model, unit string) bool {
+	return imageTaskNormalizeAmountUnit(unit) != imageTaskAmountUnitAPIMartCost ||
+		!strings.EqualFold(strings.TrimSpace(model), util.ImageModelGPT)
 }
 
 func imageTaskStoredExternalChargeUnit(task map[string]any) string {

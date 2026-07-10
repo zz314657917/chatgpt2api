@@ -21,3 +21,5 @@
 260616 13:46 | task-011-ecommerce-production-acceptance | build-complete | codex | docs/workflow/worker-results/task-011-ecommerce-production-acceptance-result.md
 260616 13:46 | task-011-ecommerce-production-acceptance | qa-pass | codex | docs/workflow/qa-reports/task-011-ecommerce-production-acceptance-qa.md
 260616 17:27 | task-011-ecommerce-production-acceptance | local-container-updated | codex | chatgpt2api:codex-20260616-task011-acceptance, version local-20260616-task011-acceptance
+260710 2344 | studio-bridge-model-scoped-apimart-billing | contract-approved | codex | docs/workflow/tasks/studio-bridge-model-scoped-apimart-billing.md
+260710 2358 | studio-bridge-model-scoped-apimart-billing | qa-pass | codex | docs/workflow/qa-reports/studio-bridge-model-scoped-apimart-billing-qa.md

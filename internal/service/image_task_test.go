@@ -271,6 +271,50 @@ func TestImageTaskServiceExternalBillingUsesTaskStatusCostOverride(t *testing.T)
 	}
 }
 
+func TestImageTaskServiceExternalBillingIgnoresAPIMartCostOverrideForGPTImage2(t *testing.T) {
+	tests := []struct {
+		name string
+		cost float64
+	}{
+		{name: "higher than fixed price", cost: 0.0085},
+		{name: "lower than fixed price", cost: 0.004},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			handler := func(context.Context, Identity, map[string]any) (map[string]any, error) {
+				return map[string]any{
+					"external_billing_consumed_amount": tt.cost,
+					"external_billing_amount_unit":     imageTaskAmountUnitAPIMartCost,
+					"data": []map[string]any{
+						{"url": "https://example.test/image.png"},
+					},
+				}, nil
+			}
+			svc := newTestImageTaskService(t, handler, handler, handler, func() int { return 30 })
+			billing := &recordingExternalTaskBilling{}
+			svc.SetExternalBilling(billing)
+			identity := Identity{ID: "sub2api:42", OwnerID: "sub2api:42", Role: AuthRoleUser, Provider: AuthProviderSub2API}
+			taskID := "gpt-image-2-fixed-cost-" + strings.ReplaceAll(tt.name, " ", "-")
+
+			_, err := svc.SubmitGeneration(context.Background(), identity, taskID, "draw", util.ImageModelGPT, "1024x1024", "high", "https://base.test", 1, nil)
+			if err != nil {
+				t.Fatalf("SubmitGeneration() error = %v", err)
+			}
+			waitForTaskBillingConsumed(t, svc, identity, taskID, 51)
+
+			if !reflect.DeepEqual(billing.calls, []string{"reserve", "commit"}) {
+				t.Fatalf("external billing calls = %#v, want reserve/commit", billing.calls)
+			}
+			if !reflect.DeepEqual(billing.reserveAmounts, []float64{0.051}) || !reflect.DeepEqual(billing.commitAmounts, []float64{0.051}) {
+				t.Fatalf("external billing amounts reserve=%#v commit=%#v, want fixed 0.051", billing.reserveAmounts, billing.commitAmounts)
+			}
+			if billing.reserveUnit != "" || billing.commitUnit != "" {
+				t.Fatalf("external amount units reserve=%q commit=%q, want balance units", billing.reserveUnit, billing.commitUnit)
+			}
+		})
+	}
+}
+
 func TestImageTaskServiceExternalBillingCostOverrideSurchargesOnlyDeltaWhenStoredPrechargeMissingExternalAmount(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
