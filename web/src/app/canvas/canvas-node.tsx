@@ -30,7 +30,9 @@ import {
   Link2,
   LoaderCircle,
   MoreHorizontal,
+  Minus,
   Pencil,
+  Plus,
   RefreshCw,
   RotateCcw,
   RotateCw,
@@ -145,7 +147,7 @@ import type {
 const NODE_SIZE: Record<SmartCanvasItem["type"], { w: number; h: number }> = {
   image: { w: 270, h: 260 },
   prompt: { w: 310, h: 210 },
-  llm: { w: 380, h: 420 },
+  llm: { w: 330, h: 260 },
   loop: { w: 340, h: 280 },
   group: { w: 340, h: 230 },
   image_generation: { w: 390, h: 370 },
@@ -162,6 +164,16 @@ const CANVAS_GRAPH_KEY_SEPARATOR = "\u001f";
 
 type SmartCanvasNodeSizeMap = Record<string, { w: number; h: number }>;
 type SmartCanvasNodeLookup = ReadonlyMap<string, SmartCanvasItem>;
+type PromptSplitBatchSummary = {
+  id: string;
+  sourceNodeId: string;
+  total: number;
+  completed: number;
+  active: number;
+  failed: number;
+  waiting: number;
+  updatedAt: string;
+};
 type SmartCanvasGraphIndexes = {
   nodesById: Map<string, SmartCanvasItem>;
   dependencyKeysByNodeId: Map<string, string>;
@@ -773,6 +785,7 @@ type SmartCanvasTopBarProps = {
   operationCount: number;
   blankNodeCount: number;
   canUndo: boolean;
+  activePromptSplitBatchId: string;
   onSave: () => void;
   onAddNode: (type: SmartCanvasItem["type"]) => void;
   onUploadClick: () => void;
@@ -784,6 +797,10 @@ type SmartCanvasTopBarProps = {
   onCanvasListToggle?: () => void;
   onFocusNode: (id: string) => void;
   onMoveNodeToScreenPoint: (id: string, point: { x: number; y: number }) => void;
+  onActivePromptSplitBatchChange: (batchId: string) => void;
+  onFocusPromptSplitBatch: (batchId: string) => void;
+  onArrangePromptSplitBatch: (batchId: string) => void;
+  onDeletePromptSplitBatch: (batchId: string) => boolean;
 };
 
 export function SmartCanvasTopBar({
@@ -796,6 +813,7 @@ export function SmartCanvasTopBar({
   operationCount,
   blankNodeCount,
   canUndo,
+  activePromptSplitBatchId,
   onSave,
   onAddNode,
   onUploadClick,
@@ -807,15 +825,35 @@ export function SmartCanvasTopBar({
   onCanvasListToggle,
   onFocusNode,
   onMoveNodeToScreenPoint,
+  onActivePromptSplitBatchChange,
+  onFocusPromptSplitBatch,
+  onArrangePromptSplitBatch,
+  onDeletePromptSplitBatch,
 }: SmartCanvasTopBarProps) {
+  const [deleteBatchId, setDeleteBatchId] = useState("");
+  const batchSummaries = useMemo(() => promptSplitBatchSummaries(canvas?.nodes || EMPTY_SMART_CANVAS_NODES), [canvas?.nodes]);
+  const activeBatch = batchSummaries.find((batch) => batch.id === activePromptSplitBatchId) || batchSummaries.at(-1) || null;
+  const activeBatchIndex = activeBatch ? batchSummaries.findIndex((batch) => batch.id === activeBatch.id) : -1;
   return (
     <div className="pointer-events-none absolute left-3 right-3 top-3 z-40 flex items-start justify-between gap-2 lg:left-6 lg:right-6 lg:top-5 lg:items-center lg:gap-4">
-      <div className="min-w-0 max-w-[360px] rounded-full border border-border bg-background/78 px-3 py-2 backdrop-blur dark:border-slate-700 dark:bg-slate-950/45 lg:border-0 lg:bg-transparent lg:px-1">
+      <div className={cn("min-w-0 max-w-[360px] rounded-full border border-border bg-background/78 px-3 py-2 backdrop-blur dark:border-slate-700 dark:bg-slate-950/45 lg:border-0 lg:bg-transparent lg:px-1", activeBatch && "lg:hidden")}>
         <div className="truncate text-sm font-black text-slate-900 drop-shadow-none dark:text-zinc-100 dark:drop-shadow-[0_1px_2px_rgba(0,0,0,0.55)]">{canvasName || "未命名画布"}</div>
         <div className="mt-0.5 hidden text-[11px] font-semibold text-slate-500 drop-shadow-none dark:text-zinc-400/90 dark:drop-shadow-[0_1px_2px_rgba(0,0,0,0.45)] lg:block">当前画布</div>
       </div>
-      <div className="pointer-events-auto hidden min-w-0 flex-wrap items-center justify-end gap-2 lg:flex">
-        <div className={cn("flex min-w-0 items-center justify-end gap-1 rounded-full border p-1.5 lg:flex-wrap lg:gap-2", canvasPanelClass)}>
+      <div className="pointer-events-auto hidden min-w-0 flex-wrap items-center justify-end gap-2 lg:flex lg:flex-1">
+        {activeBatch ? (
+          <PromptSplitBatchToolbar
+            batch={activeBatch}
+            batchIndex={activeBatchIndex}
+            batchCount={batchSummaries.length}
+            onPrevious={() => onActivePromptSplitBatchChange(batchSummaries[Math.max(0, activeBatchIndex - 1)]?.id || activeBatch.id)}
+            onNext={() => onActivePromptSplitBatchChange(batchSummaries[Math.min(batchSummaries.length - 1, activeBatchIndex + 1)]?.id || activeBatch.id)}
+            onFocus={() => onFocusPromptSplitBatch(activeBatch.id)}
+            onArrange={() => onArrangePromptSplitBatch(activeBatch.id)}
+            onDelete={() => setDeleteBatchId(activeBatch.id)}
+          />
+        ) : null}
+        <div className={cn("flex min-w-0 items-center justify-end gap-1 rounded-full border p-1.5 lg:flex-wrap lg:gap-2 max-2xl:[&_button>span]:hidden", canvasPanelClass)}>
           {onCanvasListToggle ? <ToolbarIconButton className="lg:hidden" icon={<Grid2X2 className="size-4" />} label="画布列表" onClick={onCanvasListToggle} /> : null}
           <ToolbarButton icon={<ImagePlus className="size-4" />} label="上传" onClick={onUploadClick} />
           <ToolbarButton className="max-lg:hidden" icon={<FileText className="size-4" />} label="提示词" onClick={() => onAddNode("prompt")} />
@@ -862,6 +900,31 @@ export function SmartCanvasTopBar({
           {running ? <span className="ml-1 rounded-full bg-sky-500/15 px-3 py-2 text-xs font-bold text-sky-700 dark:text-sky-200">运行中</span> : null}
         </div>
       </div>
+      <Dialog open={Boolean(deleteBatchId)} onOpenChange={(open) => !open && setDeleteBatchId("")}>
+        <DialogContent className={cn("w-[min(92vw,440px)] rounded-2xl", canvasPanelClass)}>
+          <DialogHeader>
+            <DialogTitle>删除当前批次节点？</DialogTitle>
+            <DialogDescription>
+              只会删除该批次的图片生成与 Output 节点，不会删除来源 AI 节点、模板或其他批次。
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setDeleteBatchId("")}>取消</Button>
+            <Button
+              type="button"
+              variant="destructive"
+              onClick={() => {
+                if (deleteBatchId && onDeletePromptSplitBatch(deleteBatchId)) {
+                  setDeleteBatchId("");
+                }
+              }}
+            >
+              <Trash2 className="size-4" />
+              删除批次
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -1505,11 +1568,46 @@ function FragmentWithConnector({ children, showConnector }: { children: ReactNod
   );
 }
 
+function promptSplitBatchSummaries(nodes: SmartCanvasItem[]) {
+  const summaries = new Map<string, PromptSplitBatchSummary>();
+  for (const item of nodes) {
+    const batchId = item.data?.prompt_split_batch_id || "";
+    const sourceNodeId = item.data?.prompt_split_source_node_id || "";
+    if (item.type !== "image_generation" || !batchId || !sourceNodeId) {
+      continue;
+    }
+    const current = summaries.get(batchId) || {
+      id: batchId,
+      sourceNodeId,
+      total: 0,
+      completed: 0,
+      active: 0,
+      failed: 0,
+      waiting: 0,
+      updatedAt: "",
+    };
+    current.total += 1;
+    if (item.data?.status === "success") {
+      current.completed += 1;
+    } else if (item.data?.status === "running" || item.data?.status === "queued") {
+      current.active += 1;
+    } else if (item.data?.status === "error" || item.data?.status === "cancelled") {
+      current.failed += 1;
+    } else {
+      current.waiting += 1;
+    }
+    current.updatedAt = [current.updatedAt, item.data?.updated_at || item.data?.created_at || ""].sort().at(-1) || "";
+    summaries.set(batchId, current);
+  }
+  return Array.from(summaries.values()).sort((left, right) => left.updatedAt.localeCompare(right.updatedAt) || left.id.localeCompare(right.id));
+}
+
 type SmartCanvasBoardProps = {
   canvas: SmartCanvasDocument | null;
   viewport: SmartCanvasViewport;
   selectedItemId: string;
   selectedItemIds: string[];
+  activePromptSplitBatchId: string;
   tool: SmartCanvasTool;
   connectState: SmartCanvasConnectState;
   lightweightMedia: boolean;
@@ -1540,6 +1638,7 @@ type SmartCanvasBoardProps = {
   onZoomIn: () => void;
   onZoomOut: () => void;
   onFit: () => void;
+  onActivePromptSplitBatchChange: (batchId: string) => void;
   onViewportChange: (viewport: SmartCanvasViewport, commit?: boolean, label?: string) => void;
   onUpdateItemData: (id: string, patch: Partial<SmartCanvasItem["data"]>) => void;
   onRunGenerator: (id: string) => void;
@@ -1569,6 +1668,7 @@ export function SmartCanvasBoard({
   viewport,
   selectedItemId,
   selectedItemIds,
+  activePromptSplitBatchId,
   tool,
   connectState,
   lightweightMedia,
@@ -1599,6 +1699,7 @@ export function SmartCanvasBoard({
   onZoomIn,
   onZoomOut,
   onFit,
+  onActivePromptSplitBatchChange,
   onViewportChange,
   onUpdateItemData,
   onRunGenerator,
@@ -1885,6 +1986,9 @@ export function SmartCanvasBoard({
               item={item}
               graphDependencyKey={graphIndexes.dependencyKeysByNodeId.get(item.id) || ""}
               selected={selectedNodeIds.has(item.id)}
+              lowZoomLod={viewport.zoom < 0.4 && Boolean(item.data?.prompt_split_source_node_id)}
+              batchFocused={Boolean(activePromptSplitBatchId && item.data?.prompt_split_batch_id === activePromptSplitBatchId && item.data?.prompt_split_source_node_id)}
+              batchDimmed={Boolean(activePromptSplitBatchId && item.data?.prompt_split_batch_id && item.data?.prompt_split_batch_id !== activePromptSplitBatchId && item.data?.prompt_split_source_node_id)}
               imageModels={imageModels}
               textModels={textModels}
               videoModels={videoModels}
@@ -1896,6 +2000,7 @@ export function SmartCanvasBoard({
               onItemPointerDown={onItemPointerDown}
               onResizeItemPointerDown={onResizeItemPointerDown}
               onSelectItem={onSelectItem}
+              onActivatePromptSplitBatch={onActivePromptSplitBatchChange}
               onOpenImage={onOpenImage}
               onDeleteImage={onDeleteImage}
               onRemoveImageBackground={onRemoveImageBackground}
@@ -1966,6 +2071,7 @@ export function SmartCanvasBoard({
         <IconToolButton title="缩小" onClick={onZoomOut}><ZoomOut className="size-4" /></IconToolButton>
         <IconToolButton title="适配内容" onClick={onFit}><BoxSelect className="size-4" /></IconToolButton>
       </div>
+
       <div className="absolute bottom-3 left-1/2 z-30 hidden -translate-x-1/2 rounded-full bg-card/85 px-4 py-1 text-[11px] font-semibold text-muted-foreground shadow-sm backdrop-blur dark:bg-slate-950/70 dark:text-slate-500 lg:block">
         右键添加节点，Ctrl/⌘ 点击多选，拖动任一已选节点可一起移动，Delete 删除所选
       </div>
@@ -2012,6 +2118,82 @@ export function SmartCanvasBoard({
         </div>
       ) : null}
     </section>
+  );
+}
+
+function PromptSplitBatchToolbar({
+  batch,
+  batchIndex,
+  batchCount,
+  onPrevious,
+  onNext,
+  onFocus,
+  onArrange,
+  onDelete,
+}: {
+  batch: PromptSplitBatchSummary;
+  batchIndex: number;
+  batchCount: number;
+  onPrevious: () => void;
+  onNext: () => void;
+  onFocus: () => void;
+  onArrange: () => void;
+  onDelete: () => void;
+}) {
+  return (
+    <div
+      className={cn("hidden h-[52px] shrink-0 items-center gap-1 rounded-full border px-1.5 shadow-sm backdrop-blur xl:flex", canvasPanelClass)}
+      data-node-interactive="true"
+      data-prompt-split-batch-toolbar={batch.id}
+      onPointerDown={stopNodeInteraction}
+    >
+      <button
+        type="button"
+        className={cn("flex size-7 items-center justify-center rounded-md", canvasIconButtonClass)}
+        title="上一个批次"
+        aria-label="上一个批次"
+        disabled={batchIndex <= 0}
+        onClick={onPrevious}
+      >
+        <ChevronLeft className="size-4" />
+      </button>
+      <div className="min-w-0 px-1">
+        <div className="flex items-center gap-1.5 whitespace-nowrap text-[11px] font-black">
+          <span>批次 {batchIndex + 1}/{batchCount}</span>
+          <span className="inline-flex items-center gap-0.5 text-emerald-600 dark:text-emerald-300" title={`完成 ${batch.completed}`}><Check className="size-3" />{batch.completed}</span>
+          {batch.active > 0 ? <span className="inline-flex items-center gap-0.5 text-sky-600 dark:text-sky-300" title={`进行 ${batch.active}`}><LoaderCircle className="size-3 animate-spin" />{batch.active}</span> : null}
+          {batch.failed > 0 ? <span className="inline-flex items-center gap-0.5 text-rose-600 dark:text-rose-300" title={`失败 ${batch.failed}`}><CircleAlert className="size-3" />{batch.failed}</span> : null}
+          {batch.waiting > 0 ? <span className="hidden items-center gap-0.5 text-muted-foreground 2xl:inline-flex" title={`等待 ${batch.waiting}`}><Clock3 className="size-3" />{batch.waiting}</span> : null}
+        </div>
+      </div>
+      <button
+        type="button"
+        className={cn("flex size-7 items-center justify-center rounded-md", canvasIconButtonClass)}
+        title="下一个批次"
+        aria-label="下一个批次"
+        disabled={batchIndex >= batchCount - 1}
+        onClick={onNext}
+      >
+        <ChevronRight className="size-4" />
+      </button>
+      <span className="mx-0.5 h-5 w-px bg-border dark:bg-zinc-700" />
+      <button type="button" className={cn("flex size-7 items-center justify-center rounded-md", canvasIconButtonClass)} title="定位当前批次" aria-label="定位当前批次" onClick={onFocus}>
+        <BoxSelect className="size-4" />
+      </button>
+      <button type="button" className={cn("flex size-7 items-center justify-center rounded-md", canvasIconButtonClass)} title="整理当前批次" aria-label="整理当前批次" onClick={onArrange}>
+        <Grid2X2 className="size-4" />
+      </button>
+      <button
+        type="button"
+        className="flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-rose-500/10 hover:text-rose-600 disabled:cursor-not-allowed disabled:opacity-35 dark:text-zinc-400 dark:hover:text-rose-300"
+        title={batch.active > 0 ? "任务进行中，暂不能删除批次" : "删除当前批次"}
+        aria-label="删除当前批次"
+        disabled={batch.active > 0}
+        onClick={onDelete}
+      >
+        <Trash2 className="size-4" />
+      </button>
+    </div>
   );
 }
 
@@ -2702,6 +2884,9 @@ type SmartCanvasNodeProps = {
   item: SmartCanvasItem;
   graphDependencyKey: string;
   selected: boolean;
+  lowZoomLod: boolean;
+  batchFocused: boolean;
+  batchDimmed: boolean;
   imageModels: CanvasModelOption[];
   textModels: CanvasModelOption[];
   videoModels: CanvasModelOption[];
@@ -2713,6 +2898,7 @@ type SmartCanvasNodeProps = {
   onItemPointerDown: (event: ReactPointerEvent<HTMLDivElement>, item: SmartCanvasItem) => void;
   onResizeItemPointerDown: (event: ReactPointerEvent<HTMLElement>, item: SmartCanvasItem) => void;
   onSelectItem: (id: string, multi?: boolean) => void;
+  onActivatePromptSplitBatch: (batchId: string) => void;
   onOpenImage: (image: CanvasImageRef) => void;
   onDeleteImage: (nodeId: string, image: CanvasImageRef) => void;
   onRemoveImageBackground: (nodeId: string) => void;
@@ -2740,6 +2926,9 @@ export const SmartCanvasNode = memo(function SmartCanvasNode({
   item,
   graphDependencyKey: _graphDependencyKey,
   selected,
+  lowZoomLod,
+  batchFocused,
+  batchDimmed,
   imageModels,
   textModels,
   videoModels,
@@ -2751,6 +2940,7 @@ export const SmartCanvasNode = memo(function SmartCanvasNode({
   onItemPointerDown,
   onResizeItemPointerDown,
   onSelectItem,
+  onActivatePromptSplitBatch,
   onOpenImage,
   onDeleteImage,
   onRemoveImageBackground,
@@ -2774,7 +2964,7 @@ export const SmartCanvasNode = memo(function SmartCanvasNode({
 }: SmartCanvasNodeProps) {
   const [textAssetPickerOpen, setTextAssetPickerOpen] = useState(false);
   const size = NODE_SIZE[item.type];
-  const resizable = item.type === "image" || item.type === "group";
+  const resizable = item.type === "image" || item.type === "group" || item.type === "image_generation" || item.type === "result";
   const width = resizable ? Number(item.data?.width || size.w) : size.w;
   const minHeight = resizable ? Number(item.data?.height || size.h) : size.h;
   const canInput = item.type === "llm" || item.type === "loop" || item.type === "group" || item.type === "image_generation" || item.type === "video_generation" || item.type === "result";
@@ -2818,19 +3008,27 @@ export const SmartCanvasNode = memo(function SmartCanvasNode({
     <div
       ref={measureRef}
       data-canvas-node-id={item.id}
+      data-prompt-split-batch-id={item.data?.prompt_split_batch_id || undefined}
+      data-node-lod={lowZoomLod ? "summary" : "full"}
       className={cn(
         "group absolute rounded-2xl border bg-card/95 text-card-foreground shadow-[0_18px_46px_rgba(44,74,116,0.18)] backdrop-blur dark:bg-[#181818] dark:text-zinc-100 dark:shadow-[0_18px_46px_rgba(0,0,0,0.36)]",
         selected ? "border-sky-500 ring-2 ring-sky-400/30 dark:border-zinc-200 dark:ring-sky-400/35" : "border-border hover:border-muted-foreground/50 dark:border-zinc-800 dark:hover:border-zinc-600",
+        batchFocused && !selected && "border-sky-400/80 ring-2 ring-sky-400/20 dark:border-sky-300/70",
+        batchDimmed && "opacity-35 grayscale-[0.35]",
       )}
       style={{
         transform: `translate3d(${Number(item.position?.x || 0)}px, ${Number(item.position?.y || 0)}px, 0)`,
         width,
         minHeight,
+        height: item.type === "image_generation" || item.type === "result" ? minHeight : undefined,
         zIndex,
       }}
       onPointerDown={(event) => onItemPointerDown(event, item)}
       onClick={(event) => {
         event.stopPropagation();
+        if (item.data?.prompt_split_source_node_id && item.data?.prompt_split_batch_id) {
+          onActivatePromptSplitBatch(item.data.prompt_split_batch_id);
+        }
         onSelectItem(item.id, event.ctrlKey || event.metaKey);
       }}
       onContextMenu={(event) => {
@@ -2845,7 +3043,9 @@ export const SmartCanvasNode = memo(function SmartCanvasNode({
         onOpenHelp={() => onOpenNodeHelp(item.type)}
         onDelete={() => onDeleteItem(item.id)}
       />
-      {item.type === "image" ? (
+      {lowZoomLod ? (
+        <PromptSplitNodeZoomSummary item={item} />
+      ) : item.type === "image" ? (
         <>
           <ImageNodeBody
             item={item}
@@ -2899,19 +3099,22 @@ export const SmartCanvasNode = memo(function SmartCanvasNode({
           onUpdateData={(patch) => onUpdateItemData(item.id, patch)}
         />
       ) : item.type === "image_generation" ? (
-        <GeneratorNodeBody
-          canvas={canvas}
-          item={item}
-          models={imageModels}
-          running={running}
-          onUpdateData={(patch) => onUpdateItemData(item.id, patch)}
-          onRunGenerator={() => onRunGenerator(item.id)}
-          onStopNode={() => onStopNode(item.id)}
-          onConnectLlmImagesToGenerator={() => onConnectLlmImagesToGenerator(item.id)}
-          onOpenImage={onOpenImage}
-          onDeleteDirectImage={(image) => onDeleteImage(item.id, image)}
-          lightweightMedia={lightweightMedia}
-        />
+        <>
+          <GeneratorNodeBody
+            canvas={canvas}
+            item={item}
+            models={imageModels}
+            running={running}
+            onUpdateData={(patch) => onUpdateItemData(item.id, patch)}
+            onRunGenerator={() => onRunGenerator(item.id)}
+            onStopNode={() => onStopNode(item.id)}
+            onConnectLlmImagesToGenerator={() => onConnectLlmImagesToGenerator(item.id)}
+            onOpenImage={onOpenImage}
+            onDeleteDirectImage={(image) => onDeleteImage(item.id, image)}
+            lightweightMedia={lightweightMedia}
+          />
+          <ResizeHandle onPointerDown={(event) => onResizeItemPointerDown(event, item)} label="拖拽缩放图片生成节点" />
+        </>
       ) : item.type === "video_generation" ? (
         <VideoGeneratorNodeBody
           canvas={canvas}
@@ -2927,7 +3130,10 @@ export const SmartCanvasNode = memo(function SmartCanvasNode({
           lightweightMedia={lightweightMedia}
         />
       ) : (
-        <OutputNodeBody item={item} onOpenImage={onOpenImage} onDeleteImage={(image) => onDeleteImage(item.id, image)} onStopNode={() => onStopNode(item.id)} lightweight={lightweightMedia} />
+        <>
+          <OutputNodeBody item={item} onOpenImage={onOpenImage} onDeleteImage={(image) => onDeleteImage(item.id, image)} onStopNode={() => onStopNode(item.id)} lightweight={lightweightMedia} />
+          <ResizeHandle onPointerDown={(event) => onResizeItemPointerDown(event, item)} label="拖拽缩放 Output 节点" />
+        </>
       )}
       {item.type === "prompt" ? (
         <TextAssetPickerDialog
@@ -2945,6 +3151,9 @@ function areSmartCanvasNodePropsEqual(previous: SmartCanvasNodeProps, next: Smar
   return previous.item === next.item &&
     previous.graphDependencyKey === next.graphDependencyKey &&
     previous.selected === next.selected &&
+    previous.lowZoomLod === next.lowZoomLod &&
+    previous.batchFocused === next.batchFocused &&
+    previous.batchDimmed === next.batchDimmed &&
     previous.imageModels === next.imageModels &&
     previous.textModels === next.textModels &&
     previous.videoModels === next.videoModels &&
@@ -2956,6 +3165,7 @@ function areSmartCanvasNodePropsEqual(previous: SmartCanvasNodeProps, next: Smar
     previous.onItemPointerDown === next.onItemPointerDown &&
     previous.onResizeItemPointerDown === next.onResizeItemPointerDown &&
     previous.onSelectItem === next.onSelectItem &&
+    previous.onActivatePromptSplitBatch === next.onActivatePromptSplitBatch &&
     previous.onOpenImage === next.onOpenImage &&
     previous.onDeleteImage === next.onDeleteImage &&
     previous.onRemoveImageBackground === next.onRemoveImageBackground &&
@@ -2976,6 +3186,24 @@ function areSmartCanvasNodePropsEqual(previous: SmartCanvasNodeProps, next: Smar
     previous.onCreateNodeFromPort === next.onCreateNodeFromPort &&
     previous.onCreateNodeHelpTemplate === next.onCreateNodeHelpTemplate &&
     previous.onMeasure === next.onMeasure;
+}
+
+function PromptSplitNodeZoomSummary({ item }: { item: SmartCanvasItem }) {
+  const index = Number(item.data?.prompt_split_index || 0) + 1;
+  const images = item.data?.output?.images || item.data?.images || [];
+  const status = item.data?.status ? statusLabel(item.data.status) : item.type === "image_generation" ? "待生成" : "等待结果";
+  const detail = item.type === "image_generation"
+    ? displayModelLabel(item.data?.model || "auto")
+    : images.length > 0
+      ? `${images.length} 张图片`
+      : status;
+  return (
+    <div className="flex h-[calc(100%_-_40px)] min-h-0 flex-col items-center justify-center gap-3 overflow-hidden px-6 text-center" data-node-interactive="true">
+      <div className="text-[32px] font-black leading-none text-sky-700 dark:text-sky-200">{String(index).padStart(2, "0")}</div>
+      <div className="text-[22px] font-black leading-none">{item.type === "image_generation" ? "图片生成" : "Output"}</div>
+      <div className="max-w-full truncate text-[18px] font-bold text-muted-foreground dark:text-zinc-400" title={detail}>{detail}</div>
+    </div>
+  );
 }
 
 function suggestedNodeTypeForItem(item: SmartCanvasItem): Exclude<SmartCanvasItem["type"], "image"> {
@@ -3246,15 +3474,15 @@ function ImageNodeBody({
   );
 }
 
-function ResizeHandle({ onPointerDown }: { onPointerDown: (event: ReactPointerEvent<HTMLElement>) => void }) {
+function ResizeHandle({ onPointerDown, label = "拖拽缩放图片节点" }: { onPointerDown: (event: ReactPointerEvent<HTMLElement>) => void; label?: string }) {
   return (
     <button
       type="button"
       className="absolute right-2 bottom-2 z-40 flex size-5 items-center justify-center rounded-full border border-muted-foreground/50 bg-background/90 text-muted-foreground shadow-sm transition hover:border-sky-500 hover:text-sky-600 dark:border-slate-500 dark:bg-slate-900 dark:text-slate-300 dark:hover:border-sky-300 dark:hover:text-sky-200"
       data-node-interactive="true"
       onPointerDown={onPointerDown}
-      title="拖拽缩放图片节点"
-      aria-label="拖拽缩放图片节点"
+      title={label}
+      aria-label={label}
     >
       <span className="block size-2.5 rounded-br-[6px] border-r-2 border-b-2 border-current" />
     </button>
@@ -3727,31 +3955,48 @@ function LlmNodeBody({
     .filter((entry) => entry.text);
   const upstreamImages = dedupeCanvasImageRefs(upstream.flatMap((node) => nodeInputImagesForCanvas(canvas, node)));
   const outputText = item.data?.output?.text || "";
-  const nodeRunning = isActiveTask(item.data?.status);
+  const splitCount = Math.max(1, Math.min(10, Math.round(Number(item.data?.split_count || 1)) || 1));
+  const directGenerate = item.data?.direct_generate === true;
+  const splitStatus = item.data?.prompt_split_status;
+  const splitItems = [...(item.data?.prompt_split_items || [])].sort((left, right) => left.index - right.index);
+  const nodeRunning = isActiveTask(item.data?.status) || splitStatus === "splitting" || splitStatus === "submitting" || splitStatus === "running";
+  const hasPreviousPromptSplit = Boolean(item.data?.prompt_split_batch_id) && !nodeRunning;
   const [outputCopyState, setOutputCopyState] = useState<"idle" | "copied" | "failed">("idle");
+  const [editorOpen, setEditorOpen] = useState(false);
   const [outputDialogOpen, setOutputDialogOpen] = useState(false);
+  const [rerunDialogOpen, setRerunDialogOpen] = useState(false);
   const outputCopyResetTimerRef = useRef<number | null>(null);
   const availableModels = models.filter((model) => canvasModelHasCapability(model, "chat") || model.kind === "text" || model.kind === "both" || model.id === "auto");
   const hasInput = upstreamTexts.length > 0 || upstreamImages.length > 0 || Boolean((item.data?.prompt || "").trim());
-  const outputCharacterCount = outputText.length.toLocaleString("zh-CN");
+  const inputPreview = [...upstreamTexts.map((entry) => entry.text), item.data?.prompt || ""].map((value) => value.trim()).filter(Boolean).join("\n\n");
+  const detailsText = splitCount > 1 ? splitItems.map((entry) => entry.prompt).join("\n\n") : outputText;
+  const outputCharacterCount = detailsText.length.toLocaleString("zh-CN");
+  const splitStatusText = promptSplitStatusLabel(splitStatus);
+  const runDisabled = running || !hasInput || (splitCount > 1 && upstreamImages.length > 0);
+  const setSplitCount = (next: number) => onUpdateData({ split_count: Math.max(1, Math.min(10, Math.round(next) || 1)) });
+  const runPromptSplit = (replacePrevious: boolean) => {
+    onUpdateData({ prompt_split_replace_batch_id: replacePrevious ? item.data?.prompt_split_batch_id || "" : "" });
+    setRerunDialogOpen(false);
+    onRunLlm();
+  };
   const copyOutputText = useCallback(async () => {
-    if (!outputText) return;
+    if (!detailsText) return;
     if (outputCopyResetTimerRef.current !== null) {
       window.clearTimeout(outputCopyResetTimerRef.current);
     }
     try {
-      await navigator.clipboard.writeText(outputText);
+      await navigator.clipboard.writeText(detailsText);
       setOutputCopyState("copied");
       outputCopyResetTimerRef.current = window.setTimeout(() => setOutputCopyState("idle"), 1200);
     } catch {
       setOutputCopyState("failed");
       outputCopyResetTimerRef.current = window.setTimeout(() => setOutputCopyState("idle"), 2200);
     }
-  }, [outputText]);
+  }, [detailsText]);
 
   useEffect(() => {
     setOutputCopyState("idle");
-  }, [outputText]);
+  }, [detailsText]);
 
   useEffect(() => () => {
     if (outputCopyResetTimerRef.current !== null) {
@@ -3760,59 +4005,20 @@ function LlmNodeBody({
   }, []);
 
   return (
-    <div className="space-y-3 p-3" data-node-interactive="true" onPointerDown={stopNodeInteraction}>
-      <div>
-        <div className={cn("mb-1 text-[11px] font-black uppercase tracking-[0.14em]", canvasLabelClass)}>Input</div>
-        {upstreamTexts.length > 0 ? (
-          <div className="mb-2 space-y-1">
-            {upstreamTexts.slice(0, 3).map((entry) => (
-              <div
-                key={entry.id}
-                className="rounded-xl border border-sky-500/20 bg-sky-500/8 px-3 py-2 text-xs font-semibold text-foreground dark:border-sky-400/20 dark:bg-sky-400/10 dark:text-slate-100"
-                title={`${entry.name}: ${entry.text}`}
-              >
-                <div className={cn("mb-1 truncate text-[10px] font-black uppercase tracking-[0.12em]", canvasAccentTextClass)}>
-                  已连接 {entry.name}
-                </div>
-                <div className="line-clamp-2 whitespace-pre-wrap break-words">{entry.text}</div>
-              </div>
-            ))}
-            {upstreamTexts.length > 3 ? (
-              <div className={cn("rounded-xl border px-3 py-2 text-xs font-bold", canvasDashedClass)}>
-                还有 {upstreamTexts.length - 3} 个文本输入
-              </div>
-            ) : null}
-          </div>
-        ) : null}
-        <Textarea
-          value={item.data?.prompt || ""}
-          onChange={(event) => onUpdateData({ prompt: event.target.value })}
-          className={cn("h-24 resize-none rounded-xl text-xs", canvasFieldClass)}
-          placeholder="补充处理要求，例如：优化成英文生图提示词..."
-        />
+    <div className="space-y-1.5 p-2.5" data-node-interactive="true" onPointerDown={stopNodeInteraction}>
+      <div className={cn("flex min-h-10 items-center gap-2 rounded-lg border px-2.5 py-1.5", inputPreview ? "border-border bg-background/65 dark:border-slate-700 dark:bg-slate-950/40" : canvasDashedClass)}>
+        <div className="min-w-0 flex-1">
+          <div className={cn("text-[10px] font-black uppercase tracking-[0.12em]", canvasLabelClass)}>输入</div>
+          <div className="line-clamp-2 whitespace-pre-wrap break-words text-xs leading-4 text-foreground dark:text-slate-100">{inputPreview || "连接文本节点或补充输入"}</div>
+        </div>
+        <Button type="button" size="icon" variant="ghost" className={cn("size-7 shrink-0 rounded-lg", canvasIconButtonClass)} title="编辑完整输入" aria-label="编辑完整输入" onClick={() => setEditorOpen(true)}>
+          <Pencil className="size-3.5" />
+        </Button>
       </div>
 
-      <div>
-        <div className={cn("mb-1 text-[11px] font-black uppercase tracking-[0.14em]", canvasLabelClass)}>Images</div>
-        {upstreamImages.length > 0 ? (
-          <CanvasImageStrip images={upstreamImages} limit={4} className="grid-cols-5" lightweight={lightweight} />
-        ) : (
-          <div className={cn("rounded-xl border px-3 py-3 text-xs", canvasDashedClass)}>可连接图片节点，让 AI 先看图再输出提示词</div>
-        )}
-      </div>
-
-      <div className="grid grid-cols-[76px_1fr] gap-2">
-        <Select value="llm" disabled>
+      <Select value={item.data?.model || "auto"} onValueChange={(model) => onUpdateData({ model })} disabled={nodeRunning}>
           <SelectTrigger className={canvasSelectClass}>
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="llm">模型</SelectItem>
-          </SelectContent>
-        </Select>
-        <Select value={item.data?.model || "auto"} onValueChange={(model) => onUpdateData({ model })}>
-          <SelectTrigger className={canvasSelectClass}>
-            <SelectValue placeholder="模型" />
+            <SelectValue placeholder="提示词模型" />
           </SelectTrigger>
           <SelectContent>
             {availableModels.map((model) => (
@@ -3821,126 +4027,179 @@ function LlmNodeBody({
               </SelectItem>
             ))}
           </SelectContent>
-        </Select>
+      </Select>
+
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-1.5">
+          <span className={cn("text-[10px] font-black uppercase tracking-[0.12em]", canvasLabelClass)}>拆分</span>
+          <div className="flex h-8 items-center rounded-lg border border-border bg-background/65 dark:border-slate-700 dark:bg-slate-950/40">
+            <Button type="button" size="icon" variant="ghost" className={cn("size-7 rounded-md", canvasIconButtonClass)} title="减少拆分数量" aria-label="减少拆分数量" disabled={nodeRunning || splitCount <= 1} onClick={() => setSplitCount(splitCount - 1)}>
+              <Minus className="size-3.5" />
+            </Button>
+            <Input type="number" min={1} max={10} value={splitCount} onChange={(event) => setSplitCount(Number(event.target.value))} disabled={nodeRunning} className="h-7 w-9 border-0 bg-transparent px-0 text-center text-xs font-black shadow-none focus-visible:ring-0" aria-label="拆分数量" />
+            <Button type="button" size="icon" variant="ghost" className={cn("size-7 rounded-md", canvasIconButtonClass)} title="增加拆分数量" aria-label="增加拆分数量" disabled={nodeRunning || splitCount >= 10} onClick={() => setSplitCount(splitCount + 1)}>
+              <Plus className="size-3.5" />
+            </Button>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className={cn("text-[10px] font-black", canvasLabelClass)}>直接生图</span>
+          <button type="button" role="switch" aria-checked={directGenerate} aria-label="直接生图" disabled={nodeRunning} className={cn("relative h-5 w-9 rounded-full transition-colors", directGenerate ? "bg-sky-500" : "bg-muted", nodeRunning && "cursor-not-allowed opacity-55")} onClick={() => onUpdateData({ direct_generate: !directGenerate })} title="仅在点击下方按钮后提交图片任务">
+            <span className={cn("absolute left-0.5 top-0.5 size-4 rounded-full bg-white shadow-sm transition-transform", directGenerate ? "translate-x-4" : "translate-x-0")} />
+          </button>
+        </div>
       </div>
 
-      <div>
-        <div className="mb-1 flex items-center justify-between gap-2">
-          <div className={cn("text-[11px] font-black uppercase tracking-[0.14em]", canvasLabelClass)}>Output</div>
-          {outputText && !nodeRunning ? (
-            <div className="flex min-w-0 items-center gap-1">
-              <span className={cn("truncate text-[10px] font-semibold", outputCopyState === "failed" ? "text-rose-600 dark:text-rose-300" : canvasSubtleTextClass)}>
-                {outputCopyState === "failed" ? "复制失败，请手动选择文本" : `${outputCharacterCount} 字符`}
-              </span>
-              <Button
-                type="button"
-                size="sm"
-                variant="ghost"
-                className={cn("h-7 shrink-0 rounded-lg px-2 text-[11px] font-black", canvasIconButtonClass)}
-                data-node-interactive="true"
-                onPointerDown={stopNodeInteraction}
-                onClick={() => setOutputDialogOpen(true)}
-                title="查看完整提示词输出"
-              >
-                <FileText className="size-3.5" />
-                全文
-              </Button>
-              <Button
-                type="button"
-                size="icon"
-                variant="ghost"
-                className={cn("size-7 shrink-0 rounded-lg", canvasIconButtonClass)}
-                data-node-interactive="true"
-                onPointerDown={stopNodeInteraction}
-                onClick={() => void copyOutputText()}
-                title={outputCopyState === "copied" ? "已复制" : "复制提示词输出"}
-                aria-label={outputCopyState === "copied" ? "已复制" : "复制提示词输出"}
-              >
-                {outputCopyState === "copied" ? <Check className="size-3.5 text-emerald-500" /> : <Copy className="size-3.5" />}
-              </Button>
-            </div>
-          ) : null}
-        </div>
-        <div className={cn("min-h-24 rounded-xl border p-3 text-xs leading-relaxed", outputText ? "border-border bg-background/70 text-foreground dark:border-slate-700 dark:bg-slate-950/45 dark:text-slate-100" : canvasDashedClass)}>
-          {nodeRunning ? (
-            <div className="flex items-center justify-between gap-2">
-              <span className="inline-flex min-w-0 items-center gap-2">
-                <LoaderCircle className="size-4 shrink-0 animate-spin" />
-                <span className="truncate">运行中</span>
-              </span>
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                className="h-7 shrink-0 rounded-lg border-rose-300/70 bg-white/80 px-2 text-xs font-black text-rose-600 hover:bg-rose-50 dark:border-rose-400/30 dark:bg-slate-950/50 dark:text-rose-100"
-                onClick={onStopNode}
-              >
-                <X className="mr-1 size-3.5" />
-                中断
-              </Button>
-            </div>
-          ) : outputText ? (
-            <div className="max-h-40 overflow-y-auto overscroll-contain whitespace-pre-wrap break-words pr-1 select-text" onWheel={(event) => event.stopPropagation()}>
-              {outputText}
-            </div>
-          ) : (
-            "运行后会输出文本，可连接到 图片生成 节点"
-          )}
-        </div>
-        <Dialog open={outputDialogOpen} onOpenChange={setOutputDialogOpen}>
-          <DialogContent className={cn("w-[min(92vw,760px)] max-w-none rounded-2xl p-0", canvasPanelClass)} data-node-interactive="true" onPointerDown={stopNodeInteraction}>
-            <div className="border-b border-border px-4 py-3 pr-12 dark:border-slate-800 sm:pr-14">
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <DialogTitle className="text-base font-black">提示词输出全文</DialogTitle>
-                  <DialogDescription className={cn("mt-1 text-xs", canvasSubtleTextClass)}>
-                    {outputCharacterCount} 字符
-                  </DialogDescription>
-                </div>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  className={cn("h-8 shrink-0 rounded-lg px-2 text-xs font-black", canvasGhostButtonClass)}
-                  onClick={() => void copyOutputText()}
-                >
+      <button type="button" className={cn("flex h-7 w-full items-center justify-between gap-2 rounded-lg border px-2 text-left text-[11px] font-semibold", splitStatus === "error" || splitStatus === "partial_success" ? "border-rose-300/60 bg-rose-50/70 text-rose-700 dark:border-rose-400/25 dark:bg-rose-950/20 dark:text-rose-200" : "border-border bg-muted/35 text-muted-foreground dark:border-slate-700 dark:bg-slate-950/35")} onClick={() => setOutputDialogOpen(true)} title="查看提示词详情">
+        <span className="truncate">
+          {splitCount > 1
+            ? splitStatus ? `${splitStatusText} ${splitItems.length}/${splitCount}` : `将拆分为 ${splitCount} 条`
+            : nodeRunning ? "生成提示词中" : outputText ? `${outputText.length.toLocaleString("zh-CN")} 字符输出` : "单条提示词"}
+        </span>
+        <FileText className="size-3.5 shrink-0" />
+      </button>
+
+      <Dialog open={outputDialogOpen} onOpenChange={setOutputDialogOpen}>
+        <DialogContent className={cn("w-[min(92vw,780px)] max-w-none rounded-2xl p-0", canvasPanelClass)} data-node-interactive="true" onPointerDown={stopNodeInteraction}>
+          <DialogHeader className="border-b border-border px-5 pt-5 pr-12 pb-4 dark:border-slate-800">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <DialogTitle>{splitCount > 1 ? `拆分提示词 ${splitItems.length}/${splitCount}` : "提示词输出"}</DialogTitle>
+                <DialogDescription>{splitCount > 1 ? splitStatusText || "等待运行" : `${outputCharacterCount} 字符`}</DialogDescription>
+              </div>
+              {detailsText ? (
+                <Button type="button" size="sm" variant="outline" className={cn("h-8 shrink-0 rounded-lg px-2 text-xs font-black", canvasGhostButtonClass)} onClick={() => void copyOutputText()}>
                   {outputCopyState === "copied" ? <Check className="size-3.5 text-emerald-500" /> : <Copy className="size-3.5" />}
                   {outputCopyState === "copied" ? "已复制" : "复制"}
                 </Button>
-              </div>
-              {outputCopyState === "failed" ? <div className="mt-2 text-xs font-semibold text-rose-600 dark:text-rose-300">复制失败，请手动选择文本。</div> : null}
+              ) : null}
             </div>
-            <div className="max-h-[min(68vh,560px)] overflow-y-auto overscroll-contain p-4 text-sm leading-relaxed" onWheel={(event) => event.stopPropagation()}>
-              <pre className="whitespace-pre-wrap break-words font-sans text-foreground select-text dark:text-slate-100">{outputText}</pre>
-            </div>
-          </DialogContent>
-        </Dialog>
-      </div>
-
-      <CanvasRunInsight item={item} />
+            {outputCopyState === "failed" ? <div className="mt-2 text-xs font-semibold text-rose-600 dark:text-rose-300">复制失败，请手动选择文本。</div> : null}
+          </DialogHeader>
+          <div className="max-h-[min(66vh,580px)] overflow-y-auto p-5" onWheel={(event) => event.stopPropagation()}>
+            {splitCount > 1 ? (
+              splitItems.length > 0 ? (
+                <div className="space-y-3">
+                  {splitItems.map((entry, index) => (
+                    <div key={entry.index} className={cn("rounded-lg border p-3", entry.status === "error" || entry.status === "cancelled" ? "border-rose-300/60 bg-rose-50/70 dark:border-rose-400/25 dark:bg-rose-950/20" : "border-border bg-background/60 dark:border-slate-700 dark:bg-slate-950/40")}>
+                      <div className="mb-2 flex items-center justify-between gap-3 text-xs font-black">
+                        <span>提示词 {index + 1}</span>
+                        <span className={cn(entry.status === "error" || entry.status === "cancelled" ? "text-rose-600 dark:text-rose-200" : canvasSubtleTextClass)}>{promptSplitItemStatusLabel(entry.status)}</span>
+                      </div>
+                      <pre className="whitespace-pre-wrap break-words font-sans text-sm leading-6 text-foreground select-text dark:text-slate-100">{entry.prompt}</pre>
+                      {entry.error ? <div className="mt-2 text-xs font-semibold text-rose-600 dark:text-rose-200">{entry.error}</div> : null}
+                    </div>
+                  ))}
+                </div>
+              ) : <div className={cn("rounded-lg border px-4 py-8 text-center text-sm", canvasDashedClass)}>拆分结果会显示在这里。</div>
+            ) : outputText ? (
+              <pre className="whitespace-pre-wrap break-words font-sans text-sm leading-6 text-foreground select-text dark:text-slate-100">{outputText}</pre>
+            ) : <div className={cn("rounded-lg border px-4 py-8 text-center text-sm", canvasDashedClass)}>运行后会显示完整提示词。</div>}
+          </div>
+        </DialogContent>
+      </Dialog>
       {nodeRunning ? (
         <Button
           type="button"
           variant="outline"
-          className="h-10 w-full rounded-xl border-rose-300/70 font-bold text-rose-600 hover:bg-rose-50 dark:border-rose-400/30 dark:text-rose-100 dark:hover:bg-rose-500/10"
+          className="h-9 w-full rounded-lg border-rose-300/70 font-bold text-rose-600 hover:bg-rose-50 dark:border-rose-400/30 dark:text-rose-100 dark:hover:bg-rose-500/10"
           onClick={onStopNode}
         >
-          <X className="size-4" />
-          中断生成提示词
+          <X className="size-3.5" />
+          中断
         </Button>
       ) : (
         <Button
           type="button"
-          className="h-10 w-full rounded-xl bg-primary font-bold text-primary-foreground hover:bg-primary/90 dark:bg-slate-100 dark:text-slate-950 dark:hover:bg-white"
-          disabled={running || !hasInput}
-          onClick={onRunLlm}
+          className="h-9 w-full rounded-lg bg-primary font-bold text-primary-foreground hover:bg-primary/90 dark:bg-slate-100 dark:text-slate-950 dark:hover:bg-white"
+          disabled={runDisabled}
+          onClick={() => hasPreviousPromptSplit && splitCount > 1 ? setRerunDialogOpen(true) : onRunLlm()}
+          title={splitCount > 1 && upstreamImages.length > 0 ? "拆分模式暂不支持图片输入" : undefined}
         >
           {running ? <LoaderCircle className="size-4 animate-spin" /> : <Bot className="size-4" />}
-          生成提示词
+          {splitCount > 1
+            ? directGenerate
+              ? hasPreviousPromptSplit ? "重新拆分并直接生图" : "拆分并直接生图"
+              : hasPreviousPromptSplit ? `重新拆分为 ${splitCount} 条` : `拆分为 ${splitCount} 条`
+            : "生成提示词"}
         </Button>
       )}
+      <Dialog open={rerunDialogOpen} onOpenChange={setRerunDialogOpen}>
+        <DialogContent className={cn("w-[min(92vw,440px)] rounded-2xl", canvasPanelClass)} data-node-interactive="true" onPointerDown={stopNodeInteraction}>
+          <DialogHeader>
+            <DialogTitle>如何处理上一批节点？</DialogTitle>
+            <DialogDescription>新提示词准备完成前不会删除上一批结果。</DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2 sm:justify-between">
+            <Button type="button" variant="ghost" onClick={() => setRerunDialogOpen(false)}>取消</Button>
+            <div className="flex gap-2">
+              <Button type="button" variant="outline" onClick={() => runPromptSplit(true)}>替换上一批</Button>
+              <Button type="button" onClick={() => runPromptSplit(false)}>保留并新建</Button>
+            </div>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={editorOpen} onOpenChange={setEditorOpen}>
+        <DialogContent className={cn("w-[min(92vw,720px)] max-w-none rounded-2xl p-0", canvasPanelClass)} data-node-interactive="true" onPointerDown={stopNodeInteraction}>
+          <DialogHeader className="border-b border-border px-5 pt-5 pr-12 pb-4 dark:border-slate-800">
+            <DialogTitle>AI 提示词输入</DialogTitle>
+            <DialogDescription>上游文本会与此处补充内容一起交给提示词模型。</DialogDescription>
+          </DialogHeader>
+          <div className="max-h-[min(66vh,560px)] space-y-4 overflow-y-auto p-5" onWheel={(event) => event.stopPropagation()}>
+            {upstreamTexts.length > 0 ? (
+              <div className="space-y-2">
+                <div className={cn("text-xs font-black", canvasLabelClass)}>已连接文本</div>
+                {upstreamTexts.map((entry) => (
+                  <div key={entry.id} className="rounded-lg border border-sky-500/20 bg-sky-500/8 px-3 py-2 text-sm leading-6 text-foreground dark:border-sky-400/20 dark:bg-sky-400/10 dark:text-slate-100">
+                    <div className={cn("mb-1 text-[10px] font-black uppercase tracking-[0.12em]", canvasAccentTextClass)}>{entry.name}</div>
+                    <div className="whitespace-pre-wrap break-words">{entry.text}</div>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            {upstreamImages.length > 0 ? (
+              <div className="space-y-2">
+                <div className={cn("text-xs font-black", canvasLabelClass)}>已连接图片</div>
+                <CanvasImageStrip images={upstreamImages} limit={8} className="grid-cols-4" lightweight={lightweight} />
+                {splitCount > 1 ? <div className="text-xs font-semibold text-amber-700 dark:text-amber-300">拆分模式仅支持文本输入，运行前请移除这些图片连接。</div> : null}
+              </div>
+            ) : null}
+            <label className="grid gap-1.5">
+              <span className={cn("text-xs font-black", canvasLabelClass)}>补充要求</span>
+              <Textarea value={item.data?.prompt || ""} onChange={(event) => onUpdateData({ prompt: event.target.value })} className={cn("min-h-40 resize-y rounded-lg text-sm", canvasFieldClass)} placeholder="补充处理要求，例如：优化成英文生图提示词..." />
+            </label>
+          </div>
+          <DialogFooter className="border-t border-border px-5 py-4 dark:border-slate-800">
+            <Button type="button" className="h-9 rounded-lg" onClick={() => setEditorOpen(false)}>完成</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
+}
+
+function promptSplitStatusLabel(status?: string) {
+  if (status === "splitting") return "正在拆分";
+  if (status === "ready") return "提示词已就绪";
+  if (status === "submitting") return "正在提交图片任务";
+  if (status === "running") return "正在生成";
+  if (status === "success") return "已完成";
+  if (status === "partial_success") return "部分完成";
+  if (status === "error") return "拆分失败";
+  if (status === "cancelled") return "已中断";
+  return "";
+}
+
+function promptSplitItemStatusLabel(status?: string) {
+  if (status === "ready") return "待生成";
+  if (status === "submitting") return "正在提交";
+  if (status === "not_submitted") return "等待提交";
+  if (status === "queued") return "已排队";
+  if (status === "running") return "生成中";
+  if (status === "success") return "已完成";
+  if (status === "error") return "失败";
+  if (status === "cancelled") return "已中断";
+  return "等待处理";
 }
 
 function canvasModelHasCapability(model: CanvasModelOption, capability: "chat" | "image" | "video") {
@@ -4194,8 +4453,36 @@ function GeneratorNodeBody({
     onUpdateData({ output_compression: Number.isFinite(numeric) ? Math.min(100, Math.max(0, Math.round(numeric))) : undefined });
   };
 
+  if (item.data?.node_view === "compact") {
+    return (
+      <div className="flex h-[calc(100%_-_42px)] min-h-0 flex-col gap-2 overflow-hidden p-3" data-node-interactive="true" onPointerDown={stopNodeInteraction}>
+        <div className={cn("min-h-0 flex-1 overflow-hidden rounded-lg border px-3 py-2", canvasFieldClass)}>
+          <div className={cn("mb-1 text-[10px] font-black uppercase", canvasLabelClass)}>Prompt</div>
+          <div className="line-clamp-4 whitespace-pre-wrap break-words text-xs leading-5" title={mergedPromptPreview}>{mergedPromptPreview || "等待提示词"}</div>
+        </div>
+        <div className="grid grid-cols-[1fr_auto] items-center gap-2 text-xs">
+          <div className="min-w-0 truncate font-semibold" title={displayModelLabel(activeImageModel)}>{displayModelLabel(activeImageModel)}</div>
+          <div className={cn("rounded-md border px-2 py-1", canvasDashedClass)}>{imageRatioLabel}</div>
+        </div>
+        <div className="flex items-center gap-2">
+          <Button type="button" variant="outline" className="h-8 shrink-0 px-3 text-xs font-bold" onClick={() => onUpdateData({ node_view: "full" })}>展开</Button>
+          {nodeRunning ? (
+            <Button type="button" variant="destructive" className="h-8 flex-1 text-xs font-black" onClick={onStopNode}><X className="mr-1 size-3.5" />中断</Button>
+          ) : (
+            <Button type="button" className="h-8 flex-1 bg-zinc-950 text-xs font-black text-white hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-950" disabled={running || !mergedPromptPreview} onClick={onRunGenerator}><Zap className="mr-1 size-3.5" />图片生成</Button>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="space-y-3 p-3" data-node-interactive="true" onPointerDown={stopNodeInteraction}>
+    <div className="h-[calc(100%_-_42px)] space-y-3 overflow-auto p-3" data-node-interactive="true" onPointerDown={stopNodeInteraction}>
+      {item.data?.prompt_split_batch_id ? (
+        <div className="flex justify-end">
+          <Button type="button" variant="ghost" className="h-7 px-2 text-[11px] font-bold" onClick={() => onUpdateData({ node_view: "compact" })}>收起</Button>
+        </div>
+      ) : null}
       <div>
         <div className={cn("mb-1 text-[11px] font-black uppercase tracking-[0.14em]", canvasLabelClass)}>Prompts</div>
         {upstreamPrompts.length > 0 ? (
@@ -4521,7 +4808,7 @@ function VideoGeneratorNodeBody({
   const aspectRatioValue = ratioOptions.some((option) => option.value === item.data?.aspect_ratio) ? String(item.data?.aspect_ratio) : "16:9";
 
   return (
-    <div className="space-y-3 p-3" data-node-interactive="true" onPointerDown={stopNodeInteraction}>
+    <div className="h-[calc(100%_-_42px)] space-y-3 overflow-auto p-3" data-node-interactive="true" onPointerDown={stopNodeInteraction}>
       <div>
         <div className={cn("mb-1 text-[11px] font-black uppercase tracking-[0.14em]", canvasLabelClass)}>Prompts</div>
         {upstreamPrompts.length > 0 ? (
@@ -4787,7 +5074,7 @@ function OutputNodeBody({
     />
   ) : null;
   return (
-    <div className="p-3">
+    <div className="h-[calc(100%_-_42px)] overflow-auto p-3">
       {downloadToolbar}
       {loopRaw ? (
         <LoopOutputSlots

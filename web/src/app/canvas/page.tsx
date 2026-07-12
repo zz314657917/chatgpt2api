@@ -169,6 +169,7 @@ export default function CanvasPage() {
             operationCount={canvas.historyEntries.slice(0, 30).length}
             blankNodeCount={canvas.blankNodeCount}
             canUndo={canvas.canUndo}
+            activePromptSplitBatchId={canvas.activePromptSplitBatchId}
             onSave={() => void canvas.saveNow()}
             onAddNode={canvas.addNodeAt}
             onUploadClick={canvas.openUploadDialog}
@@ -179,6 +180,10 @@ export default function CanvasPage() {
             onUndo={canvas.undoCanvas}
             onFocusNode={canvas.focusItem}
             onMoveNodeToScreenPoint={canvas.moveItemToScreenPoint}
+            onActivePromptSplitBatchChange={canvas.setActivePromptSplitBatchId}
+            onFocusPromptSplitBatch={canvas.focusPromptSplitBatch}
+            onArrangePromptSplitBatch={canvas.arrangePromptSplitBatch}
+            onDeletePromptSplitBatch={canvas.deletePromptSplitBatchNodes}
           />
 
           <SmartCanvasBoard
@@ -186,6 +191,7 @@ export default function CanvasPage() {
             viewport={canvas.viewport}
             selectedItemId={canvas.selectedItemId}
             selectedItemIds={canvas.selectedItemIds}
+            activePromptSplitBatchId={canvas.activePromptSplitBatchId}
             tool={canvas.tool}
             connectState={canvas.connectState}
             lightweightMedia={canvas.lightweightCanvasMedia}
@@ -221,6 +227,7 @@ export default function CanvasPage() {
             onZoomIn={() => canvas.zoomBy(1.12)}
             onZoomOut={() => canvas.zoomBy(0.88)}
             onFit={canvas.fitContent}
+            onActivePromptSplitBatchChange={canvas.setActivePromptSplitBatchId}
             onViewportChange={canvas.updateViewport}
             onUpdateItemData={canvas.updateItemData}
             onRunGenerator={canvas.runGeneratorNode}

@@ -1569,6 +1569,10 @@ func (a *App) handleCreationTasks(w http.ResponseWriter, r *http.Request) {
 		util.WriteJSON(w, http.StatusOK, a.decorateCreationTasks(identity, a.tasks.ListTasks(identity, util.ParseCommaList(r.URL.Query().Get("ids")))))
 		return
 	}
+	if len(parts) >= 3 && parts[0] == "api" && parts[1] == "creation-tasks" && parts[2] == "prompt-splits" {
+		a.handlePromptSplitTasks(w, r, identity)
+		return
+	}
 	if len(parts) == 4 && parts[0] == "api" && parts[1] == "creation-tasks" && parts[3] == "cancel" {
 		if r.Method != http.MethodPost {
 			w.WriteHeader(http.StatusMethodNotAllowed)

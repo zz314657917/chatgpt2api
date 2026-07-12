@@ -254,6 +254,8 @@ export function createLlmNode(position: { x: number; y: number }): SmartCanvasIt
     data: {
       prompt: "",
       model: "auto",
+      split_count: 1,
+      direct_generate: false,
       output: { text: "" },
       status: undefined,
       created_at: new Date().toISOString(),
@@ -311,6 +313,7 @@ export function createGeneratorNode(position: { x: number; y: number }): SmartCa
       n: DEFAULT_COMPOSER.n,
       visibility: DEFAULT_COMPOSER.visibility,
       input_images: [],
+      node_view: "full",
       status: undefined,
       created_at: new Date().toISOString(),
     },
@@ -348,6 +351,10 @@ export function createOutputNode(position: { x: number; y: number }): SmartCanva
     position,
     data: {
       output: { images: [] },
+      width: 320,
+      height: 220,
+      node_view: "full",
+      node_size_user_modified: false,
       created_at: new Date().toISOString(),
     },
   };
@@ -980,6 +987,9 @@ function sanitizeSmartItemData(data?: SmartCanvasItemData): SmartCanvasItemData 
     output_compression: normalizeCanvasImageOutputCompression(data.output_format, data.output_compression),
     image_model_settings: compactImageModelSettings(data.image_model_settings || source.imageModelSettings),
     background: normalizeCanvasImageBackground(data.background),
+    moderation: cleanImageText(data.moderation),
+    style: cleanImageText(data.style),
+    partial_images: Number.isFinite(Number(data.partial_images)) ? Math.max(0, Math.floor(Number(data.partial_images))) : undefined,
     duration: Number.isFinite(Number(data.duration)) ? Math.max(5, Math.min(15, Number(data.duration))) : undefined,
     aspect_ratio: typeof data.aspect_ratio === "string" && data.aspect_ratio ? data.aspect_ratio : "16:9",
     resolution: typeof data.resolution === "string" ? data.resolution : "",
@@ -1010,6 +1020,8 @@ function sanitizeSmartItemData(data?: SmartCanvasItemData): SmartCanvasItemData 
     tool_parameters: data.tool_parameters && typeof data.tool_parameters === "object" ? data.tool_parameters : undefined,
     width: Number.isFinite(Number(data.width)) ? Math.max(180, Math.min(720, Number(data.width))) : undefined,
     height: Number.isFinite(Number(data.height)) ? Math.max(180, Math.min(720, Number(data.height))) : undefined,
+    node_view: data.node_view === "compact" ? "compact" : data.node_view === "full" ? "full" : undefined,
+    node_size_user_modified: data.node_size_user_modified === true,
     output: normalizeOutput(data.output),
     status: data.status,
     error: typeof data.error === "string" ? data.error : "",
@@ -1019,9 +1031,53 @@ function sanitizeSmartItemData(data?: SmartCanvasItemData): SmartCanvasItemData 
     upload_status: data.upload_status === "uploading" || data.upload_status === "error" ? data.upload_status : undefined,
     upload_progress: Number.isFinite(Number(data.upload_progress)) ? Math.max(0, Math.min(100, Number(data.upload_progress))) : undefined,
     task_id: typeof data.task_id === "string" ? data.task_id : "",
+    split_count: Number.isFinite(Number(data.split_count)) ? Math.max(1, Math.min(10, Math.round(Number(data.split_count)))) : 1,
+    direct_generate: data.direct_generate === true,
+    prompt_split_client_task_id: cleanImageText(data.prompt_split_client_task_id),
+    prompt_split_batch_id: cleanImageText(data.prompt_split_batch_id),
+    prompt_split_template_node_id: cleanImageText(data.prompt_split_template_node_id),
+    prompt_split_status: normalizePromptSplitStatus(data.prompt_split_status),
+    prompt_split_execution_mode: data.prompt_split_execution_mode === "direct" ? "direct" : data.prompt_split_execution_mode === "nodes" ? "nodes" : undefined,
+    prompt_split_items: normalizePromptSplitItems(data.prompt_split_items),
+    prompt_split_index: Number.isFinite(Number(data.prompt_split_index)) ? Math.max(0, Math.floor(Number(data.prompt_split_index))) : undefined,
+    prompt_split_source_node_id: cleanImageText(data.prompt_split_source_node_id),
+    prompt_split_replace_batch_id: cleanImageText(data.prompt_split_replace_batch_id),
     started_at: typeof data.started_at === "string" ? data.started_at : "",
     stop_requested: data.stop_requested === true,
   };
+}
+
+function normalizePromptSplitStatus(value: unknown): SmartCanvasItemData["prompt_split_status"] {
+  return value === "splitting" || value === "ready" || value === "submitting" || value === "running" || value === "success" || value === "partial_success" || value === "error" || value === "cancelled"
+    ? value
+    : undefined;
+}
+
+function normalizePromptSplitItems(value: unknown): NonNullable<SmartCanvasItemData["prompt_split_items"]> {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const seen = new Set<number>();
+  return value.flatMap((item) => {
+    if (!item || typeof item !== "object") {
+      return [];
+    }
+    const source = item as Record<string, unknown>;
+    const index = Number(source.index);
+    const prompt = cleanImageText(source.prompt);
+    const status = source.status;
+    if (!Number.isInteger(index) || index < 0 || !prompt || seen.has(index) || (status !== "queued" && status !== "running" && status !== "success" && status !== "error" && status !== "cancelled" && status !== "ready" && status !== "submitting" && status !== "not_submitted")) {
+      return [];
+    }
+    seen.add(index);
+    return [{
+      index,
+      prompt,
+      task_id: cleanImageText(source.task_id),
+      status,
+      error: cleanImageText(source.error),
+    }];
+  });
 }
 
 function uniqueStringList(values: unknown[]) {

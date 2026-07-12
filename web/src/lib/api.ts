@@ -1274,6 +1274,39 @@ export type CreationTask = {
   visibility?: ImageVisibility;
 };
 
+export type PromptSplitExecutionMode = "nodes" | "direct";
+export type PromptSplitStatus = "splitting" | "ready" | "submitting" | "running" | "success" | "partial_success" | "error" | "cancelled";
+export type PromptSplitItemStatus = CreationTask["status"] | "ready" | "submitting" | "not_submitted";
+
+export type PromptSplitItem = {
+  index: number;
+  prompt: string;
+  task_id?: string;
+  status: PromptSplitItemStatus;
+  error?: string;
+};
+
+export type PromptSplitBatch = {
+  id: string;
+  status: PromptSplitStatus;
+  execution_mode: PromptSplitExecutionMode;
+  split_count: number;
+  split_task_id?: string;
+  items: PromptSplitItem[];
+  error?: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CreatePromptSplitRequest = {
+  client_task_id: string;
+  prompt: string;
+  model: string;
+  split_count: number;
+  execution_mode: PromptSplitExecutionMode;
+  image_request?: Record<string, unknown>;
+};
+
 export type CreationTaskReferenceImage = {
   id: string;
   client_reference_id: string;
@@ -2560,6 +2593,29 @@ export async function fetchCreationTasks(ids: string[], options: { signal?: Abor
 
 export async function cancelCreationTask(clientTaskId: string) {
   return httpRequest<CreationTask>(`/api/creation-tasks/${encodeURIComponent(clientTaskId)}/cancel`, {
+    method: "POST",
+    body: {},
+  });
+}
+
+export async function createPromptSplit(payload: CreatePromptSplitRequest) {
+  return httpRequest<PromptSplitBatch>("/api/creation-tasks/prompt-splits", {
+    method: "POST",
+    body: payload,
+  });
+}
+
+export async function fetchPromptSplit(batchId: string) {
+  return httpRequest<PromptSplitBatch>(`/api/creation-tasks/prompt-splits/${encodeURIComponent(batchId)}`, {
+    headers: {
+      "Cache-Control": "no-cache",
+      Pragma: "no-cache",
+    },
+  });
+}
+
+export async function cancelPromptSplit(batchId: string) {
+  return httpRequest<PromptSplitBatch>(`/api/creation-tasks/prompt-splits/${encodeURIComponent(batchId)}/cancel`, {
     method: "POST",
     body: {},
   });

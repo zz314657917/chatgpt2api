@@ -14,11 +14,13 @@ import {
 import { toast } from "sonner";
 
 import {
+  cancelPromptSplit,
   cancelCreationTask,
   createChatCompletionTask,
   createCanvas,
   createImageEditTask,
   createImageGenerationTask,
+  createPromptSplit,
   createVideoGenerationTask,
   deleteCanvas,
   fetchCanvasModels,
@@ -26,6 +28,7 @@ import {
   fetchCreationTasks,
   fetchManagedImageCollections,
   fetchManagedImages,
+  fetchPromptSplit,
   fetchTeamWorkspace,
   imageReferenceInputLimit,
   MANAGED_IMAGE_UNCLASSIFIED_COLLECTION_ID,
@@ -43,6 +46,9 @@ import {
   type ManagedImageCollection,
   type ManagedImageSummary,
   type ManagedVideoAssetSummary,
+  type PromptSplitBatch,
+  type PromptSplitItem,
+  type PromptSplitStatus,
   type TeamSummary,
 } from "@/lib/api";
 import { fetchAuthenticatedImageBlob } from "@/lib/authenticated-image";
@@ -54,6 +60,7 @@ import {
   type ImageQuality,
 } from "@/lib/image-parameters";
 import { imageModelSettingsToTaskFields, type ImageModelSettingsState } from "@/lib/image-model-settings";
+import { buildImageTaskRequestParameters, imageTaskRequestBodyFields } from "@/lib/image-task-request";
 import { getCachedAuthSession } from "@/lib/session";
 import { useAuthGuard } from "@/lib/use-auth-guard";
 
@@ -115,6 +122,7 @@ import {
   normalizeCanvasImageResolution,
   normalizeModelCatalog,
   normalizeSmartCanvas,
+  outgoingItems,
   screenToWorld,
   toCanvasPayload,
   zoomViewportAt,
@@ -151,6 +159,8 @@ const MANAGED_IMAGE_DRAG_TYPE = "application/x-chatgpt2api-managed-image";
 const CANVAS_ASSET_PAGE_SIZE = 50;
 const SMART_CANVAS_PORT_SNAP_RADIUS = 44;
 const CROP_NODE_OFFSET = { x: 32, y: 32 };
+const PROMPT_SPLIT_POLL_INTERVAL_MS = 2_000;
+const PROMPT_SPLIT_SYNC_RETRY_LIMIT = 3;
 const DEFAULT_ANGLE_CONTROL_VALUES: SmartCanvasAngleControlValues = { horizontal: 0, vertical: 15, zoom: 5 };
 const DETAIL_ENHANCE_PROMPT = "请对这张图片进行细节增强和高清修复，提升清晰度、纹理细节、边缘锐度和整体质感，同时严格保留原始构图、主体、颜色关系和风格，不新增无关元素。";
 const AI_BACKGROUND_REMOVAL_PROMPT = "AI 抠图：自动识别图片中的主要主体，移除背景并输出透明背景 PNG。保持主体形状、纹理、颜色和像素细节，避免新增或重绘无关内容。注意：这是 AI 编辑，可能会重绘图片内容。";
@@ -175,6 +185,13 @@ type SmartCanvasUpdateOptions = {
 type SmartCanvasGenerationNode = SmartCanvasItem & { type: "image_generation" | "video_generation" };
 type PendingImageUploadNode = {
   nodeId: string;
+};
+
+type PromptSplitFanoutPair = {
+  generatorId: string;
+  outputId: string;
+  taskId: string;
+  shouldPoll: boolean;
 };
 
 function isMaskImageRef(ref: CanvasImageRef) {
@@ -665,6 +682,343 @@ function cleanLlmPromptOutput(value: string) {
   return text;
 }
 
+function promptSplitCount(node: SmartCanvasItem) {
+  return Math.max(1, Math.min(10, Math.round(Number(node.data?.split_count || 1)) || 1));
+}
+
+function promptSplitExecutionMode(node: SmartCanvasItem) {
+  return node.data?.direct_generate === true ? "direct" as const : "nodes" as const;
+}
+
+function promptSplitStatusIsActive(status: PromptSplitStatus | undefined, executionMode: PromptSplitBatch["execution_mode"] | undefined) {
+  if (status === "splitting" || status === "submitting" || status === "running") {
+    return true;
+  }
+  return executionMode === "direct" && status === "ready";
+}
+
+function promptSplitBatchIsActive(batch: PromptSplitBatch) {
+  return promptSplitStatusIsActive(batch.status, batch.execution_mode);
+}
+
+function promptSplitNodeTaskStatus(status: PromptSplitStatus, executionMode: PromptSplitBatch["execution_mode"]): CreationTask["status"] {
+  if (status === "cancelled") {
+    return "cancelled";
+  }
+  if (status === "error") {
+    return "error";
+  }
+  if (status === "splitting" || status === "submitting" || status === "running" || (status === "ready" && executionMode === "direct")) {
+    return "running";
+  }
+  return "success";
+}
+
+function promptSplitItemTaskStatus(item: PromptSplitItem): CreationTask["status"] | undefined {
+  if (item.status === "error" || item.status === "cancelled" || item.status === "success" || item.status === "running" || item.status === "queued") {
+    return item.status;
+  }
+  return undefined;
+}
+
+function promptSplitItemShouldPoll(item: PromptSplitItem) {
+  return item.status === "queued" || item.status === "running" || item.status === "success";
+}
+
+function promptSplitTemplateForNode(canvas: SmartCanvasDocument, node: SmartCanvasItem) {
+  const storedTemplate = node.data?.prompt_split_template_node_id
+    ? canvas.nodes.find((item) => item.id === node.data?.prompt_split_template_node_id && item.type === "image_generation") || null
+    : null;
+  return outgoingItems(canvas, node.id, ["image_generation"])[0] || storedTemplate;
+}
+
+function promptSplitHasMaskSettings(value: unknown, depth = 0): boolean {
+  if (!value || depth > 5) {
+    return false;
+  }
+  if (Array.isArray(value)) {
+    return value.some((item) => promptSplitHasMaskSettings(item, depth + 1));
+  }
+  if (typeof value !== "object") {
+    return false;
+  }
+  return Object.entries(value as Record<string, unknown>).some(([key, item]) => {
+    if (/mask/i.test(key) && Boolean(item)) {
+      return true;
+    }
+    return promptSplitHasMaskSettings(item, depth + 1);
+  });
+}
+
+function promptSplitTemplateValidation(canvas: SmartCanvasDocument, node: SmartCanvasItem): { template: SmartCanvasItem | null; reason: string } {
+  const directImageTemplates = outgoingItems(canvas, node.id, ["image_generation"]);
+  const directVideoTemplates = outgoingItems(canvas, node.id, ["video_generation"]);
+  if (directImageTemplates.length > 1) {
+    return { template: null, reason: "AI 提示词只能保留一个直接下游图片生成节点作为拆分模板" };
+  }
+  if (directVideoTemplates.length > 0) {
+    return { template: null, reason: "提示词拆分只支持文生图模板，不能连接视频生成节点" };
+  }
+  const template = promptSplitTemplateForNode(canvas, node);
+  if (!template) {
+    return { template: null, reason: "" };
+  }
+  const directInputs = generatorDirectInputImages(canvas, template);
+  const linkedInputs = incomingItems(canvas, template.id).filter((item) => item.id !== node.id);
+  const hasLinkedImageInput = linkedInputs.some((item) => nodeInputImagesForCanvas(canvas, item).length > 0);
+  const hasVideoInput = linkedInputs.some((item) => item.type === "video_generation" || (item.data?.videos || item.data?.output?.videos || []).length > 0);
+  const hasStoredImageInput = (template.data?.input_images || []).length > 0 || (template.data?.source_images || []).length > 0;
+  if (directInputs.length > 0 || hasStoredImageInput || hasLinkedImageInput || hasVideoInput) {
+    return { template: null, reason: "提示词拆分只支持纯文生图模板，请移除参考图、图生图或视频输入" };
+  }
+  if (template.data?.input_image_mask || promptSplitHasMaskSettings(template.data?.image_model_settings)) {
+    return { template: null, reason: "提示词拆分不支持蒙版或图片编辑模板" };
+  }
+  return { template, reason: "" };
+}
+
+function promptSplitImageRequest(generator: SmartCanvasItem) {
+  const proPayload = generatorProStudioEnabled(generator) ? generatorProStudioPayload(generator, "") : undefined;
+  if (proPayload) {
+    const {
+      prompt: _prompt,
+      n: _count,
+      image_urls: _imageUrls,
+      input_image_mask: _mask,
+      mask_url: _maskUrl,
+      ...imageRequest
+    } = proPayload;
+    return {
+      ...imageRequest,
+      visibility: generatorImageVisibility(generator),
+      n: 1,
+    };
+  }
+  const modelFields = generatorImageModelTaskFields(generator);
+  return {
+    ...imageTaskRequestBodyFields(buildImageTaskRequestParameters({
+      model: generatorImageModel(generator),
+      size: generatorImageSize(generator),
+      imageResolution: generatorImageResolution(generator),
+      quality: generatorImageQuality(generator),
+      outputFormat: generatorOutputFormat(generator),
+      outputCompression: generatorOutputCompression(generator),
+      toolOptions: modelFields?.toolOptions,
+    })),
+    ...modelFields?.extraBody,
+    visibility: generatorImageVisibility(generator),
+    n: 1,
+  };
+}
+
+function promptSplitPairPosition(canvas: SmartCanvasDocument, node: SmartCanvasItem, template: SmartCanvasItem | null, index: number) {
+  const column = index % 2;
+  let row = Math.floor(index / 2);
+  const baseX = template
+    ? Number(template.position?.x || 0)
+    : Number(node.position?.x || 0) + 390;
+  const baseY = template
+    ? Number(template.position?.y || 0) + 380
+    : Number(node.position?.y || 0);
+  const occupied = canvas.nodes.map(canvasItemRect);
+  while (row < 100) {
+    const x = baseX + column * 760;
+    const y = baseY + row * 340;
+    const generatorRect = { x, y, w: 340, h: 270 };
+    const outputRect = { x: x + 380, y: y + 24, w: 320, h: 220 };
+    const collides = occupied.some((rect) => rectIntersectionArea(generatorRect, rect) > 0 || rectIntersectionArea(outputRect, rect) > 0);
+    if (!collides) {
+      return { x, y };
+    }
+    row += 1;
+  }
+  return { x: baseX + column * 760, y: baseY + row * 340 };
+}
+
+function promptSplitGeneratorData(template: SmartCanvasItem | null, position: { x: number; y: number }) {
+  const generator = createGeneratorNode(position);
+  const source = template?.type === "image_generation" ? template : generator;
+  return {
+    ...generator,
+    data: {
+      ...generator.data,
+      model: generatorImageModel(source),
+      size: generatorImageSize(source),
+      size_user_modified: source.data?.size_user_modified === true,
+      image_resolution: generatorImageResolution(source) || "",
+      image_resolution_user_modified: source.data?.image_resolution_user_modified === true,
+      output_format: generatorOutputFormat(source),
+      output_compression: generatorOutputCompression(source),
+      image_model_settings: source.data?.image_model_settings,
+      professional_mode: source.data?.professional_mode === true,
+      pro_studio: source.data?.pro_studio,
+      pro_studio_state: source.data?.pro_studio_state,
+      official_settings: source.data?.official_settings,
+      background: source.data?.background,
+      moderation: source.data?.moderation,
+      style: source.data?.style,
+      partial_images: source.data?.partial_images,
+      quality: generatorImageQuality(source) || "auto",
+      visibility: generatorImageVisibility(source),
+      n: 1,
+      input_images: [],
+      mention_images: [],
+      source_images: [],
+      input_image_mask: "",
+      width: 340,
+      height: 270,
+      node_view: "compact" as const,
+      node_size_user_modified: false,
+    },
+  };
+}
+
+function syncPromptSplitBatch(canvas: SmartCanvasDocument, nodeId: string, batch: PromptSplitBatch, template: SmartCanvasItem | null): { canvas: SmartCanvasDocument; pairs: PromptSplitFanoutPair[] } {
+  const items = [...batch.items].sort((left, right) => left.index - right.index);
+  const allPromptsReady = items.length === batch.split_count && items.every((item) => item.prompt.trim());
+  const nodeStatus = promptSplitNodeTaskStatus(batch.status, batch.execution_mode);
+  let nodes = canvas.nodes.map((item) => item.id === nodeId
+    ? {
+        ...item,
+        data: {
+          ...item.data,
+          split_count: batch.split_count,
+          direct_generate: batch.execution_mode === "direct",
+          prompt_split_batch_id: batch.id,
+          prompt_split_template_node_id: template?.id || item.data?.prompt_split_template_node_id || "",
+          prompt_split_status: batch.status,
+          prompt_split_execution_mode: batch.execution_mode,
+          prompt_split_items: items,
+          output: { text: "", raw: { prompt_split_batch_id: batch.id, prompt_split_status: batch.status } },
+          status: nodeStatus,
+          task_id: batch.split_task_id || "",
+          error: batch.error || "",
+          last_run_error_detail: batch.status === "error" || batch.status === "cancelled" ? batch.error || "" : "",
+          started_at: item.data?.started_at || batch.created_at,
+          updated_at: batch.updated_at,
+        },
+      }
+    : item);
+  let edges = canvas.edges;
+  const pairs: PromptSplitFanoutPair[] = [];
+  if (!allPromptsReady) {
+    return { canvas: { ...canvas, nodes, edges }, pairs };
+  }
+  const sourceNode = nodes.find((item) => item.id === nodeId);
+  const replaceBatchId = sourceNode?.data?.prompt_split_replace_batch_id || "";
+  if (replaceBatchId && replaceBatchId !== batch.id) {
+    const removedIds = new Set(nodes.filter((item) => item.data?.prompt_split_batch_id === replaceBatchId).map((item) => item.id));
+    nodes = nodes
+      .filter((item) => !removedIds.has(item.id))
+      .map((item) => item.id === nodeId ? { ...item, data: { ...item.data, prompt_split_replace_batch_id: "" } } : item);
+    edges = edges.filter((edge) => !removedIds.has(edge.source) && !removedIds.has(edge.target));
+  }
+  for (const [positionIndex, item] of items.entries()) {
+    const existingGenerator = nodes.find((node) => node.type === "image_generation" && node.data?.prompt_split_batch_id === batch.id && node.data?.prompt_split_index === item.index);
+    const layoutCanvas = { ...canvas, nodes, edges };
+    const generatorPosition = promptSplitPairPosition(layoutCanvas, nodes.find((node) => node.id === nodeId) || canvas.nodes.find((node) => node.id === nodeId) || createLlmNode({ x: 0, y: 0 }), template, positionIndex);
+    const templateGenerator = promptSplitGeneratorData(template, generatorPosition);
+    const taskStatus = batch.execution_mode === "direct" ? promptSplitItemTaskStatus(item) : undefined;
+    const taskId = batch.execution_mode === "direct" ? item.task_id || "" : "";
+    const createdGenerator = {
+      ...templateGenerator,
+      data: {
+        ...templateGenerator.data,
+        prompt: item.prompt,
+        status: taskStatus,
+        error: item.error || "",
+        last_run_error_detail: taskStatus === "error" || taskStatus === "cancelled" ? item.error || "" : "",
+        task_id: taskId,
+        prompt_split_batch_id: batch.id,
+        prompt_split_index: item.index,
+        prompt_split_execution_mode: batch.execution_mode,
+        prompt_split_source_node_id: nodeId,
+        started_at: batch.created_at,
+        updated_at: batch.updated_at,
+      },
+    };
+    const generator = existingGenerator
+      ? {
+          ...existingGenerator,
+          data: {
+            ...existingGenerator.data,
+            prompt: existingGenerator.data?.prompt || item.prompt,
+            status: taskStatus,
+            error: item.error || "",
+            last_run_error_detail: taskStatus === "error" || taskStatus === "cancelled" ? item.error || "" : "",
+            task_id: taskId,
+            prompt_split_batch_id: batch.id,
+            prompt_split_index: item.index,
+            prompt_split_execution_mode: batch.execution_mode,
+            started_at: existingGenerator.data?.started_at || batch.created_at,
+            updated_at: batch.updated_at,
+          },
+        }
+      : createdGenerator;
+    if (existingGenerator) {
+      nodes = nodes.map((node) => node.id === generator.id ? generator : node);
+    } else {
+      nodes = [...nodes, generator];
+    }
+    const existingOutput = edges
+      .filter((edge) => edge.source === generator.id)
+      .map((edge) => nodes.find((node) => node.id === edge.target))
+      .find((node): node is SmartCanvasItem => node?.type === "result" && node.data?.prompt_split_batch_id === batch.id && node.data?.prompt_split_index === item.index);
+    const output = existingOutput
+      ? {
+          ...existingOutput,
+          name: taskStatus ? generationOutputNodeName(taskStatus) : existingOutput.name || "Output",
+          data: {
+            ...existingOutput.data,
+            prompt: existingOutput.data?.prompt || item.prompt,
+            model: existingOutput.data?.model || generator.data?.model || "auto",
+            status: taskStatus,
+            error: item.error || "",
+            last_run_error_detail: taskStatus === "error" || taskStatus === "cancelled" ? item.error || "" : "",
+            task_id: taskId,
+            prompt_split_batch_id: batch.id,
+            prompt_split_index: item.index,
+            prompt_split_execution_mode: batch.execution_mode,
+            started_at: existingOutput.data?.started_at || batch.created_at,
+            updated_at: batch.updated_at,
+          },
+        }
+      : {
+          ...createOutputNode({ x: Number(generator.position?.x || 0) + 380, y: Number(generator.position?.y || 0) + 24 }),
+          name: taskStatus ? generationOutputNodeName(taskStatus) : "Output",
+          data: {
+            output: { images: [] },
+            width: 320,
+            height: 220,
+            node_view: "full" as const,
+            node_size_user_modified: false,
+            prompt: item.prompt,
+            model: generator.data?.model || "auto",
+            status: taskStatus,
+            error: item.error || "",
+            last_run_error_detail: taskStatus === "error" || taskStatus === "cancelled" ? item.error || "" : "",
+            task_id: taskId,
+            prompt_split_batch_id: batch.id,
+            prompt_split_index: item.index,
+            prompt_split_execution_mode: batch.execution_mode,
+            prompt_split_source_node_id: nodeId,
+            started_at: batch.created_at,
+            updated_at: batch.updated_at,
+          },
+        };
+    if (existingOutput) {
+      nodes = nodes.map((node) => node.id === output.id ? output : node);
+    } else {
+      nodes = [...nodes, output];
+      edges = edges.some((edge) => edge.source === generator.id && edge.target === output.id)
+        ? edges
+        : [...edges, createSmartEdge(generator.id, output.id)];
+    }
+    pairs.push({ generatorId: generator.id, outputId: output.id, taskId, shouldPoll: batch.execution_mode === "direct" && promptSplitItemShouldPoll(item) });
+  }
+  return { canvas: { ...canvas, nodes, edges }, pairs };
+}
+
 function createCanvasNode(type: SmartCanvasItem["type"], position: { x: number; y: number }) {
   if (type === "prompt") {
     return createPromptNode(position);
@@ -751,7 +1105,7 @@ function canvasItemCenterOffset(type: SmartCanvasItem["type"]) {
     return { x: -190, y: -190 };
   }
   if (type === "llm") {
-    return { x: -190, y: -210 };
+    return { x: -165, y: -130 };
   }
   if (type === "loop") {
     return { x: -170, y: -150 };
@@ -773,7 +1127,7 @@ function nodeSizeForType(type: SmartCanvasItem["type"]) {
     return { w: 310, h: 210 };
   }
   if (type === "llm") {
-    return { w: 380, h: 420 };
+    return { w: 330, h: 260 };
   }
   if (type === "loop") {
     return { w: 340, h: 280 };
@@ -782,12 +1136,22 @@ function nodeSizeForType(type: SmartCanvasItem["type"]) {
     return { w: 340, h: 230 };
   }
   if (type === "image_generation") {
-    return { w: 390, h: 330 };
+    return { w: 390, h: 370 };
   }
   if (type === "video_generation") {
     return { w: 390, h: 420 };
   }
-  return { w: 440, h: 245 };
+  return { w: 320, h: 220 };
+}
+
+function nodeResizeBounds(item: SmartCanvasItem) {
+  if (item.type === "image_generation") {
+    return { minW: 300, minH: 220, maxW: 720, maxH: 720 };
+  }
+  if (item.type === "result") {
+    return { minW: 260, minH: 180, maxW: 720, maxH: 720 };
+  }
+  return { minW: 180, minH: 180, maxW: 720, maxH: 720 };
 }
 
 type CanvasNodeRect = {
@@ -811,6 +1175,137 @@ function rectIntersectionArea(a: CanvasNodeRect, b: CanvasNodeRect) {
   const w = Math.max(0, Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x));
   const h = Math.max(0, Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y));
   return w * h;
+}
+
+function isPromptSplitFanoutNode(item: SmartCanvasItem, batchId?: string) {
+  return (item.type === "image_generation" || item.type === "result") &&
+    Boolean(item.data?.prompt_split_source_node_id) &&
+    Boolean(item.data?.prompt_split_batch_id) &&
+    (!batchId || item.data?.prompt_split_batch_id === batchId);
+}
+
+function promptSplitBatchIdsForCanvas(canvas: SmartCanvasDocument | null) {
+  const batches = new Map<string, string>();
+  for (const item of canvas?.nodes || []) {
+    if (item.type !== "image_generation" || !isPromptSplitFanoutNode(item)) {
+      continue;
+    }
+    const batchId = item.data?.prompt_split_batch_id || "";
+    const updatedAt = item.data?.updated_at || item.data?.created_at || "";
+    const current = batches.get(batchId) || "";
+    batches.set(batchId, current > updatedAt ? current : updatedAt);
+  }
+  return Array.from(batches.entries())
+    .sort((left, right) => left[1].localeCompare(right[1]) || left[0].localeCompare(right[0]))
+    .map(([batchId]) => batchId);
+}
+
+function expandedCanvasRect(rect: CanvasNodeRect, gap: number): CanvasNodeRect {
+  return {
+    x: rect.x - gap,
+    y: rect.y - gap,
+    w: rect.w + gap * 2,
+    h: rect.h + gap * 2,
+  };
+}
+
+function arrangedPromptSplitBatch(canvas: SmartCanvasDocument, batchId: string) {
+  const batchNodes = canvas.nodes.filter((item) => isPromptSplitFanoutNode(item, batchId));
+  const generators = batchNodes
+    .filter((item) => item.type === "image_generation")
+    .sort((left, right) => Number(left.data?.prompt_split_index || 0) - Number(right.data?.prompt_split_index || 0));
+  if (generators.length === 0) {
+    return { canvas, nodeIds: [] as string[] };
+  }
+
+  const outputsByIndex = new Map<number, SmartCanvasItem>();
+  for (const output of batchNodes) {
+    if (output.type === "result") {
+      outputsByIndex.set(Number(output.data?.prompt_split_index || 0), output);
+    }
+  }
+  const pairs = generators.map((generator) => {
+    const index = Number(generator.data?.prompt_split_index || 0);
+    const output = outputsByIndex.get(index) || null;
+    const generatorRect = canvasItemRect(generator);
+    const outputRect = output ? canvasItemRect(output) : null;
+    return {
+      generator,
+      output,
+      generatorSize: { w: generatorRect.w, h: generatorRect.h },
+      outputSize: outputRect ? { w: outputRect.w, h: outputRect.h } : null,
+      width: generatorRect.w + (outputRect ? 40 + outputRect.w : 0),
+      height: Math.max(generatorRect.h, outputRect ? outputRect.h + 24 : 0),
+    };
+  });
+  const columnWidths = [0, 0];
+  const rowHeights: number[] = [];
+  pairs.forEach((pair, index) => {
+    const column = index % 2;
+    const row = Math.floor(index / 2);
+    columnWidths[column] = Math.max(columnWidths[column], pair.width);
+    rowHeights[row] = Math.max(rowHeights[row] || 0, pair.height);
+  });
+  const columnX = [0, columnWidths[0] + 80];
+  const rowY: number[] = [];
+  rowHeights.forEach((height, row) => {
+    rowY[row] = row === 0 ? 0 : rowY[row - 1] + rowHeights[row - 1] + 70;
+  });
+
+  const currentRects = batchNodes.map(canvasItemRect);
+  const initialBaseX = Math.min(...currentRects.map((rect) => rect.x));
+  const initialBaseY = Math.min(...currentRects.map((rect) => rect.y));
+  const occupied = canvas.nodes
+    .filter((item) => !isPromptSplitFanoutNode(item, batchId))
+    .map((item) => expandedCanvasRect(canvasItemRect(item), 28));
+  const blockHeight = rowY[rowY.length - 1] + rowHeights[rowHeights.length - 1];
+  let baseX = initialBaseX;
+  let baseY = initialBaseY;
+  let placements: Array<{ id: string; x: number; y: number; rect: CanvasNodeRect }> = [];
+
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    placements = pairs.flatMap((pair, index) => {
+      const column = index % 2;
+      const row = Math.floor(index / 2);
+      const generatorX = baseX + columnX[column];
+      const generatorY = baseY + rowY[row];
+      const generatorPlacement = {
+        id: pair.generator.id,
+        x: generatorX,
+        y: generatorY,
+        rect: { x: generatorX, y: generatorY, w: pair.generatorSize.w, h: pair.generatorSize.h },
+      };
+      if (!pair.output || !pair.outputSize) {
+        return [generatorPlacement];
+      }
+      const outputX = generatorX + pair.generatorSize.w + 40;
+      const outputY = generatorY + 24;
+      return [generatorPlacement, {
+        id: pair.output.id,
+        x: outputX,
+        y: outputY,
+        rect: { x: outputX, y: outputY, w: pair.outputSize.w, h: pair.outputSize.h },
+      }];
+    });
+    const collides = placements.some((placement) => occupied.some((rect) => rectIntersectionArea(expandedCanvasRect(placement.rect, 28), rect) > 0));
+    if (!collides) {
+      break;
+    }
+    baseY = initialBaseY + (attempt + 1) * (blockHeight + 90);
+    if ((attempt + 1) % 8 === 0) {
+      baseX += columnWidths[0] + columnWidths[1] + 240;
+      baseY = initialBaseY;
+    }
+  }
+
+  const positions = new Map(placements.map((placement) => [placement.id, { x: placement.x, y: placement.y }]));
+  return {
+    canvas: {
+      ...canvas,
+      nodes: canvas.nodes.map((item) => positions.has(item.id) ? { ...item, position: positions.get(item.id) } : item),
+    },
+    nodeIds: placements.map((placement) => placement.id),
+  };
 }
 
 function groupPositionForItems(canvas: SmartCanvasDocument, itemIds: string[]) {
@@ -1067,6 +1562,7 @@ export function useSmartCanvasController() {
   const [assetSidebarActivated, setAssetSidebarActivated] = useState(false);
   const [selectedItemId, setSelectedItemId] = useState("");
   const [selectedItemIds, setSelectedItemIds] = useState<string[]>([]);
+  const [activePromptSplitBatchId, setActivePromptSplitBatchId] = useState("");
   const [viewport, setViewport] = useState<SmartCanvasViewport>(DEFAULT_SMART_VIEWPORT);
   const [tool, setTool] = useState<SmartCanvasTool>("pan");
   const [dragState, setDragState] = useState<SmartCanvasDragState>({ kind: "none" });
@@ -1116,11 +1612,14 @@ export function useSmartCanvasController() {
   const savePromiseRef = useRef<Promise<SmartCanvasDocument | null> | null>(null);
   const dirtyVersionRef = useRef(0);
   const pollingTasksRef = useRef(new Set<string>());
+  const promptSplitRecoveryRef = useRef(new Set<string>());
   const loopStopRequestsRef = useRef(new Set<string>());
   const dragStateRef = useRef<SmartCanvasDragState>({ kind: "none" });
   const connectStateRef = useRef<SmartCanvasConnectState>({ kind: "none" });
   const selectedItemIdRef = useRef("");
   const selectedItemIdsRef = useRef<string[]>([]);
+  const previousPromptSplitBatchCountRef = useRef(0);
+  const previousPromptSplitSelectedItemIdRef = useRef("");
   const lightweightMediaTimerRef = useRef<number | null>(null);
   const applyingHistoryRef = useRef(false);
   const historyCommitBaseRef = useRef<SmartCanvasDocument | null>(null);
@@ -1134,6 +1633,7 @@ export function useSmartCanvasController() {
     () => canvas?.nodes.find((item) => item.id === selectedItemId) || null,
     [canvas, selectedItemId],
   );
+  const promptSplitBatchIds = useMemo(() => promptSplitBatchIdsForCanvas(canvas), [canvas]);
   const blankNodeCount = useMemo(() => blankSmartCanvasItemIds(canvas).length, [canvas]);
   const selectedImageToolDisabledReason = useMemo(() => imageToolUnavailableReason(selectedItem), [selectedItem]);
   const activeAssetCollections = useMemo(() => assetCollections[assetLibraryScope] || [], [assetCollections, assetLibraryScope]);
@@ -1166,6 +1666,33 @@ export function useSmartCanvasController() {
   useEffect(() => {
     selectedItemIdsRef.current = selectedItemIds;
   }, [selectedItemIds]);
+
+  useEffect(() => {
+    if (promptSplitBatchIds.length > previousPromptSplitBatchCountRef.current) {
+      previousPromptSplitBatchCountRef.current = promptSplitBatchIds.length;
+      setActivePromptSplitBatchId(promptSplitBatchIds.at(-1) || "");
+      return;
+    }
+    previousPromptSplitBatchCountRef.current = promptSplitBatchIds.length;
+    if (promptSplitBatchIds.length === 0) {
+      setActivePromptSplitBatchId("");
+      return;
+    }
+    if (!promptSplitBatchIds.includes(activePromptSplitBatchId)) {
+      setActivePromptSplitBatchId(promptSplitBatchIds.at(-1) || "");
+    }
+  }, [activePromptSplitBatchId, promptSplitBatchIds]);
+
+  useEffect(() => {
+    if (selectedItemId === previousPromptSplitSelectedItemIdRef.current) {
+      return;
+    }
+    previousPromptSplitSelectedItemIdRef.current = selectedItemId;
+    const selected = canvas?.nodes.find((item) => item.id === selectedItemId);
+    if (selected?.data?.prompt_split_source_node_id && selected.data?.prompt_split_batch_id) {
+      setActivePromptSplitBatchId(selected.data.prompt_split_batch_id);
+    }
+  }, [canvas, selectedItemId]);
 
   useEffect(() => {
     if (saveState === "saving" && saveStateRef.current === "dirty") {
@@ -1304,6 +1831,7 @@ export function useSmartCanvasController() {
   }, []);
 
   const applyCanvas = useCallback((next: SmartCanvasDocument | null) => {
+    promptSplitRecoveryRef.current.clear();
     canvasRef.current = next;
     setCanvas(next);
     setViewport(next?.viewport || DEFAULT_SMART_VIEWPORT);
@@ -2049,8 +2577,9 @@ export function useSmartCanvasController() {
                 ...item,
                 data: {
                   ...item.data,
-                  width: Math.max(180, Math.min(720, activeDrag.startSize.w + dx)),
-                  height: Math.max(180, Math.min(720, activeDrag.startSize.h + dy)),
+                  width: Math.max(nodeResizeBounds(item).minW, Math.min(nodeResizeBounds(item).maxW, activeDrag.startSize.w + dx)),
+                  height: Math.max(nodeResizeBounds(item).minH, Math.min(nodeResizeBounds(item).maxH, activeDrag.startSize.h + dy)),
+                  node_size_user_modified: true,
                 },
               }
             : item),
@@ -2679,16 +3208,19 @@ export function useSmartCanvasController() {
       const dy = (event.clientY - dragState.startClientY) / viewportRef.current.zoom;
       updateCanvas((current) => ({
         ...current,
-        nodes: current.nodes.map((item) => item.id === dragState.itemId
-          ? {
+        nodes: current.nodes.map((item) => {
+          if (item.id !== dragState.itemId) return item;
+          const bounds = nodeResizeBounds(item);
+          return {
               ...item,
               data: {
                 ...item.data,
-                width: Math.max(180, Math.min(720, dragState.startSize.w + dx)),
-                height: Math.max(180, Math.min(720, dragState.startSize.h + dy)),
+                width: Math.max(bounds.minW, Math.min(bounds.maxW, dragState.startSize.w + dx)),
+                height: Math.max(bounds.minH, Math.min(bounds.maxH, dragState.startSize.h + dy)),
+                node_size_user_modified: true,
               },
-            }
-          : item),
+            };
+        }),
       }), false, undefined, { history: "skip" });
     }
   }, [connectState, dragState, setActiveConnectState, updateCanvas]);
@@ -2803,6 +3335,115 @@ export function useSmartCanvasController() {
     setViewport(next);
     viewportRef.current = next;
   }, [selectSingleItem]);
+
+  const focusPromptSplitBatch = useCallback((batchId: string) => {
+    const current = canvasRef.current;
+    const rect = boardRef.current?.getBoundingClientRect();
+    const batchNodes = current?.nodes.filter((item) => isPromptSplitFanoutNode(item, batchId)) || [];
+    if (!current || !rect || batchNodes.length === 0) {
+      return;
+    }
+    const bounds = batchNodes.map(canvasItemRect);
+    const minX = Math.min(...bounds.map((item) => item.x));
+    const minY = Math.min(...bounds.map((item) => item.y));
+    const maxX = Math.max(...bounds.map((item) => item.x + item.w));
+    const maxY = Math.max(...bounds.map((item) => item.y + item.h));
+    const zoom = clampZoom(Math.min(
+      rect.width / Math.max(420, maxX - minX + 220),
+      rect.height / Math.max(320, maxY - minY + 220),
+      0.82,
+    ));
+    const next = {
+      x: rect.width / 2 - ((minX + maxX) / 2) * zoom,
+      y: rect.height / 2 - ((minY + maxY) / 2) * zoom,
+      zoom,
+    };
+    const ids = batchNodes.map((item) => item.id);
+    selectedItemIdsRef.current = ids;
+    selectedItemIdRef.current = ids[0] || "";
+    setSelectedItemIds(ids);
+    setSelectedItemId(ids[0] || "");
+    setViewport(next);
+    viewportRef.current = next;
+    commitViewport(next, true);
+  }, [commitViewport]);
+
+  const arrangePromptSplitBatch = useCallback((batchId: string) => {
+    let arrangedIds: string[] = [];
+    updateCanvas((current) => {
+      const arranged = arrangedPromptSplitBatch(current, batchId);
+      arrangedIds = arranged.nodeIds;
+      return arranged.canvas;
+    }, true, "整理提示词批次");
+    if (arrangedIds.length === 0) {
+      toast.info("当前批次没有可整理的节点");
+      return;
+    }
+    selectedItemIdsRef.current = arrangedIds;
+    selectedItemIdRef.current = arrangedIds[0] || "";
+    setSelectedItemIds(arrangedIds);
+    setSelectedItemId(arrangedIds[0] || "");
+    toast.success(`已整理 ${Math.ceil(arrangedIds.length / 2)} 组节点`);
+  }, [updateCanvas]);
+
+  const deletePromptSplitBatchNodes = useCallback((batchId: string) => {
+    const current = canvasRef.current;
+    if (!current) {
+      return false;
+    }
+    const fanoutNodes = current.nodes.filter((item) => isPromptSplitFanoutNode(item, batchId));
+    const sourceNode = current.nodes.find((item) => item.type === "llm" && item.data?.prompt_split_batch_id === batchId);
+    const sourceBatchActive = Boolean(sourceNode && promptSplitStatusIsActive(
+      sourceNode.data?.prompt_split_status,
+      sourceNode.data?.prompt_split_execution_mode || (sourceNode.data?.direct_generate ? "direct" : "nodes"),
+    ));
+    if (sourceBatchActive || fanoutNodes.some((item) => isActiveTask(item.data?.status))) {
+      toast.error("批次仍有任务进行中，请完成或中断后再删除");
+      return false;
+    }
+    if (fanoutNodes.length === 0) {
+      toast.info("当前批次没有可删除的节点");
+      return false;
+    }
+    const removedIds = new Set(fanoutNodes.map((item) => item.id));
+    updateCanvas((doc) => ({
+      ...doc,
+      nodes: doc.nodes
+        .filter((item) => !removedIds.has(item.id))
+        .map((item) => {
+          const pruned = pruneGroupReferences(item, removedIds);
+          if (pruned.type !== "llm" || pruned.data?.prompt_split_batch_id !== batchId) {
+            return pruned;
+          }
+          return {
+            ...pruned,
+            data: {
+              ...pruned.data,
+              prompt_split_batch_id: "",
+              prompt_split_status: undefined,
+              prompt_split_execution_mode: undefined,
+              prompt_split_items: [],
+              prompt_split_replace_batch_id: "",
+              task_id: "",
+              status: undefined,
+              error: "",
+              last_run_error_detail: "",
+              output: undefined,
+              updated_at: new Date().toISOString(),
+            },
+          };
+        }),
+      edges: doc.edges.filter((edge) => !removedIds.has(edge.source) && !removedIds.has(edge.target)),
+    }), true, "删除提示词批次");
+    const remainingIds = selectedItemIdsRef.current.filter((id) => !removedIds.has(id));
+    const nextPrimary = removedIds.has(selectedItemIdRef.current) ? remainingIds[0] || "" : selectedItemIdRef.current;
+    selectedItemIdsRef.current = remainingIds;
+    selectedItemIdRef.current = nextPrimary;
+    setSelectedItemIds(remainingIds);
+    setSelectedItemId(nextPrimary);
+    toast.success(`已删除 ${Math.ceil(fanoutNodes.length / 2)} 组批次节点`);
+    return true;
+  }, [updateCanvas]);
 
   const moveItemToScreenPoint = useCallback((itemId: string, point: { x: number; y: number }) => {
     const rect = boardRef.current?.getBoundingClientRect();
@@ -3336,6 +3977,77 @@ export function useSmartCanvasController() {
     }
   }, [updateCanvas]);
 
+  const applyPromptSplitBatch = useCallback((nodeId: string, batch: PromptSplitBatch, historyLabel?: string, dirty = true) => {
+    const current = canvasRef.current;
+    const node = current?.nodes.find((item) => item.id === nodeId);
+    if (!current || !node || node.type !== "llm") {
+      return [] as PromptSplitFanoutPair[];
+    }
+    const template = promptSplitTemplateForNode(current, node);
+    const synced = syncPromptSplitBatch(current, nodeId, batch, template);
+    updateCanvas(() => synced.canvas, dirty, historyLabel, historyLabel ? undefined : { history: "skip" });
+    if (batch.execution_mode === "direct") {
+      synced.pairs
+        .filter((pair) => pair.taskId && pair.shouldPoll)
+        .forEach((pair) => void pollTaskIntoGenerator(pair.taskId, pair.generatorId, [pair.outputId]));
+    }
+    return synced.pairs;
+  }, [pollTaskIntoGenerator, updateCanvas]);
+
+  const pollPromptSplitBatch = useCallback(async (batchId: string, nodeId: string, fetchImmediately = false) => {
+    const pollingKey = `prompt-split:${batchId}:${nodeId}`;
+    if (pollingTasksRef.current.has(pollingKey)) {
+      return;
+    }
+    pollingTasksRef.current.add(pollingKey);
+    try {
+      let active = true;
+      let waitBeforeFetch = !fetchImmediately;
+      let consecutiveFailures = 0;
+      while (active) {
+        if (waitBeforeFetch) {
+          await new Promise((resolve) => window.setTimeout(resolve, PROMPT_SPLIT_POLL_INTERVAL_MS));
+        }
+        waitBeforeFetch = true;
+        try {
+          const batch = await fetchPromptSplit(batchId);
+          consecutiveFailures = 0;
+          active = promptSplitBatchIsActive(batch);
+          const historyLabel = active
+            ? undefined
+            : batch.status === "cancelled"
+              ? "已中断提示词拆分"
+              : batch.status === "error"
+                ? "提示词拆分失败"
+                : "完成提示词拆分";
+          applyPromptSplitBatch(nodeId, batch, historyLabel, true);
+        } catch (error) {
+          consecutiveFailures += 1;
+          const message = error instanceof Error ? error.message : "同步提示词拆分任务失败";
+          updateCanvas((current) => ({
+            ...current,
+            nodes: current.nodes.map((item) => item.id === nodeId && item.data?.prompt_split_batch_id === batchId
+              ? {
+                  ...item,
+                  data: {
+                    ...item.data,
+                    last_run_error_detail: `暂时无法同步提示词拆分状态（${consecutiveFailures}/${PROMPT_SPLIT_SYNC_RETRY_LIMIT}）：${message}`,
+                    updated_at: new Date().toISOString(),
+                  },
+                }
+              : item),
+          }), true, undefined, { history: "skip" });
+          if (consecutiveFailures >= PROMPT_SPLIT_SYNC_RETRY_LIMIT) {
+            toast.info("提示词拆分状态暂时无法同步，恢复网络后重新打开画布即可继续恢复");
+            return;
+          }
+        }
+      }
+    } finally {
+      pollingTasksRef.current.delete(pollingKey);
+    }
+  }, [applyPromptSplitBatch, updateCanvas]);
+
   const runLlmNode = useCallback(async (nodeId: string) => {
     const current = canvasRef.current;
     const node = current?.nodes.find((item) => item.id === nodeId);
@@ -3359,6 +4071,99 @@ export function useSmartCanvasController() {
       toast.error(message);
       return;
     }
+    const splitCount = promptSplitCount(node);
+    if (splitCount > 1) {
+      if (inputImages.length > 0) {
+        const message = "提示词拆分当前只支持文本输入，请移除连接到 AI 提示词节点的图片";
+        updateCanvas((doc) => ({
+          ...doc,
+          nodes: doc.nodes.map((item) => item.id === node.id
+            ? { ...item, data: { ...item.data, ...canvasBlockedData("image", "图片输入", message), prompt_split_status: "error" } }
+            : item),
+        }), true, "提示词拆分阻断");
+        toast.error(message);
+        return;
+      }
+      const validation = promptSplitTemplateValidation(current, node);
+      if (validation.reason) {
+        updateCanvas((doc) => ({
+          ...doc,
+          nodes: doc.nodes.map((item) => item.id === node.id
+            ? { ...item, data: { ...item.data, ...canvasBlockedData("template", "图片生成模板", validation.reason), prompt_split_status: "error" } }
+            : item),
+        }), true, "提示词拆分阻断");
+        toast.error(validation.reason);
+        return;
+      }
+      const executionMode = promptSplitExecutionMode(node);
+      const clientTaskId = !node.data?.prompt_split_batch_id && node.data?.prompt_split_client_task_id
+        ? node.data.prompt_split_client_task_id
+        : uniqueTaskId("smart-canvas-prompt-split");
+      const imageTemplate = validation.template || createGeneratorNode({ x: 0, y: 0 });
+      setRunning(true);
+      try {
+        updateCanvas((doc) => ({
+          ...doc,
+          nodes: doc.nodes.map((item) => item.id === node.id
+            ? {
+                ...item,
+                data: {
+                  ...item.data,
+                  split_count: splitCount,
+                  direct_generate: executionMode === "direct",
+                  prompt_split_client_task_id: clientTaskId,
+                  prompt_split_batch_id: "",
+                  prompt_split_template_node_id: validation.template?.id || "",
+                  prompt_split_status: "splitting",
+                  prompt_split_execution_mode: executionMode,
+                  prompt_split_items: [],
+                  status: "running",
+                  task_id: "",
+                  error: "",
+                  last_run_error_detail: "",
+                  output: { text: "", raw: { prompt_split_status: "splitting" } },
+                  started_at: new Date().toISOString(),
+                  updated_at: new Date().toISOString(),
+                },
+              }
+            : item),
+        }), true, "开始提示词拆分");
+        const batch = await createPromptSplit({
+          client_task_id: clientTaskId,
+          prompt: inputText,
+          model: node.data?.model || "auto",
+          split_count: splitCount,
+          execution_mode: executionMode,
+          ...(executionMode === "direct" ? { image_request: promptSplitImageRequest(imageTemplate) } : {}),
+        });
+        applyPromptSplitBatch(node.id, batch, "提交提示词拆分", true);
+        if (promptSplitBatchIsActive(batch)) {
+          void pollPromptSplitBatch(batch.id, node.id);
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "提交提示词拆分失败";
+        updateCanvas((doc) => ({
+          ...doc,
+          nodes: doc.nodes.map((item) => item.id === node.id
+            ? {
+                ...item,
+                data: {
+                  ...item.data,
+                  status: "error",
+                  prompt_split_status: "error",
+                  error: message,
+                  last_run_error_detail: message,
+                  updated_at: new Date().toISOString(),
+                },
+              }
+            : item),
+        }), true, "提示词拆分失败");
+        toast.error(message);
+      } finally {
+        setRunning(false);
+      }
+      return;
+    }
     setRunning(true);
     try {
       updateCanvas((doc) => ({
@@ -3368,6 +4173,14 @@ export function useSmartCanvasController() {
               ...item,
               data: {
                 ...item.data,
+                split_count: 1,
+                direct_generate: false,
+                prompt_split_client_task_id: "",
+                prompt_split_batch_id: "",
+                prompt_split_template_node_id: "",
+                prompt_split_status: undefined,
+                prompt_split_execution_mode: undefined,
+                prompt_split_items: [],
                 status: "running",
                 error: "",
                 output: { text: "" },
@@ -3434,7 +4247,7 @@ export function useSmartCanvasController() {
     } finally {
       setRunning(false);
     }
-  }, [imageRefsToFiles, pollTaskIntoLlmNode, updateCanvas]);
+  }, [applyPromptSplitBatch, imageRefsToFiles, pollPromptSplitBatch, pollTaskIntoLlmNode, updateCanvas]);
 
   const runLoopNode = useCallback(async (loopId: string, generatorId?: string) => {
     const current = canvasRef.current;
@@ -4112,6 +4925,20 @@ export function useSmartCanvasController() {
       await stopLoopNode(nodeId);
       return;
     }
+    if (node.type === "llm" && node.data?.prompt_split_batch_id && promptSplitStatusIsActive(
+      node.data?.prompt_split_status,
+      node.data?.prompt_split_execution_mode || (node.data?.direct_generate ? "direct" : "nodes"),
+    )) {
+      try {
+        const batch = await cancelPromptSplit(node.data.prompt_split_batch_id);
+        applyPromptSplitBatch(node.id, batch, "中断提示词拆分", true);
+        toast.info("已请求中断提示词拆分");
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "中断提示词拆分失败";
+        toast.error(message);
+      }
+      return;
+    }
     if (!isActiveTask(node.data?.status)) {
       toast.info("当前节点没有运行中的任务");
       return;
@@ -4149,7 +4976,7 @@ export function useSmartCanvasController() {
       await Promise.allSettled(Array.from(taskIds).map((taskId) => cancelCreationTask(taskId)));
     }
     toast.info(`已请求中断${label}`);
-  }, [stopLoopNode, updateCanvas]);
+  }, [applyPromptSplitBatch, stopLoopNode, updateCanvas]);
 
   useEffect(() => {
     const current = canvasRef.current;
@@ -4167,7 +4994,29 @@ export function useSmartCanvasController() {
       void pollTaskIntoGenerator(item.data?.task_id || "", item.id, outputIds);
       });
     current.nodes
+      .filter((item) => item.type === "image_generation" && item.data?.prompt_split_batch_id && item.data?.prompt_split_execution_mode === "direct" && item.data?.task_id && item.data?.status === "success" && (item.data?.output?.images || []).length === 0)
+      .forEach((item) => {
+        const outputIds = current.edges
+          .filter((edge) => edge.source === item.id)
+          .map((edge) => current.nodes.find((node) => node.id === edge.target))
+          .filter((node): node is SmartCanvasItem => node?.type === "result")
+          .map((node) => node.id);
+        void pollTaskIntoGenerator(item.data?.task_id || "", item.id, outputIds);
+      });
+    current.nodes
+      .filter((item) => item.type === "llm" && item.data?.prompt_split_batch_id)
+      .forEach((item) => {
+        const batchId = item.data?.prompt_split_batch_id || "";
+        const recoveryKey = `${current.id}:${item.id}:${batchId}`;
+        if (promptSplitRecoveryRef.current.has(recoveryKey)) {
+          return;
+        }
+        promptSplitRecoveryRef.current.add(recoveryKey);
+        void pollPromptSplitBatch(batchId, item.id, true);
+      });
+    current.nodes
       .filter((item) => item.type === "llm" && item.data?.task_id && isActiveTask(item.data.status))
+      .filter((item) => !item.data?.prompt_split_batch_id)
       .forEach((item) => {
         void pollTaskIntoLlmNode(item.data?.task_id || "", item.id);
       });
@@ -4176,7 +5025,7 @@ export function useSmartCanvasController() {
       .forEach((item) => {
         void pollTaskIntoToolResult(item.data?.task_id || "", item.id, imageToolLabel(item.data?.tool_type || "image_edit"));
       });
-  }, [canvas?.id, pollTaskIntoGenerator, pollTaskIntoLlmNode, pollTaskIntoToolResult]);
+  }, [canvas, pollPromptSplitBatch, pollTaskIntoGenerator, pollTaskIntoLlmNode, pollTaskIntoToolResult]);
 
   const selectCanvas = useCallback(async (id: string) => {
     if (saveStateRef.current === "dirty" || saveStateRef.current === "error" || saveStateRef.current === "saving") {
@@ -4584,6 +5433,7 @@ export function useSmartCanvasController() {
     activeAssetCollectionId,
     selectedItemId,
     selectedItemIds,
+    activePromptSplitBatchId,
     selectedItem,
     blankNodeCount,
     viewport,
@@ -4626,6 +5476,7 @@ export function useSmartCanvasController() {
     uploadInputRef,
     setTool,
     setSelectedItemId,
+    setActivePromptSplitBatchId,
     selectItem,
     setCanvasPickerOpen,
     setCanvasPresetPickerOpen,
@@ -4672,6 +5523,9 @@ export function useSmartCanvasController() {
     zoomBy,
     fitContent,
     focusItem,
+    focusPromptSplitBatch,
+    arrangePromptSplitBatch,
+    deletePromptSplitBatchNodes,
     moveItemToScreenPoint,
     openImage,
     applyEditedImageFiles,

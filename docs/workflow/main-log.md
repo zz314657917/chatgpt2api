@@ -23,3 +23,20 @@
 260616 17:27 | task-011-ecommerce-production-acceptance | local-container-updated | codex | chatgpt2api:codex-20260616-task011-acceptance, version local-20260616-task011-acceptance
 260710 2344 | studio-bridge-model-scoped-apimart-billing | contract-approved | codex | docs/workflow/tasks/studio-bridge-model-scoped-apimart-billing.md
 260710 2358 | studio-bridge-model-scoped-apimart-billing | qa-pass | codex | docs/workflow/qa-reports/studio-bridge-model-scoped-apimart-billing-qa.md
+260711 1101 | task-013-prompt-split-canvas | contract-approved | codex | docs/workflow/tasks/task-013-prompt-split-canvas.md
+260711 1208 | task-013-prompt-split-canvas | build-complete | codex | docs/workflow/worker-results/task-013-prompt-split-canvas-result.md
+260711 1208 | task-013-prompt-split-canvas | qa-fail | codex | docs/workflow/qa-reports/task-013-prompt-split-canvas-qa.md
+260711 1621 | task-013-prompt-split-canvas | ui-fix-pass | codex | direct mode switch no longer starts a batch or shows interrupt; browser smoke PASS
+260711 1636 | task-013-prompt-split-canvas | local-container-updated | codex | chatgpt2api:codex-20260711-1621-direct-switch-fix, version task-013-prompt-split-docker-direct-switch
+260711 1700 | task-014-canvas-batch-layout | contract-approved | codex | docs/workflow/tasks/task-014-canvas-batch-layout.md
+260711 1735 | task-014-canvas-batch-layout | build-complete | codex | docs/workflow/worker-results/task-014-canvas-batch-layout-result.md
+260711 1735 | task-014-canvas-batch-layout | qa-pass | codex | docs/workflow/qa-reports/task-014-canvas-batch-layout-qa.md
+260711 1752 | task-014-canvas-batch-layout | local-container-updated | codex | chatgpt2api:codex-20260711-1740-task014-layout, version task-014-canvas-batch-layout
+260712 1032 | task-015-canvas-batch-controls | contract-approved | codex | docs/workflow/tasks/task-015-canvas-batch-controls.md
+260712 1056 | task-015-canvas-batch-controls | build-complete | codex | docs/workflow/worker-results/task-015-canvas-batch-controls-result.md
+260712 1056 | task-015-canvas-batch-controls | qa-pass | codex | docs/workflow/qa-reports/task-015-canvas-batch-controls-qa.md
+260712 1056 | task-015-canvas-batch-controls | local-container-updated | codex | chatgpt2api:codex-20260712-1049-task015-batch-controls, version task-015-canvas-batch-controls
+260712 1115 | task-016-canvas-topbar-batch-controls | contract-approved | codex | docs/workflow/tasks/task-016-canvas-topbar-batch-controls.md
+260712 2026 | task-016-canvas-topbar-batch-controls | build-complete | codex | docs/workflow/worker-results/task-016-canvas-topbar-batch-controls-result.md
+260712 2026 | task-016-canvas-topbar-batch-controls | qa-pass | codex | docs/workflow/qa-reports/task-016-canvas-topbar-batch-controls-qa.md
+260712 2026 | task-016-canvas-topbar-batch-controls | local-container-updated | codex | chatgpt2api:codex-20260712-2020-task016-topbar, version task-016-canvas-topbar-batch-controls

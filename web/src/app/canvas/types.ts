@@ -8,6 +8,9 @@ import type {
   CreationTask,
   ImageVisibility,
   ManagedImageSummary,
+  PromptSplitExecutionMode,
+  PromptSplitItem,
+  PromptSplitStatus,
 } from "@/lib/api";
 import type { ImageModelSettingsState } from "@/lib/image-model-settings";
 import type { ProStudioOfficialSettingsPayload, ProStudioPayloadMeta, ProStudioState } from "@/lib/pro-studio";
@@ -54,6 +57,9 @@ export type SmartCanvasItemData = {
   pro_studio_state?: ProStudioState;
   official_settings?: ProStudioOfficialSettingsPayload;
   background?: string;
+  moderation?: string;
+  style?: string;
+  partial_images?: number;
   duration?: number;
   aspect_ratio?: string;
   resolution?: string;
@@ -82,6 +88,8 @@ export type SmartCanvasItemData = {
   tool_parameters?: SmartCanvasImageToolParameters;
   width?: number;
   height?: number;
+  node_view?: "compact" | "full";
+  node_size_user_modified?: boolean;
   output?: CanvasNodeOutput;
   status?: CreationTask["status"];
   error?: string;
@@ -91,6 +99,17 @@ export type SmartCanvasItemData = {
   upload_status?: "uploading" | "error";
   upload_progress?: number;
   task_id?: string;
+  split_count?: number;
+  direct_generate?: boolean;
+  prompt_split_client_task_id?: string;
+  prompt_split_batch_id?: string;
+  prompt_split_template_node_id?: string;
+  prompt_split_status?: PromptSplitStatus;
+  prompt_split_execution_mode?: PromptSplitExecutionMode;
+  prompt_split_items?: PromptSplitItem[];
+  prompt_split_index?: number;
+  prompt_split_source_node_id?: string;
+  prompt_split_replace_batch_id?: string;
   started_at?: string;
   stop_requested?: boolean;
   created_at?: string;

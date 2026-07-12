@@ -59,6 +59,7 @@ type App struct {
 	textAssets   *service.TextAssetService
 	videoAssets  *service.VideoAssetService
 	tasks        *service.ImageTaskService
+	promptSplits *service.PromptSplitService
 	analytics    *service.AnalyticsService
 	canvases     *service.CanvasService
 	social       *service.SocialProjectService
@@ -184,6 +185,8 @@ func NewApp() (*App, error) {
 	app.tasks.SetTaskTimeoutGetter(func() time.Duration {
 		return time.Duration(app.config.ImageTaskTimeoutSeconds()) * time.Second
 	})
+	app.promptSplits = service.NewStoredPromptSplitService(storageBackend, app.tasks)
+	app.promptSplits.Resume()
 	accounts.StartLimitedWatcher(ctx, time.Duration(cfg.RefreshAccountIntervalMinute())*time.Minute)
 	logs.StartRetentionCleaner(ctx, cfg.LogRetentionDays, 24*time.Hour, logger)
 	_, _ = app.images.CleanupStorage(service.ImageStorageCleanupOptions{
@@ -207,6 +210,9 @@ func newUpdateService(cfg *config.Store) *service.UpdateService {
 func (a *App) Close() {
 	if a.cancel != nil {
 		a.cancel()
+	}
+	if a.promptSplits != nil {
+		a.promptSplits.Close()
 	}
 	if a.logger != nil {
 		_ = a.logger.Close()

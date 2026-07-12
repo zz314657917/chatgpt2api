@@ -1,28 +1,60 @@
 ---
 phase: done
-current_sprint: image-workspace-followup
-total_sprints: 4
-pending_action: plan-image-arena-followup-or-run-real-e2e
+current_sprint: task-016-canvas-topbar-batch-controls
+total_sprints: 9
+pending_action: approve-core-image-task-restart-recovery-design
 project_type: web
 qa_mode: browser
 approval_required: true
-last_verified: 2026-06-22
+last_verified: 2026-07-12
 ---
 
 # Workflow Status
 
-- 当前阶段：`done`
-- 当前 Sprint：`image-workspace-followup`
-- 当前目标：保持独立用户版与多工作台创作底座稳定，同时把 image arena、账号级图片输入 URL、签名临时参考图 URL、profile usage 状态与统一模型设置继续收口成默认图片工作台基线。
-- 下一合法动作：由 Planner 基于 2026-06-21~2026-06-22 的 image workspace follow-up 进入下一 Sprint，或用真实账号补跑生产 E2E。
+- 当前阶段：`done`（Task-016 PASS）
+- 当前 Sprint：`task-016-canvas-topbar-batch-controls`
+- 当前目标：将批次控制整合到桌面顶部节点按钮左侧，并保持 Board 高亮联动。
+- 下一合法动作：如继续处理 Task-013 P1，为核心 creation-task restart recovery 新建独立 contract。
+- Task-013 遗留：服务重启后的核心 creation-task 安全恢复仍为独立 P1，本 Sprint 不修改或改判该结论。
+- 当前默认续做提示：`task-013` 的直接模式必须沿用既有 creation-task、内容策略、并发和 Sub2API 结算链路；不得由前端直接绕过任务服务。
+- 最近已完成的背景 contract：
+  - `studio-bridge-model-scoped-apimart-billing` 已 PASS：普通 `gpt-image-2` 保持固定预扣/固定结算，不再跟随 APIMart `apimart_cost` surcharge/refund；`gpt-image-2-official` 与其他成本型模型继续保留实际成本结算。
+  - 这条计费边界属于当前 `task-014` 必须继承的稳定背景，而不是本 Sprint 里可顺手改写的结算语义。
 - 当前 contract：
-  - `docs/workflow/tasks/task-011-ecommerce-production-acceptance.md`
+  - `docs/workflow/tasks/task-016-canvas-topbar-batch-controls.md`
 - Contract review：
-  - `docs/workflow/task-011-contract-review.md`
+  - `docs/workflow/task-016-contract-review.md`
 - Worker result：
-  - `docs/workflow/worker-results/task-011-ecommerce-production-acceptance-result.md`
+  - `docs/workflow/worker-results/task-016-canvas-topbar-batch-controls-result.md`
 - QA report：
-  - `docs/workflow/qa-reports/task-011-ecommerce-production-acceptance-qa.md`
+  - `docs/workflow/qa-reports/task-016-canvas-topbar-batch-controls-qa.md`（PASS）
+- Task-016 裁决：
+  - 批次控制已进入桌面顶部节点按钮左侧，1365px/390px 无横向溢出。
+  - `npm.cmd run lint`、`npm.cmd run build`、10 场景 Canvas smoke 全部通过。
+  - 本地容器已更新为 `chatgpt2api:codex-20260712-2020-task016-topbar`，健康版本 `task-016-canvas-topbar-batch-controls`。
+- Worker result：
+  - `docs/workflow/worker-results/task-015-canvas-batch-controls-result.md`
+- QA report：
+  - `docs/workflow/qa-reports/task-015-canvas-batch-controls-qa.md`（PASS）
+- Task-015 裁决：
+  - 批次工具条、切换/定位/整理/删除和 zoom `<0.4` 摘要通过 browser QA。
+  - `npm.cmd run lint`、`npm.cmd run build`、9 场景 Canvas smoke 全部通过。
+  - 本地容器已更新为 `chatgpt2api:codex-20260712-1049-task015-batch-controls`，健康版本 `task-015-canvas-batch-controls`。
+- Worker result：
+  - `docs/workflow/worker-results/task-014-canvas-batch-layout-result.md`
+- QA report：
+  - `docs/workflow/qa-reports/task-014-canvas-batch-layout-qa.md`（PASS）
+- Task-014 裁决：
+  - compact fan-out、无重叠两列布局、generator/output 缩放、重跑保留/替换/取消均通过 browser QA。
+  - `npm.cmd run lint`、`npm.cmd run build`、8 场景 Canvas smoke 全部通过。
+- Worker result：
+  - `docs/workflow/worker-results/task-013-prompt-split-canvas-result.md`
+- QA report：
+  - `docs/workflow/qa-reports/task-013-prompt-split-canvas-qa.md`（FAIL）
+- 本轮裁决：
+  - Canvas mini node、prompt split API、直接/节点模式、终态 fan-out 恢复和浏览器 smoke 已通过。
+  - FAIL 原因仅为：服务重启后，已运行的底层 creation task 会被既有任务服务安全中断，不能在不重复上游提交或扣费的前提下自动续跑。
+  - `knowledge/tasks/current-task.md` 有现有用户改动且不在 task-013 contract 范围，本轮未修改。
 - 关键依据：
   - 桌面计划文件：`C:/Users/Administrator/Desktop/专业计划开发.txt`
   - ChatGPT 分享链接只读到标题和登录墙，正文未纳入事实源。
@@ -73,6 +105,32 @@ last_verified: 2026-06-22
   - 默认图片工作台基线已继续前移到 `image arena gallery + app/canvas/image 多页面共享设置 + account image input URL + signed temp reference image URL + profile usage status clarify`。
   - `/image` 不再只按单轮结果列表理解，最近运行结果已开始收口为更明确的 arena 结果视图与电商/画布后续动作入口；真实参考图 URL 也不再假设可长期裸用。
   - `fix: support signed temp reference image urls` 已把临时参考图路径提升为稳定后端边界；后续再看引用图回填、继续编辑或跨页复用时，应默认先检查签名 URL 语义，而不是继续按静态本地/公网 URL 心智理解。
+- 2026-06-24 续做入口提示：
+  - 默认图片工作台基线又前移到 `mixed Sub2API image edits + multipart references preservation + image-manager asset sidebar handoff`。
+  - `fix: keep json image edits on multipart references` 与 `fix(httpapi): route mixed sub2api image edits as multipart` 已把“继续编辑不能静默丢 reference/mask”提升为稳定后端契约；后续如果 mixed edit、retry 或跨页继续编辑异常，应优先回看 multipart route 和 reference preservation。
+  - `image-manager` 已继续吸收结果/视频资产侧栏语义，说明资产 handoff 不再只是被动图库行为，而是当前多工作台默认交接层。
+- 2026-06-25 续做入口提示：
+  - `/canvas` pixel icon 预览强化已经进入普通用户可见的稳定交互面；如果节点缩略图、小尺寸结果或像素类图标辨识性回退，应按稳定工作台交互回归处理，而不只是样式微调。
+  - `/profile` recharge history 已默认隐藏；普通用户 profile 当前更接近最小账号视图，而不是支付历史控制台。
+- 2026-06-28 续做入口提示：
+  - 当前 workflow 不应再被理解成旧的单页 `image-workspace follow-up`；默认主线应按“独立用户版 + 多工作台创作底座 + 普通用户可见收口”理解。
+  - 真实账号补验时，除 mixed edit 与 asset handoff 外，还应顺带确认 `/canvas` pixel icon 预览和 `/profile` 最小视图没有被后续改动回退。
+- 2026-07-01 续做入口提示：
+  - `/image` 的 chat mode 已开始支持显式 `web_search` 开关；后续若文本创作结果、提示词拼接或任务 payload 异常，不能再把 chat mode 当成“纯本地 prompt 直发”看待，而要先确认联网搜索是否开启、搜索 query 是否从 `web_search_query/prompt` 生成，以及搜索结果是否已注入 messages。
+  - 联网搜索当前依赖 `CHATGPT2API_WEB_SEARCH_URL`；未配置时会直接返回前置条件错误，不属于普通模型调用失败。
+  - 团队成员列表默认不再向 owner/manager 之外暴露 `remark`；后续若普通成员、团队页或 profile 侧看到成员备注，应优先按可见性收口回归处理，而不是当成纯前端显示问题。
+- 2026-07-02~2026-07-03 续做入口提示：
+  - 素材库默认顶层分类已统一为 `图片 / 文本 / 视频`；后续验收 `/image-manager`、资产侧栏或跨工作台 handoff 时，不应继续只按单一图库心智检查。
+  - Midjourney APIMart 参数与 unsupported ratio warning 已继续收口到共享图片参数链路；后续若只在单页看到比例/参数报错，不要先按单页 UI 处理。
+- 2026-07-05 续做入口提示：
+  - Sub2API bridge 扣费已开始显式带图片张数、尺寸和尺寸来源元数据；后续若 usage 明细、bridge 账单或图片成本解释异常，不能只看金额换算，优先检查 metadata 组装与尺寸归一。
+  - `/canvas` 的图片/视频资源库开始共用同一素材侧栏和媒体切换语义；后续若视频入口、素材计数、刷新或加入画布动作异常，优先按统一媒体切换链路排查，而不是按旧独立视频面板心智处理。
+- 2026-07-06 续做入口提示：
+  - pending Studio Bridge settlements 已开始支持本地重试；后续若任务成功但 usage/扣费仍挂起，不要先把问题归到前端轮询或上游超时，优先检查 settlement retry 状态和恢复入口。
+  - 当前 bridge 扣费链路默认要把金额、图片尺寸 metadata 和 settlement state 一起理解；单看一次 commit/refund 结果已不足以解释真实账单恢复路径。
+- 2026-07-10 续做入口提示：
+  - `studio-bridge-model-scoped-apimart-billing` 已把图片 bridge 结算再收口一层：普通 `gpt-image-2` 固定价不再被 APIMart 实际成本覆盖；后续若看到高于或低于固定价的上游 `apimart_cost`，不要直接期待 surcharge/refund。
+  - `gpt-image-2-official`、Midjourney、Grok 等成本型模型的实际成本结算语义保持不变；排查图片账单时必须先按模型结算类别分流，而不是把所有图片任务都按同一 override 规则解释。
 - 未验证项：
   - 真实上游 `gpt-image-2` / `gpt-image-2-official` 502 修复不在 task-009 范围内。
   - 真实上游 `gpt-image-2-official` 图片生成仍需可用账号和上游配置后验证。
@@ -86,3 +144,19 @@ last_verified: 2026-06-22
 - 6/21~6/22 新增未验证项：
   - image arena 新结果视图、收藏/加入画布/送电商动作和缩略图切换仍缺一轮真实浏览器 smoke，需确认多图结果在 `/image` 当前默认交互下没有退化。
   - 账号级图片输入 URL、签名临时参考图 URL 与 profile usage 状态文案仍缺真实账号联调，当前结论主要来自代码和定向测试。
+- 2026-07-01 新增未验证项：
+  - `/image` chat mode 联网搜索仍缺真实浏览器 smoke，需确认开关状态、报错提示、搜索结果注入后的文本任务和关闭开关后的普通 chat 提交都符合预期。
+  - `CHATGPT2API_WEB_SEARCH_URL` 未配置、搜索服务报错和空 query 三种分支目前主要来自代码路径判断，仍缺真实接口联调证据。
+  - 团队 owner / manager / member 三种身份下的成员备注可见性仍缺真实账号 UI 回归，当前结论主要来自服务层收口。
+- 2026-07-03 新增未验证项：
+  - 素材库 `图片 / 文本 / 视频` 三大分类仍缺真实登录态回归，需确认 `/image-manager`、图片/视频资产侧栏和 text asset 入口的默认落点一致。
+  - Midjourney APIMart 参数对齐、unsupported ratio warning 和 official image edit reference URL 化目前主要来自代码路径与提交事实，仍缺真实上游或真实页面联调证据。
+- 2026-07-05 新增未验证项：
+  - bridge `image_count / image_size / image_size_source / image_size_breakdown` 目前主要来自代码路径与 payload 组装，仍缺真实 Sub2API usage / 账单回读证据。
+  - `/canvas` 图片/视频素材侧栏媒体切换目前主要来自前端结构调整，仍缺真实登录态下的浏览器回归，需确认切换、计数、空态和加入画布动作都正常。
+- 2026-07-06 新增未验证项：
+  - pending Studio Bridge settlement retry 目前主要来自代码路径与定向测试，仍缺真实挂起结算回放或真实 bridge usage 恢复证据。
+  - settlement retry 成功后的 usage 展示、bridge 账单状态和图片任务记录是否完全一致，仍缺真实账号 E2E 回归。
+- 2026-07-10 新增未验证项：
+  - 普通 `gpt-image-2` fixed settlement 目前主要来自定向 service/httpapi 测试和 scoped QA，仍缺真实 Sub2API 账单回读证据。
+  - `gpt-image-2-official` 与成本型模型在同一部署下继续保留 actual-cost surcharge/refund 的行为，仍缺真实账号 E2E 回归。
