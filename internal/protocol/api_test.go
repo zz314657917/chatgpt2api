@@ -1549,6 +1549,44 @@ func TestResponseImageGenerationRequestUsesToolImageModel(t *testing.T) {
 	if request.Model != "gpt-image-2" {
 		t.Fatalf("request model = %q, want image tool model gpt-image-2", request.Model)
 	}
+	if !request.MessageAsError {
+		t.Fatal("responses image-tool request MessageAsError = false, want true")
+	}
+}
+
+func TestResponseImageGenerationRequestKeepsMainAndToolModelSemantics(t *testing.T) {
+	tests := []struct {
+		name      string
+		mainModel string
+		toolModel string
+		wantModel string
+	}{
+		{name: "explicit official tool", mainModel: "gpt-5.4-mini", toolModel: "gpt-image-2", wantModel: "gpt-image-2"},
+		{name: "codex tool", mainModel: "gpt-5.4-mini", toolModel: "codex-gpt-image-2", wantModel: "codex-gpt-image-2"},
+		{name: "codex main model", mainModel: "gpt-5.4-mini", wantModel: "gpt-image-2"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tool := map[string]any{"type": "image_generation"}
+			if tt.toolModel != "" {
+				tool["model"] = tt.toolModel
+			}
+			request, _, err := ResponseImageGenerationRequest(map[string]any{
+				"model": tt.mainModel,
+				"input": "生成封面",
+				"tools": []any{tool},
+			}, "admin", nil)
+			if err != nil {
+				t.Fatalf("ResponseImageGenerationRequest() error = %v", err)
+			}
+			if request.Model != tt.wantModel {
+				t.Fatalf("request model = %q, want %q", request.Model, tt.wantModel)
+			}
+			if !request.MessageAsError {
+				t.Fatal("request MessageAsError = false, want true")
+			}
+		})
+	}
 }
 
 func TestResponseImageGenerationToolAcceptsTypedToolSlice(t *testing.T) {
@@ -1882,6 +1920,38 @@ func TestStreamImageResponseErrorsWhenNoImageOutput(t *testing.T) {
 	}
 	if err := <-errCh; err == nil || err.Error() != "upstream image stream completed without image output" {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestHandleResponsesImageToolRejectsTextOutput(t *testing.T) {
+	engine := &Engine{
+		ImageTokenProvider: func(context.Context) (string, error) { return "test-token", nil },
+		ImageClientFactory: func(string) *backend.Client { return nil },
+	}
+	engine.StreamImageOutputsFunc = func(ctx context.Context, client *backend.Client, request ConversationRequest, index, total int) (<-chan ImageOutput, <-chan error) {
+		out := make(chan ImageOutput, 1)
+		errCh := make(chan error, 1)
+		out <- ImageOutput{Kind: "message", Model: request.Model, Index: index, Total: total, Text: "威海旅游攻略", UpstreamEventType: "image_text_response"}
+		close(out)
+		errCh <- nil
+		close(errCh)
+		if !request.MessageAsError {
+			t.Errorf("image-tool responses request MessageAsError = false, want true")
+		}
+		return out, errCh
+	}
+
+	_, _, err := engine.HandleResponses(context.Background(), map[string]any{
+		"model": "gpt-image-2",
+		"input": "生成一张海报",
+		"tools": []any{map[string]any{"type": "image_generation"}},
+	})
+	var imageErr *ImageGenerationError
+	if !errors.As(err, &imageErr) {
+		t.Fatalf("HandleResponses() error = %T %v, want ImageGenerationError", err, err)
+	}
+	if imageErr.Code != "image_generation_text_response" || imageErr.Message != "威海旅游攻略" {
+		t.Fatalf("image error = %#v, want preserved text response", imageErr)
 	}
 }
 

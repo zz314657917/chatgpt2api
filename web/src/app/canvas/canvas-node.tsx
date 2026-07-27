@@ -13,6 +13,7 @@ import {
   CircleAlert,
   CircleDot,
   Clapperboard,
+  ClipboardPaste,
   Clock3,
   Copy,
   Download,
@@ -1641,6 +1642,9 @@ type SmartCanvasBoardProps = {
   onActivePromptSplitBatchChange: (batchId: string) => void;
   onViewportChange: (viewport: SmartCanvasViewport, commit?: boolean, label?: string) => void;
   onUpdateItemData: (id: string, patch: Partial<SmartCanvasItem["data"]>) => void;
+  hasGeneratorStyleClipboard: boolean;
+  onCopyGeneratorStyle: (id: string) => void;
+  onPasteGeneratorStyle: (id: string) => void;
   onRunGenerator: (id: string) => void;
   onRunLlm: (id: string) => void;
   onStopLoop: (id: string) => void;
@@ -1702,6 +1706,9 @@ export function SmartCanvasBoard({
   onActivePromptSplitBatchChange,
   onViewportChange,
   onUpdateItemData,
+  hasGeneratorStyleClipboard,
+  onCopyGeneratorStyle,
+  onPasteGeneratorStyle,
   onRunGenerator,
   onRunLlm,
   onStopLoop,
@@ -2005,6 +2012,9 @@ export function SmartCanvasBoard({
               onDeleteImage={onDeleteImage}
               onRemoveImageBackground={onRemoveImageBackground}
               onUpdateItemData={onUpdateItemData}
+              hasGeneratorStyleClipboard={hasGeneratorStyleClipboard}
+              onCopyGeneratorStyle={onCopyGeneratorStyle}
+              onPasteGeneratorStyle={onPasteGeneratorStyle}
               onRunGenerator={onRunGenerator}
               onRunLlm={onRunLlm}
               onStopLoop={onStopLoop}
@@ -2903,6 +2913,9 @@ type SmartCanvasNodeProps = {
   onDeleteImage: (nodeId: string, image: CanvasImageRef) => void;
   onRemoveImageBackground: (nodeId: string) => void;
   onUpdateItemData: (id: string, patch: Partial<SmartCanvasItem["data"]>) => void;
+  hasGeneratorStyleClipboard: boolean;
+  onCopyGeneratorStyle: (id: string) => void;
+  onPasteGeneratorStyle: (id: string) => void;
   onRunGenerator: (id: string) => void;
   onRunLlm: (id: string) => void;
   onStopLoop: (id: string) => void;
@@ -2945,6 +2958,9 @@ export const SmartCanvasNode = memo(function SmartCanvasNode({
   onDeleteImage,
   onRemoveImageBackground,
   onUpdateItemData,
+  hasGeneratorStyleClipboard,
+  onCopyGeneratorStyle,
+  onPasteGeneratorStyle,
   onRunGenerator,
   onRunLlm,
   onStopLoop,
@@ -3020,7 +3036,7 @@ export const SmartCanvasNode = memo(function SmartCanvasNode({
         transform: `translate3d(${Number(item.position?.x || 0)}px, ${Number(item.position?.y || 0)}px, 0)`,
         width,
         minHeight,
-        height: item.type === "image_generation" || item.type === "result" ? minHeight : undefined,
+        height: item.type === "result" || (item.type === "image_generation" && item.data?.node_view === "compact") ? minHeight : undefined,
         zIndex,
       }}
       onPointerDown={(event) => onItemPointerDown(event, item)}
@@ -3103,6 +3119,7 @@ export const SmartCanvasNode = memo(function SmartCanvasNode({
           <GeneratorNodeBody
             canvas={canvas}
             item={item}
+            nodeWidth={width}
             models={imageModels}
             running={running}
             onUpdateData={(patch) => onUpdateItemData(item.id, patch)}
@@ -3112,6 +3129,9 @@ export const SmartCanvasNode = memo(function SmartCanvasNode({
             onOpenImage={onOpenImage}
             onDeleteDirectImage={(image) => onDeleteImage(item.id, image)}
             lightweightMedia={lightweightMedia}
+            hasStyleClipboard={hasGeneratorStyleClipboard}
+            onCopyStyle={() => onCopyGeneratorStyle(item.id)}
+            onPasteStyle={() => onPasteGeneratorStyle(item.id)}
           />
           <ResizeHandle onPointerDown={(event) => onResizeItemPointerDown(event, item)} label="拖拽缩放图片生成节点" />
         </>
@@ -3170,6 +3190,9 @@ function areSmartCanvasNodePropsEqual(previous: SmartCanvasNodeProps, next: Smar
     previous.onDeleteImage === next.onDeleteImage &&
     previous.onRemoveImageBackground === next.onRemoveImageBackground &&
     previous.onUpdateItemData === next.onUpdateItemData &&
+    previous.hasGeneratorStyleClipboard === next.hasGeneratorStyleClipboard &&
+    previous.onCopyGeneratorStyle === next.onCopyGeneratorStyle &&
+    previous.onPasteGeneratorStyle === next.onPasteGeneratorStyle &&
     previous.onRunGenerator === next.onRunGenerator &&
     previous.onRunLlm === next.onRunLlm &&
     previous.onStopLoop === next.onStopLoop &&
@@ -3958,9 +3981,14 @@ function LlmNodeBody({
   const splitCount = Math.max(1, Math.min(10, Math.round(Number(item.data?.split_count || 1)) || 1));
   const directGenerate = item.data?.direct_generate === true;
   const splitStatus = item.data?.prompt_split_status;
+  const splitVariationAxis = item.data?.prompt_split_variation_axis || "";
   const splitItems = [...(item.data?.prompt_split_items || [])].sort((left, right) => left.index - right.index);
   const nodeRunning = isActiveTask(item.data?.status) || splitStatus === "splitting" || splitStatus === "submitting" || splitStatus === "running";
-  const hasPreviousPromptSplit = Boolean(item.data?.prompt_split_batch_id) && !nodeRunning;
+  const hasPreviousPromptSplit = !nodeRunning && Boolean(item.data?.prompt_split_batch_id) && canvas.nodes.some((node) =>
+    (node.type === "image_generation" || node.type === "result") &&
+    node.data?.prompt_split_source_node_id === item.id &&
+    node.data?.prompt_split_batch_id === item.data?.prompt_split_batch_id,
+  );
   const [outputCopyState, setOutputCopyState] = useState<"idle" | "copied" | "failed">("idle");
   const [editorOpen, setEditorOpen] = useState(false);
   const [outputDialogOpen, setOutputDialogOpen] = useState(false);
@@ -4066,6 +4094,11 @@ function LlmNodeBody({
               <div>
                 <DialogTitle>{splitCount > 1 ? `拆分提示词 ${splitItems.length}/${splitCount}` : "提示词输出"}</DialogTitle>
                 <DialogDescription>{splitCount > 1 ? splitStatusText || "等待运行" : `${outputCharacterCount} 字符`}</DialogDescription>
+                {splitCount > 1 && splitVariationAxis ? (
+                  <div className={cn("mt-2 text-xs font-semibold", canvasSubtleTextClass)} data-prompt-split-variation-axis={splitVariationAxis}>
+                    拆分维度：<span className="text-foreground dark:text-slate-100">{splitVariationAxis}</span>
+                  </div>
+                ) : null}
               </div>
               {detailsText ? (
                 <Button type="button" size="sm" variant="outline" className={cn("h-8 shrink-0 rounded-lg px-2 text-xs font-black", canvasGhostButtonClass)} onClick={() => void copyOutputText()}>
@@ -4083,7 +4116,10 @@ function LlmNodeBody({
                   {splitItems.map((entry, index) => (
                     <div key={entry.index} className={cn("rounded-lg border p-3", entry.status === "error" || entry.status === "cancelled" ? "border-rose-300/60 bg-rose-50/70 dark:border-rose-400/25 dark:bg-rose-950/20" : "border-border bg-background/60 dark:border-slate-700 dark:bg-slate-950/40")}>
                       <div className="mb-2 flex items-center justify-between gap-3 text-xs font-black">
-                        <span>提示词 {index + 1}</span>
+                        <div className="flex min-w-0 items-center gap-2">
+                          <span className="shrink-0">提示词 {index + 1}</span>
+                          {entry.variant_label ? <span className={cn("truncate font-semibold", canvasAccentTextClass)} data-prompt-split-variant-label={entry.variant_label}>{entry.variant_label}</span> : null}
+                        </div>
                         <span className={cn(entry.status === "error" || entry.status === "cancelled" ? "text-rose-600 dark:text-rose-200" : canvasSubtleTextClass)}>{promptSplitItemStatusLabel(entry.status)}</span>
                       </div>
                       <pre className="whitespace-pre-wrap break-words font-sans text-sm leading-6 text-foreground select-text dark:text-slate-100">{entry.prompt}</pre>
@@ -4357,6 +4393,7 @@ function LoopNodeBody({
 function GeneratorNodeBody({
   canvas,
   item,
+  nodeWidth,
   models,
   running,
   lightweightMedia,
@@ -4366,9 +4403,13 @@ function GeneratorNodeBody({
   onConnectLlmImagesToGenerator,
   onOpenImage,
   onDeleteDirectImage,
+  hasStyleClipboard,
+  onCopyStyle,
+  onPasteStyle,
 }: {
   canvas: SmartCanvasDocument;
   item: SmartCanvasItem;
+  nodeWidth: number;
   models: CanvasModelOption[];
   running: boolean;
   lightweightMedia: boolean;
@@ -4378,8 +4419,12 @@ function GeneratorNodeBody({
   onConnectLlmImagesToGenerator: () => void;
   onOpenImage: (image: CanvasImageRef) => void;
   onDeleteDirectImage: (image: CanvasImageRef) => void;
+  hasStyleClipboard: boolean;
+  onCopyStyle: () => void;
+  onPasteStyle: () => void;
 }) {
   const [imageRatioOpen, setImageRatioOpen] = useState(false);
+  const parameterBodyRef = useRef<HTMLDivElement>(null);
   const upstream = incomingItems(canvas, item.id);
   const upstreamPrompts = upstream
     .filter((node) => node.type === "prompt" || node.type === "llm" || node.type === "loop" || node.type === "group")
@@ -4452,6 +4497,38 @@ function GeneratorNodeBody({
     const numeric = Number(value);
     onUpdateData({ output_compression: Number.isFinite(numeric) ? Math.min(100, Math.max(0, Math.round(numeric))) : undefined });
   };
+  const parameterLayout = nodeWidth < 360 ? "stacked" : nodeWidth >= 520 ? "wide" : "default";
+  useEffect(() => {
+    const parameterBody = parameterBodyRef.current;
+    if (!parameterBody) {
+      return;
+    }
+    const consumeWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+    };
+    parameterBody.addEventListener("wheel", consumeWheel, { passive: false });
+    return () => parameterBody.removeEventListener("wheel", consumeWheel);
+  }, [item.data?.node_view]);
+  const styleActions = (
+    <div className="flex shrink-0 items-center gap-1">
+      <Button type="button" variant="ghost" size="icon" className="size-8" onClick={onCopyStyle} title="复制样式" aria-label="复制样式">
+        <Copy className="size-3.5" />
+      </Button>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon"
+        className="size-8"
+        disabled={!hasStyleClipboard || nodeRunning}
+        onClick={onPasteStyle}
+        title={nodeRunning ? "运行中的节点不能粘贴样式" : hasStyleClipboard ? "粘贴样式" : "请先复制样式"}
+        aria-label="粘贴样式"
+      >
+        <ClipboardPaste className="size-3.5" />
+      </Button>
+    </div>
+  );
 
   if (item.data?.node_view === "compact") {
     return (
@@ -4465,7 +4542,8 @@ function GeneratorNodeBody({
           <div className={cn("rounded-md border px-2 py-1", canvasDashedClass)}>{imageRatioLabel}</div>
         </div>
         <div className="flex items-center gap-2">
-          <Button type="button" variant="outline" className="h-8 shrink-0 px-3 text-xs font-bold" onClick={() => onUpdateData({ node_view: "full" })}>展开</Button>
+          <Button type="button" variant="outline" className="h-8 shrink-0 px-3 text-xs font-bold" onClick={() => onUpdateData({ node_view: "full" })}>展开参数</Button>
+          {styleActions}
           {nodeRunning ? (
             <Button type="button" variant="destructive" className="h-8 flex-1 text-xs font-black" onClick={onStopNode}><X className="mr-1 size-3.5" />中断</Button>
           ) : (
@@ -4477,12 +4555,18 @@ function GeneratorNodeBody({
   }
 
   return (
-    <div className="h-[calc(100%_-_42px)] space-y-3 overflow-auto p-3" data-node-interactive="true" onPointerDown={stopNodeInteraction}>
-      {item.data?.prompt_split_batch_id ? (
-        <div className="flex justify-end">
-          <Button type="button" variant="ghost" className="h-7 px-2 text-[11px] font-bold" onClick={() => onUpdateData({ node_view: "compact" })}>收起</Button>
-        </div>
-      ) : null}
+    <div
+      ref={parameterBodyRef}
+      className="space-y-3 p-3"
+      data-node-interactive="true"
+      data-canvas-wheel-lock="true"
+      data-generator-parameter-layout={parameterLayout}
+      onPointerDown={stopNodeInteraction}
+    >
+      <div className="flex items-center justify-end gap-1">
+        {styleActions}
+        <Button type="button" variant="ghost" className="h-8 px-2 text-[11px] font-bold" onClick={() => onUpdateData({ node_view: "compact" })}>收起参数</Button>
+      </div>
       <div>
         <div className={cn("mb-1 text-[11px] font-black uppercase tracking-[0.14em]", canvasLabelClass)}>Prompts</div>
         {upstreamPrompts.length > 0 ? (
@@ -4565,7 +4649,7 @@ function GeneratorNodeBody({
         labelClassName={cn("text-[11px] font-bold", canvasSubtleTextClass)}
         compact
       />
-      <div className="flex min-w-0 gap-2">
+      <div className={cn("min-w-0 gap-2", parameterLayout === "stacked" ? "grid grid-cols-1" : "flex")}>
         <Select value={activeImageModel} onValueChange={(model) => onUpdateData({ model, ...(model === MIDJOURNEY_IMAGE_MODEL ? { n: 1 } : {}) })} disabled={proStudioEnabled}>
           <SelectTrigger className={cn(canvasSelectClass, "min-w-0 flex-1")}>
             <SelectValue placeholder="模型" />
@@ -4595,7 +4679,10 @@ function GeneratorNodeBody({
           />
         ) : null}
       </div>
-      {!proStudioEnabled ? <div className="grid grid-cols-2 gap-2">
+      {!proStudioEnabled ? <div className={cn(
+        "grid gap-2",
+        parameterLayout === "stacked" ? "grid-cols-1" : parameterLayout === "wide" ? "grid-cols-3" : "grid-cols-2",
+      )} data-generator-parameter-grid="true">
         <Select
           value={imageResolutionValue}
           onValueChange={(imageResolution) => onUpdateData({
@@ -5073,9 +5160,15 @@ function OutputNodeBody({
       onDownloadAll={() => void downloadItems("all", downloadableImages)}
     />
   ) : null;
+  const imageGridClass = images.length === 1
+    ? "grid-cols-1"
+    : images.length === 2
+      ? "grid-cols-2"
+      : "grid-cols-2 grid-rows-2";
   return (
-    <div className="h-[calc(100%_-_42px)] overflow-auto p-3">
+    <div className="flex h-[calc(100%_-_42px)] min-h-0 flex-col overflow-hidden p-3">
       {downloadToolbar}
+      <div className="min-h-0 flex-1">
       {loopRaw ? (
         <LoopOutputSlots
           images={images}
@@ -5103,8 +5196,9 @@ function OutputNodeBody({
           onToggleSelect={toggleImageSelection}
           selectedImageIds={selectedImageIds}
           downloadingImageIds={downloadingImageIds}
-          className="grid-cols-4"
+          className={imageGridClass}
           large
+          imageFit="contain"
           lightweight={lightweight}
           pixelated={pixelated}
         />
@@ -5115,7 +5209,8 @@ function OutputNodeBody({
           连接生成节点后显示输出
         </div>
       )}
-      <div className="mt-2">
+      </div>
+      <div className="mt-2 shrink-0">
         <CanvasRunInsight item={item} />
       </div>
       <Dialog open={showAllImages} onOpenChange={setShowAllImages}>
@@ -5731,6 +5826,7 @@ export function CanvasImageStrip({
   lightweight,
   style,
   pixelated,
+  imageFit = "cover",
 }: {
   images: CanvasImageRef[];
   limit?: number;
@@ -5746,6 +5842,7 @@ export function CanvasImageStrip({
   lightweight?: boolean;
   style?: CSSProperties;
   pixelated?: boolean;
+  imageFit?: "cover" | "contain";
 }) {
   const visible = images.slice(0, limit);
   const overflow = Math.max(0, images.length - visible.length);
@@ -5789,7 +5886,11 @@ export function CanvasImageStrip({
               <AuthenticatedImage
                 src={src}
                 alt={canvasImageLabel(image, index)}
-                className="h-full w-full object-cover transition duration-150 group-hover:scale-[1.03]"
+                className={cn(
+                  "h-full w-full transition duration-150",
+                  imageFit === "contain" ? "object-contain" : "object-cover group-hover:scale-[1.03]",
+                )}
+                data-image-fit={imageFit}
                 style={pixelated ? canvasPixelatedImageStyle : undefined}
                 placeholderClassName="min-h-0 h-full bg-muted text-muted-foreground dark:bg-slate-900 dark:text-slate-500"
               />

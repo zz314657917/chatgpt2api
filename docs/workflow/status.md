@@ -1,20 +1,86 @@
 ---
 phase: done
-current_sprint: task-016-canvas-topbar-batch-controls
-total_sprints: 9
-pending_action: approve-core-image-task-restart-recovery-design
+current_sprint: task-021-generator-node-responsive-parameters
+total_sprints: 14
+pending_action: deploy-or-plan-next-sprint
 project_type: web
 qa_mode: browser
 approval_required: true
-last_verified: 2026-07-12
+last_verified: 2026-07-28
 ---
 
 # Workflow Status
 
-- 当前阶段：`done`（Task-016 PASS）
-- 当前 Sprint：`task-016-canvas-topbar-batch-controls`
-- 当前目标：将批次控制整合到桌面顶部节点按钮左侧，并保持 Board 高亮联动。
+- 当前阶段：`done`（Task-021 PASS）
+- 当前 Sprint：`task-021-generator-node-responsive-parameters`
+- 当前目标：图片生成节点参数随宽度自动重排，无内部滚动，并阻止节点 wheel 继续滚动页面或缩放 Canvas。
+- 下一合法动作：部署包含最新 embedded frontend 的服务，或由 Planner 进入下一 Sprint。
+- 当前 contract：`docs/workflow/tasks/task-021-generator-node-responsive-parameters.md`
+- Contract review：`docs/workflow/task-021-contract-review.md`（PASS）
+- Worker result：`docs/workflow/worker-results/task-021-generator-node-responsive-parameters-result.md`
+- QA report：`docs/workflow/qa-reports/task-021-generator-node-responsive-parameters-qa.md`（PASS）
+- Task-021 裁决：
+  - 320px/390px/540px 普通参数分别使用 1/2/3 列，full 参数区无内部纵向滚动条。
+  - 参数区 wheel 不再滚动页面或缩放 Canvas；空白画布 wheel 缩放保持有效。
+  - `npm.cmd run lint`、`npm.cmd run build`、`go test ./...` 和 13 场景 Canvas smoke 均通过。
+  - 本次未更新本地 Docker 容器，不将源码验收外推为运行容器已更新。
+
+- 当前阶段：`done`（Task-020 PASS）
+- 当前 Sprint：`task-020-image-tool-text-response-hardening`
+- 当前目标：修复强制生图工具收到普通文本或空图片结果时的错误归一、任务状态和退款幂等。
+- 下一合法动作：部署前核对运行版本并补真实/脱敏上游 capture，或由 Planner 进入下一 Sprint。
+- 当前 contract：`docs/workflow/tasks/task-020-image-tool-text-response-hardening.md`
+- Contract review：`docs/workflow/task-020-contract-review.md`（PASS）
+- Worker result：`docs/workflow/worker-results/task-020-image-tool-text-response-hardening-result.md`
+- QA report：`docs/workflow/qa-reports/task-020-image-tool-text-response-hardening-qa.md`（PASS）
+- Task-020 裁决：
+  - Codex Responses 普通文本、空输出和真实图片调用已分流；text-only 不再伪造成图片成功。
+  - `/v1/responses` image-tool text-only 返回 HTTP 400 / `image_generation_text_response`，诊断文本保留。
+  - generate/edit/video text-only creation-task 为 error、图片消费 0，reserve/refund 重复结算不重复退款；chat 文本语义保持不变。
+  - `go test ./internal/backend ./internal/protocol ./internal/service ./internal/httpapi -count=1`、`go test ./...` 和 `git diff --check` 均通过。
+  - 真实账号、真实上游和线上容器版本未验证，不将当前 checkout 结论外推为生产已修复。
+
+- 当前阶段：`done`（Task-019 PASS）
+- 当前 Sprint：`task-019-canvas-node-ergonomics`
+- 当前目标：修正 Output 预览、参数展开滚轮体验并增加图片生成样式复制/粘贴。
 - 下一合法动作：如继续处理 Task-013 P1，为核心 creation-task restart recovery 新建独立 contract。
+- 当前 contract：`docs/workflow/tasks/task-019-canvas-node-ergonomics.md`
+- Contract review：`docs/workflow/task-019-contract-review.md`（PASS）
+- Worker result：`docs/workflow/worker-results/task-019-canvas-node-ergonomics-result.md`
+- QA report：`docs/workflow/qa-reports/task-019-canvas-node-ergonomics-qa.md`（PASS）
+- Task-019 裁决：
+  - Output 数量布局、full 自动增高、wheel 隔离和普通/Pro Studio 样式复制粘贴均通过 browser QA。
+  - `npm.cmd run lint`、`npm.cmd run build`、`go test ./...` 和 13 场景 Canvas smoke 均通过。
+  - 本地容器已更新为 `chatgpt2api:codex-20260713-0840-task019-node-ergonomics`，健康版本 `task-019-canvas-node-ergonomics`。
+
+- 当前阶段：`done`（Task-018 PASS）
+- 当前 Sprint：`task-018-semantic-prompt-split`
+- 当前目标：自动识别主要变化维度并生成单变体、结构化的独立生图提示词。
+- 下一合法动作：如继续处理 Task-013 P1，为核心 creation-task restart recovery 新建独立 contract。
+- 当前 contract：
+  - `docs/workflow/tasks/task-018-semantic-prompt-split.md`
+- Contract review：
+  - `docs/workflow/task-018-contract-review.md`（PASS）
+- Worker result：
+  - `docs/workflow/worker-results/task-018-semantic-prompt-split-result.md`
+- QA report：
+  - `docs/workflow/qa-reports/task-018-semantic-prompt-split-qa.md`（PASS）
+- Task-018 裁决：
+  - splitter 已改为结构化语义结果，节点数量优先，Canvas 可显示并恢复变化轴和变体标签。
+  - `npm.cmd run lint`、`npm.cmd run build`、`go test ./...` 和 11 场景 Canvas smoke 均通过。
+  - 本地容器已更新为 `chatgpt2api:codex-20260713-0213-task018-semantic`，健康版本 `task-018-semantic-prompt-split`。
+- 当前 contract：
+  - `docs/workflow/tasks/task-017-prompt-split-failed-rerun.md`
+- Contract review：
+  - `docs/workflow/task-017-contract-review.md`（PASS）
+- Worker result：
+  - `docs/workflow/worker-results/task-017-prompt-split-failed-rerun-result.md`
+- QA report：
+  - `docs/workflow/qa-reports/task-017-prompt-split-failed-rerun-qa.md`（PASS）
+- Task-017 裁决：
+  - 失败 `0/N` 批次没有 fan-out 节点时直接重试；成功批次的保留/替换保护保持不变。
+  - `npm.cmd run lint`、`npm.cmd run build`、11 场景 Canvas smoke 全部通过。
+  - 本地容器已更新为 `chatgpt2api:codex-20260712-2119-task017-failed-rerun`，健康版本 `task-017-prompt-split-failed-rerun`。
 - Task-013 遗留：服务重启后的核心 creation-task 安全恢复仍为独立 P1，本 Sprint 不修改或改判该结论。
 - 当前默认续做提示：`task-013` 的直接模式必须沿用既有 creation-task、内容策略、并发和 Sub2API 结算链路；不得由前端直接绕过任务服务。
 - 最近已完成的背景 contract：

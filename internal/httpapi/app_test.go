@@ -1773,6 +1773,48 @@ func TestResponsesImageGenerationRejectsBlockedPrompt(t *testing.T) {
 	}
 }
 
+func TestResponsesImageGenerationTextOnlyReturnsBadRequest(t *testing.T) {
+	app := newTestApp(t)
+	defer app.Close()
+	_, rawKey, err := app.auth.CreateAPIKey(service.AuthRoleUser, "responses-text-user", service.AuthOwner{})
+	if err != nil {
+		t.Fatalf("CreateAPIKey() error = %v", err)
+	}
+	installHTTPTestImageStreamFunc(t, app, func(ctx context.Context, client *backend.Client, request protocol.ConversationRequest, index, total int) (<-chan protocol.ImageOutput, <-chan error) {
+		out := make(chan protocol.ImageOutput, 1)
+		errCh := make(chan error, 1)
+		out <- protocol.ImageOutput{
+			Kind:    "message",
+			Model:   request.Model,
+			Index:   index,
+			Total:   total,
+			Text:    "威海旅游攻略",
+			Created: time.Now().Unix(),
+		}
+		close(out)
+		errCh <- nil
+		close(errCh)
+		return out, errCh
+	})
+
+	body := `{"model":"gpt-image-2","input":"生成一张海报","tools":[{"type":"image_generation"}],"tool_choice":{"type":"image_generation"}}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+rawKey)
+	res := httptest.NewRecorder()
+	app.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("text-only responses image status = %d body = %s", res.Code, res.Body.String())
+	}
+	var response map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &response); err != nil {
+		t.Fatalf("text-only responses image json: %v", err)
+	}
+	errorBody := util.StringMap(response["error"])
+	if errorBody["code"] != "image_generation_text_response" || errorBody["message"] != "威海旅游攻略" {
+		t.Fatalf("text-only responses image error = %#v", errorBody)
+	}
+}
+
 func TestDirectImageGenerationDoesNotLimitAdminToken(t *testing.T) {
 	t.Setenv("CHATGPT2API_USER_DEFAULT_CONCURRENT_LIMIT", "2")
 	app := newTestApp(t)

@@ -1280,6 +1280,7 @@ export type PromptSplitItemStatus = CreationTask["status"] | "ready" | "submitti
 
 export type PromptSplitItem = {
   index: number;
+  variant_label?: string;
   prompt: string;
   task_id?: string;
   status: PromptSplitItemStatus;
@@ -1288,6 +1289,7 @@ export type PromptSplitItem = {
 
 export type PromptSplitBatch = {
   id: string;
+  variation_axis?: string;
   status: PromptSplitStatus;
   execution_mode: PromptSplitExecutionMode;
   split_count: number;

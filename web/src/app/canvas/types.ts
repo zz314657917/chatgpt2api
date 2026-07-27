@@ -104,6 +104,7 @@ export type SmartCanvasItemData = {
   prompt_split_client_task_id?: string;
   prompt_split_batch_id?: string;
   prompt_split_template_node_id?: string;
+  prompt_split_variation_axis?: string;
   prompt_split_status?: PromptSplitStatus;
   prompt_split_execution_mode?: PromptSplitExecutionMode;
   prompt_split_items?: PromptSplitItem[];

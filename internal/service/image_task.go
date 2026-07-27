@@ -974,9 +974,13 @@ func (s *ImageTaskService) runTask(ctx context.Context, key, mode string, identi
 		}
 		data := taskResultData(result)
 		outputType := util.Clean(result["output_type"])
-		if outputType == "text" && len(data) == 0 && ctx.Err() == nil && runCtx.Err() != context.DeadlineExceeded {
+		if outputType == "text" && len(data) == 0 {
 			if text := util.Clean(result["message"]); text != "" {
 				data = []map[string]any{{"text_response": text}}
+			}
+		}
+		if mode == "chat" && outputType == "text" && len(data) > 0 && ctx.Err() == nil && runCtx.Err() != context.DeadlineExceeded {
+			if text := util.Clean(result["message"]); text != "" {
 				status = TaskStatusSuccess
 				message = ""
 			}
@@ -1011,6 +1015,14 @@ func (s *ImageTaskService) runTask(ctx context.Context, key, mode string, identi
 		if text := util.Clean(result["message"]); text != "" {
 			data = []map[string]any{{"text_response": text}}
 		}
+	}
+	if isMediaTaskMode(mode) && outputType == "text" {
+		message := firstNonEmpty(util.Clean(result["error"]), "image generation returned a text response instead of image data")
+		updates := map[string]any{"status": TaskStatusError, "error": message, "data": data, "output_type": outputType}
+		updates["output_statuses"] = finalImageOutputStatuses(taskCount(mode, payload), data, TaskStatusError)
+		s.updateActiveTask(key, updates)
+		s.settleTaskBilling(key)
+		return
 	}
 	if len(data) == 0 {
 		message := util.LocalizeErrorMessage(firstNonEmpty(util.Clean(result["message"]), "task returned no output data"))
@@ -2455,7 +2467,7 @@ func hasImageTaskOutputData(item map[string]any) bool {
 	if item == nil {
 		return false
 	}
-	return util.Clean(item["b64_json"]) != "" || util.Clean(item["url"]) != "" || util.Clean(item["video_url"]) != "" || util.Clean(item["local_url"]) != "" || util.Clean(item["text_response"]) != ""
+	return util.Clean(item["b64_json"]) != "" || util.Clean(item["url"]) != "" || util.Clean(item["video_url"]) != "" || util.Clean(item["local_url"]) != ""
 }
 
 func hasBillableImageTaskOutputData(item map[string]any) bool {

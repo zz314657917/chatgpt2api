@@ -1,8 +1,8 @@
 "use client";
 
-import { forwardRef, useCallback, useEffect, useMemo, useState, type DragEvent, type HTMLAttributes } from "react";
+import { forwardRef, useCallback, useEffect, useMemo, useState, type DragEvent, type HTMLAttributes, type ReactNode } from "react";
 import { VirtuosoGrid } from "react-virtuoso";
-import { Images, LoaderCircle, Maximize2, Minimize2, PanelRightOpen, Pin, RefreshCw } from "lucide-react";
+import { Clapperboard, Images, LoaderCircle, Maximize2, Minimize2, PanelRightOpen, Pin, RefreshCw } from "lucide-react";
 
 import { AuthenticatedImage } from "@/components/authenticated-image";
 import { setManagedImageDragData } from "@/components/managed-image-drag";
@@ -15,6 +15,8 @@ export type ManagedImageAssetSidebarTab = {
   label: string;
   count?: number;
 };
+
+export type ManagedAssetSidebarMediaType = "image" | "video";
 
 export type ManagedImageAssetSidebarProps = {
   assets: ManagedImageSummary[];
@@ -46,6 +48,11 @@ export type ManagedImageAssetSidebarProps = {
   activeCollectionId?: string;
   onCollectionChange?: (collectionId: string) => void;
   onExpandedChange?: (expanded: boolean) => void;
+  mediaType?: ManagedAssetSidebarMediaType;
+  onMediaTypeChange?: (mediaType: ManagedAssetSidebarMediaType) => void;
+  videoCount?: number;
+  loadingVideoAssets?: boolean;
+  videoContent?: ReactNode;
 };
 
 const panelClass =
@@ -85,6 +92,11 @@ export function ManagedImageAssetSidebar({
   activeCollectionId = "",
   onCollectionChange,
   onExpandedChange,
+  mediaType = "image",
+  onMediaTypeChange,
+  videoCount = 0,
+  loadingVideoAssets = false,
+  videoContent,
 }: ManagedImageAssetSidebarProps) {
   const pinnedStorageKey = `${storagePrefix}-pinned`;
   const wideStorageKey = `${storagePrefix}-wide`;
@@ -112,7 +124,14 @@ export function ManagedImageAssetSidebar({
     accent === "sky"
       ? "bg-sky-500/15 text-sky-600 dark:bg-sky-400/15 dark:text-sky-300"
       : "bg-slate-900/8 text-slate-700 dark:bg-slate-100/10 dark:text-slate-200";
-  const resolvedSubtitle = subtitle || `${assets.length} 张素材 · 点击加入输入`;
+  const activeMediaType = mediaType === "video" ? "video" : "image";
+  const activeMediaCount = activeMediaType === "video" ? videoCount : assets.length;
+  const activeMediaLoading = activeMediaType === "video" ? loadingVideoAssets : loadingAssets;
+  const ActiveMediaIcon = activeMediaType === "video" ? Clapperboard : Images;
+  const resolvedTitle = activeMediaType === "video" ? "素材库" : title;
+  const resolvedSubtitle = activeMediaType === "video"
+    ? `${videoCount} 个视频 · 点击加入画布`
+    : subtitle || `${assets.length} 张素材 · 点击加入输入`;
   useEffect(() => {
     onExpandedChange?.(expanded);
   }, [expanded, onExpandedChange]);
@@ -198,9 +217,9 @@ export function ManagedImageAssetSidebar({
           }}
           title={pinned ? "取消固定素材库" : expanded ? "固定素材库" : collapsedTitle}
         >
-          {expanded ? <Pin className={cn("size-4", pinned && "fill-current")} /> : <Images className="size-5" />}
+          {expanded ? <Pin className={cn("size-4", pinned && "fill-current")} /> : <ActiveMediaIcon className="size-5" />}
         </button>
-        <div className={cn("rounded-full px-2 py-1 text-[11px] font-black", countClass)}>{assets.length}</div>
+        <div className={cn("rounded-full px-2 py-1 text-[11px] font-black", countClass)}>{activeMediaCount}</div>
         {!expanded ? (
           <button
             type="button"
@@ -216,7 +235,7 @@ export function ManagedImageAssetSidebar({
       <div className={cn("flex min-h-0 min-w-0 flex-1 flex-col transition-all duration-300", expanded ? "translate-x-0 opacity-100" : "pointer-events-none translate-x-4 opacity-0")}>
         <div className="flex items-center justify-between gap-2">
           <div className="min-w-0">
-            <div className="text-sm font-bold text-foreground dark:text-slate-100">{title}</div>
+            <div className="text-sm font-bold text-foreground dark:text-slate-100">{resolvedTitle}</div>
             <div className={cn("text-xs", subtleTextClass)}>{resolvedSubtitle}</div>
           </div>
           <div className="flex gap-1">
@@ -241,11 +260,43 @@ export function ManagedImageAssetSidebar({
               <Pin className={cn("size-4", pinned && "fill-current")} />
             </Button>
             <Button type="button" size="icon" variant="ghost" className={cn("size-8 rounded-lg", iconButtonClass)} onClick={onRefreshAssets} title="刷新素材库">
-              {loadingAssets ? <LoaderCircle className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
+              {activeMediaLoading ? <LoaderCircle className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
             </Button>
           </div>
         </div>
-        {tabs?.length ? (
+        {onMediaTypeChange ? (
+          <div className="mt-3 grid grid-cols-2 gap-1 rounded-xl border border-border bg-muted/40 p-1 dark:border-slate-800 dark:bg-slate-950/40">
+            {[
+              { id: "image" as const, label: "图片", count: assets.length, icon: Images },
+              { id: "video" as const, label: "视频", count: videoCount, icon: Clapperboard },
+            ].map((tab) => {
+              const Icon = tab.icon;
+              const active = tab.id === activeMediaType;
+              return (
+                <button
+                  key={tab.id}
+                  type="button"
+                  className={cn(
+                    "flex h-8 min-w-0 items-center justify-center gap-1.5 rounded-lg px-2 text-xs font-semibold transition",
+                    active
+                      ? "bg-background text-foreground shadow-sm dark:bg-slate-900 dark:text-slate-100"
+                      : "text-muted-foreground hover:bg-background/70 hover:text-foreground dark:text-slate-500 dark:hover:bg-slate-900/80 dark:hover:text-slate-200",
+                  )}
+                  onClick={() => onMediaTypeChange(tab.id)}
+                  title={`${tab.label}素材`}
+                  aria-pressed={active}
+                >
+                  <Icon className="size-3.5 shrink-0" />
+                  <span className="truncate">{tab.label}</span>
+                  <span className={cn("rounded-full px-1.5 py-0.5 text-[10px]", active ? countClass : "bg-background/80 dark:bg-slate-900")}>
+                    {tab.count}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        ) : null}
+        {activeMediaType === "image" && tabs?.length ? (
           <div className={cn("mt-3 grid gap-1 rounded-xl border border-border bg-muted/40 p-1 dark:border-slate-800 dark:bg-slate-950/40", tabs.length > 2 ? "grid-cols-3" : "grid-cols-2")}>
             {tabs.map((tab) => {
               const active = tab.id === activeTabId;
@@ -273,7 +324,7 @@ export function ManagedImageAssetSidebar({
             })}
           </div>
         ) : null}
-        {collections && onCollectionChange ? (
+        {activeMediaType === "image" && collections && onCollectionChange ? (
           <div className="mt-3 min-w-0 rounded-xl border border-border bg-muted/30 p-2 dark:border-slate-800 dark:bg-slate-950/30">
             <div className="mb-1.5 flex items-center justify-between gap-2">
               <span className={cn("text-[11px] font-semibold", subtleTextClass)}>素材集</span>
@@ -342,8 +393,16 @@ export function ManagedImageAssetSidebar({
             </div>
           </div>
         ) : null}
+        {activeMediaType === "video" ? (
+          <div className="mt-3 min-w-0 rounded-xl border border-border bg-muted/30 p-2 dark:border-slate-800 dark:bg-slate-950/30">
+            <div className="flex items-center gap-2 text-xs leading-5 text-muted-foreground dark:text-slate-400">
+              <Clapperboard className="size-4 shrink-0" />
+              <span className="min-w-0 truncate">当前账号视频 · 来自视频生成成功记录</span>
+            </div>
+          </div>
+        ) : null}
         <div className="mt-3 min-h-0 flex-1 overflow-auto pr-1">
-          {assets.length > 0 ? (
+          {activeMediaType === "video" ? videoContent : assets.length > 0 ? (
             <VirtuosoGrid
               data={assets}
               overscan={400}

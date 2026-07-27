@@ -2,7 +2,7 @@
 title: Current Focus
 type: status
 repo: chatgpt2api
-last_verified: 2026-06-22
+last_verified: 2026-07-11
 ---
 
 # 当前稳定心智模型
@@ -44,9 +44,27 @@ chatgpt2api 当前不应再被理解为单纯“ChatGPT 官网能力封装服务
   - 图片输入 URL 已继续下沉到账号级能力层，后续对参考图来源、继续编辑和跨工作台复用的理解，不应再停留在单次会话临时文件语义。
   - 临时参考图 URL 已切到签名安全路径；当前默认心智应假设引用图地址带有效期和后端鉴权边界，而不是前端长期直持裸 URL。
   - 2026-06-23 又补上了 multipart references 继续编辑边界：图片编辑请求里引用图与 mask 的来源不能再只按“前端传了 multipart 就必定走本地文件上传”理解；若账号能力或签名临时 URL 语义要求改写，继续编辑链路也必须保住同一组 references，而不能在重试或二次编辑时静默丢图。
+- 2026-06-25 开始，默认图片工作台基线又补进了“小收口但高频可见”的用户面细节：
+  - `/canvas` 的 pixel icon 预览已经进入稳定交互面；它不再只是节点内部的小样式，而是当前画布上辨识像素类节点/结果的默认视觉语义。
+  - `/profile` 已继续收窄普通用户可见面，充值历史默认隐藏；后续不要再把 profile 理解成持续扩张的账户运营面，而应优先回到独立创作站的最小用户信息视图。
+- 2026-07-01 开始，默认主线又补进了“chat 联网搜索 + 团队字段可见性”层：
+  - `/image` chat mode 已支持显式联网搜索开关，说明文本创作也开始共享工作台级上下文增强能力，不再只是普通 prompt 直发。
+  - 联网搜索依赖后端搜索网关配置；后续若 chat 任务在前端可点、后端却直接失败，应先区分“模型调用失败”和“搜索前置条件未满足”。
+  - 团队成员备注已开始按角色收口：owner/manager 保留 remark 视角，普通成员默认不再看到团队内部备注。后续团队页、成员列表或 profile 若继续暴露 remark，应按权限边界回归处理。
+- 2026-07-05~2026-07-06 开始，默认主线又补进了“bridge 计费元数据 + settlement recovery”层：
+  - Sub2API bridge 侧的图片扣费不再只是金额回写；`image_count`、`image_size`、`image_size_source` 和 `image_size_breakdown` 已进入默认计费上下文，后续解释 usage、账单或图片成本时要把尺寸归一和 metadata 一起看。
+  - pending Studio Bridge settlements 已支持本地重试，说明当前默认 bridge 语义也不再只是 `reserve / commit / refund` 的一次性闭环；后续若 launch/redeem 成功但 usage 或扣费状态挂起，优先检查 settlement retry，而不是先把问题归到前端或上游模型。
+- 2026-07-10~2026-07-11 开始，默认主线又补进了“模型范围计费边界 + Canvas prompt split 当前工作流”层：
+  - 普通 `gpt-image-2` 的 Sub2API bridge 结算已明确保持固定价，不再被上游 APIMart `apimart_cost` 高低覆盖；只有 `gpt-image-2-official` 和 Midjourney、Grok 这类成本型模型继续按实际成本结算。后续若图片账单出现 surcharge/refund 分歧，先区分模型结算语义，再判断是否真的计费异常。
+  - 当前活跃 workflow 已前移到 `/canvas` 的 `task-013` / `task-014`：`task-013` 的 direct mode、mini node 和 fan-out 恢复 smoke 已通过，剩余阻断只剩“服务重启后不能安全续跑既有 creation task”；`task-014` 在此基础上继续做 batch layout 与重跑替换交互，而不是重新改写图片结算链路。
+- 2026-07-21 开始，默认 workflow 状态已经前移到 `task-020-image-tool-text-response-hardening` PASS：
+  - Codex Responses 的普通文本、空输出和真实图片调用已经分流，`/v1/responses` image-tool text-only 直接返回 `HTTP 400 / image_generation_text_response`。
+  - generate/edit/video text-only creation-task 已明确为 error、图片消费 0，reserve/refund 重复结算不重复退款；这条结论只覆盖 checkout，不外推真实账号或线上容器。
+  - 如果继续推进，下一合法动作是为 `task-013` restart recovery 新建独立 contract，而不是继续把 `task-014` batch layout 当成当前默认主线。
 
 ## 已稳定结论
 
+- `task-020-image-tool-text-response-hardening` 已 PASS；当前默认续做不应再停在 `task-014`，而应把 `task-013` restart recovery 单独拆成新 contract。
 - 当前项目仍不支持 `SuperGrok` / `Grok` / `xAI`；如果要支持，属于新增集成决策。
 - 落叶创艺独立用户版当前的稳定边界是：用户通过 Sub2API 注册/登录/充值，chatgpt2api 不再要求普通用户理解 API 概念或手动绑定本地能力入口。
 - `image` 相关默认心智已经包含：
@@ -56,6 +74,9 @@ chatgpt2api 当前不应再被理解为单纯“ChatGPT 官网能力封装服务
   - 每用户图片保留上限已经收口为稳定配置约束。
   - image workspace policies 已进一步 harden，不应再把早期宽松行为当默认。
 - 当前产品线里，`white label profile experience` 与旧 leaf login 更像背景层；真正需要优先理解的是独立用户版 bridge、钱包扣费语义和生产联调闭环。
+- 当前 `/profile` 的默认产品边界也已更明确：普通用户视角下，profile 不应继续承担充值历史或后台运维信息面；那些语义已退回到更窄的管理/支付链路。
+- 当前 bridge 计费默认边界也已更明确：图片任务的 Sub2API 扣费解释必须同时考虑金额、图片尺寸元数据和挂起结算重试状态；只看单次 charge amount 已不足以解释当前链路。
+- 当前 bridge 模型范围计费边界也已更明确：普通 `gpt-image-2` 固定价结算与 `gpt-image-2-official` / 其他成本型模型的实际成本结算，已经是不同的稳定语义；后续不要再把所有图片模型都按同一种 APIMart override 规则理解。
 - 登录入口当前至少要区分普通本地登录与 leaf network / linux.do launch login，不应再把登录页当成纯静态表单。
 - 当前图片工作台默认也要区分“模型配置层”和“单页工作台层”：如果模型标签、参数分组、generation count 或错误提示回退，不要只在页面组件里找原因，优先回看共享 image gateway / payload / error normalize 语义。
 - 当前图片工作台默认还要区分“结果视图层”和“引用图输入层”：
@@ -92,6 +113,10 @@ chatgpt2api 当前不应再被理解为单纯“ChatGPT 官网能力封装服务
   - 6/18 新增的 summary layout 说明，`/ecommerce-suite` 现在还包含“排版方式 + 参与图片选择 + 顺序编排 + 拼图导出/AI 合成”这一层稳定交付能力；后续不能只按 ZIP、素材归档和 text asset 理解它的输出链路。
 - 6/19 新增的统一模型设置说明，当前 `/ecommerce-suite` 与 `/canvas` 不再只是“各自拥有生产参数面板”的两个工作台；它们还共享同一条 image settings 组织方式、模型标签收口和上游错误归一边界。
 - 6/21~6/23 新增的结果/引用图说明，当前 `/image` 也不再只是“提交任务 -> 看结果”的单页；它同时承担 image arena 结果工作台、账号级图片输入来源，以及跨工作台继续编辑/送电商的前置入口。
+- 7/1 新增的 chat/search 说明，当前 `/image` 也不再只是图片与文本共用一个输入框的轻量工作台；chat mode 已开始具备显式联网搜索与搜索上下文注入语义，后续排查文本创作问题时要把这层共享增强逻辑一起考虑。
+- 7/6 新增的 settlement recovery 说明，当前 Sub2API bridge 也不再只是 launch 后直连一次扣费；pending 结算重试已经进入稳定后端契约，后续排查 usage 不一致、挂起扣费或 bridge 状态恢复时要把这层补偿逻辑一起考虑。
+- 7/10 新增的模型范围计费说明，当前图片 bridge 结算也不再只是“有上游 cost 就覆盖预扣金额”；普通 `gpt-image-2` 已固定保持产品价，只有 official 和其他成本型模型继续按 APIMart 实际成本收口。
+- 7/11 新增的 workflow 说明，当前仓库虽然在做 `/canvas` prompt split / batch layout，但 `task-013` 的真实遗留阻断只剩服务重启后的安全续跑；后续若继续推进 `task-014`，不要误把图片结算策略回退成同一波需要重写的背景问题。
 - 当前多工作台默认共用同一套 creation-task 与输出序列化语义：
   - `/image`
   - `/canvas`
@@ -132,6 +157,9 @@ chatgpt2api 当前不应再被理解为单纯“ChatGPT 官网能力封装服务
 2. 把 Pro Studio 生产模式、电商生产交付、6/18 的 summary layout 编排，以及 Gemini reference upload 的默认边界继续下沉到稳定专题知识，不要只留在 `current-task` 或 workflow 产物。
 3. 把 2026-06-09 之后的独立用户版主线继续下沉到稳定知识，包括生产域名/回跳 URL/bridge secret/默认分组、余额展示、充值入口、预扣确认退款、account image input URL 和团队空间最小闭环。
 4. 如果继续推进 Sub2API 集成，继续把 launch/redeem、embedded session 恢复、bound key 保持、钱包扣费、图片任务、对象存储、`/image`、`/canvas` 与 `ecommerce-suite` 之间的关系固化到专题知识，而不是只留在提交历史。
+5. 把 2026-07-01 形成的 chat 联网搜索与团队 remark 可见性边界补进稳定专题或验证清单，不要继续只埋在 `status`、代码 diff 和临时快照里。
+6. 把 2026-07-05~2026-07-06 形成的 bridge 图片计费元数据与 pending settlement retry 边界补进稳定专题或验证清单，不要继续只埋在 billing/service diff 和临时快照里。
+7. 把 2026-07-10 形成的“普通 `gpt-image-2` 固定价、official/成本型模型按实际成本”的模型范围计费边界补进稳定专题或验证清单，不要继续只埋在 `image_task` 结算 diff 和 QA 报告里。
 
 ## 不要误判的点
 
@@ -142,10 +170,15 @@ chatgpt2api 当前不应再被理解为单纯“ChatGPT 官网能力封装服务
 - 不要把 `session-probe` 当成纯前端调试 iframe；它已经直接决定切号、登出和余额同步是否正确。
 - 不要把对象存储下载能力误判成“前端拿 object_url 直接下”；当前默认路径是站内鉴权 + presign / CDN TypeA 临时签名。
 - 不要把素材库 collections 当成 `image-manager` 的孤立功能；它已经影响 `/image` 参考图选择和 `/canvas` 资产侧栏的默认工作流。
+- 不要把 pixel icon 预览误判成纯视觉点缀；它已经影响当前 `/canvas` 节点与结果的快速识别语义，后续改 icon、缩略图或节点预览时要按工作台稳定交互处理。
 - 不要把“视频模型隐藏”误判成纯前端展示条件；它反映的是当前能力边界依赖 Sub2API 绑定这一真实产品约束。
 - 不要把当前仓库默认理解成“继续做 `/canvas` 功能”或“继续打磨 image workspace UI”；最近更高优先级的是 bridge 配置、真实账号回跳、充值扣费、余额展示、团队空间闭环，以及 Pro Studio / 电商生产工作台交付。
 - 不要把 Pro Studio 生产模式误判成单纯 UI 壳层；它已经牵涉 official 路由能力、batch 参数、结果序列化、素材归档和项目交付。
 - 不要把 `ecommerce-suite` 的 summary composite 误判成单独的“导出按钮”；它现在依赖项目里的排版模式、参与图片、顺序和持久化配置，属于工作台默认状态的一部分。
 - 不要把 Gemini 模型变更理解成纯命名调整；当前 preview 路由和 reference upload 已影响协议入口、前端 payload 和兼容验证基线。
 - 不要把 6/19 的 image settings / image gateway / error normalize 误判成“只是前端文案整理”；它们已经开始改变跨工作台的模型配置入口、错误展示语义和后续验收基线。
+- 不要把 7/1 的联网搜索开关误判成“只是 `/image` chat mode 的小按钮”；它已经改变文本任务 payload 和默认失败面，后续 chat 结果异常要先确认搜索上下文注入与搜索网关配置。
+- 不要把团队成员 `remark` 可见性误判成纯前端隐藏；当前是服务层公开 payload 的默认权限收口，回归时应优先检查角色判断和输出字段，而不是只查列表组件。
+- 不要把 pending settlement retry 误判成后台运维补丁；它已经改变了当前 bridge 计费链路的默认恢复方式，后续若 usage/扣费卡在 pending，先检查 retry 入口和状态转换。
+- 不要把 7/10 的 fixed settlement 误判成“所有图片模型都不再看 APIMart cost”；当前只是普通 `gpt-image-2` 回到固定产品价，official 和其他成本型模型仍保留实际成本结算。
 - 仅看 README 和旧任务快照，容易漏掉独立用户版入口、Sub2API 钱包真源、团队共享额度 v1、per-user retention、continued edit、embedded session recovery、bound Sub2API key preservation、视频节点 fail-closed、`/canvas` 自研节点画布，以及 Pro Studio / `ecommerce-suite` 生产模式这些新默认约束。

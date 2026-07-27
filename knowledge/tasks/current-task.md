@@ -1,44 +1,31 @@
 # Current Task
 
-最后更新：2026-06-22 23:55 +08:00
+最后更新：2026-07-21 22:20 +08:00
 
 ## 背景
 
-`chatgpt2api` 最近主线已从 `/canvas` 与图片任务稳定性，前移到“落叶创艺独立用户版”。本仓库已完成提交 `47c9f72 feat: add luoye independent studio mode`，定位改为面向普通用户的独立创作站：用户注册/登录、充值和余额真源统一走 Sub2API，站内直接进入创作，不再要求用户理解 API Key、Token、OpenAI-compatible 或 API 选择。
+`chatgpt2api` 的稳定产品底座仍然是“落叶创艺独立用户版 + Sub2API 作为用户/余额/充值/扣费真源 + 多工作台共用创作链路”。截至 2026-07-21，当前会话事实源已经前移到 `task-020-image-tool-text-response-hardening` 已 PASS，`task-013` restart recovery 仍是下一合法动作。
 
-Sub2API 对应桥接提交为 `fe2f80be1 feat: add studio bridge integration`。两边本地容器已重建并健康运行；但 2026-06-18 之后，默认续做入口又继续前移，不再只是“生产配置 + Pro Studio / `ecommerce-suite` 交付闭环”，而是先补进了 image gateway、统一模型设置面板、品牌收口和上游图片错误归一，随后在 2026-06-21~2026-06-22 继续前移到 image arena、账号级图片输入 URL 和签名临时参考图 URL 这条新的图片工作台 follow-up。
+最新工作流状态来自 `docs/workflow/status.md`：当前阶段是 `done`，当前 Sprint 是 `task-020-image-tool-text-response-hardening`。这说明默认续做入口已经不再停在 7 月上旬的 `task-014-canvas-batch-layout`，而是先承认 `task-020` 的 text-only hardening 已落盘，再把剩余的 `task-013` 安全续跑问题单独拆出来。
+
+同时，2026-07-21 的最新结论还明确了：强制生图工具收到普通文本或空图片结果时，不能再伪装成图片成功；`/v1/responses` image-tool text-only 直接返回 `HTTP 400 / image_generation_text_response`，generate/edit/video text-only creation-task 为 error、图片消费 0，reserve/refund 重复结算不重复退款。后续若继续排查图片任务计费、usage 解释或 restart recovery，不能只看金额和状态，还要一起看模型、任务类型和退款幂等。
 
 ## 当前主线
 
-- 独立用户版生产配置与真实闭环仍是背景主链：
-  - 配置正式 Sub2API bridge URL、internal secret、recharge URL、默认聊天/生图/视频分组和落叶创艺回跳域名。
-  - 用真实账号跑 `Sub2API 注册/登录 -> 回跳落叶创艺 -> 充值 -> 创作扣费 -> 使用记录 -> 团队空间`。
-- 多工作台已进入同一默认产品面：
-  - `/image`、`/canvas`、`/image-manager`、`/social`、`/ecommerce-suite` 现在都在复用同一套登录态、素材输入、creation-task 输出和钱包扣费底座。
-  - 当前续做不能再只按“图片页 + 生产联调”理解，而要把素材库、输出序列化、Output 动作栈和 team usage 一起看。
-- `ecommerce-suite`、Pro Studio 与 text assets 已成为新的稳定入口：
-  - 电商套图工作台不是独立系统，而是基于现有图片任务、素材能力和本地项目状态的前端工作台。
-  - text assets 已成为电商工作台与创作结果编排的一部分，说明“创作底座”已经扩展到图片之外的文本资产组织。
-  - `/canvas` 与 `/ecommerce-suite` 现在都已有 production mode，说明普通工作台与生产交付工作台已经并入同一默认产品面。
-- 图片模型与错误处理基线已进入新的默认产品面：
-  - `/image`、`/canvas`、`/ecommerce-suite` 开始共用更统一的模型设置心智，模型配置不再只是单页局部表单，而是跨工作台的一致交互层。
-  - image gateway model support 已进入默认实现边界；后续讨论图片模型支持时，不能再只按 `gpt-image-2` / official 路径理解。
-  - 上游图片内容策略错误、尺寸错误与 Midjourney 生成张数语义，已开始在后端做统一归一；后续排障不能继续把这些差异当成各页面各自处理的偶发问题。
-- 2026-06-21~2026-06-22 的默认续做入口又补进了“图片结果与引用图输入层”：
-  - `/image` 最近运行结果开始收口到更明确的 image arena 结果视图，不再只按平铺结果列表理解多图输出；收藏、加入画布和送电商入口开始围绕单轮 run 聚合。
-  - 账号级图片输入 URL 已进入默认产品面；后续再看参考图、继续编辑或跨页复用时，不能只按会话局部临时文件理解。
-  - 临时参考图 URL 现已支持签名安全路径，默认心智不再是“引用图地址天然长期可直连”。
-- profile / team 侧的图片使用状态也继续收口：
-  - profile usage status 现在更偏向图片工作台真实使用语义，而不再只是泛泛的账号统计文案。
-  - 团队页继续维持“共享额度/使用视图”的背景层，但当前高频排障更应优先回到图片工作台共享设置与图片输入来源。
-- 团队模式 v1 的后续验证重点继续前移到 team usage 收口：
-  - 除了 `team_id`、`payer_user_id`、`actor_user_id`，现在还要确认团队页与新工作台默认按同一计费/展示语义工作。
-- UI 继续维持独立用户版语义：
-  - 顶部为用户名下拉，充值入口在下拉或余额 hover 逻辑里。
-  - 普通用户不暴露本地管理员、API 绑定、限制 API、API Key、Token、OpenAI-compatible 等入口。
+- 当前最新已完成的是 `task-020-image-tool-text-response-hardening`：
+  - 普通文本、空输出和真实图片调用已经分流，text-only 不再伪造成图片成功。
+  - 这条边界只说明 checkout 结论，不外推真实账号、真实上游或线上容器。
+- 当前剩余的下一合法动作是 `task-013` restart recovery：
+  - 继续推进时要单独新建 contract，沿用既有 creation-task、内容策略、并发和 Sub2API 结算链路。
+  - `task-013` 的核心遗留阻断仍是服务重启后的安全续跑，而不是 `task-014` 的 batch layout。
+- 独立用户版、多工作台和 bridge 计费仍然是背景主链：
+  - `/image`、`/canvas`、`/image-manager`、`/social`、`/ecommerce-suite` 共用同一套登录态、素材输入、creation-task 输出和钱包扣费底座。
+  - `web_search` chat mode、素材库 `图片 / 文本 / 视频` 顶层分组、统一 image model settings、asset sidebar 的 `image / video` 切换、pending settlement retry 等稳定边界继续成立。
+  - 团队模式 v1 仍按 `team_id / payer_user_id / actor_user_id` 语义理解；排障时不要把当前主线误收回成旧的单页图片工作台或只剩 bridge 联调。
 
 ## 已稳定事实
 
+- `task-020-image-tool-text-response-hardening` 已 PASS：普通文本、空输出和真实图片调用已分流；text-only image-tool 返回 `HTTP 400 / image_generation_text_response`；generate/edit/video text-only creation-task 为 error、图片消费 0；reserve/refund 重复结算不重复退款。
 - Sub2API 是用户、余额、充值、管理配置和扣费的唯一真源；落叶创艺只保存必要用户映射和创作站会话。
 - 未登录访问落叶创艺用户页时走 Sub2API launch/redeem 链路，`launch_token` 只用于一次性换取本地 session。
 - 创作任务通过 Sub2API 默认分组和钱包适配器执行，任务前预扣，成功确认，失败或取消退款。
@@ -77,11 +64,28 @@ Sub2API 对应桥接提交为 `fe2f80be1 feat: add studio bridge integration`。
 - 2026-06-19 上游错误归一已形成新的后端默认边界：图片内容策略错误、尺寸错误与 Midjourney generation count 已开始统一映射；后续如果前端提示文案、错误态或重试逻辑异常，应先查统一归一层而不是分散页面逻辑。
 - 2026-06-21 image arena 已进入新的稳定候选面：多图结果现在更适合按单个 run 的主图 + 缩略图切换、预览/下载/收藏/送电商动作聚合理解，而不是继续按长列表图片块理解。
 - 2026-06-22 临时参考图签名 URL 已进入新的稳定后端边界：后续任何“引用图突然失效/继续编辑拿不到图/跨页结果回填丢图”的问题，都要优先检查签名临时 URL 与过期语义。
+- 2026-06-24 mixed Sub2API image edits 已补齐 multipart 保图边界：`fix: keep json image edits on multipart references` 与 `fix(httpapi): route mixed sub2api image edits as multipart` 说明当前编辑链路已经默认要求保住同一组 references；若 mixed 路径再次把 JSON edit 误走成不带 multipart 的请求，应视为主线回归。
+- 2026-06-25 `/canvas` pixel icon 预览强化已完成：后续如果画布节点缩略图、像素类图标或小尺寸结果辨识性回退，不应再把它当成纯样式微调，而要按当前工作台稳定交互回归处理。
+- 2026-06-25 `/profile` recharge history 已默认隐藏：普通用户入口继续避免暴露不必要的支付历史信息；后续若 profile 又重新膨胀，先确认是否真的属于独立创作站主链。
+- 2026-07-01 `/image` chat mode 联网搜索已进入新的稳定候选面：后续若文本创作结果风格、payload 拼接或任务重试异常，先确认 `web_search` 是否开启、搜索 query 是否有效，以及搜索上下文是否已注入，而不是直接把问题归到模型随机性。
+- 2026-07-01 团队 remark 可见性已进入新的稳定权限边界：owner/manager 之外不应再拿到成员备注；后续涉及团队公开载荷、成员列表和 profile 展示时，应把它视为默认隐私约束而不是临时前端细节。
+- 2026-07-01~2026-07-03 素材库三大分类已进入新的稳定产品边界：当前素材库默认首先区分 `图片 / 文本 / 视频`，每类下再做分组/归类；后续不要再把 text assets、video assets 和 image collections 当成互不相干的平行系统。
+- 2026-07-05 Sub2API bridge 图片计费元数据已进入新的稳定候选面：当前桥接扣费不再只是“这次花了多少钱”，还开始记录图片张数、尺寸和尺寸来源；后续若 Sub2API 侧 usage 细节、bridge 账单或图片成本解释和前端预期不一致，优先检查 metadata 组装与尺寸归一，而不是只看金额换算。
+- 2026-07-05 `/canvas` 资产侧栏媒体切换已进入新的稳定候选面：图片/视频资源库开始复用同一侧栏容器和计数/刷新/切换语义，后续若视频资产入口失效、图片计数异常或素材切换后状态串类，不要只按独立视频面板理解。
+- 2026-07-06 pending settlement retry 已进入新的稳定候选面：后续若 Sub2API usage、bridge 账单或落叶侧任务状态出现“任务成功但结算挂起”的情况，先检查 settlement retry 状态机和重试入口，而不是直接把问题归到上游超时或前端轮询。
 
 ## 下一步
 
 - 上线前先整理生产部署清单，确认两个站点域名、回跳 URL、充值 URL、内部密钥、默认分组、对象存储地域和 bucket 私有读写策略。
 - 如继续做图片工作台 follow-up，优先补一轮跨页面最小 smoke：`/image`、`/canvas`、`/ecommerce-suite` 至少各验证一次模型设置面板、模型标签隐藏、提交 payload、image arena 结果交互和错误提示是否一致。
+- 如继续做 7/1 之后的默认主线，优先补一轮 `/image` chat mode 联网搜索最小 smoke：开启/关闭开关各跑一次，并覆盖未配置搜索网关、空 query 和正常搜索结果注入三种分支。
+- 如继续做 7/2 之后的默认主线，再补一轮素材库三大分类最小 smoke：确认 `/image-manager`、图片/视频资产侧栏和 text asset 入口默认先按 `图片 / 文本 / 视频` 分流，再看各类内部归组是否一致。
+- 如继续做 7/5 之后的 bridge / 资产面 follow-up，优先补一轮图片计费元数据 smoke：至少确认 `generate/edit` 任务提交后，bridge 侧 charge payload 会带上 `image_count`、`image_size` 和 breakdown，且 `image_resolution`/`requested_size` 的归一结果符合当前 `1K / 2K / 4K` 语义。
+- 如继续做 7/6 之后的 bridge 账单 follow-up，再补一轮 pending settlement retry smoke：至少覆盖一条挂起结算重试后恢复成功的链路，并确认状态转换后 usage/账单展示与图片任务记录一致。
+- 如继续做 7/5 之后的 `/canvas` 资产面验收，再补一轮图片/视频媒体切换 smoke：确认同一素材侧栏里 `图片`/`视频` 切换、计数、刷新、空态和加入画布动作都正常，不再依赖额外打开独立视频面板。
+- 如继续做团队侧验收，优先补 owner / manager / member 三种身份查看团队成员列表，确认普通成员不再看到 `remark`。
+- 如继续做 6/25 之后的工作台小收口验收，优先补一轮真实浏览器检查：`/canvas` pixel icon 预览在常见缩放下是否可辨，`/profile` 是否继续保持最小用户视图而没有把充值历史重新带回。
+- 如继续做图片协议/上游兼容回归，优先补 Midjourney APIMart 参数、unsupported ratio warning 和 official image edit reference URL 化这三条最小链路，确认当前提示与 payload 已对齐。
 - 如继续做知识或验收，优先把 `/image`、`/canvas`、`/ecommerce-suite`、素材库和 team usage 当成同一条创作底座补最小浏览器闭环，而不是分散按单页验收。
 - 如继续做后端联调，优先补真实账号下的 account image input URL、signed temp reference image URL 与继续编辑/参考图回填闭环。
 - 对象存储生产配置建议改为私有读写：`CHATGPT2API_IMAGE_OBJECT_STORAGE_ACL=private` 或留空使用 bucket 默认私有；如配置 `CHATGPT2API_IMAGE_OBJECT_STORAGE_PUBLIC_BASE_URL`，必须同步配置 CDN TypeA 鉴权密钥和 TTL。

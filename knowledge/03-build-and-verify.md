@@ -78,6 +78,28 @@ Sub2API launch/redeem、登录态桥接、图片任务路由或对象存储类�
 4. `git diff --check`
 5. 如本地预览环境可用，至少补 `/image` 的最小页面回读，并确认分辨率/格式/压缩参数未回退
 
+Sub2API bridge 图片计费元数据、图片 usage 明细或 bridge charge payload 类修改：
+
+1. `go test ./internal/httpapi ./internal/service -count=1`
+2. `go test ./...`
+3. `cd web && npm run build`
+4. `git diff --check`
+5. 如本地预览或容器环境可用，至少补一次真实或 mock 回读：
+   - `generate` 与 `edit` 各触发一次 bridge charge
+   - 确认 payload / usage 明细包含 `image_count`、`image_size`、`image_size_source`
+   - 确认 `image_resolution`、`requested_size`、`size` 的归一不会把 `1K / 2K / 4K` 解释串掉
+
+`/canvas` 素材侧栏媒体切换、图片/视频资源库统一入口类修改：
+
+1. `cd web && npm run lint`
+2. `cd web && npm run build`
+3. `go test ./...`
+4. `git diff --check`
+5. 如本地预览环境可用，至少补 `/canvas` 或对应素材侧栏最小回读：
+   - `图片` / `视频` 切换后计数、空态和刷新按钮语义一致
+   - 视频资源可加入画布，图片资源不受影响
+   - 不再依赖旧的独立视频面板入口
+
 落叶创艺独立用户版、Sub2API bridge、充值/余额、团队空间或生产联调类修改：
 
 1. `go test ./...`
@@ -218,9 +240,29 @@ image gateway 模型支持、统一 image settings 面板、模型标签隐藏�
   - 前后端 payload 不回退到旧字段或旧入口
 - 当前统一图片设置/错误归一主线至少应覆盖：
   - `/image`、`/canvas`、`/ecommerce-suite` 的 image settings 面板能打开且主设置项含义一致
+  - Midjourney APIMart 参数、unsupported ratio warning 和图片尺寸/内容策略错误的提示语义在不同工作台保持一致
+
+- 当前 `/image` chat mode 联网搜索主线至少应覆盖：
+  - 开启 `web_search` 后，文本任务 payload 会注入搜索上下文，而不是仍按普通 chat prompt 直发
+  - 关闭 `web_search` 后，不会残留搜索上下文或把普通 chat 错误地走成搜索链路
+  - `CHATGPT2API_WEB_SEARCH_URL` 缺失时返回前置条件错误，而不是伪装成普通模型失败
+  - 空 query、搜索服务报错和正常搜索结果三种分支的前端提示能区分
+
+- 当前素材库三大分类主线至少应覆盖：
+  - `/image-manager`、图片资产侧栏、视频资产侧栏和 text asset 入口默认先区分 `图片 / 文本 / 视频`
+  - 三大分类切换后，各自列表、空态和后续 handoff 不会串类
   - 模型标签默认不暴露不该展示的 upstream brand
   - image gateway 新模型不会让共享 payload、校验或展示层退回到单页特例处理
   - Midjourney generation count、图片尺寸错误和内容策略错误的提示语义在不同工作台保持一致
+- 当前 Sub2API bridge 图片计费元数据主线至少应覆盖：
+  - `generate`、`edit` 两类图片任务都会把 `image_count` 带入 bridge charge
+  - `image_resolution`、`requested_size`、`size` 会按当前规则归一成稳定的 `image_size`
+  - 未显式给尺寸时，bridge 侧默认回退语义仍可解释，不会把默认尺寸误记成随机值
+  - usage / bridge 账单侧看到的尺寸和张数能和前端任务语义对上
+- 当前 `/canvas` 资产侧栏媒体切换主线至少应覆盖：
+  - 同一侧栏容器内可以在 `图片` / `视频` 间切换，而不是依赖额外弹出或单独面板
+  - 切换媒体类型后，计数、刷新、列表和空态不会串用另一侧的数据
+  - 视频加入画布动作仍可用，且不会破坏图片素材库原有拖拽/加入链路
 - 只跑前端 build 不足以证明 Sub2API launch/redeem 或图片任务链路正确；涉及登录态、任务、配置和存储时必须带后端测试。
 - 只跑 `go test ./...` 也不足以证明 `/image` 工作台 UI 没被破坏；涉及编辑器、拖拽和展示流时应至少补前端 build。
 - 只跑命令行构建也不足以证明 `/canvas` 交互没退化；涉及节点拖拽、连线、画布缩放、自动保存和运行状态时，应至少补浏览器侧最小回读。

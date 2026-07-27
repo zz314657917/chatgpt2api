@@ -1036,6 +1036,7 @@ function sanitizeSmartItemData(data?: SmartCanvasItemData): SmartCanvasItemData 
     prompt_split_client_task_id: cleanImageText(data.prompt_split_client_task_id),
     prompt_split_batch_id: cleanImageText(data.prompt_split_batch_id),
     prompt_split_template_node_id: cleanImageText(data.prompt_split_template_node_id),
+    prompt_split_variation_axis: cleanImageText(data.prompt_split_variation_axis),
     prompt_split_status: normalizePromptSplitStatus(data.prompt_split_status),
     prompt_split_execution_mode: data.prompt_split_execution_mode === "direct" ? "direct" : data.prompt_split_execution_mode === "nodes" ? "nodes" : undefined,
     prompt_split_items: normalizePromptSplitItems(data.prompt_split_items),
@@ -1072,6 +1073,7 @@ function normalizePromptSplitItems(value: unknown): NonNullable<SmartCanvasItemD
     seen.add(index);
     return [{
       index,
+      variant_label: cleanImageText(source.variant_label),
       prompt,
       task_id: cleanImageText(source.task_id),
       status,

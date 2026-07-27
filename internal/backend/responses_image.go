@@ -520,22 +520,41 @@ func parseResponsesImagePayload(payload string) (ResponsesImageEvent, bool, erro
 		event.OutputFormat = util.Clean(data["output_format"])
 		event.Background = util.Clean(data["background"])
 		return event, event.PartialImage != "", nil
-	case "response.output_item.done":
-		item := util.StringMap(data["item"])
-		if util.Clean(item["type"]) != "image_generation_call" {
+	case "response.output_text.done":
+		event.Text = responsesImageOutputText(data)
+		if event.Text == "" {
 			return event, false, nil
 		}
-		mergeResponsesImageItem(&event, item)
-		return event, event.Result != "", nil
+		event.Type = "image_text_response"
+		return event, true, nil
+	case "response.output_item.done":
+		item := util.StringMap(data["item"])
+		if util.Clean(item["type"]) == "image_generation_call" {
+			mergeResponsesImageItem(&event, item)
+			return event, event.Result != "", nil
+		}
+		event.Text = responsesImageOutputText(item)
+		if event.Text == "" {
+			return event, false, nil
+		}
+		event.Type = "image_text_response"
+		return event, true, nil
 	case "response.completed":
 		response := util.StringMap(data["response"])
 		for _, raw := range anySlice(response["output"]) {
 			item, ok := raw.(map[string]any)
-			if !ok || util.Clean(item["type"]) != "image_generation_call" {
+			if !ok {
 				continue
 			}
-			mergeResponsesImageItem(&event, item)
-			return event, event.Result != "", nil
+			if util.Clean(item["type"]) == "image_generation_call" {
+				mergeResponsesImageItem(&event, item)
+				return event, event.Result != "", nil
+			}
+			if text := responsesImageOutputText(item); text != "" {
+				event.Type = "image_text_response"
+				event.Text = text
+				return event, true, nil
+			}
 		}
 		return event, false, nil
 	case "error":
@@ -550,6 +569,46 @@ func parseResponsesImagePayload(payload string) (ResponsesImageEvent, bool, erro
 	default:
 		return event, false, nil
 	}
+}
+
+func responsesImageOutputText(value map[string]any) string {
+	if value == nil {
+		return ""
+	}
+	if text := strings.TrimSpace(util.Clean(value["text"])); text != "" {
+		return text
+	}
+	if text := strings.TrimSpace(util.Clean(value["output_text"])); text != "" {
+		return text
+	}
+	return responsesImageContentText(value["content"])
+}
+
+func responsesImageContentText(value any) string {
+	var parts []string
+	var walk func(any)
+	walk = func(raw any) {
+		switch item := raw.(type) {
+		case string:
+			if text := strings.TrimSpace(item); text != "" {
+				parts = append(parts, text)
+			}
+		case []any:
+			for _, child := range item {
+				walk(child)
+			}
+		case map[string]any:
+			if text := strings.TrimSpace(util.Clean(item["text"])); text != "" {
+				parts = append(parts, text)
+				return
+			}
+			if nested := item["content"]; nested != nil {
+				walk(nested)
+			}
+		}
+	}
+	walk(value)
+	return strings.TrimSpace(strings.Join(parts, ""))
 }
 
 func mergeResponsesImageItem(event *ResponsesImageEvent, item map[string]any) {

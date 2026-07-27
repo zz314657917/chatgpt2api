@@ -145,6 +145,7 @@ import {
   type SmartCanvasDragState,
   type SmartCanvasHistoryEntry,
   type SmartCanvasItem,
+  type SmartCanvasItemData,
   type SmartCanvasImageToolParameters,
   type SmartCanvasImageToolType,
   type SmartCanvasItemType,
@@ -172,6 +173,52 @@ type SmartCanvasNodeClipboard = {
   nodes: SmartCanvasItem[];
   edges: SmartCanvasDocument["edges"];
 };
+
+type SmartCanvasGeneratorStyle = Pick<SmartCanvasItemData,
+  | "model"
+  | "size"
+  | "size_user_modified"
+  | "image_resolution"
+  | "image_resolution_user_modified"
+  | "output_format"
+  | "output_compression"
+  | "image_model_settings"
+  | "professional_mode"
+  | "pro_studio"
+  | "pro_studio_state"
+  | "official_settings"
+  | "background"
+  | "moderation"
+  | "style"
+  | "partial_images"
+  | "quality"
+  | "n"
+  | "visibility"
+>;
+
+function generatorStyleSnapshot(data: SmartCanvasItemData): SmartCanvasGeneratorStyle {
+  return structuredClone({
+    model: data.model,
+    size: data.size,
+    size_user_modified: data.size_user_modified,
+    image_resolution: data.image_resolution,
+    image_resolution_user_modified: data.image_resolution_user_modified,
+    output_format: data.output_format,
+    output_compression: data.output_compression,
+    image_model_settings: data.image_model_settings,
+    professional_mode: data.professional_mode,
+    pro_studio: data.pro_studio,
+    pro_studio_state: data.pro_studio_state,
+    official_settings: data.official_settings,
+    background: data.background,
+    moderation: data.moderation,
+    style: data.style,
+    partial_images: data.partial_images,
+    quality: data.quality,
+    n: data.n,
+    visibility: data.visibility,
+  });
+}
 
 type SmartCanvasPortSnapCandidate = {
   id: string;
@@ -886,6 +933,7 @@ function syncPromptSplitBatch(canvas: SmartCanvasDocument, nodeId: string, batch
           direct_generate: batch.execution_mode === "direct",
           prompt_split_batch_id: batch.id,
           prompt_split_template_node_id: template?.id || item.data?.prompt_split_template_node_id || "",
+          prompt_split_variation_axis: batch.variation_axis || "",
           prompt_split_status: batch.status,
           prompt_split_execution_mode: batch.execution_mode,
           prompt_split_items: items,
@@ -1601,6 +1649,7 @@ export function useSmartCanvasController() {
   const [helpTopic, setHelpTopic] = useState<SmartCanvasHelpTopic>({ kind: "flow", id: "basic-text" });
   const [onboardingOpen, setOnboardingOpen] = useState(false);
   const [portMenuRequest, setPortMenuRequest] = useState<SmartCanvasPortMenuRequest | null>(null);
+  const [hasGeneratorStyleClipboard, setHasGeneratorStyleClipboard] = useState(false);
   const boardRef = useRef<HTMLDivElement | null>(null);
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
   const uploadTargetPointRef = useRef<{ x: number; y: number } | null>(null);
@@ -1624,6 +1673,7 @@ export function useSmartCanvasController() {
   const applyingHistoryRef = useRef(false);
   const historyCommitBaseRef = useRef<SmartCanvasDocument | null>(null);
   const nodeClipboardRef = useRef<SmartCanvasNodeClipboard | null>(null);
+  const generatorStyleClipboardRef = useRef<SmartCanvasGeneratorStyle | null>(null);
   const nodePasteOffsetRef = useRef(0);
   const assetsLoadingRequestRef = useRef(false);
   const teamAssetsLoadingRequestRef = useRef(false);
@@ -2046,9 +2096,9 @@ export function useSmartCanvasController() {
     }
   }, [assetLibraryMediaType, assetLibraryScope, assetsLoaded, loadAssets, loadTeamAssets, loadVideoAssets, loadingAssets, loadingPublicAssets, loadingVideoAssets, teamAssetsLoaded, videoAssetsLoaded]);
 
-  const setAssetLibraryVideoActive = useCallback((active: boolean) => {
-    setAssetLibraryMediaType(active ? "video" : "image");
-    if (active && !videoAssetsLoaded && !loadingVideoAssets && !videoAssetsLoadingRequestRef.current) {
+  const selectAssetLibraryMediaType = useCallback((mediaType: SmartCanvasAssetMediaType) => {
+    setAssetLibraryMediaType(mediaType);
+    if (mediaType === "video" && !videoAssetsLoaded && !loadingVideoAssets && !videoAssetsLoadingRequestRef.current) {
       void loadVideoAssets();
     }
   }, [loadVideoAssets, loadingVideoAssets, videoAssetsLoaded]);
@@ -3262,6 +3312,10 @@ export function useSmartCanvasController() {
   }, [appendEdge, commitViewport, connectState, dragState, setActiveConnectState, setActiveDragState, updateCanvas]);
 
   const handleWheel = useCallback((event: ReactWheelEvent<HTMLDivElement>) => {
+    const target = event.target;
+    if (target instanceof HTMLElement && target.closest("[data-canvas-wheel-lock='true']")) {
+      return;
+    }
     event.preventDefault();
     keepCanvasMediaLightweight();
     const rect = event.currentTarget.getBoundingClientRect();
@@ -3386,6 +3440,43 @@ export function useSmartCanvasController() {
     toast.success(`已整理 ${Math.ceil(arrangedIds.length / 2)} 组节点`);
   }, [updateCanvas]);
 
+  const copyGeneratorStyle = useCallback((id: string) => {
+    const node = canvasRef.current?.nodes.find((item) => item.id === id && item.type === "image_generation");
+    if (!node) {
+      toast.error("找不到图片生成节点");
+      return;
+    }
+    generatorStyleClipboardRef.current = generatorStyleSnapshot(node.data || {});
+    setHasGeneratorStyleClipboard(true);
+    toast.success("已复制图片生成样式");
+  }, []);
+
+  const pasteGeneratorStyle = useCallback((id: string) => {
+    const style = generatorStyleClipboardRef.current;
+    const node = canvasRef.current?.nodes.find((item) => item.id === id && item.type === "image_generation");
+    if (!style || !node) {
+      toast.error(style ? "找不到图片生成节点" : "请先复制图片生成样式");
+      return;
+    }
+    if (isActiveTask(node.data?.status)) {
+      toast.error("运行中的节点不能粘贴样式");
+      return;
+    }
+    const snapshot = structuredClone(style);
+    updateCanvas((current) => ({
+      ...current,
+      nodes: current.nodes.map((item) => item.id === id ? {
+        ...item,
+        data: {
+          ...item.data,
+          ...snapshot,
+          updated_at: new Date().toISOString(),
+        },
+      } : item),
+    }), true, "粘贴图片生成样式");
+    toast.success("已粘贴图片生成样式");
+  }, [updateCanvas]);
+
   const deletePromptSplitBatchNodes = useCallback((batchId: string) => {
     const current = canvasRef.current;
     if (!current) {
@@ -3420,6 +3511,7 @@ export function useSmartCanvasController() {
             data: {
               ...pruned.data,
               prompt_split_batch_id: "",
+              prompt_split_variation_axis: "",
               prompt_split_status: undefined,
               prompt_split_execution_mode: undefined,
               prompt_split_items: [],
@@ -4114,6 +4206,7 @@ export function useSmartCanvasController() {
                   prompt_split_client_task_id: clientTaskId,
                   prompt_split_batch_id: "",
                   prompt_split_template_node_id: validation.template?.id || "",
+                  prompt_split_variation_axis: "",
                   prompt_split_status: "splitting",
                   prompt_split_execution_mode: executionMode,
                   prompt_split_items: [],
@@ -4178,6 +4271,7 @@ export function useSmartCanvasController() {
                 prompt_split_client_task_id: "",
                 prompt_split_batch_id: "",
                 prompt_split_template_node_id: "",
+                prompt_split_variation_axis: "",
                 prompt_split_status: undefined,
                 prompt_split_execution_mode: undefined,
                 prompt_split_items: [],
@@ -5487,7 +5581,7 @@ export function useSmartCanvasController() {
     setOnboardingOpen,
     setLeftRailCollapsed,
     setAssetLibraryScope: selectAssetLibraryScope,
-    setAssetLibraryVideoActive,
+    setAssetLibraryMediaType: selectAssetLibraryMediaType,
     setAssetCollection: selectAssetCollection,
     undoCanvas,
     redoCanvas,
@@ -5498,6 +5592,9 @@ export function useSmartCanvasController() {
     loadMoreAssets: loadMoreAssetLibrary,
     reloadCanvases,
     updateItemData,
+    hasGeneratorStyleClipboard,
+    copyGeneratorStyle,
+    pasteGeneratorStyle,
     addNodeAt,
     addNodeFromPort,
     openCanvasHelp,

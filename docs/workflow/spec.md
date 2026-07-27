@@ -2,16 +2,54 @@
 repo: chatgpt2api
 project_type: web
 qa_mode: browser
-last_updated: 2026-07-11
+last_updated: 2026-07-28
 ---
 
 # Product Spec
 
 ## 当前状态
 
-- 当前 workflow 状态以 `docs/workflow/status.md` 为准：`phase=contract-approved`，当前 Sprint 为 `task-014-canvas-batch-layout`。
+- 当前 workflow 状态以 `docs/workflow/status.md` 为准：`phase=done`，当前 Sprint 为 `task-021-generator-node-responsive-parameters`。
 - `task-001` 到 `task-013` 已把落叶创艺独立用户版、Pro Studio、prompt split、bridge 计费元数据和 pending settlement retry 推成稳定背景层；当前默认续做不再是“继续补独立站入口”，而是继续收口 Canvas prompt-split fan-out 的布局、缩放和重复拆分语义。
 - 2026-07-11 新增的结算约束也已进入当前规格背景：固定结算场景下，Studio Bridge / APIMart 图片账单仍需保留真实模型语义，不能把 `gpt-image-2` 错映射成泛化模型名。
+
+## 追加需求：图片生成节点响应式参数
+
+### 一句话需求
+- 图片生成节点不使用内部滚动框；参数随节点宽度自动重排，节点上的滚轮不继续滚动页面或缩放 Canvas。
+
+### 验收标准
+- full 模式由内容自然撑高且没有内部纵向滚动条。
+- 320px、390px、540px 节点分别使用单列、双列和三列普通参数布局。
+- 参数区 wheel 阻止默认页面滚动且不改变 Canvas viewport；空白 Canvas wheel 缩放保持有效。
+- compact 模式、生成请求、样式复制粘贴和持久化语义不变。
+
+### Sprint 计划
+- `task-021-generator-node-responsive-parameters`：响应式参数布局、wheel 边界和 browser QA。
+
+## 追加需求：强制生图工具普通文本响应硬化
+
+### 一句话需求
+- 当请求明确要求图片工具但上游只返回普通 `output_text`、没有 `image_generation_call` 时，统一判定为生图失败，保留诊断文本并正确退款。
+
+### 目标
+- 用路由矩阵和脱敏出站 capture 区分主模型、工具模型、实际图片路由和真实工具调用，不把工具字段存在误判为工具已执行。
+- Codex Responses 解析器识别最终普通文本、空输出和真实图片调用；只有 `image_generation_call` 才能进入图片成功链路。
+- `/v1/images/*`、`/v1/responses` image-tool 和 creation-task 对 text-only/no-image-output 使用稳定错误语义；generate/edit 失败不变成成功的文本任务。
+- 失败任务图片消费数为 `0`，既有 `reserve / commit / refund` charge key 幂等保证退款最多一次；合法 chat 文本输出不回退。
+
+### 非目标
+- 不凭猜测重写 `gpt-5.4-mini` 与 `gpt-image-2` 的上游模型契约，不把失败请求静默改成普通聊天或另一条图片路由。
+- 不修改前端、数据库、Sub2API 协议、生产部署、对象存储或新的计费状态机。
+
+### 验收标准
+- 路由/出站 payload 测试能证明 `model`、工具 `model`、`tool_choice`、`instructions` 和实际路由选择；真实工具调用必须出现 `image_generation_call`。
+- 上游返回普通文本时，错误正文/任务诊断保留文本，接口不返回成功图片 output；无文本时返回稳定 no-image-output 错误。
+- generate/edit creation-task 为 error/cancelled，图片消费数为 `0`，本地或 Sub2API 退款只发生一次；chat 合法文本任务保持现状。
+- 后端定向测试、全量 Go 测试和脱敏运行态 smoke 均通过；真实账号未验证项必须明确列出。
+
+### Sprint 计划
+- `task-020-image-tool-text-response-hardening`：路由矩阵、Responses 文本识别、错误归一、creation-task 状态/退款回归与运行态 capture。
 
 ## 一句话需求
 - 将 `chatgpt2api` 改造成独立创作站“落叶创艺”：普通用户只走 Sub2API 注册、登录、充值和余额扣费，进入站点后直接使用创作台、无限画布、社媒运营和图片库，不再接触 API Key / Token / OpenAI-compatible / API 选择。
@@ -105,6 +143,52 @@ last_updated: 2026-07-11
 - 直接模式为每条 prompt 创建独立 `n=1` 任务；单项失败保留兄弟任务，父 batch 归为 `partial_success`。
 - AI 提示词节点默认尺寸约为 `330 x 260`，输入/输出长文本不会撑高节点或遮挡画布。
 - 通过后端单测、前端 lint/build、全量 Go 测试和 Playwright Canvas smoke。
+
+## 追加需求：Canvas 语义化提示词拆分
+
+### 一句话需求
+- prompt-split 自动识别用户要求的主要变化维度，并为每个变体生成一条独立、自包含的最终生图提示词。
+
+### 目标
+- 颜色、角度、材质、场景和风格等明确维度优先成为拆分轴；每项只承载一个变体。
+- 结构化返回变化轴、变体标签和最终 prompt，并将语义元数据持久化到批次。
+- 节点 `split_count` 始终决定最终条数；文字数量只参与语义理解，不覆盖节点设置。
+- 用户明确要求同框或群组构图时保留多个主体共同出现的语义。
+
+### 非目标
+- 不增加拆分维度选择器、第二次模型调用或自动修复重试。
+- 不修改图片任务、Sub2API、计费、鉴权、direct `n=1` 或后端请求入口。
+
+### 验收标准
+- 结构化解析严格拒绝数量错误、空值、重复标签、重复 prompt 和额外字段。
+- `5 个颜色的陶瓷瓶子 + split_count=5` 得到 5 个单色变体；`split_count=4` 只得到 4 个。
+- Canvas 详情弹窗显示变化轴和变体标签，旧批次无元数据时仍显示原提示词列表。
+
+### Sprint 计划
+- `task-018-semantic-prompt-split`：结构化语义拆分、持久化、Canvas 展示与回归。
+
+## 追加需求：Canvas Output 预览、参数展开与样式复制
+
+### 一句话需求
+- Output 按图片数量充分利用节点预览区域，图片生成参数可完整内联展开，并能在节点间复制生成样式。
+
+### 目标
+- 单图完整填满预览区，2/3/4 图使用适合数量的稳定网格。
+- full 参数模式自动增高且不产生内部滚动，参数区滚轮不缩放画布。
+- 页面会话内复制/粘贴图片生成样式，粘贴结果继续随 Canvas 保存。
+
+### 非目标
+- 不修改后端 API、图片任务、prompt-split、计费、数据库或 Sub2API。
+- 不复制 prompt、输入素材、任务/结果、批次字段、位置、尺寸或展开状态。
+
+### 验收标准
+- Output 单图 `object-contain` 且随节点缩放增大；2/3/4 图不重叠、不溢出。
+- 展开后全部参数位于节点边界内，参数区 wheel 不改变 viewport zoom。
+- 普通和 Pro Studio 样式可复制粘贴，运行中禁用粘贴，操作不产生生成请求。
+- 粘贴参数刷新后保留，页面内样式剪贴板刷新后清空。
+
+### Sprint 计划
+- `task-019-canvas-node-ergonomics`：Output 布局、full 自动增高、wheel 隔离与样式复制。
 
 ## 追加需求：Canvas 批量节点整理与缩放
 

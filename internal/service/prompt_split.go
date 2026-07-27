@@ -74,11 +74,22 @@ type PromptSplitCreateRequest struct {
 }
 
 type PromptSplitItem struct {
-	Index  int    `json:"index"`
-	Prompt string `json:"prompt"`
-	TaskID string `json:"task_id,omitempty"`
-	Status string `json:"status"`
-	Error  string `json:"error,omitempty"`
+	Index        int    `json:"index"`
+	VariantLabel string `json:"variant_label,omitempty"`
+	Prompt       string `json:"prompt"`
+	TaskID       string `json:"task_id,omitempty"`
+	Status       string `json:"status"`
+	Error        string `json:"error,omitempty"`
+}
+
+type PromptSplitResult struct {
+	VariationAxis string
+	Items         []PromptSplitResultItem
+}
+
+type PromptSplitResultItem struct {
+	VariantLabel string
+	Prompt       string
 }
 
 type promptSplitIdentity struct {
@@ -99,6 +110,7 @@ type promptSplitBatch struct {
 	ExecutionMode    string                   `json:"execution_mode"`
 	SplitCount       int                      `json:"split_count"`
 	SplitTaskID      string                   `json:"split_task_id"`
+	VariationAxis    string                   `json:"variation_axis,omitempty"`
 	ImageRequest     *PromptSplitImageRequest `json:"image_request,omitempty"`
 	TaskMetadata     map[string]any           `json:"task_metadata,omitempty"`
 	Items            []PromptSplitItem        `json:"items"`
@@ -311,45 +323,80 @@ func (s *PromptSplitService) Cancel(identity Identity, id string) (map[string]an
 	return out, nil
 }
 
-func ParsePromptSplitPrompts(value string, splitCount int) ([]string, error) {
+func ParsePromptSplitResult(value string, splitCount int) (PromptSplitResult, error) {
 	if splitCount < 1 || splitCount > maxImageTaskCount {
-		return nil, fmt.Errorf("split_count must be between 1 and %d", maxImageTaskCount)
+		return PromptSplitResult{}, fmt.Errorf("split_count must be between 1 and %d", maxImageTaskCount)
 	}
 	value, err := unwrapPromptSplitFence(value)
 	if err != nil {
-		return nil, err
+		return PromptSplitResult{}, err
 	}
 	decoder := json.NewDecoder(strings.NewReader(value))
 	var payload map[string]json.RawMessage
 	if err := decoder.Decode(&payload); err != nil {
-		return nil, fmt.Errorf("splitter response must be JSON: %w", err)
+		return PromptSplitResult{}, fmt.Errorf("splitter response must be JSON: %w", err)
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); err != io.EOF {
-		return nil, fmt.Errorf("splitter response must contain one JSON object")
+		return PromptSplitResult{}, fmt.Errorf("splitter response must contain one JSON object")
 	}
-	if len(payload) != 1 || payload["prompts"] == nil {
-		return nil, fmt.Errorf("splitter response must be exactly {\"prompts\":[...]}")
+	if len(payload) != 2 || payload["variation_axis"] == nil || payload["items"] == nil {
+		return PromptSplitResult{}, fmt.Errorf("splitter response must contain exactly variation_axis and items")
 	}
-	var prompts []string
-	if err := json.Unmarshal(payload["prompts"], &prompts); err != nil {
-		return nil, fmt.Errorf("splitter prompts must be a string array: %w", err)
+	var axis string
+	if err := json.Unmarshal(payload["variation_axis"], &axis); err != nil {
+		return PromptSplitResult{}, fmt.Errorf("splitter variation_axis must be a string: %w", err)
 	}
-	if len(prompts) != splitCount {
-		return nil, fmt.Errorf("splitter returned %d prompts, expected %d", len(prompts), splitCount)
+	axis = strings.TrimSpace(axis)
+	if axis == "" {
+		return PromptSplitResult{}, fmt.Errorf("splitter variation_axis is empty")
 	}
-	seen := map[string]struct{}{}
-	for index := range prompts {
-		prompts[index] = strings.TrimSpace(prompts[index])
-		if prompts[index] == "" {
-			return nil, fmt.Errorf("splitter prompt %d is empty", index+1)
+	var rawItems []map[string]json.RawMessage
+	if err := json.Unmarshal(payload["items"], &rawItems); err != nil {
+		return PromptSplitResult{}, fmt.Errorf("splitter items must be an object array: %w", err)
+	}
+	if len(rawItems) != splitCount {
+		return PromptSplitResult{}, fmt.Errorf("splitter returned %d items, expected %d", len(rawItems), splitCount)
+	}
+	items := make([]PromptSplitResultItem, 0, len(rawItems))
+	seenLabels := map[string]struct{}{}
+	seenPrompts := map[string]struct{}{}
+	for index, rawItem := range rawItems {
+		if len(rawItem) != 2 || rawItem["variant_label"] == nil || rawItem["prompt"] == nil {
+			return PromptSplitResult{}, fmt.Errorf("splitter item %d must contain exactly variant_label and prompt", index+1)
 		}
-		if _, ok := seen[prompts[index]]; ok {
-			return nil, fmt.Errorf("splitter prompts must be unique")
+		var item PromptSplitResultItem
+		if err := json.Unmarshal(rawItem["variant_label"], &item.VariantLabel); err != nil {
+			return PromptSplitResult{}, fmt.Errorf("splitter item %d variant_label must be a string: %w", index+1, err)
 		}
-		seen[prompts[index]] = struct{}{}
+		if err := json.Unmarshal(rawItem["prompt"], &item.Prompt); err != nil {
+			return PromptSplitResult{}, fmt.Errorf("splitter item %d prompt must be a string: %w", index+1, err)
+		}
+		item.VariantLabel = strings.TrimSpace(item.VariantLabel)
+		item.Prompt = strings.TrimSpace(item.Prompt)
+		if item.VariantLabel == "" {
+			return PromptSplitResult{}, fmt.Errorf("splitter item %d variant_label is empty", index+1)
+		}
+		if item.Prompt == "" {
+			return PromptSplitResult{}, fmt.Errorf("splitter item %d prompt is empty", index+1)
+		}
+		labelKey := normalizePromptSplitUniqueValue(item.VariantLabel)
+		if _, ok := seenLabels[labelKey]; ok {
+			return PromptSplitResult{}, fmt.Errorf("splitter variant labels must be unique")
+		}
+		promptKey := normalizePromptSplitUniqueValue(item.Prompt)
+		if _, ok := seenPrompts[promptKey]; ok {
+			return PromptSplitResult{}, fmt.Errorf("splitter prompts must be unique")
+		}
+		seenLabels[labelKey] = struct{}{}
+		seenPrompts[promptKey] = struct{}{}
+		items = append(items, item)
 	}
-	return prompts, nil
+	return PromptSplitResult{VariationAxis: axis, Items: items}, nil
+}
+
+func normalizePromptSplitUniqueValue(value string) string {
+	return strings.ToLower(strings.Join(strings.Fields(value), " "))
 }
 
 func unwrapPromptSplitFence(value string) (string, error) {
@@ -460,12 +507,12 @@ func (s *PromptSplitService) advanceSplit(ctx context.Context, key string, batch
 	case TaskStatusQueued, TaskStatusRunning:
 		return true
 	case TaskStatusSuccess:
-		prompts, err := ParsePromptSplitPrompts(promptSplitTaskText(task), batch.SplitCount)
+		result, err := ParsePromptSplitResult(promptSplitTaskText(task), batch.SplitCount)
 		if err != nil {
 			s.markBatchError(key, err.Error())
 			return false
 		}
-		s.completeSplit(key, prompts)
+		s.completeSplit(key, result)
 		updated, ok := s.batchSnapshot(key)
 		return ok && isActivePromptSplitStatus(updated.Status)
 	case TaskStatusCancelled:
@@ -526,20 +573,21 @@ func (s *PromptSplitService) ensureSplitTask(ctx context.Context, key string) er
 	return err
 }
 
-func (s *PromptSplitService) completeSplit(key string, prompts []string) {
+func (s *PromptSplitService) completeSplit(key string, result PromptSplitResult) {
 	_, _ = s.mutateBatch(key, func(batch *promptSplitBatch) {
 		if batch.Status != PromptSplitStatusSplitting {
 			return
 		}
-		items := make([]PromptSplitItem, 0, len(prompts))
-		for index, prompt := range prompts {
-			item := PromptSplitItem{Index: index + 1, Prompt: prompt, Status: PromptSplitStatusReady}
+		items := make([]PromptSplitItem, 0, len(result.Items))
+		for index, splitItem := range result.Items {
+			item := PromptSplitItem{Index: index + 1, VariantLabel: splitItem.VariantLabel, Prompt: splitItem.Prompt, Status: PromptSplitStatusReady}
 			if batch.ExecutionMode == PromptSplitExecutionModeDirect {
 				item.TaskID = promptSplitChildTaskID(batch.ID, item.Index)
 				item.Status = promptSplitItemStatusNotSubmitted
 			}
 			items = append(items, item)
 		}
+		batch.VariationAxis = result.VariationAxis
 		batch.Items = items
 		if batch.ExecutionMode == PromptSplitExecutionModeDirect {
 			batch.Status = PromptSplitStatusSubmitting
@@ -933,6 +981,7 @@ func normalizeStoredPromptSplitBatch(batch promptSplitBatch) promptSplitBatch {
 	batch.OwnerID = strings.TrimSpace(batch.OwnerID)
 	batch.SourcePrompt = strings.TrimSpace(batch.SourcePrompt)
 	batch.SplitModel = firstNonEmpty(strings.TrimSpace(batch.SplitModel), util.DefaultChatModel)
+	batch.VariationAxis = strings.TrimSpace(batch.VariationAxis)
 	batch.ExecutionMode = strings.ToLower(strings.TrimSpace(batch.ExecutionMode))
 	if batch.ExecutionMode != PromptSplitExecutionModeNodes && batch.ExecutionMode != PromptSplitExecutionModeDirect {
 		batch.Status = PromptSplitStatusError
@@ -951,6 +1000,7 @@ func normalizeStoredPromptSplitBatch(batch promptSplitBatch) promptSplitBatch {
 	items := make([]PromptSplitItem, 0, len(batch.Items))
 	for index, item := range batch.Items {
 		item.Index = index + 1
+		item.VariantLabel = strings.TrimSpace(item.VariantLabel)
 		item.Prompt = strings.TrimSpace(item.Prompt)
 		item.TaskID = strings.TrimSpace(item.TaskID)
 		item.Status = strings.TrimSpace(item.Status)
@@ -1048,7 +1098,17 @@ func (identity promptSplitIdentity) identity() Identity {
 }
 
 func promptSplitMessages(prompt string, splitCount int) []map[string]any {
-	instruction := fmt.Sprintf("Split the user's request into exactly %d independent final text-to-image prompts. Preserve the user's intent and repeat essential context in each prompt. Return one JSON object with this exact shape: {\"prompts\":[\"...\"]}. Do not use markdown. Do not use prose. Do not use numbered lists. Do not add extra keys.", splitCount)
+	instruction := fmt.Sprintf(`You are a semantic text-to-image prompt splitter. Convert the user's request into exactly %d independent final prompts.
+
+Rules:
+1. The requested output count is exactly %d. This count is authoritative even when a number written in the user's text differs.
+2. Infer one primary variation axis from the user's intent, such as color, camera angle, material, scene, style, season, flavor, packaging, or another explicit enumerable attribute. Prefer an explicitly quantified axis that matches the output count; otherwise prefer the first strongly emphasized axis.
+3. Each item must represent exactly one distinct variant on that axis. Keep the subject identity, shape, material, branding, composition, lighting, and other essential context fixed unless one of them is the selected axis.
+4. A request like "five colors of a ceramic bottle" means one color variant per prompt, not five colors or five bottles in every prompt. If the user explicitly says one image, same frame, together, group, or equivalent wording, preserve that multi-subject composition and vary the next eligible axis instead.
+5. Preserve explicit variant values and their order. If there are more values than required, use the first required values. If there are fewer, add visually distinct values from the same axis. When the user explicitly restricts the allowed values, keep those values and use the closest secondary distinction to reach the required count.
+6. Every prompt must be self-contained and ready for direct text-to-image generation. Use the user's language for variation_axis, variant_label, and prompt.
+7. Return one JSON object with exactly this shape: {"variation_axis":"颜色","items":[{"variant_label":"红色","prompt":"一只红色陶瓷瓶子，保持用户要求的其余细节"}]}. The items array must contain exactly %d objects. Labels and prompts must be non-empty and unique after case and whitespace normalization.
+8. Return JSON only. Do not use markdown, prose, analysis, numbered lists, or extra keys.`, splitCount, splitCount, splitCount)
 	return []map[string]any{
 		{"role": "system", "content": instruction},
 		{"role": "user", "content": prompt},
@@ -1073,6 +1133,9 @@ func publicPromptSplitBatch(batch promptSplitBatch) map[string]any {
 			"prompt": item.Prompt,
 			"status": item.Status,
 		}
+		if item.VariantLabel != "" {
+			publicItem["variant_label"] = item.VariantLabel
+		}
 		if item.TaskID != "" {
 			publicItem["task_id"] = item.TaskID
 		}
@@ -1090,6 +1153,9 @@ func publicPromptSplitBatch(batch promptSplitBatch) map[string]any {
 		"items":          items,
 		"created_at":     batch.CreatedAt,
 		"updated_at":     batch.UpdatedAt,
+	}
+	if batch.VariationAxis != "" {
+		public["variation_axis"] = batch.VariationAxis
 	}
 	if batch.Error != "" {
 		public["error"] = batch.Error

@@ -40,3 +40,22 @@
 260712 2026 | task-016-canvas-topbar-batch-controls | build-complete | codex | docs/workflow/worker-results/task-016-canvas-topbar-batch-controls-result.md
 260712 2026 | task-016-canvas-topbar-batch-controls | qa-pass | codex | docs/workflow/qa-reports/task-016-canvas-topbar-batch-controls-qa.md
 260712 2026 | task-016-canvas-topbar-batch-controls | local-container-updated | codex | chatgpt2api:codex-20260712-2020-task016-topbar, version task-016-canvas-topbar-batch-controls
+260712 2108 | task-017-prompt-split-failed-rerun | contract-approved | codex | docs/workflow/tasks/task-017-prompt-split-failed-rerun.md
+260712 2117 | task-017-prompt-split-failed-rerun | build-complete | codex | docs/workflow/worker-results/task-017-prompt-split-failed-rerun-result.md
+260712 2117 | task-017-prompt-split-failed-rerun | qa-pass | codex | docs/workflow/qa-reports/task-017-prompt-split-failed-rerun-qa.md
+260712 2124 | task-017-prompt-split-failed-rerun | local-container-updated | codex | chatgpt2api:codex-20260712-2119-task017-failed-rerun, version task-017-prompt-split-failed-rerun
+260713 0151 | task-018-semantic-prompt-split | contract-approved | codex | docs/workflow/tasks/task-018-semantic-prompt-split.md
+260713 0211 | task-018-semantic-prompt-split | build-complete | codex | docs/workflow/worker-results/task-018-semantic-prompt-split-result.md
+260713 0211 | task-018-semantic-prompt-split | qa-pass | codex | docs/workflow/qa-reports/task-018-semantic-prompt-split-qa.md
+260713 0215 | task-018-semantic-prompt-split | local-container-updated | codex | chatgpt2api:codex-20260713-0213-task018-semantic, version task-018-semantic-prompt-split
+260713 0300 | task-019-canvas-node-ergonomics | contract-approved | codex | docs/workflow/tasks/task-019-canvas-node-ergonomics.md
+260713 0837 | task-019-canvas-node-ergonomics | build-complete | codex | docs/workflow/worker-results/task-019-canvas-node-ergonomics-result.md
+260713 0837 | task-019-canvas-node-ergonomics | qa-pass | codex | docs/workflow/qa-reports/task-019-canvas-node-ergonomics-qa.md
+260713 0846 | task-019-canvas-node-ergonomics | local-container-updated | codex | chatgpt2api:codex-20260713-0840-task019-node-ergonomics, version task-019-canvas-node-ergonomics
+260721 0107 | task-020-image-tool-text-response-hardening | contract-draft | codex | docs/workflow/tasks/task-020-image-tool-text-response-hardening.md
+260721 0110 | task-020-image-tool-text-response-hardening | contract-approved | codex | docs/workflow/task-020-contract-review.md
+260721 0245 | task-020-image-tool-text-response-hardening | build-complete | codex | docs/workflow/worker-results/task-020-image-tool-text-response-hardening-result.md
+260721 0245 | task-020-image-tool-text-response-hardening | qa-pass | codex | docs/workflow/qa-reports/task-020-image-tool-text-response-hardening-qa.md
+260728 0033 | task-021-generator-node-responsive-parameters | contract-approved | codex | docs/workflow/tasks/task-021-generator-node-responsive-parameters.md
+260728 0033 | task-021-generator-node-responsive-parameters | build-complete | codex | docs/workflow/worker-results/task-021-generator-node-responsive-parameters-result.md
+260728 0033 | task-021-generator-node-responsive-parameters | qa-pass | codex | docs/workflow/qa-reports/task-021-generator-node-responsive-parameters-qa.md

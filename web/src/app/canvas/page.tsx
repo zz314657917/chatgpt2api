@@ -230,6 +230,9 @@ export default function CanvasPage() {
             onActivePromptSplitBatchChange={canvas.setActivePromptSplitBatchId}
             onViewportChange={canvas.updateViewport}
             onUpdateItemData={canvas.updateItemData}
+            hasGeneratorStyleClipboard={canvas.hasGeneratorStyleClipboard}
+            onCopyGeneratorStyle={canvas.copyGeneratorStyle}
+            onPasteGeneratorStyle={canvas.pasteGeneratorStyle}
             onRunGenerator={canvas.runGeneratorNode}
             onRunLlm={canvas.runLlmNode}
             onStopLoop={canvas.stopLoopNode}
@@ -277,15 +280,11 @@ export default function CanvasPage() {
             onCollectionChange={canvas.setAssetCollection}
             defaultExpanded
             onExpandedChange={canvas.handleAssetSidebarExpandedChange}
-            videoLibrary={{
-              videos: canvas.videoAssets,
-              count: canvas.videoAssets.length,
-              loadingVideos: canvas.loadingVideoAssets,
-              active: canvas.assetLibraryMediaType === "video",
-              onActiveChange: canvas.setAssetLibraryVideoActive,
-              onRefreshVideos: () => void canvas.refreshAssets(),
-              onAddVideoToCanvas: canvas.addVideoAssetToCanvas,
-            }}
+            mediaType={canvas.assetLibraryMediaType}
+            onMediaTypeChange={canvas.setAssetLibraryMediaType}
+            videoAssets={canvas.videoAssets}
+            loadingVideoAssets={canvas.loadingVideoAssets}
+            onAddVideoToCanvas={canvas.addVideoAssetToCanvas}
           />
 
           {canvas.helpOpen ? (

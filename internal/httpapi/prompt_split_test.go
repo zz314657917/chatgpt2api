@@ -33,7 +33,7 @@ func TestCreationTaskPromptSplitDirectHTTPUsesNormalizedImageRequest(t *testing.
 			return map[string]any{"data": []map[string]any{{"url": "https://example.test/image.png"}}}, nil
 		},
 		func(context.Context, service.Identity, map[string]any) (map[string]any, error) {
-			return map[string]any{"output_type": "text", "data": []map[string]any{{"text_response": `{"prompts":["first card","second card"]}`}}}, nil
+			return map[string]any{"output_type": "text", "data": []map[string]any{{"text_response": `{"variation_axis":"版式","items":[{"variant_label":"版式一","prompt":"first card"},{"variant_label":"版式二","prompt":"second card"}]}`}}}, nil
 		},
 	)
 	body := `{"client_task_id":"http-direct","prompt":"two cards","model":"gpt-5","split_count":2,"execution_mode":"direct","image_request":{"model":"gpt-image-2","size":"16:9","quality":"high","visibility":"private","output_format":"webp","output_compression":80,"background":"transparent","style":"vivid"}}`
@@ -69,11 +69,15 @@ func TestCreationTaskPromptSplitDirectHTTPUsesNormalizedImageRequest(t *testing.
 		return completed["status"] == service.PromptSplitStatusSuccess
 	})
 	items := util.AsMapSlice(completed["items"])
-	if len(items) != 2 {
+	if completed["variation_axis"] != "版式" || len(items) != 2 {
 		t.Fatalf("completed items = %#v", items)
 	}
+	wantLabels := []string{"版式一", "版式二"}
 	taskIDs := make([]string, 0, len(items))
 	for index, item := range items {
+		if item["variant_label"] != wantLabels[index] {
+			t.Fatalf("item %d semantic metadata = %#v", index+1, item)
+		}
 		taskID := util.Clean(item["task_id"])
 		if !strings.HasPrefix(taskID, "prompt-split-internal:") || !strings.HasSuffix(taskID, ":image:"+strconv.Itoa(index+1)) {
 			t.Fatalf("child task id %d = %q", index+1, taskID)
@@ -195,7 +199,7 @@ func TestCreationTaskPromptSplitDirectHTTPAllowsProStudioResolutions(t *testing.
 					return map[string]any{"data": []map[string]any{{"url": "https://example.test/image.png"}}}, nil
 				},
 				func(context.Context, service.Identity, map[string]any) (map[string]any, error) {
-					return map[string]any{"output_type": "text", "data": []map[string]any{{"text_response": `{"prompts":["pro image"]}`}}}, nil
+					return map[string]any{"output_type": "text", "data": []map[string]any{{"text_response": `{"variation_axis":"构图","items":[{"variant_label":"方案一","prompt":"pro image"}]}`}}}, nil
 				},
 			)
 

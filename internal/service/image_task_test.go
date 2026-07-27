@@ -1808,7 +1808,15 @@ func TestImageTaskServiceBillingSuccessFailureCancelAndTextOutput(t *testing.T) 
 		if _, err := svc.SubmitGeneration(context.Background(), user, "text", "who are you", "gpt-image-2", "1024x1024", "high", "https://base.test", 1, nil); err != nil {
 			t.Fatalf("SubmitGeneration() error = %v", err)
 		}
-		waitForTaskStatus(t, svc, user, "text", TaskStatusSuccess)
+		waitForTaskStatus(t, svc, user, "text", TaskStatusError)
+		got := svc.ListTasks(user, []string{"text"})
+		item := got["items"].([]map[string]any)[0]
+		if item["status"] != TaskStatusError {
+			t.Fatalf("text task status = %#v, want error", item)
+		}
+		if len(item["data"].([]map[string]any)) != 1 || item["data"].([]map[string]any)[0]["text_response"] != "text response" {
+			t.Fatalf("text task diagnostic = %#v, want preserved text response", item["data"])
+		}
 		state := billing.Get("alice")
 		standard := util.StringMap(state["standard"])
 		if util.ToInt(standard["balance"], -1) != 51 || util.ToInt(standard["lifetime_consumed"], -1) != 0 {
@@ -2063,7 +2071,7 @@ func TestImageTaskServicePreservesTextOutputType(t *testing.T) {
 	if _, err := svc.SubmitGeneration(context.Background(), identity, "task-1", "who are you", "gpt-image-2", "1024x1024", "high", "https://base.test", 1, nil); err != nil {
 		t.Fatalf("SubmitGeneration() error = %v", err)
 	}
-	waitForTaskStatus(t, svc, identity, "task-1", TaskStatusSuccess)
+	waitForTaskStatus(t, svc, identity, "task-1", TaskStatusError)
 	got := svc.ListTasks(identity, []string{"task-1"})
 	item := got["items"].([]map[string]any)[0]
 	if item["output_type"] != "text" {
@@ -2085,11 +2093,11 @@ func TestImageTaskServiceStoresTextOutputFromHandlerError(t *testing.T) {
 	if _, err := svc.SubmitGeneration(context.Background(), identity, "task-1", "who are you", "gpt-image-2", "1024x1024", "high", "https://base.test", 1, nil); err != nil {
 		t.Fatalf("SubmitGeneration() error = %v", err)
 	}
-	waitForTaskStatus(t, svc, identity, "task-1", TaskStatusSuccess)
+	waitForTaskStatus(t, svc, identity, "task-1", TaskStatusError)
 	got := svc.ListTasks(identity, []string{"task-1"})
 	item := got["items"].([]map[string]any)[0]
-	if util.Clean(item["error"]) != "" {
-		t.Fatalf("error = %#v, want empty in %#v", item["error"], item)
+	if util.Clean(item["error"]) == "" {
+		t.Fatalf("error = %#v, want preserved failure diagnostic in %#v", item["error"], item)
 	}
 	if item["output_type"] != "text" {
 		t.Fatalf("output_type = %#v, want text in %#v", item["output_type"], item)
@@ -2099,8 +2107,40 @@ func TestImageTaskServiceStoresTextOutputFromHandlerError(t *testing.T) {
 		t.Fatalf("text response data = %#v", data)
 	}
 	statuses := item["output_statuses"].([]string)
-	if len(statuses) != 1 || statuses[0] != "success" {
-		t.Fatalf("output_statuses = %#v, want success", statuses)
+	if len(statuses) != 1 || statuses[0] != TaskStatusError {
+		t.Fatalf("output_statuses = %#v, want error", statuses)
+	}
+}
+
+func TestImageTaskServiceTextOnlyExternalImageRefundsOnce(t *testing.T) {
+	handler := func(context.Context, Identity, map[string]any) (map[string]any, error) {
+		return map[string]any{"message": "威海旅游攻略", "output_type": "text"}, nil
+	}
+	svc := newTestImageTaskService(t, handler, handler, failingImageTaskHandler, func() int { return 30 })
+	billing := &recordingExternalTaskBilling{}
+	svc.SetExternalBilling(billing)
+	identity := Identity{ID: "sub2api:42", OwnerID: "sub2api:42", Role: AuthRoleUser, Provider: AuthProviderSub2API}
+
+	if _, err := svc.SubmitGeneration(context.Background(), identity, "text-external", "who are you", "gpt-image-2", "1024x1024", "high", "https://base.test", 1, nil); err != nil {
+		t.Fatalf("SubmitGeneration() error = %v", err)
+	}
+	waitForTaskStatus(t, svc, identity, "text-external", TaskStatusError)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && len(billing.calls) < 2 {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !reflect.DeepEqual(billing.calls, []string{"reserve", "refund"}) {
+		t.Fatalf("external billing calls = %#v, want one reserve and one refund", billing.calls)
+	}
+	item := svc.ListTasks(identity, []string{"text-external"})["items"].([]map[string]any)[0]
+	if item["status"] != TaskStatusError || util.ToInt(item["billing_consumed_amount"], -1) != 0 {
+		t.Fatalf("text-only external task = %#v, want error with zero consumption", item)
+	}
+	if svc.settleTaskBilling(taskKey(ownerID(identity), "text-external")) {
+		t.Fatal("settleTaskBilling() returned true after completed refund")
+	}
+	if !reflect.DeepEqual(billing.calls, []string{"reserve", "refund"}) {
+		t.Fatalf("external billing calls after duplicate settlement = %#v, want unchanged", billing.calls)
 	}
 }
 

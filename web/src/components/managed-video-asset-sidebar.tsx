@@ -15,6 +15,7 @@ export type ManagedVideoAssetSidebarProps = {
   onAddVideoToCanvas: (video: ManagedVideoAssetSummary) => void;
   className?: string;
   emptyLabel?: string;
+  compact?: boolean;
 };
 
 const subtleTextClass = "text-muted-foreground dark:text-slate-500";
@@ -29,6 +30,7 @@ export function ManagedVideoAssetSidebar({
   onAddVideoToCanvas,
   className,
   emptyLabel = "暂无视频资源",
+  compact = false,
 }: ManagedVideoAssetSidebarProps) {
   const gridComponents = useMemo(
     () => ({
@@ -45,16 +47,18 @@ export function ManagedVideoAssetSidebar({
 
   return (
     <div className={cn("flex min-h-0 min-w-0 flex-1 flex-col", className)}>
-      <div className="flex items-center justify-between gap-2">
-        <div className="min-w-0">
-          <div className="text-sm font-bold text-foreground dark:text-slate-100">视频资源库</div>
-          <div className={cn("text-xs", subtleTextClass)}>{videos.length} 个视频 · 点击加入画布</div>
+      {!compact ? (
+        <div className="flex items-center justify-between gap-2">
+          <div className="min-w-0">
+            <div className="text-sm font-bold text-foreground dark:text-slate-100">视频资源库</div>
+            <div className={cn("text-xs", subtleTextClass)}>{videos.length} 个视频 · 点击加入画布</div>
+          </div>
+          <Button type="button" size="icon" variant="ghost" className={cn("size-8 rounded-lg", iconButtonClass)} onClick={onRefreshVideos} title="刷新视频资源">
+            {loadingVideos ? <LoaderCircle className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
+          </Button>
         </div>
-        <Button type="button" size="icon" variant="ghost" className={cn("size-8 rounded-lg", iconButtonClass)} onClick={onRefreshVideos} title="刷新视频资源">
-          {loadingVideos ? <LoaderCircle className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
-        </Button>
-      </div>
-      <div className="mt-3 min-h-0 flex-1 overflow-auto pr-1">
+      ) : null}
+      <div className={cn("min-h-0 flex-1 overflow-auto pr-1", compact ? "" : "mt-3")}>
         {videos.length > 0 ? (
           <VirtuosoGrid
             data={videos}

@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -11,68 +12,95 @@ import (
 	"chatgpt2api/internal/util"
 )
 
-func TestParsePromptSplitPrompts(t *testing.T) {
+func TestParsePromptSplitResult(t *testing.T) {
 	for _, test := range []struct {
-		name    string
-		value   string
-		count   int
-		want    []string
-		wantErr bool
+		name     string
+		value    string
+		count    int
+		wantAxis string
+		want     []PromptSplitResultItem
+		wantErr  bool
 	}{
 		{
-			name:  "plain JSON",
-			value: `{"prompts":["first","second"]}`,
-			count: 2,
-			want:  []string{"first", "second"},
+			name:     "plain JSON",
+			value:    `{"variation_axis":"颜色","items":[{"variant_label":"红色","prompt":"红色陶瓷瓶子"},{"variant_label":"蓝色","prompt":"蓝色陶瓷瓶子"}]}`,
+			count:    2,
+			wantAxis: "颜色",
+			want:     []PromptSplitResultItem{{VariantLabel: "红色", Prompt: "红色陶瓷瓶子"}, {VariantLabel: "蓝色", Prompt: "蓝色陶瓷瓶子"}},
 		},
 		{
-			name:  "single JSON fence",
-			value: "```json\n{\"prompts\":[\"first\",\"second\"]}\n```",
-			count: 2,
-			want:  []string{"first", "second"},
+			name:     "single JSON fence",
+			value:    "```json\n{\"variation_axis\":\"角度\",\"items\":[{\"variant_label\":\"正面\",\"prompt\":\"正面产品照\"}]}\n```",
+			count:    1,
+			wantAxis: "角度",
+			want:     []PromptSplitResultItem{{VariantLabel: "正面", Prompt: "正面产品照"}},
 		},
 		{
-			name:    "extra key",
-			value:   `{"prompts":["first"],"note":"no"}`,
+			name:    "extra top-level key",
+			value:   `{"variation_axis":"颜色","items":[{"variant_label":"红色","prompt":"红色瓶子"}],"note":"no"}`,
 			count:   1,
 			wantErr: true,
 		},
 		{
-			name:    "duplicate prompt",
-			value:   `{"prompts":["same","same"]}`,
+			name:    "extra item key",
+			value:   `{"variation_axis":"颜色","items":[{"variant_label":"红色","prompt":"红色瓶子","note":"no"}]}`,
+			count:   1,
+			wantErr: true,
+		},
+		{
+			name:    "empty axis",
+			value:   `{"variation_axis":" ","items":[{"variant_label":"红色","prompt":"红色瓶子"}]}`,
+			count:   1,
+			wantErr: true,
+		},
+		{
+			name:    "empty label",
+			value:   `{"variation_axis":"颜色","items":[{"variant_label":" ","prompt":"红色瓶子"}]}`,
+			count:   1,
+			wantErr: true,
+		},
+		{
+			name:    "duplicate normalized label",
+			value:   `{"variation_axis":"颜色","items":[{"variant_label":"RED","prompt":"red bottle front"},{"variant_label":" red ","prompt":"red bottle side"}]}`,
+			count:   2,
+			wantErr: true,
+		},
+		{
+			name:    "duplicate normalized prompt",
+			value:   `{"variation_axis":"颜色","items":[{"variant_label":"红色","prompt":"SAME  PROMPT"},{"variant_label":"蓝色","prompt":" same prompt "}]}`,
 			count:   2,
 			wantErr: true,
 		},
 		{
 			name:    "wrong count",
-			value:   `{"prompts":["only"]}`,
+			value:   `{"variation_axis":"颜色","items":[{"variant_label":"红色","prompt":"红色瓶子"}]}`,
 			count:   2,
 			wantErr: true,
 		},
 		{
 			name:    "multiple fences",
-			value:   "```json\n{\"prompts\":[\"one\"]}\n```\n```",
+			value:   "```json\n{\"variation_axis\":\"颜色\",\"items\":[{\"variant_label\":\"红色\",\"prompt\":\"红色瓶子\"}]}\n```\n```",
 			count:   1,
 			wantErr: true,
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			got, err := ParsePromptSplitPrompts(test.value, test.count)
+			got, err := ParsePromptSplitResult(test.value, test.count)
 			if test.wantErr {
 				if err == nil {
-					t.Fatalf("ParsePromptSplitPrompts() error = nil, want error")
+					t.Fatalf("ParsePromptSplitResult() error = nil, want error")
 				}
 				return
 			}
 			if err != nil {
-				t.Fatalf("ParsePromptSplitPrompts() error = %v", err)
+				t.Fatalf("ParsePromptSplitResult() error = %v", err)
 			}
-			if len(got) != len(test.want) {
-				t.Fatalf("prompts = %#v, want %#v", got, test.want)
+			if got.VariationAxis != test.wantAxis || len(got.Items) != len(test.want) {
+				t.Fatalf("result = %#v, want axis %q items %#v", got, test.wantAxis, test.want)
 			}
 			for index := range test.want {
-				if got[index] != test.want[index] {
-					t.Fatalf("prompts[%d] = %q, want %q", index, got[index], test.want[index])
+				if got.Items[index] != test.want[index] {
+					t.Fatalf("items[%d] = %#v, want %#v", index, got.Items[index], test.want[index])
 				}
 			}
 		})
@@ -83,15 +111,17 @@ func TestPromptSplitServiceNodesCreatesPromptsWithoutImageTasks(t *testing.T) {
 	backend := newTestStorageBackend(t)
 	var generationCalls int
 	var chatCalls int
+	var chatPayload map[string]any
 	tasks := NewStoredImageTaskService(backend,
 		func(context.Context, Identity, map[string]any) (map[string]any, error) {
 			generationCalls++
 			return map[string]any{"data": []map[string]any{{"url": "https://example.test/image.png"}}}, nil
 		},
 		failingImageTaskHandler,
-		func(context.Context, Identity, map[string]any) (map[string]any, error) {
+		func(_ context.Context, _ Identity, payload map[string]any) (map[string]any, error) {
 			chatCalls++
-			return map[string]any{"output_type": "text", "data": []map[string]any{{"text_response": `{"prompts":["first scene","second scene","third scene"]}`}}}, nil
+			chatPayload = util.CopyMap(payload)
+			return map[string]any{"output_type": "text", "data": []map[string]any{{"text_response": `{"variation_axis":"颜色","items":[{"variant_label":"红色","prompt":"一只红色陶瓷瓶子，白色摄影棚背景"},{"variant_label":"蓝色","prompt":"一只蓝色陶瓷瓶子，白色摄影棚背景"},{"variant_label":"绿色","prompt":"一只绿色陶瓷瓶子，白色摄影棚背景"},{"variant_label":"黑色","prompt":"一只黑色陶瓷瓶子，白色摄影棚背景"},{"variant_label":"白色","prompt":"一只白色陶瓷瓶子，灰色摄影棚背景"}]}`}}}, nil
 		},
 		func() int { return 30 },
 	)
@@ -101,20 +131,21 @@ func TestPromptSplitServiceNodesCreatesPromptsWithoutImageTasks(t *testing.T) {
 
 	if _, err := splits.Create(context.Background(), identity, PromptSplitCreateRequest{
 		ClientTaskID:  "nodes-batch",
-		Prompt:        "three scenes",
+		Prompt:        "生成5个颜色的陶瓷瓶子",
 		Model:         "gpt-5",
-		SplitCount:    3,
+		SplitCount:    5,
 		ExecutionMode: PromptSplitExecutionModeNodes,
 	}); err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
 	batch := waitForPromptSplitStatus(t, splits, identity, "nodes-batch", PromptSplitStatusReady)
 	items := util.AsMapSlice(batch["items"])
-	if len(items) != 3 {
-		t.Fatalf("items = %#v, want 3 items", items)
+	if batch["variation_axis"] != "颜色" || len(items) != 5 {
+		t.Fatalf("batch = %#v, want color axis with 5 items", batch)
 	}
+	wantLabels := []string{"红色", "蓝色", "绿色", "黑色", "白色"}
 	for index, item := range items {
-		if item["index"] != index+1 || item["status"] != PromptSplitStatusReady {
+		if item["index"] != index+1 || item["status"] != PromptSplitStatusReady || item["variant_label"] != wantLabels[index] {
 			t.Fatalf("item %d = %#v", index, item)
 		}
 		if _, ok := item["task_id"]; ok {
@@ -123,6 +154,28 @@ func TestPromptSplitServiceNodesCreatesPromptsWithoutImageTasks(t *testing.T) {
 	}
 	if generationCalls != 0 {
 		t.Fatalf("generation calls = %d, want 0", generationCalls)
+	}
+	messages := util.AsMapSlice(chatPayload["messages"])
+	if len(messages) != 2 {
+		t.Fatalf("split chat messages = %#v", chatPayload["messages"])
+	}
+	systemPrompt := util.Clean(messages[0]["content"])
+	for _, required := range []string{
+		"authoritative",
+		"Prefer an explicitly quantified axis",
+		"first strongly emphasized axis",
+		"one color variant per prompt",
+		"same frame",
+		"Preserve explicit variant values and their order",
+		"more values than required",
+		"fewer",
+		"explicitly restricts",
+		"variation_axis",
+		"exactly 5",
+	} {
+		if !strings.Contains(systemPrompt, required) {
+			t.Fatalf("system prompt missing %q: %s", required, systemPrompt)
+		}
 	}
 	if _, err := splits.Create(context.Background(), identity, PromptSplitCreateRequest{ClientTaskID: "nodes-batch"}); err != nil {
 		t.Fatalf("duplicate Create() error = %v", err)
@@ -135,13 +188,74 @@ func TestPromptSplitServiceNodesCreatesPromptsWithoutImageTasks(t *testing.T) {
 	}
 }
 
+func TestPromptSplitServiceNodeCountOverridesSourceTextNumber(t *testing.T) {
+	backend := newTestStorageBackend(t)
+	tasks := NewStoredImageTaskService(backend,
+		failingImageTaskHandler,
+		failingImageTaskHandler,
+		func(context.Context, Identity, map[string]any) (map[string]any, error) {
+			return map[string]any{"output_type": "text", "data": []map[string]any{{"text_response": `{"variation_axis":"颜色","items":[{"variant_label":"红色","prompt":"红色陶瓷瓶子"},{"variant_label":"蓝色","prompt":"蓝色陶瓷瓶子"},{"variant_label":"绿色","prompt":"绿色陶瓷瓶子"},{"variant_label":"黑色","prompt":"黑色陶瓷瓶子"}]}`}}}, nil
+		},
+		func() int { return 30 },
+	)
+	splits := NewStoredPromptSplitService(backend, tasks)
+	defer splits.Close()
+	identity := Identity{ID: "alice", Name: "Alice", Role: AuthRoleUser}
+
+	if _, err := splits.Create(context.Background(), identity, PromptSplitCreateRequest{
+		ClientTaskID:  "count-authority-batch",
+		Prompt:        "生成5个颜色的陶瓷瓶子",
+		SplitCount:    4,
+		ExecutionMode: PromptSplitExecutionModeNodes,
+	}); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	batch := waitForPromptSplitStatus(t, splits, identity, "count-authority-batch", PromptSplitStatusReady)
+	if batch["variation_axis"] != "颜色" || len(util.AsMapSlice(batch["items"])) != 4 {
+		t.Fatalf("count-authority batch = %#v", batch)
+	}
+}
+
+func TestPromptSplitServiceInvalidSemanticResultCreatesNoImageTasks(t *testing.T) {
+	backend := newTestStorageBackend(t)
+	var generationCalls int
+	tasks := NewStoredImageTaskService(backend,
+		func(context.Context, Identity, map[string]any) (map[string]any, error) {
+			generationCalls++
+			return map[string]any{"data": []map[string]any{{"url": "https://example.test/image.png"}}}, nil
+		},
+		failingImageTaskHandler,
+		func(context.Context, Identity, map[string]any) (map[string]any, error) {
+			return map[string]any{"output_type": "text", "data": []map[string]any{{"text_response": `{"variation_axis":"颜色","items":[{"variant_label":"红色","prompt":"红色瓶子"},{"variant_label":" 红色 ","prompt":"蓝色瓶子"}]}`}}}, nil
+		},
+		func() int { return 30 },
+	)
+	splits := NewStoredPromptSplitService(backend, tasks)
+	defer splits.Close()
+	identity := Identity{ID: "alice", Name: "Alice", Role: AuthRoleUser}
+
+	if _, err := splits.Create(context.Background(), identity, PromptSplitCreateRequest{
+		ClientTaskID:  "invalid-semantic-batch",
+		Prompt:        "两个颜色的瓶子",
+		SplitCount:    2,
+		ExecutionMode: PromptSplitExecutionModeDirect,
+		ImageRequest:  &PromptSplitImageRequest{Model: "gpt-image-2", BaseURL: "https://example.test"},
+	}); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	batch := waitForPromptSplitStatus(t, splits, identity, "invalid-semantic-batch", PromptSplitStatusError)
+	if generationCalls != 0 || len(util.AsMapSlice(batch["items"])) != 0 {
+		t.Fatalf("invalid semantic batch = %#v generationCalls=%d", batch, generationCalls)
+	}
+}
+
 func TestPromptSplitServiceUsesInternalTaskNamespace(t *testing.T) {
 	backend := newTestStorageBackend(t)
 	tasks := NewStoredImageTaskService(backend,
 		failingImageTaskHandler,
 		failingImageTaskHandler,
 		func(context.Context, Identity, map[string]any) (map[string]any, error) {
-			return map[string]any{"output_type": "text", "data": []map[string]any{{"text_response": `{"prompts":["split result"]}`}}}, nil
+			return map[string]any{"output_type": "text", "data": []map[string]any{{"text_response": `{"variation_axis":"构图","items":[{"variant_label":"方案一","prompt":"split result"}]}`}}}, nil
 		},
 		func() int { return 30 },
 	)
@@ -185,7 +299,7 @@ func TestPromptSplitServiceDirectForcesOneImageAndKeepsPartialFailure(t *testing
 		},
 		failingImageTaskHandler,
 		func(context.Context, Identity, map[string]any) (map[string]any, error) {
-			return map[string]any{"output_type": "text", "data": []map[string]any{{"text_response": `{"prompts":["first scene","second scene"]}`}}}, nil
+			return map[string]any{"output_type": "text", "data": []map[string]any{{"text_response": `{"variation_axis":"场景","items":[{"variant_label":"场景一","prompt":"first scene"},{"variant_label":"场景二","prompt":"second scene"}]}`}}}, nil
 		},
 		func() int { return 30 },
 	)
@@ -248,7 +362,7 @@ func TestPromptSplitServiceStopsAfterAdmissionFailure(t *testing.T) {
 		},
 		failingImageTaskHandler,
 		func(context.Context, Identity, map[string]any) (map[string]any, error) {
-			return map[string]any{"output_type": "text", "data": []map[string]any{{"text_response": `{"prompts":["first","second","third"]}`}}}, nil
+			return map[string]any{"output_type": "text", "data": []map[string]any{{"text_response": `{"variation_axis":"构图","items":[{"variant_label":"方案一","prompt":"first"},{"variant_label":"方案二","prompt":"second"},{"variant_label":"方案三","prompt":"third"}]}`}}}, nil
 		},
 		func() int { return 30 },
 		nil,
@@ -380,10 +494,11 @@ func TestPromptSplitServiceResumeSubmitsOnlyPersistedUnsubmittedChildren(t *test
 		ExecutionMode: PromptSplitExecutionModeDirect,
 		SplitCount:    2,
 		SplitTaskID:   promptSplitTaskID("resume-batch"),
+		VariationAxis: "场景",
 		ImageRequest:  &PromptSplitImageRequest{Model: "gpt-image-2", BaseURL: "https://example.test"},
 		Items: []PromptSplitItem{
-			{Index: 1, Prompt: "first", TaskID: promptSplitChildTaskID("resume-batch", 1), Status: promptSplitItemStatusNotSubmitted},
-			{Index: 2, Prompt: "second", TaskID: promptSplitChildTaskID("resume-batch", 2), Status: promptSplitItemStatusNotSubmitted},
+			{Index: 1, VariantLabel: "室内", Prompt: "first", TaskID: promptSplitChildTaskID("resume-batch", 1), Status: promptSplitItemStatusNotSubmitted},
+			{Index: 2, VariantLabel: "室外", Prompt: "second", TaskID: promptSplitChildTaskID("resume-batch", 2), Status: promptSplitItemStatusNotSubmitted},
 		},
 		CreatedAt: now,
 		UpdatedAt: now,
@@ -410,7 +525,8 @@ func TestPromptSplitServiceResumeSubmitsOnlyPersistedUnsubmittedChildren(t *test
 	batchResult := waitForPromptSplitStatus(t, splits, identity, "resume-batch", PromptSplitStatusSuccess)
 	callsMu.Lock()
 	defer callsMu.Unlock()
-	if len(util.AsMapSlice(batchResult["items"])) != 2 || calls != 2 {
+	items := util.AsMapSlice(batchResult["items"])
+	if batchResult["variation_axis"] != "场景" || len(items) != 2 || items[0]["variant_label"] != "室内" || items[1]["variant_label"] != "室外" || calls != 2 {
 		t.Fatalf("resume batch = %#v calls=%d", batchResult, calls)
 	}
 }

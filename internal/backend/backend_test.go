@@ -1417,8 +1417,21 @@ func TestBuildResponsesImagePayloadSendsCompressionOnlyForJPEG(t *testing.T) {
 	if err := json.Unmarshal(jpegPayload, &jpegBody); err != nil {
 		t.Fatalf("Unmarshal(jpeg) error = %v", err)
 	}
+	if jpegBody["model"] != ResponsesImageMainModel {
+		t.Fatalf("responses model = %#v, want %q", jpegBody["model"], ResponsesImageMainModel)
+	}
+	toolChoice, ok := jpegBody["tool_choice"].(map[string]any)
+	if !ok || toolChoice["type"] != "image_generation" {
+		t.Fatalf("tool_choice = %#v, want forced image_generation", jpegBody["tool_choice"])
+	}
+	if jpegBody["instructions"] != "You generate and edit images for the user." {
+		t.Fatalf("instructions = %#v, want image-generation instruction", jpegBody["instructions"])
+	}
 	jpegTools := jpegBody["tools"].([]any)
 	jpegTool := jpegTools[0].(map[string]any)
+	if jpegTool["model"] != ResponsesImageCodexToolModel {
+		t.Fatalf("tool model = %#v, want %q", jpegTool["model"], ResponsesImageCodexToolModel)
+	}
 	if jpegTool["output_compression"] != float64(37) {
 		t.Fatalf("jpeg output_compression = %#v, want 37", jpegTool["output_compression"])
 	}
@@ -1440,6 +1453,157 @@ func TestBuildResponsesImagePayloadSendsCompressionOnlyForJPEG(t *testing.T) {
 	webpTool := webpTools[0].(map[string]any)
 	if _, ok := webpTool["output_compression"]; ok {
 		t.Fatalf("webp tool should not include output_compression: %#v", webpTool)
+	}
+}
+
+func TestParseResponsesImagePayloadPreservesFinalTextWithoutImageCall(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload map[string]any
+		want    string
+	}{
+		{
+			name:    "output text done",
+			payload: map[string]any{"type": "response.output_text.done", "text": "威海旅游攻略"},
+			want:    "威海旅游攻略",
+		},
+		{
+			name: "output item message",
+			payload: map[string]any{
+				"type": "response.output_item.done",
+				"item": map[string]any{
+					"type":    "message",
+					"content": []any{map[string]any{"type": "output_text", "text": "普通文本"}},
+				},
+			},
+			want: "普通文本",
+		},
+		{
+			name: "completed message",
+			payload: map[string]any{
+				"type": "response.completed",
+				"response": map[string]any{
+					"output": []any{map[string]any{
+						"type":    "message",
+						"content": []any{map[string]any{"type": "output_text", "text": "最终普通文本"}},
+					}},
+				},
+			},
+			want: "最终普通文本",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			payload, err := json.Marshal(tt.payload)
+			if err != nil {
+				t.Fatalf("Marshal() error = %v", err)
+			}
+			event, ok, err := parseResponsesImagePayload(string(payload))
+			if err != nil {
+				t.Fatalf("parseResponsesImagePayload() error = %v", err)
+			}
+			if !ok || event.Type != "image_text_response" || event.Text != tt.want {
+				t.Fatalf("event = %#v, ok=%v, want final text %q", event, ok, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseResponsesImagePayloadDistinguishesImageProgressEmptyAndError(t *testing.T) {
+	t.Run("image generation call", func(t *testing.T) {
+		payload := `{"type":"response.output_item.done","item":{"id":"ig_1","type":"image_generation_call","result":"image-b64"}}`
+		event, ok, err := parseResponsesImagePayload(payload)
+		if err != nil {
+			t.Fatalf("parseResponsesImagePayload() error = %v", err)
+		}
+		if !ok || event.Type != "response.output_item.done" || event.ItemID != "ig_1" || event.Result != "image-b64" || event.Text != "" {
+			t.Fatalf("image event = %#v, ok=%v", event, ok)
+		}
+	})
+
+	t.Run("progress event", func(t *testing.T) {
+		payload := `{"type":"response.image_generation_call.partial_image","partial_image_b64":"partial-b64","partial_image_index":0}`
+		event, ok, err := parseResponsesImagePayload(payload)
+		if err != nil {
+			t.Fatalf("parseResponsesImagePayload() error = %v", err)
+		}
+		if !ok || event.PartialImage != "partial-b64" || event.Result != "" || event.Text != "" {
+			t.Fatalf("progress event = %#v, ok=%v", event, ok)
+		}
+	})
+
+	t.Run("text delta and empty completion stay non-terminal", func(t *testing.T) {
+		for _, payload := range []string{
+			`{"type":"response.output_text.delta","delta":"正在生成图片"}`,
+			`{"type":"response.completed","response":{"output":[]}}`,
+		} {
+			event, ok, err := parseResponsesImagePayload(payload)
+			if err != nil {
+				t.Fatalf("parseResponsesImagePayload(%s) error = %v", payload, err)
+			}
+			if ok || event.Result != "" || event.Text != "" {
+				t.Fatalf("non-terminal event = %#v, ok=%v for %s", event, ok, payload)
+			}
+		}
+	})
+
+	t.Run("upstream error", func(t *testing.T) {
+		payload := `{"type":"error","error":{"message":"upstream image tool failed"}}`
+		_, ok, err := parseResponsesImagePayload(payload)
+		if err == nil || err.Error() != "upstream image tool failed" {
+			t.Fatalf("parseResponsesImagePayload() error = %v, want upstream detail", err)
+		}
+		if ok {
+			t.Fatal("upstream error event ok = true, want false")
+		}
+	})
+}
+
+func TestStreamResponsesImageCodexPreservesTextResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != codexResponsesPath {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode codex request: %v", err)
+		}
+		if body["model"] != ResponsesImageMainModel {
+			t.Fatalf("codex request model = %#v, want %q", body["model"], ResponsesImageMainModel)
+		}
+		tools, ok := body["tools"].([]any)
+		if !ok || len(tools) != 1 || tools[0].(map[string]any)["type"] != "image_generation" {
+			t.Fatalf("codex tools = %#v, want one image_generation tool", body["tools"])
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"type\":\"response.output_text.done\",\"text\":\"威海旅游攻略\"}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer server.Close()
+
+	client := newTestBackendClient(server)
+	events, errCh := client.StreamResponsesImage(context.Background(), ResponsesImageRequest{
+		Prompt: "生成一张海报",
+		Model:  ResponsesImageCodexToolModel,
+	})
+	var textEvents []ResponsesImageEvent
+	var imageResults []ResponsesImageEvent
+	for event := range events {
+		if event.Type == "image_text_response" {
+			textEvents = append(textEvents, event)
+		}
+		if event.Result != "" {
+			imageResults = append(imageResults, event)
+		}
+	}
+	if err := <-errCh; err != nil {
+		t.Fatalf("StreamResponsesImage() error = %v", err)
+	}
+	if len(imageResults) != 0 {
+		t.Fatalf("image results = %#v, want none", imageResults)
+	}
+	if len(textEvents) != 1 || textEvents[0].Text != "威海旅游攻略" {
+		t.Fatalf("text events = %#v, want preserved upstream text", textEvents)
 	}
 }
 

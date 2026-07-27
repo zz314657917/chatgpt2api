@@ -1300,6 +1300,7 @@ func ResponseImageGenerationRequest(body map[string]any, scope string, previous 
 		OwnerName:      util.Clean(body["owner_name"]),
 		Images:         images,
 		InputImageMask: responseImageMask(firstNonNil(tool["input_image_mask"], tool["mask_url"], body["input_image_mask"], body["mask_url"])),
+		MessageAsError: true,
 	}
 	if hasPartialImages {
 		request.PartialImages = &partialImages

@@ -234,6 +234,7 @@ function createMockState(options = {}) {
     promptSplitReads: [],
     promptSplitReadEvents: [],
     promptSplitReadFailures: Math.max(0, Number(options.promptSplitReadFailures) || 0),
+    promptSplitFailuresRemaining: Math.max(0, Number(options.promptSplitFailures) || 0),
     promptSplitCancels: [],
     imageGenerationPosts: [],
     taskPolls: new Map(),
@@ -258,6 +259,7 @@ function creationTask(taskId) {
 function promptSplitItems(batchId, count, mode) {
   return Array.from({ length: count }, (_, index) => ({
     index,
+    variant_label: `方案 ${index + 1}`,
     prompt: `QA split ${index + 1}: matte-white circular smart lamp, blue-violet studio light, commercial product photography, distinct composition ${index + 1}`,
     ...(mode === "direct" ? { task_id: `child-${batchId}-${index + 1}`, status: "queued" } : { status: "ready" }),
   }));
@@ -353,13 +355,17 @@ async function installMockRoutes(context, state) {
         }
       }
       const batchId = `batch-${mode}-${state.promptSplitPosts.length + 1}`;
+      const splitFailed = state.promptSplitFailuresRemaining > 0;
+      if (splitFailed) state.promptSplitFailuresRemaining -= 1;
       const batch = {
         id: batchId,
-        status: mode === "direct" ? "running" : "ready",
+        status: splitFailed ? "error" : mode === "direct" ? "running" : "ready",
         execution_mode: mode,
         split_count: splitCount,
         split_task_id: `split-task-${batchId}`,
-        items: promptSplitItems(batchId, splitCount, mode),
+        ...(splitFailed ? {} : { variation_axis: "构图" }),
+        items: splitFailed ? [] : promptSplitItems(batchId, splitCount, mode),
+        ...(splitFailed ? { error: "mock prompt split failure" } : {}),
         created_at: now,
         updated_at: now,
       };
@@ -549,6 +555,31 @@ function persistedLlm(state) {
   return state.canvas.nodes.find((node) => node.id === "llm-split");
 }
 
+async function runFailedSplitRerunScenario(browser, baseURL) {
+  const state = createMockState({ promptSplitFailures: 1 });
+  const { context, page, llm } = await openCanvas(browser, baseURL, state, { width: 1365, height: 900 });
+  try {
+    const splitInput = llm.getByRole("spinbutton", { name: "拆分数量", exact: true });
+    await splitInput.fill("5");
+    await llm.getByRole("button", { name: "拆分为 5 条", exact: true }).click();
+    await waitFor(() => persistedLlm(state)?.data?.prompt_split_status === "error", "failed prompt-split status");
+
+    const failedBatchId = state.promptSplitPosts[0].batchId;
+    assert.equal(splitPairs(state.canvas, failedBatchId).generators.length, 0, "failed split must not create generator nodes");
+    assert.equal(splitPairs(state.canvas, failedBatchId).outputs.length, 0, "failed split must not create output nodes");
+    assert.equal(await page.getByRole("dialog").filter({ hasText: "如何处理上一批节点？" }).count(), 0, "failed split must not open a previous-batch dialog");
+
+    await llm.getByRole("button", { name: "拆分为 5 条", exact: true }).click();
+    await waitFor(() => state.promptSplitPosts.length === 2, "failed prompt-split direct retry POST");
+    assert.equal(await page.getByRole("dialog").filter({ hasText: "如何处理上一批节点？" }).count(), 0, "failed split retry must submit without a previous-batch dialog");
+    assert.equal(persistedLlm(state)?.data?.prompt_split_replace_batch_id || "", "", "failed split retry must not set a replacement marker");
+    await waitFor(() => splitPairs(state.canvas, state.promptSplitPosts[1].batchId).generators.length === 5, "failed prompt-split retry fanout");
+    return { failedBatchId, retryBatchId: state.promptSplitPosts[1].batchId };
+  } finally {
+    await context.close();
+  }
+}
+
 async function runNodesScenario(browser, baseURL, artifacts) {
   const state = createMockState();
   const { context, page, llm } = await openCanvas(browser, baseURL, state, { width: 1365, height: 900 });
@@ -573,6 +604,14 @@ async function runNodesScenario(browser, baseURL, artifacts) {
     assert.equal(state.promptSplitPosts[0].body.execution_mode, "nodes");
     assert.equal(state.imageGenerationPosts.length, 0, "nodes mode must not POST image generation tasks");
 
+    await llm.getByTitle("查看提示词详情").click();
+    const semanticDialog = page.getByRole("dialog").filter({ hasText: "拆分提示词 3/3" });
+    await semanticDialog.waitFor({ state: "visible" });
+    assert.equal(await semanticDialog.locator("[data-prompt-split-variation-axis]").getAttribute("data-prompt-split-variation-axis"), "构图", "prompt split axis must be visible");
+    assert.deepEqual(await semanticDialog.locator("[data-prompt-split-variant-label]").allTextContents(), ["方案 1", "方案 2", "方案 3"], "variant labels must be visible");
+    await page.keyboard.press("Escape");
+    await semanticDialog.waitFor({ state: "hidden" });
+
     const batchId = state.promptSplitPosts[0].batchId;
     await saveSettled(state, batchId);
     const pairs = splitPairs(state.canvas, batchId);
@@ -594,9 +633,9 @@ async function runNodesScenario(browser, baseURL, artifacts) {
     const firstGenerator = pairs.generators[0];
     const firstGeneratorNode = page.locator(`[data-canvas-node-id="${firstGenerator.id}"]`);
     const postsBeforeViewChange = state.promptSplitPosts.length;
-    await firstGeneratorNode.getByRole("button", { name: "展开", exact: true }).click();
+    await firstGeneratorNode.getByRole("button", { name: "展开参数", exact: true }).click();
     await waitFor(() => state.canvas.nodes.find((node) => node.id === firstGenerator.id)?.data?.node_view === "full", "generator full view");
-    await firstGeneratorNode.getByRole("button", { name: "收起", exact: true }).click();
+    await firstGeneratorNode.getByRole("button", { name: "收起参数", exact: true }).click();
     await waitFor(() => state.canvas.nodes.find((node) => node.id === firstGenerator.id)?.data?.node_view === "compact", "generator compact view");
     assert.equal(state.promptSplitPosts.length, postsBeforeViewChange, "view changes must not submit prompt-split tasks");
 
@@ -635,6 +674,8 @@ async function runNodesScenario(browser, baseURL, artifacts) {
     const outputAfterReload = state.canvas.nodes.find((node) => node.id === firstOutput.id);
     assert.equal(outputAfterReload?.data?.width, 260, "output width must survive reload");
     assert.equal(outputAfterReload?.data?.height, 180, "output height must survive reload");
+    assert.equal(persistedLlm(state)?.data?.prompt_split_variation_axis, "构图", "variation axis must survive reload");
+    assert.deepEqual(persistedLlm(state)?.data?.prompt_split_items?.map((item) => item.variant_label), ["方案 1", "方案 2", "方案 3"], "variant labels must survive reload");
 
     const directSwitch = llm.getByRole("switch", { name: "直接生图" });
     const promptSplitPostCount = state.promptSplitPosts.length;
@@ -697,6 +738,212 @@ async function runTenNodeLayoutScenario(browser, baseURL, artifacts) {
     await page.screenshot({ path: screenshot, fullPage: true });
     artifacts.push(path.basename(screenshot));
     return { batchId, pairCount: pairs.generators.length };
+  } finally {
+    await context.close();
+  }
+}
+
+async function runOutputPreviewScenario(browser, baseURL, artifacts) {
+  const observed = [];
+  const image = (index) => ({
+    url: `data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==#${index}`,
+    name: `output-${index}.gif`,
+  });
+  for (const count of [1, 2, 3, 4]) {
+    const state = createMockState();
+    const output = state.canvas.nodes.find((node) => node.id === "result-template");
+    output.position = { x: 700, y: 88 };
+    output.data = {
+      ...output.data,
+      width: 420,
+      height: 340,
+      output: { images: Array.from({ length: count }, (_, index) => image(index)) },
+      status: "success",
+    };
+    const { context, page } = await openCanvas(browser, baseURL, state, { width: 1365, height: 900 });
+    try {
+      const node = page.locator('[data-canvas-node-id="result-template"]');
+      const nodeBox = await node.boundingBox();
+      const previewImages = node.locator('img[data-image-fit="contain"]');
+      assert.equal(await previewImages.count(), count, `Output ${count} image layout must render every image with contain fit`);
+      const boxes = [];
+      for (let index = 0; index < count; index += 1) {
+        const box = await previewImages.nth(index).locator("..").boundingBox();
+        assert.ok(box && nodeBox, `Output ${count} image ${index + 1} has no bounds`);
+        assert.ok(box.x >= nodeBox.x - 1 && box.y >= nodeBox.y - 1 && box.x + box.width <= nodeBox.x + nodeBox.width + 1 && box.y + box.height <= nodeBox.y + nodeBox.height + 1, `Output ${count} image ${index + 1} must stay inside the node`);
+        boxes.push(box);
+      }
+      for (let left = 0; left < boxes.length; left += 1) {
+        for (let right = left + 1; right < boxes.length; right += 1) {
+          const overlapWidth = Math.min(boxes[left].x + boxes[left].width, boxes[right].x + boxes[right].width) - Math.max(boxes[left].x, boxes[right].x);
+          const overlapHeight = Math.min(boxes[left].y + boxes[left].height, boxes[right].y + boxes[right].height) - Math.max(boxes[left].y, boxes[right].y);
+          assert.ok(overlapWidth <= 0 || overlapHeight <= 0, `Output ${count} image cells must not overlap`);
+        }
+      }
+      if (count === 1) {
+        assert.ok(boxes[0].width >= nodeBox.width * 0.88, `single Output preview width ${boxes[0].width} must use most of node width ${nodeBox.width}`);
+        const before = boxes[0];
+        const handle = node.getByRole("button", { name: "拖拽缩放 Output 节点" });
+        const handleBox = await handle.boundingBox();
+        assert.ok(handleBox, "Output resize handle is missing");
+        await page.mouse.move(handleBox.x + handleBox.width / 2, handleBox.y + handleBox.height / 2);
+        await page.mouse.down();
+        await page.mouse.move(handleBox.x + 100, handleBox.y + 80, { steps: 4 });
+        await page.mouse.up();
+        await waitFor(async () => {
+          const after = await previewImages.first().locator("..").boundingBox();
+          return after && after.width > before.width + 70 && after.height > before.height + 40;
+        }, "single Output preview grows with node resize");
+      }
+      observed.push({ count, cells: boxes.map(({ width, height }) => ({ width, height })) });
+      if (count === 4) {
+        const screenshot = path.join(outDir, "output-preview-layout.png");
+        await page.screenshot({ path: screenshot, fullPage: true });
+        artifacts.push(path.basename(screenshot));
+      }
+    } finally {
+      await context.close();
+    }
+  }
+  return { observed };
+}
+
+async function runGeneratorStyleClipboardScenario(browser, baseURL, artifacts) {
+  const state = createMockState();
+  const source = state.canvas.nodes.find((node) => node.id === "generator-template");
+  state.canvas.nodes.find((node) => node.id === "result-template").position = { x: 1400, y: 88 };
+  Object.assign(source.data, {
+    width: 540,
+    model: "gpt-image-2",
+    size: "16:9",
+    size_user_modified: true,
+    image_resolution: "2k",
+    image_resolution_user_modified: true,
+    output_format: "jpeg",
+    output_compression: 72,
+    quality: "high",
+    n: 3,
+    visibility: "private",
+    image_model_settings: { officialImage: { background: "transparent", moderation: "low" } },
+  });
+  const target = clone(source);
+  target.id = "generator-style-target";
+  target.name = "样式目标";
+  target.position = { x: 850, y: 64 };
+  target.data = {
+    ...target.data,
+    prompt: "目标节点提示词必须保留",
+    model: "auto",
+    size: "1:1",
+    image_resolution: "",
+    output_format: "png",
+    output_compression: undefined,
+    quality: "auto",
+    n: 1,
+    visibility: "private",
+    image_model_settings: { stale: true },
+    input_images: [{ url: "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==", name: "target-input.gif" }],
+    output: { images: [{ url: "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==", name: "target-output.gif" }] },
+    status: "success",
+    task_id: "target-task",
+    width: 390,
+    height: 370,
+    node_view: "full",
+  };
+  const proSource = clone(source);
+  proSource.id = "generator-pro-source";
+  proSource.name = "Pro 样式源";
+  proSource.position = { x: 20, y: 720 };
+  proSource.data = {
+    ...proSource.data,
+    width: 540,
+    professional_mode: true,
+    pro_studio_state: proStudioTemplateState("4k"),
+    pro_studio: { enabled: true, mode: "manual", intent: "free_canvas", quality_tier: "production" },
+    official_settings: { model: "gpt-image-2-official", size: "1:1", resolution: "4k", quality: "high", output_format: "png", background: "auto", moderation: "auto", n: 1 },
+  };
+  const runningTarget = clone(target);
+  runningTarget.id = "generator-running-target";
+  runningTarget.name = "运行中目标";
+  runningTarget.position = { x: 1400, y: 700 };
+  runningTarget.data.width = 320;
+  runningTarget.data.status = "running";
+  state.canvas.nodes.push(target, proSource, runningTarget);
+
+  const { context, page } = await openCanvas(browser, baseURL, state, { width: 1365, height: 900 });
+  try {
+    const sourceNode = page.locator('[data-canvas-node-id="generator-template"]');
+    const targetNode = page.locator('[data-canvas-node-id="generator-style-target"]');
+    const runningNode = page.locator('[data-canvas-node-id="generator-running-target"]');
+    assert.equal(await targetNode.getByRole("button", { name: "粘贴样式" }).isDisabled(), true, "paste must be disabled before copying");
+
+    const requestCountsBefore = { promptSplits: state.promptSplitPosts.length, images: state.imageGenerationPosts.length };
+    const targetBefore = clone(target);
+    await sourceNode.getByRole("button", { name: "复制样式" }).click();
+    assert.equal(await targetNode.getByRole("button", { name: "粘贴样式" }).isEnabled(), true, "paste must enable after copying");
+    assert.equal(await runningNode.getByRole("button", { name: "粘贴样式" }).isDisabled(), true, "running target paste must stay disabled");
+    await targetNode.getByRole("button", { name: "粘贴样式" }).click();
+    await waitFor(() => state.saveRequests.length > 0, "normal style paste autosave");
+    let savedTarget = state.canvas.nodes.find((node) => node.id === target.id);
+    for (const key of ["model", "size", "size_user_modified", "image_resolution", "image_resolution_user_modified", "output_format", "output_compression", "quality", "n", "visibility", "image_model_settings"]) {
+      assert.deepEqual(savedTarget.data[key], source.data[key], `normal style field ${key} must match source`);
+    }
+    for (const key of ["prompt", "status", "task_id", "width", "height", "node_view"]) {
+      assert.deepEqual(savedTarget.data[key], targetBefore.data[key], `target field ${key} must be preserved`);
+    }
+    assert.deepEqual(savedTarget.data.input_images.map((image) => image.url), targetBefore.data.input_images.map((image) => image.url), "target input image references must be preserved");
+    assert.deepEqual(savedTarget.data.output.images.map((image) => image.url), targetBefore.data.output.images.map((image) => image.url), "target output image references must be preserved");
+    assert.deepEqual(savedTarget.position, targetBefore.position, "target position must be preserved");
+
+    const fullBody = targetNode.locator('[data-canvas-wheel-lock="true"]');
+    const beforeHeight = (await targetNode.boundingBox()).height;
+    assert.ok((await fullBody.evaluate((element) => ({ scrollHeight: element.scrollHeight, clientHeight: element.clientHeight }))).scrollHeight <= (await fullBody.evaluate((element) => element.clientHeight)) + 1, "expanded parameter body must not have an internal vertical scrollbar");
+    assert.equal(await fullBody.getAttribute("data-generator-parameter-layout"), "default", "390px generator must use the default parameter layout");
+    assert.equal(await sourceNode.locator('[data-canvas-wheel-lock="true"]').getAttribute("data-generator-parameter-layout"), "wide", "wide generator must use the three-column parameter layout");
+    assert.equal(await runningNode.locator('[data-canvas-wheel-lock="true"]').getAttribute("data-generator-parameter-layout"), "stacked", "narrow generator must use the stacked parameter layout");
+    const parameterColumnCount = (node) => node.locator('[data-generator-parameter-grid="true"]').evaluate((element) => getComputedStyle(element).gridTemplateColumns.split(" ").filter(Boolean).length);
+    assert.equal(await parameterColumnCount(targetNode), 2, "390px generator parameter grid must render two columns");
+    assert.equal(await parameterColumnCount(sourceNode), 3, "wide generator parameter grid must render three columns");
+    assert.equal(await parameterColumnCount(runningNode), 1, "narrow generator parameter grid must render one column");
+    const canvasTransform = () => page.locator(".smart-canvas-board > div.absolute.left-0.top-0").evaluate((element) => element.style.transform);
+    const transformBeforeLockedWheel = await canvasTransform();
+    const wheelDefaultPrevented = await fullBody.evaluate((element) => {
+      const event = new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: 120 });
+      element.dispatchEvent(event);
+      return event.defaultPrevented;
+    });
+    assert.equal(wheelDefaultPrevented, true, "wheel over parameters must prevent default page scrolling");
+    await fullBody.hover();
+    await page.mouse.wheel(0, 120);
+    assert.equal(await canvasTransform(), transformBeforeLockedWheel, "wheel over parameters must not zoom Canvas");
+    const board = page.locator(".smart-canvas-board");
+    const boardBox = await board.boundingBox();
+    assert.ok(boardBox, "Canvas board has no bounds");
+    await board.dispatchEvent("wheel", { deltaY: 120, clientX: boardBox.x + boardBox.width / 2, clientY: boardBox.y + boardBox.height / 2 });
+    await waitFor(async () => (await canvasTransform()) !== transformBeforeLockedWheel, "wheel over blank Canvas changes zoom");
+    assert.ok(beforeHeight > 370, `full parameter node height ${beforeHeight} must grow beyond its saved minimum`);
+
+    await page.locator('[data-canvas-node-id="generator-pro-source"]').getByRole("button", { name: "复制样式" }).click();
+    await targetNode.getByRole("button", { name: "粘贴样式" }).click();
+    await waitFor(() => state.saveRequests.length > 1, "Pro Studio style paste autosave");
+    savedTarget = state.canvas.nodes.find((node) => node.id === target.id);
+    assert.equal(savedTarget.data.professional_mode, true, "Pro Studio mode must paste");
+    assert.equal(savedTarget.data.pro_studio_state?.settings?.resolution, "4k", "Pro Studio resolution must paste");
+    assert.equal(savedTarget.data.official_settings?.resolution, "4k", "official settings must paste");
+    assert.deepEqual(savedTarget.data.input_images.map((image) => image.url), targetBefore.data.input_images.map((image) => image.url), "Pro paste must preserve target input images");
+    assert.equal(state.promptSplitPosts.length, requestCountsBefore.promptSplits, "style/view operations must not submit prompt splits");
+    assert.equal(state.imageGenerationPosts.length, requestCountsBefore.images, "style/view operations must not submit image tasks");
+
+    await page.reload({ waitUntil: "domcontentloaded" });
+    const reloadedTarget = page.locator('[data-canvas-node-id="generator-style-target"]');
+    await reloadedTarget.waitFor({ state: "visible", timeout: 15000 });
+    assert.equal(state.canvas.nodes.find((node) => node.id === target.id).data.pro_studio_state?.settings?.resolution, "4k", "pasted style must survive reload");
+    assert.equal(await reloadedTarget.getByRole("button", { name: "粘贴样式" }).isDisabled(), true, "style clipboard must clear after reload");
+
+    const screenshot = path.join(outDir, "generator-style-clipboard.png");
+    await page.screenshot({ path: screenshot, fullPage: true });
+    artifacts.push(path.basename(screenshot));
+    return { fullNodeHeight: beforeHeight, savedResolution: "4k" };
   } finally {
     await context.close();
   }
@@ -1091,8 +1338,11 @@ async function main() {
 
     const scenarioFilter = String(process.env.QA_SCENARIO || "").trim().toLowerCase();
     for (const [name, scenario] of [
+      ["failed split rerun without previous batch dialog", runFailedSplitRerunScenario],
       ["desktop nodes mode", runNodesScenario],
       ["ten-pair compact layout", runTenNodeLayoutScenario],
+      ["Output preview layouts", runOutputPreviewScenario],
+      ["generator style clipboard and parameter wheel", runGeneratorStyleClipboardScenario],
       ["batch controls and zoom lod", runBatchControlsAndZoomLodScenario],
       ["topbar batch controls responsive", runTopbarBatchControlsResponsiveScenario],
       ["replace previous batch", runReplaceBatchScenario],
