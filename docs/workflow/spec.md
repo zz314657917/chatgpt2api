@@ -2,16 +2,29 @@
 repo: chatgpt2api
 project_type: web
 qa_mode: browser
-last_updated: 2026-07-28
+last_updated: 2026-07-29
 ---
 
 # Product Spec
 
 ## 当前状态
 
-- 当前 workflow 状态以 `docs/workflow/status.md` 为准：`phase=done`，当前 Sprint 为 `task-021-generator-node-responsive-parameters`。
+- 当前 workflow 状态以 `docs/workflow/status.md` 为准：`phase=done`，当前 Sprint 为 `task-022-generator-style-actions-layout`。
 - `task-001` 到 `task-013` 已把落叶创艺独立用户版、Pro Studio、prompt split、bridge 计费元数据和 pending settlement retry 推成稳定背景层；当前默认续做不再是“继续补独立站入口”，而是继续收口 Canvas prompt-split fan-out 的布局、缩放和重复拆分语义。
 - 2026-07-11 新增的结算约束也已进入当前规格背景：固定结算场景下，Studio Bridge / APIMart 图片账单仍需保留真实模型语义，不能把 `gpt-image-2` 错映射成泛化模型名。
+
+## 追加需求：图片生成节点样式操作栏
+
+### 一句话需求
+- 将图片生成节点 full 模式的复制样式、粘贴样式和收起参数收进参数区底部，移除 Prompts 上方突兀的独占操作行。
+
+### 验收标准
+- full 模式中样式操作栏位于模型、普通参数或 Pro Studio 参数之后，并与生成结果和运行状态保持分隔。
+- 复制/粘贴仍保留既有 `aria-label`、禁用状态、提示文本和持久化语义；compact 模式不新增此操作栏。
+- 窄节点的操作栏可换行、不横向溢出；Task-021 的自动高度、无内部纵向滚动和 wheel 隔离不回退。
+
+### Sprint 计划
+- `task-022-generator-style-actions-layout`：full 参数底部操作栏布局与 browser QA，已 PASS。
 
 ## 追加需求：图片生成节点响应式参数
 

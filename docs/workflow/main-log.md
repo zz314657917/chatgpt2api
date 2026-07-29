@@ -59,3 +59,7 @@
 260728 0033 | task-021-generator-node-responsive-parameters | contract-approved | codex | docs/workflow/tasks/task-021-generator-node-responsive-parameters.md
 260728 0033 | task-021-generator-node-responsive-parameters | build-complete | codex | docs/workflow/worker-results/task-021-generator-node-responsive-parameters-result.md
 260728 0033 | task-021-generator-node-responsive-parameters | qa-pass | codex | docs/workflow/qa-reports/task-021-generator-node-responsive-parameters-qa.md
+260729 1631 | task-022-generator-style-actions-layout | contract-draft | planner | move full generator style actions below parameter controls; preserve Task-021 layout and wheel boundaries
+260729 1631 | task-022-generator-style-actions-layout | contract-approved | evaluator | exact Canvas-only allowlist, accessibility labels, responsive action bar, and browser acceptance commands reviewed
+260729 1658 | task-022-generator-style-actions-layout | build-complete | codex | docs/workflow/worker-results/task-022-generator-style-actions-layout-result.md
+260729 1658 | task-022-generator-style-actions-layout | qa-pass | evaluator | docs/workflow/qa-reports/task-022-generator-style-actions-layout-qa.md

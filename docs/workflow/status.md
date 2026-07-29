@@ -1,29 +1,29 @@
 ---
 phase: done
-current_sprint: task-021-generator-node-responsive-parameters
-total_sprints: 14
+current_sprint: task-022-generator-style-actions-layout
+total_sprints: 15
 pending_action: deploy-or-plan-next-sprint
 project_type: web
 qa_mode: browser
 approval_required: true
-last_verified: 2026-07-28
+last_verified: 2026-07-29
 ---
 
 # Workflow Status
 
-- 当前阶段：`done`（Task-021 PASS）
-- 当前 Sprint：`task-021-generator-node-responsive-parameters`
-- 当前目标：图片生成节点参数随宽度自动重排，无内部滚动，并阻止节点 wheel 继续滚动页面或缩放 Canvas。
+- 当前阶段：`done`（Task-022 PASS）
+- 当前 Sprint：`task-022-generator-style-actions-layout`
+- 当前目标：将图片生成节点 full 模式的复制样式、粘贴样式和收起参数从 Prompts 上方的孤立工具条移到参数区底部，保持 Task-021 的响应式、无内部滚动和 wheel 隔离行为。
 - 下一合法动作：部署包含最新 embedded frontend 的服务，或由 Planner 进入下一 Sprint。
-- 当前 contract：`docs/workflow/tasks/task-021-generator-node-responsive-parameters.md`
-- Contract review：`docs/workflow/task-021-contract-review.md`（PASS）
-- Worker result：`docs/workflow/worker-results/task-021-generator-node-responsive-parameters-result.md`
-- QA report：`docs/workflow/qa-reports/task-021-generator-node-responsive-parameters-qa.md`（PASS）
-- Task-021 裁决：
-  - 320px/390px/540px 普通参数分别使用 1/2/3 列，full 参数区无内部纵向滚动条。
-  - 参数区 wheel 不再滚动页面或缩放 Canvas；空白画布 wheel 缩放保持有效。
+- 当前 contract：`docs/workflow/tasks/task-022-generator-style-actions-layout.md`
+- Contract review：`docs/workflow/task-022-contract-review.md`（PASS）
+- Worker result：`docs/workflow/worker-results/task-022-generator-style-actions-layout-result.md`
+- QA report：`docs/workflow/qa-reports/task-022-generator-style-actions-layout-qa.md`（PASS）
+- Task-022 裁决：
+  - 样式复制、粘贴和收起参数已移至参数区底部；Prompts 上方不再有独占工具条。
   - `npm.cmd run lint`、`npm.cmd run build`、`go test ./...` 和 13 场景 Canvas smoke 均通过。
   - 本次未更新本地 Docker 容器，不将源码验收外推为运行容器已更新。
+- Sub2API 渠道定价目录核对：远端 `origin/main` 已包含 `ee5f8abbe`，将 `kimi-k3` 等仅渠道定价的精确模型并入 `/v1/models` 和 `/v1/model-catalog`；当前不重复改动该仓库。
 
 - 当前阶段：`done`（Task-020 PASS）
 - 当前 Sprint：`task-020-image-tool-text-response-hardening`

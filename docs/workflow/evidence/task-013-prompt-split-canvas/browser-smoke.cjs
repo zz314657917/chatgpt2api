@@ -629,6 +629,7 @@ async function runNodesScenario(browser, baseURL, artifacts) {
     assertWorldRectsDisjoint([...pairs.generators, ...pairs.outputs], "three-pair world layout");
     await assertDomRectsDisjoint(page, [...pairs.generators, ...pairs.outputs], "three-pair DOM layout");
     assert.equal(templateFingerprint(state.canvas), state.templateBefore, "prompt-split must not mutate the source image template");
+    await page.getByTitle("适配内容").click();
 
     const firstGenerator = pairs.generators[0];
     const firstGeneratorNode = page.locator(`[data-canvas-node-id="${firstGenerator.id}"]`);
@@ -657,14 +658,25 @@ async function runNodesScenario(browser, baseURL, artifacts) {
     const outputResizeHandle = firstOutputNode.getByRole("button", { name: "拖拽缩放 Output 节点" });
     const outputResizeBox = await outputResizeHandle.boundingBox();
     assert.ok(outputResizeBox, "output resize handle is missing");
+    const outputResizeHit = await page.evaluate(({ x, y }) => {
+      const element = document.elementFromPoint(x, y);
+      return {
+        nodeId: element?.closest("[data-canvas-node-id]")?.getAttribute("data-canvas-node-id") || "",
+        label: element?.closest("button")?.getAttribute("aria-label") || "",
+      };
+    }, { x: outputResizeBox.x + outputResizeBox.width / 2, y: outputResizeBox.y + outputResizeBox.height / 2 });
+    assert.deepEqual(outputResizeHit, { nodeId: firstOutput.id, label: "拖拽缩放 Output 节点" }, "output resize handle must receive pointer input");
     await page.mouse.move(outputResizeBox.x + outputResizeBox.width / 2, outputResizeBox.y + outputResizeBox.height / 2);
     await page.mouse.down();
     await page.mouse.move(outputResizeBox.x - 240, outputResizeBox.y - 240, { steps: 4 });
     await page.mouse.up();
-    await waitFor(() => {
-      const resized = state.canvas.nodes.find((node) => node.id === firstOutput.id);
-      return resized?.data?.width === 260 && resized?.data?.height === 180 && resized?.data?.node_size_user_modified === true;
-    }, "output resize lower bounds");
+    await waitFor(() => state.canvas.nodes.find((node) => node.id === firstOutput.id)?.data?.node_size_user_modified === true, "output resize update");
+    const resizedOutput = state.canvas.nodes.find((node) => node.id === firstOutput.id);
+    assert.deepEqual(
+      { width: resizedOutput?.data?.width, height: resizedOutput?.data?.height },
+      { width: 260, height: 180 },
+      "output resize must clamp to its lower bounds",
+    );
     await waitFor(() => state.saveRequests.length > saveCountBeforeResize, "resized generator autosave");
     await page.reload({ waitUntil: "domcontentloaded" });
     await llm.waitFor({ state: "visible", timeout: 15000 });
@@ -829,7 +841,8 @@ async function runGeneratorStyleClipboardScenario(browser, baseURL, artifacts) {
   const target = clone(source);
   target.id = "generator-style-target";
   target.name = "样式目标";
-  target.position = { x: 850, y: 64 };
+  // Keep the source and target disjoint after copying raises the source node above its peers.
+  target.position = { x: 1020, y: 64 };
   target.data = {
     ...target.data,
     prompt: "目标节点提示词必须保留",
@@ -896,7 +909,21 @@ async function runGeneratorStyleClipboardScenario(browser, baseURL, artifacts) {
     assert.deepEqual(savedTarget.position, targetBefore.position, "target position must be preserved");
 
     const fullBody = targetNode.locator('[data-canvas-wheel-lock="true"]');
+    const styleActions = targetNode.locator('[data-generator-style-actions="true"]');
+    const promptLabel = targetNode.getByText("Prompts", { exact: true });
+    const parameterGrid = targetNode.locator('[data-generator-parameter-grid="true"]');
     const beforeHeight = (await targetNode.boundingBox()).height;
+    assert.equal(await styleActions.count(), 1, "full generator must expose one bottom style action bar");
+    const [styleActionsBox, promptLabelBox, parameterGridBox] = await Promise.all([
+      styleActions.boundingBox(),
+      promptLabel.boundingBox(),
+      parameterGrid.boundingBox(),
+    ]);
+    assert.ok(styleActionsBox && promptLabelBox && parameterGridBox, "generator style action layout must have visible bounds");
+    assert.ok(styleActionsBox.y > promptLabelBox.y + promptLabelBox.height, "style action bar must not sit above Prompts");
+    assert.ok(styleActionsBox.y > parameterGridBox.y + parameterGridBox.height, "style action bar must follow regular parameters");
+    const narrowStyleActionOverflow = await runningNode.locator('[data-generator-style-actions="true"]').evaluate((element) => element.scrollWidth > element.clientWidth + 1);
+    assert.equal(narrowStyleActionOverflow, false, "narrow generator style action bar must not overflow horizontally");
     assert.ok((await fullBody.evaluate((element) => ({ scrollHeight: element.scrollHeight, clientHeight: element.clientHeight }))).scrollHeight <= (await fullBody.evaluate((element) => element.clientHeight)) + 1, "expanded parameter body must not have an internal vertical scrollbar");
     assert.equal(await fullBody.getAttribute("data-generator-parameter-layout"), "default", "390px generator must use the default parameter layout");
     assert.equal(await sourceNode.locator('[data-canvas-wheel-lock="true"]').getAttribute("data-generator-parameter-layout"), "wide", "wide generator must use the three-column parameter layout");

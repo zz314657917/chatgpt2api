@@ -4563,10 +4563,6 @@ function GeneratorNodeBody({
       data-generator-parameter-layout={parameterLayout}
       onPointerDown={stopNodeInteraction}
     >
-      <div className="flex items-center justify-end gap-1">
-        {styleActions}
-        <Button type="button" variant="ghost" className="h-8 px-2 text-[11px] font-bold" onClick={() => onUpdateData({ node_view: "compact" })}>收起参数</Button>
-      </div>
       <div>
         <div className={cn("mb-1 text-[11px] font-black uppercase tracking-[0.14em]", canvasLabelClass)}>Prompts</div>
         {upstreamPrompts.length > 0 ? (
@@ -4789,6 +4785,10 @@ function GeneratorNodeBody({
           n: proStudioState.settings.n,
         }} />
       ) : null}
+      <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border/70 pt-3 dark:border-slate-700" data-generator-style-actions="true">
+        {styleActions}
+        <Button type="button" variant="ghost" className="h-8 px-2 text-[11px] font-bold" onClick={() => onUpdateData({ node_view: "compact" })}>收起参数</Button>
+      </div>
       {outputImages.length > 0 ? (
         <CanvasGeneratedImagePreview
           images={outputImages}
