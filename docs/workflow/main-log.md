@@ -68,3 +68,8 @@
 260729 1705 | task-023-image-manager-bulk-download-action | contract-approved | evaluator | docs/workflow/task-023-contract-review.md
 260729 1718 | task-023-image-manager-bulk-download-action | build-complete | codex | docs/workflow/worker-results/task-023-image-manager-bulk-download-action-result.md
 260729 1718 | task-023-image-manager-bulk-download-action | qa-pass | evaluator | docs/workflow/qa-reports/task-023-image-manager-bulk-download-action-qa.md
+260730 2122 | task-024-image-task-error-localization | intake | planner | docs/workflow/spec.md
+260730 2122 | task-024-image-task-error-localization | contract-draft | planner | docs/workflow/tasks/task-024-image-task-error-localization.md
+260730 2122 | task-024-image-task-error-localization | contract-approved | evaluator | docs/workflow/task-024-contract-review.md
+260730 2122 | task-024-image-task-error-localization | build-complete | codex | docs/workflow/worker-results/task-024-image-task-error-localization-result.md
+260730 2122 | task-024-image-task-error-localization | qa-pass | evaluator | docs/workflow/qa-reports/task-024-image-task-error-localization-qa.md

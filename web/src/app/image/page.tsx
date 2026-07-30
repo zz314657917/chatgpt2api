@@ -142,6 +142,7 @@ import {
   type ImageArenaAgentSlotDraft,
 } from "@/lib/image-arena";
 import { authSessionFromLoginResponse, setVerifiedAuthSession } from "@/lib/session";
+import { localizeErrorMessage } from "@/lib/request";
 import { useAppMeta } from "@/lib/use-app-meta";
 import { cn } from "@/lib/utils";
 import { useAuthGuard } from "@/lib/use-auth-guard";
@@ -1384,7 +1385,7 @@ function formatCreationTaskErrorMessage(message: string) {
     return "当前没有可用的图片额度，请检查账号额度或稍后重试。";
   }
 
-  return trimmed;
+  return localizeErrorMessage(trimmed);
 }
 
 function formatCreationTaskError(error: unknown, fallback = "生成图片失败") {

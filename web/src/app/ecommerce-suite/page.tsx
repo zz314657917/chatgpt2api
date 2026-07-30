@@ -91,6 +91,7 @@ import { getManagedImagePreviewUrlFromPath, getManagedImageUrlFromPath } from "@
 import { IMAGE_QUALITY_OPTIONS, isImageOutputFormat, isImageQuality } from "@/lib/image-parameters";
 import { imageModelHasSettings, imageModelSettingsToTaskFields } from "@/lib/image-model-settings";
 import { displayModelLabel } from "@/lib/model-display";
+import { localizeErrorMessage } from "@/lib/request";
 import {
   OFFICIAL_IMAGE_MODEL,
   buildProStudioImagePayload,
@@ -674,6 +675,7 @@ function extractTaskText(task: CreationTask) {
 
 function resultFromTask(templateId: string, task: CreationTask, seed?: Partial<CommerceSuiteResult>): CommerceSuiteResult {
   const image = (task.data || []).find((item) => item.local_url || item.url || item.b64_json);
+  const taskError = task.error ? localizeErrorMessage(task.error) : undefined;
   return {
     ...seed,
     templateId,
@@ -682,7 +684,7 @@ function resultFromTask(templateId: string, task: CreationTask, seed?: Partial<C
     localUrl: image?.local_url,
     url: image?.url || (image?.b64_json ? `data:image/png;base64,${image.b64_json}` : undefined),
     revisedPrompt: image?.revised_prompt,
-    error: task.error,
+    error: taskError,
     proStudio: task.pro_studio || seed?.proStudio,
     officialSettings: task.official_settings || seed?.officialSettings,
     startedAt: seed?.startedAt || task.created_at,
@@ -2030,7 +2032,7 @@ export default function EcommerceSuitePage() {
             ),
           };
           if (task.status === "error") {
-            toast.error(task.error || `${templateById(matchedResult.templateId)?.title || "图片"}生成失败`);
+            toast.error(nextResult.error || `${templateById(matchedResult.templateId)?.title || "图片"}生成失败`);
           }
         }
         if (changed) {

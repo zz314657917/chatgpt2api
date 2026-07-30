@@ -1,15 +1,29 @@
 ---
 phase: done
-current_sprint: task-023-image-manager-bulk-download-action
-total_sprints: 16
+current_sprint: task-024-image-task-error-localization
+total_sprints: 17
 pending_action: deploy-or-plan-next-sprint
 project_type: web
 qa_mode: browser
 approval_required: true
-last_verified: 2026-07-29
+last_verified: 2026-07-30
 ---
 
 # Workflow Status
+
+- 当前阶段：`done`（Task-024 PASS）
+- 当前 Sprint：`task-024-image-task-error-localization`
+- 当前目标：将图片任务的已知尺寸校验错误转换为可执行的中文提示，覆盖图片、画布、电商套图和任务队列的用户可见错误。
+- 当前 contract：`docs/workflow/tasks/task-024-image-task-error-localization.md`
+- Contract review：`docs/workflow/task-024-contract-review.md`（PASS）
+- Worker result：`docs/workflow/worker-results/task-024-image-task-error-localization-result.md`（DONE）
+- QA report：`docs/workflow/qa-reports/task-024-image-task-error-localization-qa.md`（PASS）
+- Task-024 裁决：
+  - `size must be auto or WIDTHxHEIGHT` 及空格/大小写变体会显示为可执行的中文尺寸提示，不再直接展示该上游英文。
+  - `/image`、Canvas、电商套图和图片任务队列共用 `localizeErrorMessage`；未知错误继续保留原文。
+  - `npm.cmd run lint`、`npm.cmd run build`、Vite SSR 翻译函数断言、`go test ./...` 和 `git diff --check` 均通过。
+  - 无已登录测试会话，结果卡片的真实失败任务截图未补；Playwright Chrome 在本机环境关闭，未改动浏览器配置或 Docker/生产服务。
+- 下一合法动作：部署包含最新 embedded frontend 的服务，或由 Planner 进入下一 Sprint。
 
 - 当前阶段：`done`（Task-023 PASS）
 - 当前 Sprint：`task-023-image-manager-bulk-download-action`

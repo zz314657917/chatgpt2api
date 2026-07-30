@@ -1,4 +1,5 @@
 import type { CreationTask } from "@/lib/api";
+import { localizeErrorMessage } from "@/lib/request";
 import type { SmartCanvasImageToolType, SmartCanvasItem, SmartCanvasItemType } from "./types";
 
 export type SmartCanvasErrorStatus = CreationTask["status"] | "blocked" | "unknown";
@@ -126,7 +127,7 @@ export function formatSmartCanvasErrorMessage(error: unknown, fallback = "运行
     return "请求过于频繁，请稍后重试。";
   }
 
-  return rawMessage;
+  return localizeErrorMessage(rawMessage);
 }
 
 export function isRetryableCanvasError(input?: SmartCanvasErrorDetailInput | Partial<CreationTask> | null): boolean {

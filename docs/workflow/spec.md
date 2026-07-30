@@ -2,16 +2,29 @@
 repo: chatgpt2api
 project_type: web
 qa_mode: browser
-last_updated: 2026-07-29
+last_updated: 2026-07-30
 ---
 
 # Product Spec
 
 ## 当前状态
 
-- 当前 workflow 状态以 `docs/workflow/status.md` 为准：`phase=done`，当前 Sprint 为 `task-023-image-manager-bulk-download-action`。
+- 当前 workflow 状态以 `docs/workflow/status.md` 为准：`phase=done`，当前 Sprint 为 `task-024-image-task-error-localization`。
 - `task-001` 到 `task-013` 已把落叶创艺独立用户版、Pro Studio、prompt split、bridge 计费元数据和 pending settlement retry 推成稳定背景层；当前默认续做不再是“继续补独立站入口”，而是继续收口 Canvas prompt-split fan-out 的布局、缩放和重复拆分语义。
 - 2026-07-11 新增的结算约束也已进入当前规格背景：固定结算场景下，Studio Bridge / APIMart 图片账单仍需保留真实模型语义，不能把 `gpt-image-2` 错映射成泛化模型名。
+
+## 追加需求：图片任务错误本地化
+
+### 一句话需求
+- 将已知的图片尺寸校验错误转换为用户可执行的中文提示，而不是在图片任务结果中直接展示上游英文。
+
+### 验收标准
+- `size must be auto or WIDTHxHEIGHT`（含 `HTTP 400` 前缀、大小写或空格变体）统一说明当前模型不支持比例尺寸，建议改为“自动”或“宽度x高度”（如 `1024x1024`）。
+- `/image`、Canvas、电商套图和图片任务队列复用现有 `localizeErrorMessage`，不维护平行翻译字典。
+- 未识别错误保留原文；不修改请求参数、尺寸归一、任务状态、重试、计费或后端错误协议。
+
+### Sprint 计划
+- `task-024-image-task-error-localization`：图片任务错误本地化与 browser QA，已 PASS。
 
 ## 追加需求：素材库多选批量下载入口
 

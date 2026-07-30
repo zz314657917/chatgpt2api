@@ -11,6 +11,7 @@ import { normalizeSmartCanvas, smartCanvasRuns } from "@/app/canvas/canvas-utils
 import type { SmartCanvasDocument, SmartCanvasRunRecord } from "@/app/canvas/types";
 import { fetchCanvases, fetchCreationTasks, IMAGE_MODEL_ROUTE_DETAILS, type CanvasDocument, type CreationTask } from "@/lib/api";
 import { formatImageSizeDisplay, getImageSizeRequirementLabel, imageQualityLabel, isHighResolutionImageSize } from "@/lib/image-parameters";
+import { localizeErrorMessage } from "@/lib/request";
 import { cn } from "@/lib/utils";
 import {
   ACTIVE_IMAGE_CONVERSATION_STORAGE_KEY,
@@ -415,6 +416,7 @@ function getCommerceQueueItem(project: CommerceSuiteProject): CommerceQueueItem 
 
 function commerceResultFromTask(result: CommerceSuiteResult, task: CreationTask): CommerceSuiteResult {
   const image = (task.data || []).find((item) => item.local_url || item.url || item.b64_json);
+  const taskError = task.error ? localizeErrorMessage(task.error) : undefined;
   return {
     ...result,
     taskId: task.id,
@@ -422,7 +424,7 @@ function commerceResultFromTask(result: CommerceSuiteResult, task: CreationTask)
     localUrl: image?.local_url,
     url: image?.url || (image?.b64_json ? `data:image/png;base64,${image.b64_json}` : undefined),
     revisedPrompt: image?.revised_prompt,
-    error: task.error,
+    error: taskError,
     proStudio: task.pro_studio || result.proStudio,
     officialSettings: task.official_settings || result.officialSettings,
     startedAt: result.startedAt || task.created_at,
