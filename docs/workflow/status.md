@@ -1,7 +1,7 @@
 ---
 phase: done
-current_sprint: task-022-generator-style-actions-layout
-total_sprints: 15
+current_sprint: task-023-image-manager-bulk-download-action
+total_sprints: 16
 pending_action: deploy-or-plan-next-sprint
 project_type: web
 qa_mode: browser
@@ -11,19 +11,18 @@ last_verified: 2026-07-29
 
 # Workflow Status
 
-- 当前阶段：`done`（Task-022 PASS）
-- 当前 Sprint：`task-022-generator-style-actions-layout`
-- 当前目标：将图片生成节点 full 模式的复制样式、粘贴样式和收起参数从 Prompts 上方的孤立工具条移到参数区底部，保持 Task-021 的响应式、无内部滚动和 wheel 隔离行为。
+- 当前阶段：`done`（Task-023 PASS）
+- 当前 Sprint：`task-023-image-manager-bulk-download-action`
+- 当前目标：素材库多选两张或以上图片时显示直接可见的“批量下载 (N)”入口；复用现有签名 URL 单图下载链路，不新增 ZIP 或后端导出接口。
+- 当前 contract：`docs/workflow/tasks/task-023-image-manager-bulk-download-action.md`
+- Contract review：`docs/workflow/task-023-contract-review.md`（PASS）
+- Worker result：`docs/workflow/worker-results/task-023-image-manager-bulk-download-action-result.md`（DONE）
+- QA report：`docs/workflow/qa-reports/task-023-image-manager-bulk-download-action-qa.md`（PASS）
+- Task-023 裁决：
+  - 多选两张或以上图片时，右下角直接显示“批量下载 (N)”，不再需要先打开“操作”弹层。
+  - 批量下载继续复用既有逐张签名下载流程；浏览器 smoke 已确认两张图片分别请求当前 `scope=mine` 的下载 URL 并触发两个浏览器下载。
+  - `npm.cmd run lint`、`npm.cmd run build`、`go test ./...` 与 390px browser smoke 均通过；本次未更新 Docker 或生产服务。
 - 下一合法动作：部署包含最新 embedded frontend 的服务，或由 Planner 进入下一 Sprint。
-- 当前 contract：`docs/workflow/tasks/task-022-generator-style-actions-layout.md`
-- Contract review：`docs/workflow/task-022-contract-review.md`（PASS）
-- Worker result：`docs/workflow/worker-results/task-022-generator-style-actions-layout-result.md`
-- QA report：`docs/workflow/qa-reports/task-022-generator-style-actions-layout-qa.md`（PASS）
-- Task-022 裁决：
-  - 样式复制、粘贴和收起参数已移至参数区底部；Prompts 上方不再有独占工具条。
-  - `npm.cmd run lint`、`npm.cmd run build`、`go test ./...` 和 13 场景 Canvas smoke 均通过。
-  - 本次未更新本地 Docker 容器，不将源码验收外推为运行容器已更新。
-- Sub2API 渠道定价目录核对：远端 `origin/main` 已包含 `ee5f8abbe`，将 `kimi-k3` 等仅渠道定价的精确模型并入 `/v1/models` 和 `/v1/model-catalog`；当前不重复改动该仓库。
 
 - 当前阶段：`done`（Task-020 PASS）
 - 当前 Sprint：`task-020-image-tool-text-response-hardening`

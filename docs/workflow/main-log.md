@@ -63,3 +63,8 @@
 260729 1631 | task-022-generator-style-actions-layout | contract-approved | evaluator | exact Canvas-only allowlist, accessibility labels, responsive action bar, and browser acceptance commands reviewed
 260729 1658 | task-022-generator-style-actions-layout | build-complete | codex | docs/workflow/worker-results/task-022-generator-style-actions-layout-result.md
 260729 1658 | task-022-generator-style-actions-layout | qa-pass | evaluator | docs/workflow/qa-reports/task-022-generator-style-actions-layout-qa.md
+260729 1705 | task-023-image-manager-bulk-download-action | intake | planner | docs/workflow/spec.md
+260729 1705 | task-023-image-manager-bulk-download-action | contract-draft | planner | docs/workflow/tasks/task-023-image-manager-bulk-download-action.md
+260729 1705 | task-023-image-manager-bulk-download-action | contract-approved | evaluator | docs/workflow/task-023-contract-review.md
+260729 1718 | task-023-image-manager-bulk-download-action | build-complete | codex | docs/workflow/worker-results/task-023-image-manager-bulk-download-action-result.md
+260729 1718 | task-023-image-manager-bulk-download-action | qa-pass | evaluator | docs/workflow/qa-reports/task-023-image-manager-bulk-download-action-qa.md

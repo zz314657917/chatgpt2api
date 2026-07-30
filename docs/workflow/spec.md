@@ -9,9 +9,23 @@ last_updated: 2026-07-29
 
 ## 当前状态
 
-- 当前 workflow 状态以 `docs/workflow/status.md` 为准：`phase=done`，当前 Sprint 为 `task-022-generator-style-actions-layout`。
+- 当前 workflow 状态以 `docs/workflow/status.md` 为准：`phase=done`，当前 Sprint 为 `task-023-image-manager-bulk-download-action`。
 - `task-001` 到 `task-013` 已把落叶创艺独立用户版、Pro Studio、prompt split、bridge 计费元数据和 pending settlement retry 推成稳定背景层；当前默认续做不再是“继续补独立站入口”，而是继续收口 Canvas prompt-split fan-out 的布局、缩放和重复拆分语义。
 - 2026-07-11 新增的结算约束也已进入当前规格背景：固定结算场景下，Studio Bridge / APIMart 图片账单仍需保留真实模型语义，不能把 `gpt-image-2` 错映射成泛化模型名。
+
+## 追加需求：素材库多选批量下载入口
+
+### 一句话需求
+- 在 `/image-manager` 选中两张或以上图片后，直接显示清晰的“批量下载 (N)”操作，不再要求用户进入右下角“操作”弹层寻找下载入口。
+
+### 验收标准
+- 仅当当前素材库列表有两张或以上选中图片时显示“批量下载 (N)”按钮；取消至一张或零张后该按钮消失。
+- 按钮复用现有 `downloadItems("selected", selectedItems)` 流程，逐张请求已有 `/api/images/download-url` 并沿用个人、团队、公共素材的访问范围与失败提示。
+- 单图详情下载、“下载已选”、“下载已加载”、全选、筛选、归类和删除语义不回退；不新增对象存储、后端 ZIP、鉴权或计费接口。
+- 窄屏下批量下载按钮与“操作”按钮不互相遮挡、不会引入新的滚动容器或横向溢出。
+
+### Sprint 计划
+- `task-023-image-manager-bulk-download-action`：素材库多选的显式批量下载入口与浏览器 smoke。
 
 ## 追加需求：图片生成节点样式操作栏
 

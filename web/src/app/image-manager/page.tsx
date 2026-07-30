@@ -3497,7 +3497,24 @@ function ImageManagerContent({
         </div>
         {assetKind === "image" ? (
         <Popover open={isImageActionsOpen} onOpenChange={setIsImageActionsOpen}>
-          <div className="fixed right-4 bottom-[calc(env(safe-area-inset-bottom)+1rem)] z-40 sm:right-6 sm:bottom-6">
+          <div className="fixed right-4 bottom-[calc(env(safe-area-inset-bottom)+1rem)] z-40 flex items-center gap-2 sm:right-6 sm:bottom-6">
+            {selectedCount > 1 ? (
+              <Button
+                type="button"
+                className="h-12 rounded-full px-4 shadow-[0_18px_50px_-24px_rgba(15,23,42,0.65)]"
+                disabled={isMutatingImages}
+                onClick={() => void downloadItems("selected", selectedItems)}
+                aria-label={`批量下载 ${selectedCount} 张图片`}
+                title={`批量下载 ${selectedCount} 张图片`}
+              >
+                {downloadingKey === "selected" ? (
+                  <LoaderCircle className="size-5 animate-spin" />
+                ) : (
+                  <Download className="size-5" />
+                )}
+                <span>批量下载 ({selectedCount})</span>
+              </Button>
+            ) : null}
             <PopoverTrigger asChild>
               <Button
                 type="button"
@@ -3592,7 +3609,7 @@ function ImageManagerContent({
                   ) : (
                     <Download className="size-4" />
                   )}
-                  下载已选 ({selectedCount})
+                  {selectedCount > 1 ? `批量下载 (${selectedCount})` : `下载已选 (${selectedCount})`}
                 </Button>
                 {canDeleteImages && (galleryView !== "team" || teamManager) ? (
                   <Button
