@@ -96,8 +96,8 @@ func TestSub2APIImageBatchResultIncludesResolvedModel(t *testing.T) {
 
 func TestSub2APIImagePayloadNormalizesDecimalRatio(t *testing.T) {
 	payload := sub2APIImageJSONPayload(map[string]any{"prompt": "draw", "model": util.ImageModelGPT, "size": "1:1.4"})
-	if payload["size"] != "5:7" {
-		t.Fatalf("size = %#v, want 5:7", payload["size"])
+	if payload["size"] != "1104x1536" {
+		t.Fatalf("size = %#v, want 1104x1536", payload["size"])
 	}
 
 	officialPayload, err := sub2APIImageGatewayJSONPayload(map[string]any{"prompt": "draw", "model": util.ImageModelGPTOfficial, "size": "1:1.4"})

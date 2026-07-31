@@ -1167,13 +1167,71 @@ func sub2APIImageSize(payload map[string]any) string {
 		return "1:1"
 	case "1:1":
 		return "1024x1024"
+	case "3:2":
+		return "1536x1024"
+	case "2:3":
+		return "1024x1536"
+	case "4:3":
+		return "1536x1152"
+	case "3:4":
+		return "1152x1536"
+	case "5:4":
+		return "1280x1024"
+	case "4:5":
+		return "1024x1280"
 	case "16:9":
 		return "1536x864"
 	case "9:16":
 		return "864x1536"
+	case "2:1":
+		return "1536x768"
+	case "1:2":
+		return "768x1536"
+	case "3:1":
+		return "1536x512"
+	case "1:3":
+		return "512x1536"
+	case "21:9":
+		return "1792x768"
+	case "9:21":
+		return "768x1792"
 	default:
+		if dimensions, ok := sub2APIImageRatioDimensions(strings.ToLower(strings.TrimSpace(size))); ok {
+			return dimensions
+		}
 		return strings.TrimSpace(size)
 	}
+}
+
+func sub2APIImageRatioDimensions(size string) (string, bool) {
+	if canonical, ok := sub2APIOfficialEquivalentImageRatio(size); ok && canonical != size {
+		return sub2APIImageSize(map[string]any{"size": canonical}), true
+	}
+	match := regexp.MustCompile(`^(\d+):(\d+)$`).FindStringSubmatch(size)
+	if len(match) != 3 {
+		return "", false
+	}
+	width, errWidth := strconv.Atoi(match[1])
+	height, errHeight := strconv.Atoi(match[2])
+	if errWidth != nil || errHeight != nil || width <= 0 || height <= 0 {
+		return "", false
+	}
+	longSide := width
+	if height > longSide {
+		longSide = height
+	}
+	scale := 1536.0 / float64(longSide)
+	normalizedWidth := sub2APIRoundImageDimension(float64(width) * scale)
+	normalizedHeight := sub2APIRoundImageDimension(float64(height) * scale)
+	return fmt.Sprintf("%dx%d", normalizedWidth, normalizedHeight), true
+}
+
+func sub2APIRoundImageDimension(value float64) int {
+	dimension := int(math.Round(value/16) * 16)
+	if dimension < 16 {
+		return 16
+	}
+	return dimension
 }
 
 func sub2APIGeminiImageSize(payload map[string]any) string {

@@ -1102,8 +1102,13 @@ func TestSub2APIImagePayloadNormalizesRatioSizes(t *testing.T) {
 		want    string
 	}{
 		{name: "square ratio", payload: map[string]any{"prompt": "draw", "size": "1:1"}, want: "1024x1024"},
+		{name: "three two ratio", payload: map[string]any{"prompt": "draw", "size": "3:2"}, want: "1536x1024"},
+		{name: "two three ratio", payload: map[string]any{"prompt": "draw", "size": "2:3"}, want: "1024x1536"},
+		{name: "four three ratio", payload: map[string]any{"prompt": "draw", "size": "4:3"}, want: "1536x1152"},
+		{name: "three four ratio", payload: map[string]any{"prompt": "draw", "size": "3:4"}, want: "1152x1536"},
 		{name: "wide ratio", payload: map[string]any{"prompt": "draw", "size": "16:9"}, want: "1536x864"},
 		{name: "vertical ratio", payload: map[string]any{"prompt": "draw", "size": "9:16"}, want: "864x1536"},
+		{name: "cinematic ratio", payload: map[string]any{"prompt": "draw", "size": "21:9"}, want: "1792x768"},
 		{name: "requested size fallback", payload: map[string]any{"prompt": "draw", "requested_size": "1:1"}, want: "1024x1024"},
 		{name: "resolution preset", payload: map[string]any{"prompt": "draw", "image_resolution": "2k"}, want: "2048x2048"},
 		{name: "pixel icon size uses square upstream ratio", payload: map[string]any{"prompt": "draw", "size": "64x64"}, want: "1:1"},
