@@ -9,7 +9,6 @@ import {
   Clock3,
   FolderOpen,
   Grid2X2,
-  Image as ImageIcon,
   LayoutPanelLeft,
   LogOut,
   Menu,
@@ -55,7 +54,6 @@ const navItems = [
   { href: "/image", label: "创作台", icon: Brush },
   { href: "/canvas", label: "无限画布", icon: Grid2X2 },
   { href: "/ecommerce-suite", label: "电商套图", icon: PackageSearch },
-  { href: "/social", label: "社媒运营", icon: ImageIcon },
   { href: "/image-manager", label: "素材库", icon: FolderOpen },
 ];
 const profileNavItem = { href: "/profile", label: "个人中心" };

@@ -61,6 +61,7 @@ import {
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import {
+  canvasModelHasCapability,
   CHAT_MODEL_OPTIONS,
   DEFAULT_CHAT_MODEL,
   DEFAULT_IMAGE_MODEL,
@@ -71,6 +72,7 @@ import {
   createManagedTextAsset,
   createImageEditTaskFromReferenceIds,
   fetchCreationTasks,
+  fetchCanvasModels,
   fetchManagedImages,
   fetchTeamWorkspace,
   imageReferenceInputLimit,
@@ -80,6 +82,7 @@ import {
   uploadCreationTaskReferenceImage,
   updateManagedImageCollectionItems,
   type CreationTask,
+  type CanvasModelOption,
   type ImageModel,
   type ManagedImageSummary,
   type TeamSummary,
@@ -91,6 +94,7 @@ import { getManagedImagePreviewUrlFromPath, getManagedImageUrlFromPath } from "@
 import { IMAGE_QUALITY_OPTIONS, isImageOutputFormat, isImageQuality } from "@/lib/image-parameters";
 import { imageModelHasSettings, imageModelSettingsToTaskFields } from "@/lib/image-model-settings";
 import { displayModelLabel } from "@/lib/model-display";
+import { useAppMeta } from "@/lib/use-app-meta";
 import { localizeErrorMessage } from "@/lib/request";
 import {
   OFFICIAL_IMAGE_MODEL,
@@ -233,6 +237,29 @@ const TEMPLATE_GROUPS = [
 ] as const;
 
 type ModelOption = { value: ImageModel; label: string };
+
+function ecommerceModelOption(model: CanvasModelOption): ModelOption {
+  return { value: model.id, label: displayModelLabel(model.id, model.name || model.id) };
+}
+
+function ecommerceModelsByCapability(models: CanvasModelOption[], capability: "chat" | "image") {
+  return models
+    .filter((model) => model.enabled !== false)
+    .filter((model) => {
+      if (Array.isArray(model.group_modes) && model.group_modes.length > 0) {
+        return model.group_modes.includes(capability);
+      }
+      const hasRequestedCapability =
+        canvasModelHasCapability(model, capability) ||
+        (capability === "chat" && (model.kind === "text" || model.kind === "both")) ||
+        (capability === "image" && (model.kind === "image" || model.kind === "both"));
+      if (!hasRequestedCapability) {
+        return false;
+      }
+      return capability !== "image" || isImageCreationModel(model.id);
+    })
+    .map(ecommerceModelOption);
+}
 
 function createID(prefix: string) {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
@@ -1087,20 +1114,23 @@ async function buildSummaryBlob(project: CommerceSuiteProject) {
 }
 
 function mergeModelOptions(
+  remoteOptions: readonly ModelOption[],
   localOptions: readonly ModelOption[],
   selected: ImageModel,
+  preferRemoteOnly = false,
   canKeepSelectedModel: (model: ImageModel) => boolean = () => true,
 ) {
   const seen = new Set<string>();
   const merged: ModelOption[] = [];
-  for (const option of localOptions) {
+  const options = preferRemoteOnly && remoteOptions.length > 0 ? remoteOptions : [...remoteOptions, ...localOptions];
+  for (const option of options) {
     if (!option.value || seen.has(option.value) || isHiddenImageModelOption(option.value)) {
       continue;
     }
     seen.add(option.value);
     merged.push({ ...option, label: displayModelLabel(option.value, option.label) });
   }
-  if (selected && !seen.has(selected) && !isHiddenImageModelOption(selected) && canKeepSelectedModel(selected)) {
+  if (!(preferRemoteOnly && remoteOptions.length > 0) && selected && !seen.has(selected) && !isHiddenImageModelOption(selected) && canKeepSelectedModel(selected)) {
     merged.unshift({ value: selected, label: displayModelLabel(selected) });
   }
   return merged;
@@ -1108,6 +1138,7 @@ function mergeModelOptions(
 
 export default function EcommerceSuitePage() {
   const { isCheckingAuth } = useAuthGuard(undefined, "/ecommerce-suite");
+  const appMeta = useAppMeta();
   const { clearPanel, closeDrawer, setPanel } = useMobileNav();
   const [projects, setProjects] = useState<CommerceSuiteProject[]>([]);
   const [selectedId, setSelectedId] = useState("");
@@ -1134,6 +1165,7 @@ export default function EcommerceSuitePage() {
   const [activeTeam, setActiveTeam] = useState<TeamSummary | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const [selectedResultKey, setSelectedResultKey] = useState("");
+  const [remoteCanvasModels, setRemoteCanvasModels] = useState<CanvasModelOption[]>([]);
   const [leftRailCollapsed, setLeftRailCollapsed] = useState(() => {
     if (typeof window === "undefined") {
       return false;
@@ -1149,10 +1181,24 @@ export default function EcommerceSuitePage() {
     [projects, selectedId],
   );
   const selectedProjectRef = useRef<CommerceSuiteProject | null>(selectedProject);
-  const chatModelOptions = useMemo(() => mergeModelOptions(CHAT_MODEL_OPTIONS, selectedProject?.chatModel || DEFAULT_CHAT_MODEL), [selectedProject?.chatModel]);
+  const chatModelOptions = useMemo(
+    () => mergeModelOptions(
+      ecommerceModelsByCapability(remoteCanvasModels, "chat"),
+      CHAT_MODEL_OPTIONS,
+      selectedProject?.chatModel || DEFAULT_CHAT_MODEL,
+      appMeta.luoye_independent_mode,
+    ),
+    [appMeta.luoye_independent_mode, remoteCanvasModels, selectedProject?.chatModel],
+  );
   const imageModelOptions = useMemo(
-    () => mergeModelOptions(IMAGE_CREATION_MODEL_OPTIONS, selectedProject?.imageModel || DEFAULT_IMAGE_MODEL, isImageCreationModel),
-    [selectedProject?.imageModel],
+    () => mergeModelOptions(
+      ecommerceModelsByCapability(remoteCanvasModels, "image"),
+      IMAGE_CREATION_MODEL_OPTIONS,
+      selectedProject?.imageModel || DEFAULT_IMAGE_MODEL,
+      false,
+      isImageCreationModel,
+    ),
+    [remoteCanvasModels, selectedProject?.imageModel],
   );
   const selectedProjectImageReferenceLimit = imageReferenceInputLimit(
     selectedProject?.professionalMode ? OFFICIAL_IMAGE_MODEL : selectedProject?.imageModel,
@@ -1176,6 +1222,26 @@ export default function EcommerceSuitePage() {
   useEffect(() => {
     selectedProjectRef.current = selectedProject;
   }, [selectedProject]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadModelCatalog = async () => {
+      try {
+        const models = await fetchCanvasModels();
+        if (!cancelled) {
+          setRemoteCanvasModels(models);
+        }
+      } catch {
+        if (!cancelled) {
+          setRemoteCanvasModels([]);
+        }
+      }
+    };
+    void loadModelCatalog();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (!selectedProjectId || selectedProjectReferenceCount <= selectedProjectImageReferenceLimit) {
@@ -1274,6 +1340,20 @@ export default function EcommerceSuitePage() {
     selectedProjectRef.current = nextProject;
     setProjects((current) => current.map((item) => item.id === nextProject.id ? nextProject : item));
   }, []);
+
+  useEffect(() => {
+    if (!selectedProject || chatModelOptions.length === 0 || chatModelOptions.some((option) => option.value === selectedProject.chatModel)) {
+      return;
+    }
+    updateSelectedProject({ chatModel: chatModelOptions[0].value });
+  }, [chatModelOptions, selectedProject, updateSelectedProject]);
+
+  useEffect(() => {
+    if (!selectedProject || imageModelOptions.length === 0 || imageModelOptions.some((option) => option.value === selectedProject.imageModel)) {
+      return;
+    }
+    updateSelectedProject({ imageModel: imageModelOptions[0].value });
+  }, [imageModelOptions, selectedProject, updateSelectedProject]);
 
   const createProject = useCallback(async () => {
     const project = createCommerceSuiteProject();
@@ -1886,7 +1966,7 @@ export default function EcommerceSuitePage() {
               1,
               [{ role: "system", content: "你是电商套图视觉设计师，输出适合商品详情页的单张成品图。" }],
               "private",
-              pendingProject.imageResolution,
+              undefined,
               pendingProject.outputFormat,
               undefined,
               modelFields.toolOptions,
@@ -1908,7 +1988,7 @@ export default function EcommerceSuitePage() {
             1,
             [{ role: "system", content: "你是电商套图视觉设计师，输出适合商品详情页的单张成品图。" }],
             "private",
-            pendingProject.imageResolution,
+            undefined,
             pendingProject.outputFormat,
             undefined,
             modelFields.toolOptions,
@@ -2250,7 +2330,7 @@ export default function EcommerceSuitePage() {
         1,
         [{ role: "system", content: "你是电商套图排版设计师，输出适合商业使用的一张合成排版图。" }],
         "private",
-        proStudioCompositePayload?.image_resolution || project.imageResolution,
+        proStudioCompositePayload?.image_resolution,
         proStudioCompositePayload
           ? isImageOutputFormat(proStudioCompositePayload.output_format) ? proStudioCompositePayload.output_format : "png"
           : project.outputFormat,
