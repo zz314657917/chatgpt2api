@@ -2061,8 +2061,8 @@ func imageToolOptionsFromBody(body map[string]any) service.ImageToolOptions {
 	if partialImages := util.ToInt(body["partial_images"], 0); partialImages > 0 {
 		options.PartialImages = &partialImages
 	}
-	if _, ok := body["official_fallback"]; ok {
-		officialFallback := util.ToBool(body["official_fallback"])
+	if value, ok := body["official_fallback"]; ok && util.Clean(value) != "" {
+		officialFallback := util.ToBool(value)
 		options.OfficialFallback = &officialFallback
 	}
 	return options

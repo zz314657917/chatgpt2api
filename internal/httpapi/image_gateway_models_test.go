@@ -230,6 +230,23 @@ func TestImageGatewayModelsImageToolOptionsAcceptsMaskURLAlias(t *testing.T) {
 	}
 }
 
+func TestImageGatewayModelsImageToolOptionsIgnoresEmptyOfficialFallback(t *testing.T) {
+	empty := imageToolOptionsFromBody(map[string]any{"official_fallback": ""})
+	if empty.OfficialFallback != nil {
+		t.Fatalf("empty official_fallback = %#v, want nil", empty.OfficialFallback)
+	}
+
+	explicitFalse := imageToolOptionsFromBody(map[string]any{"official_fallback": "false"})
+	if explicitFalse.OfficialFallback == nil || *explicitFalse.OfficialFallback {
+		t.Fatalf("explicit false official_fallback = %#v, want false", explicitFalse.OfficialFallback)
+	}
+
+	explicitTrue := imageToolOptionsFromBody(map[string]any{"official_fallback": true})
+	if explicitTrue.OfficialFallback == nil || !*explicitTrue.OfficialFallback {
+		t.Fatalf("explicit true official_fallback = %#v, want true", explicitTrue.OfficialFallback)
+	}
+}
+
 func TestImageGatewayModelsReferenceLimits(t *testing.T) {
 	geminiRefs := make([]string, 15)
 	for i := range geminiRefs {
