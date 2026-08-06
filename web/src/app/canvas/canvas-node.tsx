@@ -3978,6 +3978,7 @@ function LlmNodeBody({
     .filter((entry) => entry.text);
   const upstreamImages = dedupeCanvasImageRefs(upstream.flatMap((node) => nodeInputImagesForCanvas(canvas, node)));
   const outputText = item.data?.output?.text || "";
+  const runError = item.data?.error || item.data?.last_run_error_detail || "";
   const splitCount = Math.max(1, Math.min(10, Math.round(Number(item.data?.split_count || 1)) || 1));
   const directGenerate = item.data?.direct_generate === true;
   const splitStatus = item.data?.prompt_split_status;
@@ -4108,6 +4109,12 @@ function LlmNodeBody({
               ) : null}
             </div>
             {outputCopyState === "failed" ? <div className="mt-2 text-xs font-semibold text-rose-600 dark:text-rose-300">复制失败，请手动选择文本。</div> : null}
+            {runError ? (
+              <div className="mt-3 flex items-start gap-2 rounded-lg border border-rose-300/60 bg-rose-50/70 px-3 py-2 text-xs font-semibold leading-5 text-rose-700 dark:border-rose-400/25 dark:bg-rose-950/20 dark:text-rose-200">
+                <CircleAlert className="mt-0.5 size-3.5 shrink-0" />
+                <span className="whitespace-pre-wrap break-words">{runError}</span>
+              </div>
+            ) : null}
           </DialogHeader>
           <div className="max-h-[min(66vh,580px)] overflow-y-auto p-5" onWheel={(event) => event.stopPropagation()}>
             {splitCount > 1 ? (
@@ -4160,6 +4167,7 @@ function LlmNodeBody({
             : "生成提示词"}
         </Button>
       )}
+      <CanvasRunInsight item={item} />
       <Dialog open={rerunDialogOpen} onOpenChange={setRerunDialogOpen}>
         <DialogContent className={cn("w-[min(92vw,440px)] rounded-2xl", canvasPanelClass)} data-node-interactive="true" onPointerDown={stopNodeInteraction}>
           <DialogHeader>

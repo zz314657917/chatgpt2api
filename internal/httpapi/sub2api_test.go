@@ -87,6 +87,41 @@ func TestSub2APIChatTaskResultIncludesResolvedModel(t *testing.T) {
 	}
 }
 
+func TestWriteCreationTaskSubmitErrorPreservesProtocolStatus(t *testing.T) {
+	tests := []struct {
+		name   string
+		err    error
+		status int
+		body   string
+	}{
+		{
+			name:   "protocol http error",
+			err:    protocol.HTTPError{Status: http.StatusPreconditionRequired, Message: "需要先绑定模型"},
+			status: http.StatusPreconditionRequired,
+			body:   "需要先绑定模型",
+		},
+		{
+			name:   "upstream image error",
+			err:    &protocol.ImageGenerationError{StatusCode: http.StatusBadGateway, Message: "对话上游账号池暂不可用"},
+			status: http.StatusBadGateway,
+			body:   "对话上游账号池暂不可用",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			res := httptest.NewRecorder()
+			writeCreationTaskSubmitError(res, tt.err)
+			if res.Code != tt.status {
+				t.Fatalf("status = %d, want %d; body = %s", res.Code, tt.status, res.Body.String())
+			}
+			if !strings.Contains(res.Body.String(), tt.body) {
+				t.Fatalf("body = %s, want %q", res.Body.String(), tt.body)
+			}
+		})
+	}
+}
+
 func TestSub2APIImageBatchResultIncludesResolvedModel(t *testing.T) {
 	result := sub2APIImageBatchResult(123, []map[string]any{{"url": "https://example.test/image.png"}}, util.ImageModelGPT)
 	if got := util.Clean(result["model"]); got != util.ImageModelGPT {

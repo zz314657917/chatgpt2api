@@ -2098,6 +2098,24 @@ func writeCreationTaskSubmitError(w http.ResponseWriter, err error) {
 		util.WriteError(w, http.StatusTooManyRequests, limitErr.Error())
 		return
 	}
+	var httpErr protocol.HTTPError
+	if errors.As(err, &httpErr) {
+		status := httpErr.Status
+		if status < 400 || status > 599 {
+			status = http.StatusBadRequest
+		}
+		util.WriteError(w, status, httpErr.Error())
+		return
+	}
+	var imageErr *protocol.ImageGenerationError
+	if errors.As(err, &imageErr) {
+		status := imageErr.StatusCode
+		if status < 400 || status > 599 {
+			status = http.StatusBadGateway
+		}
+		util.WriteError(w, status, imageErr.Error())
+		return
+	}
 	util.WriteError(w, http.StatusBadRequest, err.Error())
 }
 
