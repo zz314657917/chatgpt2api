@@ -1164,7 +1164,7 @@ func sub2APIImageSize(payload map[string]any) string {
 	size = protocol.NormalizeImageGenerationSize(size)
 	switch strings.ToLower(strings.TrimSpace(size)) {
 	case "8x8", "16x16", "32x32", "64x64", "128x128":
-		return "1:1"
+		return "1024x1024"
 	case "1:1":
 		return "1024x1024"
 	case "3:2":

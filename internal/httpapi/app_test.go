@@ -1111,7 +1111,11 @@ func TestSub2APIImagePayloadNormalizesRatioSizes(t *testing.T) {
 		{name: "cinematic ratio", payload: map[string]any{"prompt": "draw", "size": "21:9"}, want: "1792x768"},
 		{name: "requested size fallback", payload: map[string]any{"prompt": "draw", "requested_size": "1:1"}, want: "1024x1024"},
 		{name: "resolution preset", payload: map[string]any{"prompt": "draw", "image_resolution": "2k"}, want: "2048x2048"},
-		{name: "pixel icon size uses square upstream ratio", payload: map[string]any{"prompt": "draw", "size": "64x64"}, want: "1:1"},
+		{name: "8px icon uses supported upstream dimensions", payload: map[string]any{"prompt": "draw", "size": "8x8"}, want: "1024x1024"},
+		{name: "16px icon uses supported upstream dimensions", payload: map[string]any{"prompt": "draw", "size": "16x16"}, want: "1024x1024"},
+		{name: "32px icon uses supported upstream dimensions", payload: map[string]any{"prompt": "draw", "size": "32x32"}, want: "1024x1024"},
+		{name: "64px icon uses supported upstream dimensions", payload: map[string]any{"prompt": "draw", "size": "64x64"}, want: "1024x1024"},
+		{name: "128px icon uses supported upstream dimensions", payload: map[string]any{"prompt": "draw", "size": "128x128"}, want: "1024x1024"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
