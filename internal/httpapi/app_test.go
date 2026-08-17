@@ -4809,6 +4809,66 @@ func TestSub2APIVideoPayloadUsesApimartFields(t *testing.T) {
 	}
 }
 
+func TestSub2APIVideoPayloadSupportsSeedance25(t *testing.T) {
+	images := make([]protocol.UploadedImage, 31)
+	for index := range images {
+		images[index] = protocol.UploadedImage{ContentType: "image/png", Data: []byte(fmt.Sprintf("image-%d", index))}
+	}
+
+	payload, err := sub2APIVideoPayload(map[string]any{
+		"prompt":         "make a 30 second product video",
+		"model":          "seedance-2.5",
+		"duration":       30,
+		"aspect_ratio":   "adaptive",
+		"resolution":     "720p",
+		"generate_audio": false,
+		"output_format":  "MOV",
+		"images":         images,
+	})
+	if err != nil {
+		t.Fatalf("seedance-2.5 payload error = %v", err)
+	}
+	if payload["model"] != "seedance-2.5" || payload["duration"] != 30 || payload["size"] != "adaptive" || payload["resolution"] != "720p" || payload["generate_audio"] != false || payload["output_format"] != "mov" {
+		t.Fatalf("seedance-2.5 payload = %#v", payload)
+	}
+	if _, ok := payload["aspect_ratio"]; ok {
+		t.Fatalf("seedance-2.5 payload should use size instead of aspect_ratio: %#v", payload)
+	}
+	if urls := util.AsStringSlice(payload["image_urls"]); len(urls) != 30 {
+		t.Fatalf("seedance-2.5 image_urls count = %d, want 30", len(urls))
+	}
+
+	auto, err := sub2APIVideoPayload(map[string]any{
+		"prompt":         "choose the duration",
+		"model":          "seedance-2.5",
+		"duration":       -1,
+		"aspect_ratio":   "bad",
+		"resolution":     "1080p",
+		"generate_audio": true,
+		"output_format":  "avi",
+	})
+	if err != nil {
+		t.Fatalf("seedance-2.5 auto payload error = %v", err)
+	}
+	if auto["duration"] != -1 || auto["size"] != "adaptive" || auto["generate_audio"] != true {
+		t.Fatalf("seedance-2.5 auto payload = %#v", auto)
+	}
+	if _, ok := auto["resolution"]; ok {
+		t.Fatalf("seedance-2.5 should omit 1080p: %#v", auto)
+	}
+	if _, ok := auto["output_format"]; ok {
+		t.Fatalf("seedance-2.5 should omit invalid output format: %#v", auto)
+	}
+
+	clamped, err := sub2APIVideoPayload(map[string]any{"prompt": "short", "model": "seedance-2.5", "duration": 2})
+	if err != nil {
+		t.Fatalf("seedance-2.5 clamped payload error = %v", err)
+	}
+	if clamped["duration"] != 4 || clamped["size"] != "adaptive" || clamped["generate_audio"] != false {
+		t.Fatalf("seedance-2.5 clamped payload = %#v", clamped)
+	}
+}
+
 func TestSub2APIVideoPayloadDetectsModelSpecificFields(t *testing.T) {
 	klingV3, err := sub2APIVideoPayload(map[string]any{"prompt": "make", "model": "kling-v3-omni", "duration": 2, "aspect_ratio": "21:9", "resolution": "1080p", "generate_audio": true})
 	if err != nil {
@@ -4855,6 +4915,13 @@ func TestSub2APIVideoPayloadDetectsModelSpecificFields(t *testing.T) {
 	}
 	if veo["duration"] != 8 || veo["aspect_ratio"] != "16:9" || veo["resolution"] != "4k" || veo["generate_audio"] != nil || veo["audio"] != nil || veo["size"] != nil {
 		t.Fatalf("veo3.1-fast payload = %#v", veo)
+	}
+}
+
+func TestSub2APIVideoPayloadRejectsUnsupportedModel(t *testing.T) {
+	_, err := sub2APIVideoPayload(map[string]any{"prompt": "make", "model": "sora-2"})
+	if err == nil || !strings.Contains(err.Error(), "has no supported Sub2API parameter profile") {
+		t.Fatalf("unsupported video model error = %v", err)
 	}
 }
 
