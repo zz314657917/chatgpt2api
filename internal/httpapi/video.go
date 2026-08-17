@@ -30,11 +30,14 @@ type sub2APIVideoModelSpec struct {
 	allowedRatios                 []string
 	defaultRatio                  string
 	allowedResolutions            []string
+	allowedOutputFormats          []string
 	defaultMode                   string
 	modeFromResolution            map[string]string
 	audioField                    string
+	audioAlways                   bool
 	audioRequiresMode             string
 	audioConflictsWithMultiImages bool
+	allowAutoDuration             bool
 	promptEnhanceField            string
 	maxImages                     int
 }
@@ -67,7 +70,10 @@ func (a *App) runLoggedMediaTask(ctx context.Context, identity service.Identity,
 }
 
 func (a *App) callSub2APIVideoGeneration(ctx context.Context, payload map[string]any, binding service.Sub2APIBinding) (map[string]any, error) {
-	body := sub2APIVideoPayload(payload)
+	body, err := sub2APIVideoPayload(payload)
+	if err != nil {
+		return nil, err
+	}
 	result, err := a.postSub2APIJSON(ctx, binding, "videos/generations", body)
 	if err != nil {
 		return result, err
@@ -75,9 +81,12 @@ func (a *App) callSub2APIVideoGeneration(ctx context.Context, payload map[string
 	return a.formatSub2APIVideoResult(ctx, result, binding)
 }
 
-func sub2APIVideoPayload(payload map[string]any) map[string]any {
+func sub2APIVideoPayload(payload map[string]any) (map[string]any, error) {
 	model := firstNonEmpty(util.Clean(payload["model"]), util.ImageModelAuto)
-	spec := sub2APIVideoSpec(model)
+	spec, ok := sub2APIVideoSpec(model)
+	if !ok {
+		return nil, fmt.Errorf("video model %q has no supported Sub2API parameter profile", model)
+	}
 	imageURLs := sub2APIVideoImageURLs(payload, spec)
 	mode := normalizedVideoMode(payload["resolution"], spec)
 	if spec.audioConflictsWithMultiImages && len(imageURLs) > 1 && mode == "std" {
@@ -92,37 +101,48 @@ func sub2APIVideoPayload(payload map[string]any) map[string]any {
 	if resolution := normalizedVideoResolution(payload["resolution"], spec); resolution != "" {
 		body["resolution"] = resolution
 	}
+	if outputFormat := normalizedVideoOutputFormat(payload["output_format"], spec); outputFormat != "" {
+		body["output_format"] = outputFormat
+	}
 	if mode != "" {
 		body["mode"] = mode
 	}
 	if spec.promptEnhanceField != "" {
 		body[spec.promptEnhanceField] = util.ToBool(payload["enhance_prompt"])
 	}
-	if spec.audioField != "" && util.ToBool(payload["generate_audio"]) && (spec.audioRequiresMode == "" || mode == spec.audioRequiresMode) && (!spec.audioConflictsWithMultiImages || len(imageURLs) <= 1) {
-		body[spec.audioField] = true
+	if spec.audioField != "" {
+		generateAudio := util.ToBool(payload["generate_audio"])
+		canGenerateAudio := (spec.audioRequiresMode == "" || mode == spec.audioRequiresMode) && (!spec.audioConflictsWithMultiImages || len(imageURLs) <= 1)
+		if spec.audioAlways {
+			body[spec.audioField] = generateAudio && canGenerateAudio
+		} else if generateAudio && canGenerateAudio {
+			body[spec.audioField] = true
+		}
 	}
 	if len(imageURLs) > 0 {
 		body["image_urls"] = imageURLs
 	}
-	return body
+	return body, nil
 }
 
-func sub2APIVideoSpec(model string) sub2APIVideoModelSpec {
+func sub2APIVideoSpec(model string) (sub2APIVideoModelSpec, bool) {
 	switch strings.ToLower(strings.TrimSpace(model)) {
 	case "kling-v3-omni":
-		return sub2APIVideoModelSpec{ratioField: "aspect_ratio", durationMin: 3, durationMax: 15, allowedRatios: []string{"16:9", "9:16", "1:1"}, defaultRatio: "16:9", defaultMode: "std", modeFromResolution: map[string]string{"720p": "std", "1080p": "pro", "4k": "4k"}, audioField: "audio"}
+		return sub2APIVideoModelSpec{ratioField: "aspect_ratio", durationMin: 3, durationMax: 15, allowedRatios: []string{"16:9", "9:16", "1:1"}, defaultRatio: "16:9", defaultMode: "std", modeFromResolution: map[string]string{"720p": "std", "1080p": "pro", "4k": "4k"}, audioField: "audio"}, true
 	case "kling-v2-6":
-		return sub2APIVideoModelSpec{ratioField: "aspect_ratio", allowedDurations: []int{5, 10}, allowedRatios: []string{"16:9", "9:16", "1:1"}, defaultRatio: "16:9", defaultMode: "std", modeFromResolution: map[string]string{"720p": "std", "1080p": "pro"}, audioField: "audio", audioRequiresMode: "pro", audioConflictsWithMultiImages: true, maxImages: 2}
+		return sub2APIVideoModelSpec{ratioField: "aspect_ratio", allowedDurations: []int{5, 10}, allowedRatios: []string{"16:9", "9:16", "1:1"}, defaultRatio: "16:9", defaultMode: "std", modeFromResolution: map[string]string{"720p": "std", "1080p": "pro"}, audioField: "audio", audioRequiresMode: "pro", audioConflictsWithMultiImages: true, maxImages: 2}, true
 	case "wan2.7":
-		return sub2APIVideoModelSpec{ratioField: "size", durationMin: 2, durationMax: 15, allowedRatios: []string{"16:9", "9:16", "1:1", "4:3", "3:4"}, defaultRatio: "16:9", allowedResolutions: []string{"720P", "1080P"}, promptEnhanceField: "prompt_extend"}
+		return sub2APIVideoModelSpec{ratioField: "size", durationMin: 2, durationMax: 15, allowedRatios: []string{"16:9", "9:16", "1:1", "4:3", "3:4"}, defaultRatio: "16:9", allowedResolutions: []string{"720P", "1080P"}, promptEnhanceField: "prompt_extend"}, true
 	case "veo3.1-fast":
-		return sub2APIVideoModelSpec{ratioField: "aspect_ratio", durationFixed: 8, allowedRatios: []string{"16:9", "9:16"}, defaultRatio: "16:9", allowedResolutions: []string{"720p", "1080p", "4k"}, maxImages: 3}
+		return sub2APIVideoModelSpec{ratioField: "aspect_ratio", durationFixed: 8, allowedRatios: []string{"16:9", "9:16"}, defaultRatio: "16:9", allowedResolutions: []string{"720p", "1080p", "4k"}, maxImages: 3}, true
 	case "doubao-seedance-2.0":
-		return sub2APIVideoModelSpec{ratioField: "size", durationMin: 5, durationMax: 15, allowedRatios: []string{"16:9", "9:16", "1:1", "4:3", "3:4", "21:9", "adaptive"}, defaultRatio: "16:9", allowedResolutions: []string{"480p", "720p", "1080p"}, audioField: "generate_audio"}
+		return sub2APIVideoModelSpec{ratioField: "size", durationMin: 5, durationMax: 15, allowedRatios: []string{"16:9", "9:16", "1:1", "4:3", "3:4", "21:9", "adaptive"}, defaultRatio: "16:9", allowedResolutions: []string{"480p", "720p", "1080p"}, audioField: "generate_audio"}, true
 	case "doubao-seedance-2.0-fast":
-		return sub2APIVideoModelSpec{ratioField: "size", durationMin: 5, durationMax: 15, allowedRatios: []string{"16:9", "9:16", "1:1", "4:3", "3:4", "21:9", "adaptive"}, defaultRatio: "16:9", allowedResolutions: []string{"480p", "720p"}, audioField: "generate_audio"}
+		return sub2APIVideoModelSpec{ratioField: "size", durationMin: 5, durationMax: 15, allowedRatios: []string{"16:9", "9:16", "1:1", "4:3", "3:4", "21:9", "adaptive"}, defaultRatio: "16:9", allowedResolutions: []string{"480p", "720p"}, audioField: "generate_audio"}, true
+	case "seedance-2.5":
+		return sub2APIVideoModelSpec{ratioField: "size", durationMin: 4, durationMax: 30, allowAutoDuration: true, allowedRatios: []string{"16:9", "4:3", "1:1", "3:4", "9:16", "21:9", "adaptive"}, defaultRatio: "adaptive", allowedResolutions: []string{"480p", "720p"}, allowedOutputFormats: []string{"mp4", "mov"}, audioField: "generate_audio", audioAlways: true, maxImages: 30}, true
 	default:
-		return sub2APIVideoModelSpec{ratioField: "size", durationMin: 5, durationMax: 15, allowedRatios: []string{"16:9", "9:16", "1:1", "4:3", "3:4", "21:9", "adaptive"}, defaultRatio: "16:9", allowedResolutions: []string{"480p", "720p", "1080p"}, audioField: "generate_audio"}
+		return sub2APIVideoModelSpec{}, false
 	}
 }
 
@@ -139,6 +159,10 @@ func normalizedVideoDuration(value any, spec sub2APIVideoModelSpec) int {
 		}
 		return spec.allowedDurations[len(spec.allowedDurations)-1]
 	}
+	duration := util.ToInt(value, 5)
+	if spec.allowAutoDuration && duration == -1 {
+		return -1
+	}
 	minDuration := spec.durationMin
 	if minDuration <= 0 {
 		minDuration = 5
@@ -147,7 +171,6 @@ func normalizedVideoDuration(value any, spec sub2APIVideoModelSpec) int {
 	if maxDuration <= 0 {
 		maxDuration = minDuration
 	}
-	duration := util.ToInt(value, 5)
 	if duration < minDuration {
 		return minDuration
 	}
@@ -155,6 +178,19 @@ func normalizedVideoDuration(value any, spec sub2APIVideoModelSpec) int {
 		return maxDuration
 	}
 	return duration
+}
+
+func normalizedVideoOutputFormat(value any, spec sub2APIVideoModelSpec) string {
+	outputFormat := strings.ToLower(strings.TrimSpace(util.Clean(value)))
+	if outputFormat == "" {
+		return ""
+	}
+	for _, allowed := range spec.allowedOutputFormats {
+		if outputFormat == strings.ToLower(strings.TrimSpace(allowed)) {
+			return allowed
+		}
+	}
+	return ""
 }
 
 func normalizedVideoRatio(value any, spec sub2APIVideoModelSpec) string {

@@ -118,6 +118,9 @@ import {
   canvasImageLabel,
   canvasImagePreviewSource,
   canvasImageSource,
+  canvasVideoModelProfile,
+  canvasVideoRatioOptions,
+  canvasVideoResolutionOptions,
   canvasVideoSource,
   dedupeCanvasImageRefs,
   expandedCanvasImagesFromItem,
@@ -125,6 +128,10 @@ import {
   groupMemberItems,
   incomingItems,
   isActiveTask,
+  isCanvasVideoModelSupported,
+  normalizeCanvasVideoDuration,
+  normalizeCanvasVideoRatio,
+  normalizeCanvasVideoResolution,
   saveStateLabel,
   smartCanvasGroupCounts,
   smartCanvasRuns,
@@ -260,62 +267,6 @@ const canvasImageRatioOptions = [
   })),
 ] as const satisfies ReadonlyArray<ImageRatioPickerOption<Exclude<ImageAspectRatio, "" | "custom">>>;
 type CanvasImageRatioValue = "auto" | Exclude<ImageAspectRatio, "" | "custom">;
-const canvasVideoRatioOptions = [
-  { value: "16:9", label: "16:9" },
-  { value: "9:16", label: "9:16" },
-  { value: "1:1", label: "1:1" },
-  { value: "4:3", label: "4:3" },
-  { value: "3:4", label: "3:4" },
-  { value: "21:9", label: "21:9" },
-  { value: "adaptive", label: "自适应" },
-] as const;
-const canvasVideoResolutionOptions = [
-  { value: "auto", label: "自动" },
-  { value: "480p", label: "480p" },
-  { value: "720p", label: "720p" },
-  { value: "1080p", label: "1080p" },
-  { value: "4k", label: "4K" },
-] as const;
-type CanvasVideoRatioValue = (typeof canvasVideoRatioOptions)[number]["value"];
-type CanvasVideoResolutionValue = (typeof canvasVideoResolutionOptions)[number]["value"];
-type CanvasVideoModelProfile = {
-  ratios: readonly CanvasVideoRatioValue[];
-  resolutions: readonly CanvasVideoResolutionValue[];
-  minDuration: number;
-  maxDuration: number;
-};
-const canvasVideoModelProfiles: Record<string, CanvasVideoModelProfile> = {
-  klingV3Omni: {
-    ratios: ["16:9", "9:16", "1:1"],
-    resolutions: ["auto", "720p", "1080p", "4k"],
-    minDuration: 3,
-    maxDuration: 15,
-  },
-  klingV26: {
-    ratios: ["16:9", "9:16", "1:1"],
-    resolutions: ["auto", "720p", "1080p"],
-    minDuration: 5,
-    maxDuration: 10,
-  },
-  wan27: {
-    ratios: ["16:9", "9:16", "1:1", "4:3", "3:4"],
-    resolutions: ["auto", "720p", "1080p"],
-    minDuration: 2,
-    maxDuration: 15,
-  },
-  veo31Fast: {
-    ratios: ["16:9", "9:16"],
-    resolutions: ["auto", "720p", "1080p", "4k"],
-    minDuration: 8,
-    maxDuration: 8,
-  },
-  doubaoSeedance20: {
-    ratios: ["16:9", "9:16", "1:1", "4:3", "3:4", "21:9", "adaptive"],
-    resolutions: ["auto", "480p", "720p", "1080p"],
-    minDuration: 5,
-    maxDuration: 15,
-  },
-};
 const imageNodeTileMinWidth = 108;
 const imageNodeTileMinHeight = 82;
 const imageNodeMaxColumns = 6;
@@ -327,16 +278,6 @@ function nodeInputImagesForCanvas(canvas: SmartCanvasDocument, item: SmartCanvas
 
 function nodePromptForCanvas(canvas: SmartCanvasDocument, item: SmartCanvasItem) {
   return expandedCanvasPromptFromItem(canvas, item);
-}
-
-function canvasVideoModelProfile(model?: string) {
-  const normalized = String(model || "").trim().toLowerCase();
-  if (normalized === "kling-v3-omni") return canvasVideoModelProfiles.klingV3Omni;
-  if (normalized === "kling-v2-6") return canvasVideoModelProfiles.klingV26;
-  if (normalized === "wan2.7") return canvasVideoModelProfiles.wan27;
-  if (normalized === "veo3.1-fast") return canvasVideoModelProfiles.veo31Fast;
-  if (normalized === "doubao-seedance-2.0" || normalized === "doubao-seedance-2.0-fast") return canvasVideoModelProfiles.doubaoSeedance20;
-  return canvasVideoModelProfiles.doubaoSeedance20;
 }
 
 function smartCanvasNodeMenuItems(): SmartCanvasNodeMenuItem[] {
@@ -4891,16 +4832,22 @@ function VideoGeneratorNodeBody({
   const missingLlmReferenceImages = llmReferenceImages.filter((image) => !upstreamImageKeys.has(canvasImageKey(image)));
   const outputVideos = item.data?.output?.videos || [];
   const nodeRunning = isActiveTask(item.data?.status);
-  const modelValue = item.data?.model || (models[0]?.id ?? "");
-  const profile = canvasVideoModelProfile(modelValue);
-  const clampDuration = (next: number) => Math.max(profile.minDuration, Math.min(profile.maxDuration, Math.round(next) || profile.minDuration));
-  const duration = clampDuration(Number(item.data?.duration || profile.minDuration));
+  const supportedModels = models.filter((model) => isCanvasVideoModelSupported(model.id));
+  const modelValue = item.data?.model || (supportedModels[0]?.id ?? "");
+  const videoModelSupported = isCanvasVideoModelSupported(modelValue);
+  const profile = canvasVideoModelProfile(modelValue) || canvasVideoModelProfile("doubao-seedance-2.0")!;
+  const defaultDuration = profile.defaultDuration ?? profile.minDuration;
+  const autoDuration = profile.allowAutoDuration === true && Number(item.data?.duration) === -1;
+  const clampDuration = (next: number) => normalizeCanvasVideoDuration(modelValue, next) ?? defaultDuration;
+  const duration = autoDuration ? -1 : clampDuration(Number(item.data?.duration || defaultDuration));
   const setDuration = (next: number) => onUpdateData({ duration: clampDuration(next) });
   const durationStep = profile.minDuration === 5 && profile.maxDuration === 10 ? 5 : 1;
   const ratioOptions = canvasVideoRatioOptions.filter((option) => profile.ratios.includes(option.value));
   const resolutionOptions = canvasVideoResolutionOptions.filter((option) => profile.resolutions.includes(option.value));
+  const outputFormatOptions = profile.outputFormats || [];
+  const videoOutputFormat = outputFormatOptions.find((format) => format === item.data?.video_output_format) || outputFormatOptions[0];
   const resolutionValue = resolutionOptions.some((option) => option.value === item.data?.resolution) ? String(item.data?.resolution) : "auto";
-  const aspectRatioValue = ratioOptions.some((option) => option.value === item.data?.aspect_ratio) ? String(item.data?.aspect_ratio) : "16:9";
+  const aspectRatioValue = ratioOptions.some((option) => option.value === item.data?.aspect_ratio) ? String(item.data?.aspect_ratio) : (profile.defaultRatio || "16:9");
 
   return (
     <div className="h-[calc(100%_-_42px)] space-y-3 overflow-auto p-3" data-node-interactive="true" onPointerDown={stopNodeInteraction}>
@@ -4973,12 +4920,23 @@ function VideoGeneratorNodeBody({
             <SelectItem value="api">生成</SelectItem>
           </SelectContent>
         </Select>
-        <Select value={modelValue || undefined} onValueChange={(model) => onUpdateData({ model, duration: canvasVideoModelProfile(model).minDuration })}>
+        <Select value={modelValue || undefined} onValueChange={(model) => {
+          const selectedProfile = canvasVideoModelProfile(model);
+          if (selectedProfile) {
+            onUpdateData({
+              model,
+              duration: selectedProfile.defaultDuration ?? selectedProfile.minDuration,
+              aspect_ratio: normalizeCanvasVideoRatio(model, item.data?.aspect_ratio),
+              resolution: normalizeCanvasVideoResolution(model, item.data?.resolution),
+              video_output_format: selectedProfile.outputFormats?.[0],
+            });
+          }
+        }}>
           <SelectTrigger className={canvasSelectClass}>
             <SelectValue placeholder={models.length > 0 ? "视频模型" : "暂无视频模型"} />
           </SelectTrigger>
           <SelectContent>
-            {models.map((model) => (
+            {supportedModels.map((model) => (
               <SelectItem key={model.id} value={model.id} textValue={displayModelLabel(model.id, model.name || model.id)}>
                 <ModelProviderOptionLabel model={model.id} label={model.name || model.id} />
               </SelectItem>
@@ -4986,6 +4944,12 @@ function VideoGeneratorNodeBody({
           </SelectContent>
         </Select>
       </div>
+
+      {!videoModelSupported ? (
+        <div className="rounded-xl border border-amber-400/35 bg-amber-400/10 px-3 py-2 text-xs text-amber-800 dark:border-amber-300/25 dark:bg-amber-300/10 dark:text-amber-100">
+          {modelValue ? "该视频模型没有已验证的参数契约，请选择其他模型。" : "当前账号没有可用的已验证视频模型。"}
+        </div>
+      ) : null}
 
       <div className="grid grid-cols-[96px_1fr_88px] gap-2">
         <Select value={aspectRatioValue} onValueChange={(aspectRatio) => onUpdateData({ aspect_ratio: aspectRatio })}>
@@ -5012,25 +4976,29 @@ function VideoGeneratorNodeBody({
           <button
             type="button"
             className="flex items-center justify-center border-r border-border text-muted-foreground transition hover:bg-accent hover:text-foreground disabled:opacity-40 dark:border-slate-700"
-            disabled={duration <= profile.minDuration}
+            disabled={autoDuration || duration <= profile.minDuration}
             onClick={() => setDuration(duration - durationStep)}
             aria-label="减少时长"
           >
             <ChevronLeft className="size-3.5" />
           </button>
-          <Input
-            type="number"
-            min={profile.minDuration}
-            max={profile.maxDuration}
-            value={duration}
-            onChange={(event) => setDuration(Number(event.target.value) || 5)}
-            className="h-9 rounded-none border-0 bg-transparent p-0 text-center text-xs font-bold shadow-none focus-visible:ring-0"
-            aria-label="视频时长"
-          />
+          {autoDuration ? (
+            <div className="flex items-center justify-center text-[11px] font-bold">自动</div>
+          ) : (
+            <Input
+              type="number"
+              min={profile.minDuration}
+              max={profile.maxDuration}
+              value={duration}
+              onChange={(event) => setDuration(Number(event.target.value) || defaultDuration)}
+              className="h-9 rounded-none border-0 bg-transparent p-0 text-center text-xs font-bold shadow-none focus-visible:ring-0"
+              aria-label="视频时长"
+            />
+          )}
           <button
             type="button"
             className="flex items-center justify-center border-l border-border text-muted-foreground transition hover:bg-accent hover:text-foreground disabled:opacity-40 dark:border-slate-700"
-            disabled={duration >= profile.maxDuration}
+            disabled={autoDuration || duration >= profile.maxDuration}
             onClick={() => setDuration(duration + durationStep)}
             aria-label="增加时长"
           >
@@ -5039,7 +5007,18 @@ function VideoGeneratorNodeBody({
         </div>
       </div>
 
-      <div className="grid grid-cols-[1fr_1fr_1fr] gap-2">
+      {profile.allowAutoDuration ? (
+        <Button
+          type="button"
+          variant="outline"
+          className={cn("h-8 w-full rounded-xl text-xs font-bold", autoDuration ? "border-sky-300 bg-sky-50 text-sky-700 hover:bg-sky-100 dark:border-sky-400/30 dark:bg-sky-400/10 dark:text-sky-100" : canvasGhostButtonClass)}
+          onClick={() => onUpdateData({ duration: autoDuration ? defaultDuration : -1 })}
+        >
+          自动时长
+        </Button>
+      ) : null}
+
+      <div className={cn("grid gap-2", outputFormatOptions.length > 0 ? "grid-cols-[1fr_1fr_76px_1fr]" : "grid-cols-[1fr_1fr_1fr]")}>
         <Button
           type="button"
           variant="outline"
@@ -5056,6 +5035,18 @@ function VideoGeneratorNodeBody({
         >
           音频
         </Button>
+        {outputFormatOptions.length > 0 ? (
+          <Select value={videoOutputFormat} onValueChange={(outputFormat) => onUpdateData({ video_output_format: outputFormat as "mp4" | "mov" })}>
+            <SelectTrigger className={cn(canvasSelectClass, "px-2 text-[11px] font-bold uppercase")} aria-label="视频格式">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {outputFormatOptions.map((format) => (
+                <SelectItem key={format} value={format}>{format.toUpperCase()}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        ) : null}
         <div className={cn(canvasSelectClass, "inline-flex items-center justify-center text-xs font-bold")}>
           私有
         </div>
@@ -5077,7 +5068,7 @@ function VideoGeneratorNodeBody({
         <Button
           type="button"
           className="h-10 w-full rounded-xl bg-primary font-bold text-primary-foreground hover:bg-primary/90 dark:bg-slate-100 dark:text-slate-950 dark:hover:bg-white"
-          disabled={running || !mergedPromptPreview || models.length === 0}
+          disabled={running || !mergedPromptPreview || supportedModels.length === 0 || !videoModelSupported}
           onClick={onRunGenerator}
         >
           {running ? <LoaderCircle className="size-4 animate-spin" /> : <Clapperboard className="size-4" />}

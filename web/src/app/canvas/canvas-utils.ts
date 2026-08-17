@@ -59,6 +59,134 @@ export const DEFAULT_COMPOSER: SmartCanvasComposer = {
   mentionImages: [],
 };
 
+export const canvasVideoRatioOptions = [
+  { value: "16:9", label: "16:9" },
+  { value: "9:16", label: "9:16" },
+  { value: "1:1", label: "1:1" },
+  { value: "4:3", label: "4:3" },
+  { value: "3:4", label: "3:4" },
+  { value: "21:9", label: "21:9" },
+  { value: "adaptive", label: "自适应" },
+] as const;
+
+export const canvasVideoResolutionOptions = [
+  { value: "auto", label: "自动" },
+  { value: "480p", label: "480p" },
+  { value: "720p", label: "720p" },
+  { value: "1080p", label: "1080p" },
+  { value: "4k", label: "4K" },
+] as const;
+
+type CanvasVideoRatioValue = (typeof canvasVideoRatioOptions)[number]["value"];
+type CanvasVideoResolutionValue = (typeof canvasVideoResolutionOptions)[number]["value"];
+export type CanvasVideoOutputFormat = "mp4" | "mov";
+
+export type CanvasVideoModelProfile = {
+  ratios: readonly CanvasVideoRatioValue[];
+  resolutions: readonly CanvasVideoResolutionValue[];
+  minDuration: number;
+  maxDuration: number;
+  defaultDuration?: number;
+  defaultRatio?: CanvasVideoRatioValue;
+  allowAutoDuration?: boolean;
+  outputFormats?: readonly CanvasVideoOutputFormat[];
+};
+
+const canvasVideoModelProfiles: Record<string, CanvasVideoModelProfile> = {
+  "kling-v3-omni": {
+    ratios: ["16:9", "9:16", "1:1"],
+    resolutions: ["auto", "720p", "1080p", "4k"],
+    minDuration: 3,
+    maxDuration: 15,
+  },
+  "kling-v2-6": {
+    ratios: ["16:9", "9:16", "1:1"],
+    resolutions: ["auto", "720p", "1080p"],
+    minDuration: 5,
+    maxDuration: 10,
+  },
+  "wan2.7": {
+    ratios: ["16:9", "9:16", "1:1", "4:3", "3:4"],
+    resolutions: ["auto", "720p", "1080p"],
+    minDuration: 2,
+    maxDuration: 15,
+  },
+  "veo3.1-fast": {
+    ratios: ["16:9", "9:16"],
+    resolutions: ["auto", "720p", "1080p", "4k"],
+    minDuration: 8,
+    maxDuration: 8,
+  },
+  "doubao-seedance-2.0": {
+    ratios: ["16:9", "9:16", "1:1", "4:3", "3:4", "21:9", "adaptive"],
+    resolutions: ["auto", "480p", "720p", "1080p"],
+    minDuration: 5,
+    maxDuration: 15,
+  },
+  "doubao-seedance-2.0-fast": {
+    ratios: ["16:9", "9:16", "1:1", "4:3", "3:4", "21:9", "adaptive"],
+    resolutions: ["auto", "480p", "720p"],
+    minDuration: 5,
+    maxDuration: 15,
+  },
+  "seedance-2.5": {
+    ratios: ["16:9", "4:3", "1:1", "3:4", "9:16", "21:9", "adaptive"],
+    resolutions: ["auto", "480p", "720p"],
+    minDuration: 4,
+    maxDuration: 30,
+    defaultDuration: 5,
+    defaultRatio: "adaptive",
+    allowAutoDuration: true,
+    outputFormats: ["mp4", "mov"],
+  },
+};
+
+export function canvasVideoModelProfile(model?: string) {
+  return canvasVideoModelProfiles[String(model || "").trim().toLowerCase()];
+}
+
+export function isCanvasVideoModelSupported(model?: string) {
+  return Boolean(canvasVideoModelProfile(model));
+}
+
+export function normalizeCanvasVideoDuration(model: string | undefined, value: unknown) {
+  const profile = canvasVideoModelProfile(model);
+  const duration = Number(value);
+  if (!Number.isFinite(duration)) {
+    return undefined;
+  }
+  const rounded = Math.round(duration);
+  if (profile?.allowAutoDuration && rounded === -1) {
+    return -1;
+  }
+  const minDuration = profile?.minDuration ?? 5;
+  const maxDuration = profile?.maxDuration ?? 15;
+  return Math.max(minDuration, Math.min(maxDuration, rounded));
+}
+
+export function normalizeCanvasVideoRatio(model: string | undefined, value: unknown) {
+  const profile = canvasVideoModelProfile(model);
+  const ratio = String(value || "").trim().toLowerCase() as CanvasVideoRatioValue;
+  if (!profile) {
+    return ratio || "16:9";
+  }
+  return profile.ratios.includes(ratio) ? ratio : (profile.defaultRatio || profile.ratios[0] || "16:9");
+}
+
+export function normalizeCanvasVideoResolution(model: string | undefined, value: unknown) {
+  const profile = canvasVideoModelProfile(model);
+  const resolution = String(value || "").trim().toLowerCase() as CanvasVideoResolutionValue;
+  if (!profile) {
+    return resolution === "auto" ? "" : resolution;
+  }
+  return resolution !== "auto" && profile.resolutions.includes(resolution) ? resolution : "";
+}
+
+export function normalizeCanvasVideoOutputFormat(model: string | undefined, value: unknown) {
+  const format = String(value || "").trim().toLowerCase() as CanvasVideoOutputFormat;
+  return canvasVideoModelProfile(model)?.outputFormats?.includes(format) ? format : undefined;
+}
+
 export function normalizeCanvasImageResolution(value?: string) {
   return normalizeImageResolutionPreset(value);
 }
@@ -990,9 +1118,10 @@ function sanitizeSmartItemData(data?: SmartCanvasItemData): SmartCanvasItemData 
     moderation: cleanImageText(data.moderation),
     style: cleanImageText(data.style),
     partial_images: Number.isFinite(Number(data.partial_images)) ? Math.max(0, Math.floor(Number(data.partial_images))) : undefined,
-    duration: Number.isFinite(Number(data.duration)) ? Math.max(5, Math.min(15, Number(data.duration))) : undefined,
-    aspect_ratio: typeof data.aspect_ratio === "string" && data.aspect_ratio ? data.aspect_ratio : "16:9",
-    resolution: typeof data.resolution === "string" ? data.resolution : "",
+    duration: normalizeCanvasVideoDuration(model, data.duration),
+    aspect_ratio: normalizeCanvasVideoRatio(model, data.aspect_ratio),
+    resolution: normalizeCanvasVideoResolution(model, data.resolution),
+    video_output_format: normalizeCanvasVideoOutputFormat(model, data.video_output_format),
     enhance_prompt: data.enhance_prompt !== false,
     generate_audio: data.generate_audio === true,
     quality: typeof data.quality === "string" && data.quality ? data.quality : "auto",

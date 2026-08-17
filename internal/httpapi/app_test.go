@@ -4768,7 +4768,7 @@ func TestSub2APITaskStatusEndpoint(t *testing.T) {
 }
 
 func TestSub2APIVideoPayloadUsesApimartFields(t *testing.T) {
-	payload := sub2APIVideoPayload(map[string]any{
+	payload, err := sub2APIVideoPayload(map[string]any{
 		"prompt":         "make a video",
 		"model":          "doubao-seedance-2.0",
 		"duration":       60,
@@ -4779,6 +4779,9 @@ func TestSub2APIVideoPayloadUsesApimartFields(t *testing.T) {
 			{ContentType: "image/png", Data: []byte("png")},
 		},
 	})
+	if err != nil {
+		t.Fatalf("video payload error = %v", err)
+	}
 
 	if payload["duration"] != 15 || payload["size"] != "adaptive" || payload["generate_audio"] != true {
 		t.Fatalf("video payload = %#v", payload)
@@ -4797,19 +4800,25 @@ func TestSub2APIVideoPayloadUsesApimartFields(t *testing.T) {
 		t.Fatalf("video image_urls = %#v", payload["image_urls"])
 	}
 
-	clamped := sub2APIVideoPayload(map[string]any{"prompt": "make a video", "duration": 1, "aspect_ratio": "bad", "resolution": "1080p"})
+	clamped, err := sub2APIVideoPayload(map[string]any{"prompt": "make a video", "model": "doubao-seedance-2.0", "duration": 1, "aspect_ratio": "bad", "resolution": "1080p"})
+	if err != nil {
+		t.Fatalf("clamped video payload error = %v", err)
+	}
 	if clamped["duration"] != 5 || clamped["size"] != "16:9" || clamped["resolution"] != "1080p" {
 		t.Fatalf("clamped video payload = %#v", clamped)
 	}
 }
 
 func TestSub2APIVideoPayloadDetectsModelSpecificFields(t *testing.T) {
-	klingV3 := sub2APIVideoPayload(map[string]any{"prompt": "make", "model": "kling-v3-omni", "duration": 2, "aspect_ratio": "21:9", "resolution": "1080p", "generate_audio": true})
+	klingV3, err := sub2APIVideoPayload(map[string]any{"prompt": "make", "model": "kling-v3-omni", "duration": 2, "aspect_ratio": "21:9", "resolution": "1080p", "generate_audio": true})
+	if err != nil {
+		t.Fatalf("kling-v3 payload error = %v", err)
+	}
 	if klingV3["duration"] != 3 || klingV3["aspect_ratio"] != "16:9" || klingV3["mode"] != "pro" || klingV3["audio"] != true || klingV3["size"] != nil {
 		t.Fatalf("kling-v3 payload = %#v", klingV3)
 	}
 
-	klingV26 := sub2APIVideoPayload(map[string]any{
+	klingV26, err := sub2APIVideoPayload(map[string]any{
 		"prompt":         "make",
 		"model":          "kling-v2-6",
 		"duration":       7,
@@ -4822,6 +4831,9 @@ func TestSub2APIVideoPayloadDetectsModelSpecificFields(t *testing.T) {
 			{ContentType: "image/png", Data: []byte("ignored")},
 		},
 	})
+	if err != nil {
+		t.Fatalf("kling-v2-6 payload error = %v", err)
+	}
 	if klingV26["duration"] != 10 || klingV26["aspect_ratio"] != "1:1" || klingV26["mode"] != "pro" || klingV26["audio"] != nil {
 		t.Fatalf("kling-v2-6 payload = %#v", klingV26)
 	}
@@ -4829,12 +4841,18 @@ func TestSub2APIVideoPayloadDetectsModelSpecificFields(t *testing.T) {
 		t.Fatalf("kling-v2-6 image_urls = %#v", klingV26["image_urls"])
 	}
 
-	wan := sub2APIVideoPayload(map[string]any{"prompt": "make", "model": "wan2.7", "duration": 1, "aspect_ratio": "adaptive", "resolution": "720p", "enhance_prompt": true, "generate_audio": true})
+	wan, err := sub2APIVideoPayload(map[string]any{"prompt": "make", "model": "wan2.7", "duration": 1, "aspect_ratio": "adaptive", "resolution": "720p", "enhance_prompt": true, "generate_audio": true})
+	if err != nil {
+		t.Fatalf("wan2.7 payload error = %v", err)
+	}
 	if wan["duration"] != 2 || wan["size"] != "16:9" || wan["resolution"] != "720P" || wan["prompt_extend"] != true || wan["generate_audio"] != nil || wan["audio"] != nil {
 		t.Fatalf("wan2.7 payload = %#v", wan)
 	}
 
-	veo := sub2APIVideoPayload(map[string]any{"prompt": "make", "model": "veo3.1-fast", "duration": 15, "aspect_ratio": "1:1", "resolution": "4k", "generate_audio": true})
+	veo, err := sub2APIVideoPayload(map[string]any{"prompt": "make", "model": "veo3.1-fast", "duration": 15, "aspect_ratio": "1:1", "resolution": "4k", "generate_audio": true})
+	if err != nil {
+		t.Fatalf("veo3.1-fast payload error = %v", err)
+	}
 	if veo["duration"] != 8 || veo["aspect_ratio"] != "16:9" || veo["resolution"] != "4k" || veo["generate_audio"] != nil || veo["audio"] != nil || veo["size"] != nil {
 		t.Fatalf("veo3.1-fast payload = %#v", veo)
 	}

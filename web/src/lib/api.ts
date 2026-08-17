@@ -1386,6 +1386,7 @@ export type CanvasNodeData = {
   image_url?: string;
   image_path?: string;
   output_format?: ImageOutputFormat;
+  video_output_format?: "mp4" | "mov";
   output_compression?: number;
   image_model_settings?: ImageModelSettingsState;
   professional_mode?: boolean;
@@ -2366,6 +2367,7 @@ export async function createVideoGenerationTask(
   options: {
     enhancePrompt?: boolean;
     generateAudio?: boolean;
+    outputFormat?: "mp4" | "mov";
   } = {},
 ) {
   return httpRequest<CreationTask>("/api/creation-tasks/video-generations", {
@@ -2380,6 +2382,7 @@ export async function createVideoGenerationTask(
       ...(resolution ? { resolution } : {}),
       enhance_prompt: options.enhancePrompt === true,
       generate_audio: options.generateAudio === true,
+      ...(options.outputFormat ? { output_format: options.outputFormat } : {}),
       visibility,
     },
   });

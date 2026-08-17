@@ -115,6 +115,7 @@ import {
   expandedCanvasPromptFromItem,
   imageFilesFromList,
   incomingItems,
+  isCanvasVideoModelSupported,
   isActiveTask,
   managedImagesToRefs,
   mentionCandidateImages,
@@ -4816,7 +4817,10 @@ export function useSmartCanvasController() {
       const clientTaskId = uniqueTaskId("smart-canvas-node");
       let task: CreationTask;
       if (generator.type === "video_generation") {
-        const videoModel = generator.data?.model || models.video[0]?.id || "";
+        const videoModel = generator.data?.model || models.video.find((model) => isCanvasVideoModelSupported(model.id))?.id || "";
+        if (!isCanvasVideoModelSupported(videoModel)) {
+          throw new Error("当前视频模型没有已验证的参数契约，请选择受支持的视频模型");
+        }
         task = await createVideoGenerationTask(
           uniqueTaskId("smart-canvas-video"),
           submittedPrompt,
@@ -4829,6 +4833,7 @@ export function useSmartCanvasController() {
           {
             enhancePrompt: generator.data?.enhance_prompt !== false,
             generateAudio: generator.data?.generate_audio === true,
+            outputFormat: generator.data?.video_output_format,
           },
         );
       } else if (editInputRefs.length > 0) {

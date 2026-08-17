@@ -50,6 +50,7 @@ export type SmartCanvasItemData = {
   image_resolution?: string;
   image_resolution_user_modified?: boolean;
   output_format?: "png" | "jpeg" | "webp";
+  video_output_format?: "mp4" | "mov";
   output_compression?: number;
   image_model_settings?: ImageModelSettingsState;
   professional_mode?: boolean;
