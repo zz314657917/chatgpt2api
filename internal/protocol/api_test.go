@@ -2062,19 +2062,44 @@ func TestHandleImageGenerationsAllowsTenSequentialTaskOutputs(t *testing.T) {
 	}
 }
 
-func TestHandleImageGenerationsRejectsBlockedPrompt(t *testing.T) {
-	engine := &Engine{}
-	_, _, err := engine.HandleImageGenerations(context.Background(), map[string]any{
-		"prompt": "生成血腥肢解的暴力画面",
+func TestHandleImageGenerationsAllowsLocalPolicyKeywords(t *testing.T) {
+	engine := &Engine{
+		ImageTokenProvider: func(context.Context) (string, error) { return "test-token", nil },
+		ImageClientFactory: func(string) *backend.Client { return nil },
+		StreamImageOutputsFunc: func(ctx context.Context, client *backend.Client, request ConversationRequest, index, total int) (<-chan ImageOutput, <-chan error) {
+			out := make(chan ImageOutput, 1)
+			errCh := make(chan error, 1)
+			out <- ImageOutput{Kind: "result", Model: request.Model, Index: index, Total: total, Created: time.Now().Unix(), Data: []map[string]any{{"url": "https://example.test/image.png"}}}
+			close(out)
+			errCh <- nil
+			close(errCh)
+			return out, errCh
+		},
+	}
+	result, _, err := engine.HandleImageGenerations(context.Background(), map[string]any{
+		"prompt": "premium cultural creative desktop ornament",
 		"model":  "gpt-image-2",
 		"n":      1,
 	})
-	var policyErr service.ImageContentPolicyError
-	if !errors.As(err, &policyErr) {
-		t.Fatalf("HandleImageGenerations() error = %T %v, want ImageContentPolicyError", err, err)
+	if err != nil {
+		t.Fatalf("HandleImageGenerations() error = %v", err)
 	}
-	if policyErr.Category != "graphic_violence" {
-		t.Fatalf("policy category = %q", policyErr.Category)
+	if len(util.AsMapSlice(result["data"])) != 1 {
+		t.Fatalf("data = %#v, want one upstream result", result["data"])
+	}
+}
+
+func TestResponseImageGenerationRequestAllowsLocalPolicyKeywords(t *testing.T) {
+	request, prompt, err := ResponseImageGenerationRequest(map[string]any{
+		"model": "gpt-image-2",
+		"input": "premium cultural creative desktop ornament",
+		"tools": []any{map[string]any{"type": "image_generation"}},
+	}, "admin", nil)
+	if err != nil {
+		t.Fatalf("ResponseImageGenerationRequest() error = %v", err)
+	}
+	if prompt != "premium cultural creative desktop ornament" || request.Prompt != prompt {
+		t.Fatalf("prompt/request = %q/%q", prompt, request.Prompt)
 	}
 }
 

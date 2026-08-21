@@ -708,22 +708,41 @@ func TestImageTaskServiceRejectsBlankPromptBeforeQueueing(t *testing.T) {
 	}
 }
 
-func TestImageTaskServiceRejectsBlockedImagePromptBeforeQueueing(t *testing.T) {
-	svc := newTestImageTaskService(t, failingImageTaskHandler, failingImageTaskHandler, failingImageTaskHandler, func() int { return 30 })
+func TestImageTaskServiceQueuesLocalPolicyKeywords(t *testing.T) {
+	handler := func(_ context.Context, _ Identity, payload map[string]any) (map[string]any, error) {
+		if payload["duration"] != nil {
+			return map[string]any{"data": []map[string]any{{"video_url": "https://example.test/video.mp4"}}}, nil
+		}
+		return map[string]any{"data": []map[string]any{{"url": "https://example.test/image.png"}}}, nil
+	}
+	svc := newTestImageTaskService(t, handler, handler, handler, func() int { return 30 })
+	svc.SetVideoHandler(handler)
 	identity := Identity{ID: "alice", Name: "Alice", Role: "user"}
+	const prompt = "premium cultural creative desktop ornament"
 
-	_, err := svc.SubmitGeneration(context.Background(), identity, "task-policy", "生成真人去衣性感写真", "gpt-image-2", "1024x1024", "high", "https://base.test", 1, nil)
-	var policyErr ImageContentPolicyError
-	if !errors.As(err, &policyErr) {
-		t.Fatalf("SubmitGeneration() error = %T %v, want ImageContentPolicyError", err, err)
-	}
-	if policyErr.Category != "adult_private_body" {
-		t.Fatalf("policy category = %q", policyErr.Category)
+	tests := map[string]func() (map[string]any, error){
+		"generation": func() (map[string]any, error) {
+			return svc.SubmitGeneration(context.Background(), identity, "task-policy-generation", prompt, "gpt-image-2", "1024x1024", "high", "https://base.test", 1, nil)
+		},
+		"edit": func() (map[string]any, error) {
+			return svc.SubmitEdit(context.Background(), identity, "task-policy-edit", prompt, "gpt-image-2", "1024x1024", "high", "https://base.test", []any{"image"}, 1, nil)
+		},
+		"chat": func() (map[string]any, error) {
+			return svc.SubmitChat(context.Background(), identity, "task-policy-chat", prompt, "gpt-image-2", []map[string]any{{"role": "user", "content": prompt}}, true)
+		},
+		"video": func() (map[string]any, error) {
+			return svc.SubmitVideo(context.Background(), identity, "task-policy-video", prompt, "seedance", nil, VideoGenerationOptions{})
+		},
 	}
 
-	got := svc.ListTasks(identity, nil)
-	if len(got["items"].([]map[string]any)) != 0 {
-		t.Fatalf("blocked prompt should not queue tasks: %#v", got)
+	for name, submit := range tests {
+		t.Run(name, func(t *testing.T) {
+			task, err := submit()
+			if err != nil {
+				t.Fatalf("Submit() error = %v", err)
+			}
+			waitForTaskStatus(t, svc, identity, task["id"].(string), TaskStatusSuccess)
+		})
 	}
 }
 

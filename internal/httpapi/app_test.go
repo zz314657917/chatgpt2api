@@ -875,7 +875,7 @@ func TestCreationTaskRejectsPublicImageVisibility(t *testing.T) {
 	}
 }
 
-func TestCreationTaskRejectsBlockedImagePrompt(t *testing.T) {
+func TestCreationTaskQueuesLocalPolicyKeywords(t *testing.T) {
 	app := newTestApp(t)
 	defer app.Close()
 
@@ -888,16 +888,15 @@ func TestCreationTaskRejectsBlockedImagePrompt(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer "+rawKey)
 	res := httptest.NewRecorder()
 	app.Handler().ServeHTTP(res, req)
-	if res.Code != http.StatusBadRequest {
-		t.Fatalf("blocked creation task status = %d body = %s", res.Code, res.Body.String())
+	if res.Code != http.StatusOK {
+		t.Fatalf("creation task status = %d body = %s", res.Code, res.Body.String())
 	}
 	var body map[string]any
 	if err := json.Unmarshal(res.Body.Bytes(), &body); err != nil {
-		t.Fatalf("blocked response json: %v", err)
+		t.Fatalf("creation task response json: %v", err)
 	}
-	errorBody := util.StringMap(body["error"])
-	if errorBody["code"] != "content_policy_violation" {
-		t.Fatalf("blocked response = %#v", body)
+	if body["id"] != "blocked-policy" || body["status"] != service.TaskStatusQueued {
+		t.Fatalf("creation task = %#v", body)
 	}
 
 	req = httptest.NewRequest(http.MethodGet, "/api/creation-tasks?ids=blocked-policy", nil)
@@ -910,8 +909,8 @@ func TestCreationTaskRejectsBlockedImagePrompt(t *testing.T) {
 	if err := json.Unmarshal(res.Body.Bytes(), &body); err != nil {
 		t.Fatalf("list response json: %v", err)
 	}
-	if items := util.AsMapSlice(body["items"]); len(items) != 0 {
-		t.Fatalf("blocked prompt should not create task: %#v", body)
+	if items := util.AsMapSlice(body["items"]); len(items) != 1 || items[0]["id"] != "blocked-policy" {
+		t.Fatalf("local policy keywords should create one task: %#v", body)
 	}
 }
 
@@ -1505,7 +1504,7 @@ func TestDirectImageGenerationUsesCreationLimiter(t *testing.T) {
 	}
 }
 
-func TestDirectImageGenerationRejectsBlockedPrompt(t *testing.T) {
+func TestDirectImageGenerationPassesLocalPolicyKeywordsToExistingExecution(t *testing.T) {
 	app := newTestApp(t)
 	defer app.Close()
 	_, rawKey, err := app.auth.CreateAPIKey(service.AuthRoleUser, "image-user", service.AuthOwner{})
@@ -1517,16 +1516,16 @@ func TestDirectImageGenerationRejectsBlockedPrompt(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer "+rawKey)
 	res := httptest.NewRecorder()
 	app.Handler().ServeHTTP(res, req)
-	if res.Code != http.StatusBadRequest {
-		t.Fatalf("blocked image generation status = %d body = %s", res.Code, res.Body.String())
+	if res.Code != http.StatusBadGateway {
+		t.Fatalf("direct image generation status = %d body = %s", res.Code, res.Body.String())
 	}
 	var body map[string]any
 	if err := json.Unmarshal(res.Body.Bytes(), &body); err != nil {
-		t.Fatalf("blocked response json: %v", err)
+		t.Fatalf("direct response json: %v", err)
 	}
 	errorBody := util.StringMap(body["error"])
-	if errorBody["code"] != "content_policy_violation" || errorBody["type"] != "invalid_request_error" {
-		t.Fatalf("blocked response = %#v", body)
+	if errorBody["code"] != "upstream_error" {
+		t.Fatalf("direct response = %#v", body)
 	}
 }
 
@@ -1756,7 +1755,7 @@ func TestV1ErrorsUseOpenAIEnvelope(t *testing.T) {
 	}
 }
 
-func TestResponsesImageGenerationRejectsBlockedPrompt(t *testing.T) {
+func TestResponsesImageGenerationPassesLocalPolicyKeywordsToExistingExecution(t *testing.T) {
 	app := newTestApp(t)
 	defer app.Close()
 	_, rawKey, err := app.auth.CreateAPIKey(service.AuthRoleUser, "responses-user", service.AuthOwner{})
@@ -1769,16 +1768,16 @@ func TestResponsesImageGenerationRejectsBlockedPrompt(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer "+rawKey)
 	res := httptest.NewRecorder()
 	app.Handler().ServeHTTP(res, req)
-	if res.Code != http.StatusBadRequest {
-		t.Fatalf("blocked responses image status = %d body = %s", res.Code, res.Body.String())
+	if res.Code != http.StatusBadGateway {
+		t.Fatalf("responses image status = %d body = %s", res.Code, res.Body.String())
 	}
 	var response map[string]any
 	if err := json.Unmarshal(res.Body.Bytes(), &response); err != nil {
-		t.Fatalf("blocked response json: %v", err)
+		t.Fatalf("responses image json: %v", err)
 	}
 	errorBody := util.StringMap(response["error"])
-	if errorBody["code"] != "content_policy_violation" {
-		t.Fatalf("blocked response = %#v", response)
+	if errorBody["code"] != "upstream_error" {
+		t.Fatalf("responses image = %#v", response)
 	}
 }
 
@@ -2883,9 +2882,11 @@ func TestSocialProjectGenerateCardsCancelsSubmittedTasksOnPartialFailure(t *test
 		failingHTTPImageTaskHandler,
 		failingHTTPImageTaskHandler,
 		func() int { return 30 },
+		nil,
+		func() int { return 1 },
 	)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/social-projects", strings.NewReader(`{"platform":"xhs","topic":"partial","cards":[{"title":"A","visual_mode":"ai","image_prompt":"draw a"},{"title":"B","visual_mode":"ai","image_prompt":"生成血腥肢解的暴力画面"}]}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/social-projects", strings.NewReader(`{"platform":"xhs","topic":"partial","cards":[{"title":"A","visual_mode":"ai","image_prompt":"draw a"},{"title":"B","visual_mode":"ai","image_prompt":"draw b"}]}`))
 	req.Header.Set("Authorization", "Bearer "+rawKey)
 	res := httptest.NewRecorder()
 	app.Handler().ServeHTTP(res, req)
@@ -2905,7 +2906,7 @@ func TestSocialProjectGenerateCardsCancelsSubmittedTasksOnPartialFailure(t *test
 	req.Header.Set("Authorization", "Bearer "+rawKey)
 	res = httptest.NewRecorder()
 	app.Handler().ServeHTTP(res, req)
-	if res.Code != http.StatusBadRequest {
+	if res.Code != http.StatusTooManyRequests {
 		t.Fatalf("generate cards status = %d body = %s", res.Code, res.Body.String())
 	}
 	var failed map[string]any

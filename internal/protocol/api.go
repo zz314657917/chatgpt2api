@@ -103,9 +103,6 @@ func (e *Engine) HandleImageGenerations(ctx context.Context, body map[string]any
 	if prompt == "" {
 		return nil, nil, HTTPError{Status: 400, Message: "prompt is required"}
 	}
-	if err := service.ValidateImageContentPolicy(prompt, body["messages"]); err != nil {
-		return nil, nil, err
-	}
 	model := firstNonEmpty(util.Clean(body["model"]), util.ImageModelAuto)
 	sequentialOutputs := util.ToBool(body[ImageOutputSequentialPayloadKey])
 	n, err := parseImageCount(body["n"], imageCountLimit(sequentialOutputs))
@@ -142,9 +139,6 @@ func (e *Engine) HandleImageEdits(ctx context.Context, body map[string]any, imag
 	encoded := EncodeImages(images)
 	if len(encoded) == 0 {
 		return nil, nil, &ImageGenerationError{Message: "image is required", StatusCode: 502, Type: "server_error", Code: "upstream_error"}
-	}
-	if err := service.ValidateImageContentPolicy(util.Clean(body["prompt"]), body["messages"]); err != nil {
-		return nil, nil, err
 	}
 	size := util.Clean(body["size"])
 	request := ConversationRequest{
@@ -882,9 +876,6 @@ func (e *Engine) ImageChatResponse(ctx context.Context, body map[string]any) (ma
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := service.ValidateImageContentPolicy(prompt, messages); err != nil {
-		return nil, nil, err
-	}
 	size := util.Clean(body["size"])
 	request := ConversationRequest{Prompt: prompt, Model: model, Messages: messages, N: n, Size: size, Quality: util.Clean(body["quality"]), Background: util.Clean(body["background"]), Moderation: util.Clean(body["moderation"]), Style: util.Clean(body["style"]), ResponseFormat: "b64_json", OwnerID: util.Clean(body["owner_id"]), OwnerName: util.Clean(body["owner_name"]), Images: EncodeImages(images), InputImageMask: responseImageMask(firstNonNil(body["input_image_mask"], body["mask_url"])), AcquireImageOutputSlot: imageOutputSlotAcquirer(body), ChargeImageOutput: imageOutputCharger(body)}
 	if partialImages, ok := normalizedPositiveInt(body["partial_images"]); ok {
@@ -908,10 +899,6 @@ func (e *Engine) ImageChatEvents(ctx context.Context, body map[string]any) (<-ch
 		defer close(errOut)
 		model, prompt, n, images, messages, err := ChatImageArgs(body)
 		if err != nil {
-			errOut <- err
-			return
-		}
-		if err := service.ValidateImageContentPolicy(prompt, messages); err != nil {
 			errOut <- err
 			return
 		}
@@ -1256,9 +1243,6 @@ func ResponseImageGenerationRequest(body map[string]any, scope string, previous 
 	prompt := LatestUserPrompt(messages)
 	if prompt == "" {
 		return ConversationRequest{}, "", HTTPError{Status: 400, Message: "input text is required"}
-	}
-	if err := service.ValidateImageContentPolicy(prompt, messages); err != nil {
-		return ConversationRequest{}, "", err
 	}
 	n, err := ParseImageCount(body["n"])
 	if err != nil {
