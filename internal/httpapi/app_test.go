@@ -3633,7 +3633,7 @@ func TestSub2APIImageCreationTaskUsesOfficialFallbackAndPollsTask(t *testing.T) 
 	}
 }
 
-func TestSub2APITaskStatusCreditsCostBecomesExternalBillingCost(t *testing.T) {
+func TestSub2APITaskStatusCreditsCostTakesPriorityForExternalBilling(t *testing.T) {
 	tests := []struct {
 		name   string
 		result map[string]any
@@ -3645,18 +3645,18 @@ func TestSub2APITaskStatusCreditsCostBecomesExternalBillingCost(t *testing.T) {
 			want:   0.11055,
 		},
 		{
-			name:   "top level cost with credits unit",
-			result: map[string]any{"status": "completed", "cost": 0.86816, "unit": "credits"},
-			want:   0.086816,
+			name:   "top level credits cost wins over cost",
+			result: map[string]any{"status": "completed", "cost": 99.0, "credits_cost": 1.5},
+			want:   0.15,
 		},
 		{
-			name: "nested billing price with credits amount unit",
+			name: "nested credits cost wins over top level cost",
 			result: map[string]any{
 				"status": "completed",
+				"cost":   99.0,
 				"data": map[string]any{
 					"billing": map[string]any{
-						"price":       "0.86816",
-						"amount_unit": "credits",
+						"credits_cost": "0.86816",
 					},
 				},
 			},

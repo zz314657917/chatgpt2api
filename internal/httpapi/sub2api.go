@@ -2056,7 +2056,7 @@ func (a *App) formatSub2APIImageResult(ctx context.Context, result map[string]an
 }
 
 func sub2APITaskCost(result map[string]any) (float64, bool) {
-	for _, container := range []map[string]any{
+	containers := []map[string]any{
 		result,
 		util.StringMap(result["data"]),
 		util.StringMap(result["result"]),
@@ -2066,28 +2066,18 @@ func sub2APITaskCost(result map[string]any) (float64, bool) {
 		util.StringMap(util.StringMap(result["data"])["usage"]),
 		util.StringMap(util.StringMap(result["result"])["billing"]),
 		util.StringMap(util.StringMap(result["result"])["usage"]),
-	} {
-		if unit := sub2APICostAmountUnit(container); unit == "credits" || unit == "credit" {
-			for _, key := range []string{"credits_cost", "credit_cost", "credits", "used_credits", "total_credits", "price_credits", "credits_used", "cost", "price", "amount", "charged_amount", "consumed_amount", "fee"} {
-				if creditsCost, ok := sub2APINumber(container[key]); ok && creditsCost > 0 {
-					return creditsCost / 10, true
-				}
-			}
+	}
+	for _, container := range containers {
+		if creditsCost, ok := sub2APINumber(container["credits_cost"]); ok && creditsCost > 0 {
+			return creditsCost / 10, true
 		}
+	}
+	for _, container := range containers {
 		if cost, ok := sub2APINumber(container["cost"]); ok && cost > 0 {
 			return cost, true
 		}
-		for _, key := range []string{"credits_cost", "credit_cost", "credits", "used_credits", "total_credits", "price_credits", "credits_used"} {
-			if creditsCost, ok := sub2APINumber(container[key]); ok && creditsCost > 0 {
-				return creditsCost / 10, true
-			}
-		}
 	}
 	return 0, false
-}
-
-func sub2APICostAmountUnit(container map[string]any) string {
-	return strings.ToLower(strings.TrimSpace(util.Clean(firstNonNil(container["unit"], container["amount_unit"], container["currency"]))))
 }
 
 func sub2APIBillingAmount(value any) float64 {
