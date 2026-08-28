@@ -78,6 +78,7 @@ import {
   imageReferenceInputLimit,
   isHiddenImageModelOption,
   isImageCreationModel,
+  isGrokImagineImageModel,
   isOfficialImageModel,
   uploadCreationTaskReferenceImage,
   updateManagedImageCollectionItems,
@@ -91,7 +92,15 @@ import { fetchAuthenticatedImageBlob } from "@/lib/authenticated-image";
 import { ImageModelSettingsButton } from "@/components/image-model-settings-button";
 import { imageExtension, downloadImageFile } from "@/lib/image-download";
 import { getManagedImagePreviewUrlFromPath, getManagedImageUrlFromPath } from "@/lib/image-path";
-import { IMAGE_QUALITY_OPTIONS, isImageOutputFormat, isImageQuality } from "@/lib/image-parameters";
+import {
+  GROK_IMAGE_QUALITY_OPTIONS,
+  IMAGE_QUALITY_OPTIONS,
+  isImageOutputFormat,
+  isImageQuality,
+  normalizeGrokImageAspectRatio,
+  normalizeGrokImageQuality,
+  normalizeGrokImageResolution,
+} from "@/lib/image-parameters";
 import { imageModelHasSettings, imageModelSettingsToTaskFields } from "@/lib/image-model-settings";
 import { displayModelLabel } from "@/lib/model-display";
 import { useAppMeta } from "@/lib/use-app-meta";
@@ -1954,19 +1963,29 @@ export default function EcommerceSuitePage() {
           }
           const prompt = buildGenerationPrompt(pendingProject, placeholder.templateId, hasReferenceImages);
           const modelFields = imageModelSettingsToTaskFields(pendingProject.imageModel, pendingProject.imageModelSettings);
+          const grokImageModel = isGrokImagineImageModel(pendingProject.imageModel);
+          const taskSize = grokImageModel
+            ? normalizeGrokImageAspectRatio(pendingProject.size) || "auto"
+            : pendingProject.size;
+          const taskResolution = grokImageModel
+            ? normalizeGrokImageResolution(pendingProject.imageResolution)
+            : undefined;
+          const taskQuality = grokImageModel
+            ? hasReferenceImages ? undefined : normalizeGrokImageQuality(pendingProject.imageQuality)
+            : isOfficialImageModel(pendingProject.imageModel) && isImageQuality(pendingProject.imageQuality)
+              ? pendingProject.imageQuality
+              : undefined;
           if (!hasReferenceImages) {
             return createImageGenerationTask(
               placeholder.taskId,
               prompt,
               pendingProject.imageModel,
-              pendingProject.size,
-              isOfficialImageModel(pendingProject.imageModel) && isImageQuality(pendingProject.imageQuality)
-                ? pendingProject.imageQuality
-                : undefined,
+              taskSize,
+              taskQuality,
               1,
               [{ role: "system", content: "你是电商套图视觉设计师，输出适合商品详情页的单张成品图。" }],
               "private",
-              undefined,
+              taskResolution,
               pendingProject.outputFormat,
               undefined,
               modelFields.toolOptions,
@@ -1981,14 +2000,12 @@ export default function EcommerceSuitePage() {
             referenceIds,
             prompt,
             pendingProject.imageModel,
-            pendingProject.size,
-            isOfficialImageModel(pendingProject.imageModel) && isImageQuality(pendingProject.imageQuality)
-              ? pendingProject.imageQuality
-              : undefined,
+            taskSize,
+            taskQuality,
             1,
             [{ role: "system", content: "你是电商套图视觉设计师，输出适合商品详情页的单张成品图。" }],
             "private",
-            undefined,
+            taskResolution,
             pendingProject.outputFormat,
             undefined,
             modelFields.toolOptions,
@@ -2304,6 +2321,13 @@ export default function EcommerceSuitePage() {
         : undefined;
       const taskModel = proStudioCompositePayload ? OFFICIAL_IMAGE_MODEL : project.imageModel;
       const modelFields = proStudioCompositePayload ? undefined : imageModelSettingsToTaskFields(project.imageModel, project.imageModelSettings);
+      const grokImageModel = !proStudioCompositePayload && isGrokImagineImageModel(taskModel);
+      const taskSize = proStudioCompositePayload?.size || (grokImageModel
+        ? normalizeGrokImageAspectRatio(project.size) || "auto"
+        : project.size);
+      const taskResolution = proStudioCompositePayload?.image_resolution || (grokImageModel
+        ? normalizeGrokImageResolution(project.imageResolution)
+        : undefined);
       const extraBody = {
         ...(proStudioCompositePayload
           ? {
@@ -2321,16 +2345,18 @@ export default function EcommerceSuitePage() {
         referenceIds,
         proStudioCompositePayload?.prompt || prompt,
         taskModel,
-        proStudioCompositePayload?.size || project.size,
+        taskSize,
         proStudioCompositePayload
           ? isImageQuality(proStudioCompositePayload.quality) ? proStudioCompositePayload.quality : "auto"
-          : isOfficialImageModel(taskModel) && isImageQuality(project.imageQuality)
+          : grokImageModel
+            ? undefined
+            : isOfficialImageModel(taskModel) && isImageQuality(project.imageQuality)
             ? project.imageQuality
             : undefined,
         1,
         [{ role: "system", content: "你是电商套图排版设计师，输出适合商业使用的一张合成排版图。" }],
         "private",
-        proStudioCompositePayload?.image_resolution,
+        taskResolution,
         proStudioCompositePayload
           ? isImageOutputFormat(proStudioCompositePayload.output_format) ? proStudioCompositePayload.output_format : "png"
           : project.outputFormat,
@@ -2980,20 +3006,33 @@ export default function EcommerceSuitePage() {
                       />
                     </div>
                   ) : null}
-                  {!selectedProject.professionalMode && isOfficialImageModel(selectedProject.imageModel) ? (
+                  {!selectedProject.professionalMode && (
+                    isOfficialImageModel(selectedProject.imageModel) ||
+                    (isGrokImagineImageModel(selectedProject.imageModel) && selectedProject.referenceImages.length === 0)
+                  ) ? (
                     <label className="grid gap-1.5">
-                      <span className="text-xs font-medium text-muted-foreground">质量强度</span>
+                      <span className="text-xs font-medium text-muted-foreground">
+                        {isGrokImagineImageModel(selectedProject.imageModel) ? "质量" : "质量强度"}
+                      </span>
                       <Select
-                        value={isImageQuality(selectedProject.imageQuality) ? selectedProject.imageQuality : "auto"}
+                        value={isGrokImagineImageModel(selectedProject.imageModel)
+                          ? normalizeGrokImageQuality(selectedProject.imageQuality)
+                          : isImageQuality(selectedProject.imageQuality) ? selectedProject.imageQuality : "auto"}
                         onValueChange={(value) =>
-                          updateSelectedProject({ imageQuality: isImageQuality(value) ? value : "auto" })
+                          updateSelectedProject({
+                            imageQuality: isGrokImagineImageModel(selectedProject.imageModel)
+                              ? normalizeGrokImageQuality(value)
+                              : isImageQuality(value) ? value : "auto",
+                          })
                         }
                       >
                         <SelectTrigger className="h-10 rounded-xl">
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          {IMAGE_QUALITY_OPTIONS.map((option) => (
+                          {(isGrokImagineImageModel(selectedProject.imageModel)
+                            ? GROK_IMAGE_QUALITY_OPTIONS
+                            : IMAGE_QUALITY_OPTIONS).map((option) => (
                             <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
                           ))}
                         </SelectContent>

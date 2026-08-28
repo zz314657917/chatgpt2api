@@ -30,7 +30,10 @@ import {
   fetchManagedImages,
   fetchPromptSplit,
   fetchTeamWorkspace,
-  imageReferenceInputLimit,
+  imageReferenceInputLimitForCount,
+  imageTaskSubmitCount,
+  isGrokImagineImageModel,
+  isSeedreamImageModel,
   MANAGED_IMAGE_UNCLASSIFIED_COLLECTION_ID,
   MIDJOURNEY_IMAGE_MODEL,
   supportsImageOutputCompression,
@@ -55,8 +58,13 @@ import { fetchAuthenticatedImageBlob } from "@/lib/authenticated-image";
 import {
   isImageQuality,
   isPixelIconSize,
+  normalizeGrokImageAspectRatio,
+  normalizeGrokImageQuality,
+  normalizeGrokImageResolution,
   normalizeImageOutputCompression,
-  normalizeImageOutputFormat,
+  normalizeImageOutputFormatForModel,
+  normalizeSeedreamImageAspectRatio,
+  normalizeSeedreamImageResolution,
   type ImageQuality,
 } from "@/lib/image-parameters";
 import { imageModelSettingsToTaskFields, type ImageModelSettingsState } from "@/lib/image-model-settings";
@@ -562,6 +570,12 @@ function generatorImageResolution(generator: SmartCanvasItem, hasInputImages = f
   if (generatorProStudioEnabled(generator)) {
     return generatorProStudioState(generator).settings.resolution;
   }
+  if (isGrokImagineImageModel(generatorImageModel(generator))) {
+    return normalizeGrokImageResolution(generator.data?.image_resolution);
+  }
+  if (isSeedreamImageModel(generatorImageModel(generator))) {
+    return normalizeSeedreamImageResolution(generator.data?.image_resolution, generatorImageModel(generator));
+  }
   if (isPixelIconSize(normalizeCanvasImageSize(generator.data?.size))) {
     return undefined;
   }
@@ -574,6 +588,18 @@ function generatorImageResolution(generator: SmartCanvasItem, hasInputImages = f
 function generatorImageSize(generator: SmartCanvasItem, hasInputImages = false) {
   if (generatorProStudioEnabled(generator)) {
     return generatorProStudioState(generator).settings.size;
+  }
+  if (isGrokImagineImageModel(generatorImageModel(generator))) {
+    if (hasInputImages && generator.data?.size_user_modified !== true) {
+      return undefined;
+    }
+    return normalizeGrokImageAspectRatio(generator.data?.size) || undefined;
+  }
+  if (isSeedreamImageModel(generatorImageModel(generator))) {
+    if (hasInputImages && generator.data?.size_user_modified !== true) {
+      return undefined;
+    }
+    return normalizeSeedreamImageAspectRatio(generator.data?.size, generatorImageModel(generator)) || "auto";
   }
   if (hasInputImages) {
     if (generator.data?.size_user_modified !== true) {
@@ -613,7 +639,7 @@ function generatorOutputFormat(generator: SmartCanvasItem) {
   if (!supportsImageOutputControls(generatorImageModel(generator))) {
     return undefined;
   }
-  return normalizeImageOutputFormat(generator.data?.output_format);
+  return normalizeImageOutputFormatForModel(generatorImageModel(generator), generator.data?.output_format);
 }
 
 function generatorOutputCompression(generator: SmartCanvasItem) {
@@ -624,12 +650,15 @@ function generatorOutputCompression(generator: SmartCanvasItem) {
   return format && supportsImageOutputCompression(generatorImageModel(generator), format) ? normalizeImageOutputCompression(generator.data?.output_compression) : undefined;
 }
 
-function generatorImageQuality(generator: SmartCanvasItem): ImageQuality | undefined {
+function generatorImageQuality(generator: SmartCanvasItem, hasInputImages = false): ImageQuality | undefined {
   if (generatorProStudioEnabled(generator)) {
     return generatorProStudioState(generator).settings.quality;
   }
   if (!supportsImageQuality(generatorImageModel(generator))) {
     return undefined;
+  }
+  if (isGrokImagineImageModel(generatorImageModel(generator))) {
+    return hasInputImages ? undefined : normalizeGrokImageQuality(generator.data?.quality);
   }
   return isImageQuality(generator.data?.quality) ? generator.data.quality : "auto";
 }
@@ -638,10 +667,7 @@ function generatorImageCount(generator: SmartCanvasItem) {
   if (generatorProStudioEnabled(generator)) {
     return generatorProStudioState(generator).settings.n;
   }
-  if (generatorImageModel(generator) === MIDJOURNEY_IMAGE_MODEL) {
-    return 1;
-  }
-  return Math.max(1, Math.min(10, Number(generator.data?.n || 1)));
+  return imageTaskSubmitCount(generatorImageModel(generator), Number(generator.data?.n || 1));
 }
 
 function generatorImageVisibility(generator: SmartCanvasItem): ImageVisibility {
@@ -681,7 +707,7 @@ function proStudioExtraBody(payload?: ProStudioImagePayload): Record<string, unk
   };
 }
 
-function generatorImageModelTaskFields(generator: SmartCanvasItem, maskUrl?: string) {
+function generatorImageModelTaskFields(generator: SmartCanvasItem, count: number, maskUrl?: string) {
   const settings = (generator.data?.image_model_settings || {}) as ImageModelSettingsState;
   const mergedSettings = maskUrl
     ? {
@@ -690,7 +716,7 @@ function generatorImageModelTaskFields(generator: SmartCanvasItem, maskUrl?: str
         geminiPro: { ...settings.geminiPro, inputImageMask: maskUrl },
       }
     : settings;
-  return imageModelSettingsToTaskFields(generatorImageModel(generator), mergedSettings);
+  return imageModelSettingsToTaskFields(generatorImageModel(generator), mergedSettings, count);
 }
 
 function llmInputText(canvas: SmartCanvasDocument, node: SmartCanvasItem) {
@@ -842,7 +868,7 @@ function promptSplitImageRequest(generator: SmartCanvasItem) {
       n: 1,
     };
   }
-  const modelFields = generatorImageModelTaskFields(generator);
+  const modelFields = generatorImageModelTaskFields(generator, 1);
   return {
     ...imageTaskRequestBodyFields(buildImageTaskRequestParameters({
       model: generatorImageModel(generator),
@@ -2741,7 +2767,7 @@ export function useSmartCanvasController() {
       const existingRefs = generatorInputImages(current, generator);
       const nextRefs = dedupeCanvasImageRefs([...existingRefs, ...normalizedRefs]);
       const { images } = splitMaskImageRefs(nextRefs);
-      const referenceLimit = imageReferenceInputLimit(generatorImageModel(generator));
+      const referenceLimit = imageReferenceInputLimitForCount(generatorImageModel(generator), generatorImageCount(generator));
       if (images.length > referenceLimit) {
         toast.error(referenceImageLimitMessage(referenceLimit));
         return false;
@@ -4395,7 +4421,7 @@ export function useSmartCanvasController() {
     }
     if (loopMode === "repeat") {
       const { images: editSourceImages } = splitMaskImageRefs(sourceImages);
-      const referenceLimit = imageReferenceInputLimit(generatorImageModel(generator));
+      const referenceLimit = imageReferenceInputLimitForCount(generatorImageModel(generator), generatorImageCount(generator));
       if (editSourceImages.length > referenceLimit) {
         const message = `${referenceImageLimitMessage(referenceLimit)}，请减少连接到循环的图片后再生成`;
         updateCanvas((doc) => ({
@@ -4566,14 +4592,14 @@ export function useSmartCanvasController() {
               : "";
             const publicImageUrls = publicCanvasImageUrls(editIterationImages);
             const proPayload = generatorProStudioPayload(generator, submittedPrompt, publicImageUrls, inputImageMask);
-            const modelFields = proPayload ? undefined : generatorImageModelTaskFields(generator, inputImageMask);
+            const modelFields = proPayload ? undefined : generatorImageModelTaskFields(generator, taskCount, inputImageMask);
             task = await createImageEditTask(
               uniqueTaskId("smart-canvas-loop"),
               files,
               proPayload?.prompt || submittedPrompt,
               generatorImageModel(generator),
               generatorImageSize(generator, true),
-              generatorImageQuality(generator),
+              generatorImageQuality(generator, true),
               taskCount,
               undefined,
               generatorImageVisibility(generator),
@@ -4590,7 +4616,7 @@ export function useSmartCanvasController() {
             throw new Error("蒙版需要和原图一起作为输入");
           } else {
             const proPayload = generatorProStudioPayload(generator, submittedPrompt);
-            const modelFields = proPayload ? undefined : generatorImageModelTaskFields(generator);
+            const modelFields = proPayload ? undefined : generatorImageModelTaskFields(generator, taskCount);
             task = await createImageGenerationTask(
               uniqueTaskId("smart-canvas-loop"),
               proPayload?.prompt || submittedPrompt,
@@ -4712,7 +4738,7 @@ export function useSmartCanvasController() {
     const inputRefs = generatorInputImages(current, generator);
     const { images: editInputRefs, masks: maskInputRefs } = splitMaskImageRefs(inputRefs);
     if (generator.type === "image_generation") {
-      const referenceLimit = imageReferenceInputLimit(generatorImageModel(generator));
+      const referenceLimit = imageReferenceInputLimitForCount(generatorImageModel(generator), generatorImageCount(generator));
       if (editInputRefs.length > referenceLimit) {
         const message = `${referenceImageLimitMessage(referenceLimit)}，请减少连接到图片生成节点的图片后再生成`;
         updateCanvas((doc) => ({
@@ -4846,14 +4872,14 @@ export function useSmartCanvasController() {
           : "";
         const publicImageUrls = publicCanvasImageUrls(editInputRefs);
         const proPayload = generatorProStudioPayload(generator, submittedPrompt, publicImageUrls, inputImageMask);
-        const modelFields = proPayload ? undefined : generatorImageModelTaskFields(generator, inputImageMask);
+        const modelFields = proPayload ? undefined : generatorImageModelTaskFields(generator, generatorImageCount(generator), inputImageMask);
         task = await createImageEditTask(
           clientTaskId,
           files,
           proPayload?.prompt || submittedPrompt,
           generatorImageModel(generator),
           generatorImageSize(generator, true),
-          generatorImageQuality(generator),
+          generatorImageQuality(generator, true),
           generatorImageCount(generator),
           undefined,
           generatorImageVisibility(generator),
@@ -4870,7 +4896,7 @@ export function useSmartCanvasController() {
         throw new Error("蒙版需要和原图一起作为输入");
       } else {
         const proPayload = generatorProStudioPayload(generator, submittedPrompt);
-        const modelFields = proPayload ? undefined : generatorImageModelTaskFields(generator);
+        const modelFields = proPayload ? undefined : generatorImageModelTaskFields(generator, generatorImageCount(generator));
         task = await createImageGenerationTask(
           clientTaskId,
           proPayload?.prompt || submittedPrompt,

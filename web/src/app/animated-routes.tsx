@@ -67,7 +67,7 @@ export function AnimatedRoutes() {
   const prefersReducedMotion = useReducedMotion();
   const pathname = location.pathname.replace(/\/+$/, "") || "/";
   const isEmbeddedMode = new URLSearchParams(location.search).get("ui_mode") === "embedded";
-  const isViewportWorkspacePage = pathname === "/canvas" || pathname === "/image" || pathname === "/image-arena" || pathname === "/ecommerce-suite" || pathname === "/image-manager" || pathname === "/social";
+  const isViewportWorkspacePage = pathname === "/canvas" || pathname === "/image" || pathname === "/image-arena" || pathname === "/ecommerce-suite" || pathname === "/image-manager" || pathname === "/social" || pathname === "/beads" || pathname.startsWith("/beads/");
 
   return (
     <AnimatePresence mode="wait" initial={false}>

@@ -9,11 +9,24 @@ type RequestConfig = AxiosRequestConfig & {
     skipStoredAuthorization?: boolean;
 };
 
-type ErrorPayload = {
+export type ErrorPayload = {
     detail?: string | { error?: string | { message?: string } };
     error?: string | { message?: string };
     message?: string;
+    [key: string]: unknown;
 };
+
+export class HTTPError<T = ErrorPayload> extends Error {
+    readonly status: number;
+    readonly data: T | undefined;
+
+    constructor(message: string, status: number, data?: T) {
+        super(message);
+        this.name = "HTTPError";
+        this.status = status;
+        this.data = data;
+    }
+}
 
 function errorMessageFromValue(value: unknown): string {
     if (typeof value === "string") {
@@ -152,7 +165,7 @@ request.interceptors.response.use(
             payload?.message ||
             error.message ||
             `请求失败 (${status || 500})`;
-        return Promise.reject(new Error(localizeErrorMessage(message)));
+        return Promise.reject(new HTTPError(localizeErrorMessage(message), status || 500, payload));
     },
 );
 

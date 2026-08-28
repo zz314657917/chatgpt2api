@@ -1,0 +1,123 @@
+.beads-projects-page canvas {
+  display: block;
+}
+
+.beads-projects-page .beads-project-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1px;
+  min-width: 0;
+  background: var(--border);
+}
+
+.beads-projects-page .beads-project-card {
+  min-width: 0;
+  background: var(--background);
+}
+
+.beads-projects-page .beads-project-preview {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 11;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--muted) 30%, transparent);
+  text-align: left;
+}
+
+.beads-projects-page .beads-project-preview canvas {
+  width: 100%;
+  height: 100%;
+}
+
+@media (min-width: 640px) {
+  .beads-projects-page .beads-project-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 1280px) {
+  .beads-projects-page .beads-project-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 1536px) {
+  .beads-projects-page .beads-project-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+.beads-workbench {
+  height: calc(100vh - 78px);
+  min-height: 0;
+  color: var(--foreground);
+  background: var(--background);
+  --bg: var(--background);
+  --chrome: var(--muted);
+  --panel: var(--card);
+  --panel-warm: var(--card);
+  --surface: var(--card);
+  --surface-muted: var(--muted);
+  --surface-cool: color-mix(in srgb, var(--card) 92%, #d9f3ef 8%);
+  --line: var(--border);
+  --line-soft: var(--border-soft);
+  --line-strong: var(--input);
+  --text: var(--foreground);
+  --text-muted: var(--muted-foreground);
+  --accent: var(--primary);
+  --accent-hover: color-mix(in srgb, var(--primary) 88%, var(--foreground));
+  --accent-soft: var(--muted);
+}
+
+@supports (height: 100dvh) {
+  .beads-workbench {
+    height: calc(100dvh - 78px);
+  }
+}
+
+.beads-workbench .app-shell {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+.beads-workbench .topbar {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.beads-workbench .topbar-workspace {
+  grid-column: 1;
+}
+
+.dark .beads-workbench .topbar-params,
+.dark .beads-workbench .topbar-actions {
+  background: var(--card);
+  box-shadow: none;
+}
+
+.dark .beads-workbench .topbar-control-label {
+  color: oklch(0.8 0.1 185);
+}
+
+.dark .beads-workbench .topbar-dimension-group,
+.dark .beads-workbench .topbar-params > select,
+.dark .beads-workbench .project-action-button,
+.dark .beads-workbench .export-action-button {
+  border-color: var(--border);
+  background: var(--background);
+  color: var(--foreground);
+}
+
+.dark .beads-workbench .topbar-dimension-group input,
+.dark .beads-workbench .topbar-dimension-group .size-times,
+.dark .beads-workbench .topbar-params > select {
+  color: var(--foreground);
+}
+
+.dark .beads-workbench .canvas-apply-button,
+.dark .beads-workbench .project-action-button.primary-action,
+.dark .beads-workbench .export-action-button.primary-action {
+  border-color: oklch(0.68 0.1 185);
+  background: oklch(0.42 0.09 185);
+  color: oklch(0.98 0 0);
+}

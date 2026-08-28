@@ -10,10 +10,15 @@ import {
   isImageOutputFormat,
   isImageQuality,
   normalizeImageOutputFormat,
+  normalizeImageOutputFormatForModel,
   normalizeImageResolutionPreset,
+  normalizeSeedreamImageAspectRatio,
+  normalizeSeedreamImageResolution,
   normalizePixelIconSizeAlias,
   parseImageRatio,
   supportsImageOutputCompression,
+  seedreamImageAspectRatioOptions,
+  seedreamImageResolutionOptions,
   type ImageSizeSelection,
 } from "@/lib/image-parameters";
 
@@ -59,6 +64,14 @@ assert.equal(normalizeImageOutputFormat("jpg"), "jpeg");
 assert.equal(normalizeImageOutputFormat("jpeg"), "jpeg");
 assert.equal(normalizeImageOutputFormat("webp"), "webp");
 assert.equal(normalizeImageOutputFormat("bad"), "png");
+assert.equal(normalizeImageOutputFormatForModel("seedream-5-0-lite", "webp"), "png");
+assert.equal(normalizeImageOutputFormatForModel("seedream-5-0-pro", "jpeg"), "jpeg");
+assert.equal(seedreamImageResolutionOptions("doubao-seedance-4-5").some((option) => option.value === "1k"), false);
+assert.equal(seedreamImageResolutionOptions("seedream-5-0-lite").some((option) => option.value === "3k"), true);
+assert.equal(seedreamImageAspectRatioOptions("seedream-5-0-lite").some((option) => option.value === "9:21"), false);
+assert.equal(normalizeSeedreamImageResolution("1k", "seedream-5-0-lite"), "2k");
+assert.equal(normalizeSeedreamImageResolution("4k", "seedream-5-0-pro"), "2k");
+assert.equal(normalizeSeedreamImageAspectRatio("9:21", "seedream-5-0-lite"), "");
 assert.equal(isImageQuality("high"), true);
 assert.equal(isImageQuality("auto"), true);
 assert.equal(isImageOutputFormat("jpeg"), true);

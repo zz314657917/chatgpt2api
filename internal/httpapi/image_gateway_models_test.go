@@ -187,15 +187,17 @@ func TestImageGatewayModelsGPTImagePayloadPassesReferenceURLs(t *testing.T) {
 
 func TestImageGatewayModelsSeedreamPayloadUsesImageGateway(t *testing.T) {
 	payload, err := sub2APIImageGatewayJSONPayload(map[string]any{
-		"prompt":           "draw a product scene",
-		"model":            util.ImageModelSeedream45,
-		"size":             "16:9",
-		"image_resolution": "2K",
-		"n":                2,
-		"image_urls":       []string{"https://example.test/ref.png"},
-		"quality":          "high",
-		"background":       "transparent",
-		"watermark":        false,
+		"prompt":                              "draw a product scene",
+		"model":                               util.ImageModelSeedream45,
+		"size":                                "16:9",
+		"image_resolution":                    "2K",
+		"n":                                   2,
+		"image_urls":                          []string{"https://example.test/ref.png"},
+		"quality":                             "high",
+		"background":                          "transparent",
+		"watermark":                           false,
+		"sequential_image_generation":         "auto",
+		"sequential_image_generation_options": map[string]any{"max_images": 3},
 		"optimize_prompt_options": map[string]any{
 			"enable": true,
 		},
@@ -203,11 +205,17 @@ func TestImageGatewayModelsSeedreamPayloadUsesImageGateway(t *testing.T) {
 	if err != nil {
 		t.Fatalf("seedream payload error = %v", err)
 	}
-	if payload["model"] != util.ImageModelSeedream45 || payload["size"] != "1536x864" || payload["resolution"] != "2k" || payload["n"] != 2 {
+	if payload["model"] != util.ImageModelSeedream45 || payload["size"] != "16:9" || payload["resolution"] != "2k" || payload["n"] != 2 {
 		t.Fatalf("seedream payload basics = %#v", payload)
 	}
 	if payload["watermark"] != false {
 		t.Fatalf("seedream watermark = %#v in %#v", payload["watermark"], payload)
+	}
+	if payload["sequential_image_generation"] != "auto" {
+		t.Fatalf("seedream sequential mode = %#v in %#v", payload["sequential_image_generation"], payload)
+	}
+	if options := util.StringMap(payload["sequential_image_generation_options"]); util.ToInt(options["max_images"], 0) != 3 {
+		t.Fatalf("seedream sequential options = %#v in %#v", options, payload)
 	}
 	if _, ok := payload["quality"]; ok {
 		t.Fatalf("seedream should not forward quality: %#v", payload)
@@ -218,6 +226,87 @@ func TestImageGatewayModelsSeedreamPayloadUsesImageGateway(t *testing.T) {
 	urls := util.AsStringSlice(payload["image_urls"])
 	if len(urls) != 1 || urls[0] != "https://example.test/ref.png" {
 		t.Fatalf("seedream image_urls = %#v", payload["image_urls"])
+	}
+}
+
+func TestImageGatewayModelsSeedream50Profiles(t *testing.T) {
+	lite, err := sub2APIImageGatewayJSONPayload(map[string]any{
+		"model": "seedream-5-0-lite", "prompt": "draw", "size": "21:9", "resolution": "3K", "n": 3,
+		"output_format": "jpg", "nsfw_check": true, "watermark": false,
+		"sequential_image_generation": "auto", "sequential_image_generation_options": map[string]any{"max_images": 5},
+	})
+	if err != nil {
+		t.Fatalf("lite payload error = %v", err)
+	}
+	if lite["size"] != "21:9" || lite["resolution"] != "3k" || lite["output_format"] != "jpeg" || lite["n"] != 3 || lite["nsfw_check"] != true {
+		t.Fatalf("lite payload = %#v", lite)
+	}
+	if _, ok := lite["quality"]; ok {
+		t.Fatalf("lite should not forward quality: %#v", lite)
+	}
+
+	pro, err := sub2APIImageGatewayJSONPayload(map[string]any{
+		"model": util.ImageModelSeedream50Pro, "prompt": "draw", "size": "1024x1024", "resolution": "1.5K", "n": 1,
+		"output_format": "png", "image_urls": []string{"https://example.test/ref.png"},
+	})
+	if err != nil {
+		t.Fatalf("pro payload error = %v", err)
+	}
+	if pro["size"] != "1024x1024" || pro["resolution"] != "1.5k" || pro["output_format"] != "png" {
+		t.Fatalf("pro payload = %#v", pro)
+	}
+	if _, ok := pro["sequential_image_generation"]; ok {
+		t.Fatalf("pro should not include sequential fields: %#v", pro)
+	}
+}
+
+func TestImageGatewayModelsSeedreamProfilesRejectUnsupportedValues(t *testing.T) {
+	cases := []map[string]any{
+		{"model": util.ImageModelSeedream45, "prompt": "draw", "resolution": "1K"},
+		{"model": "seedream-5-0-lite", "prompt": "draw", "size": "9:21"},
+		{"model": util.ImageModelSeedream50Pro, "prompt": "draw", "n": 2},
+		{"model": util.ImageModelSeedream50Pro, "prompt": "draw", "size": "100x100"},
+		{"model": util.ImageModelSeedream40, "prompt": "draw", "n": 2},
+		{"model": util.ImageModelSeedream50Lite, "prompt": "draw", "n": 2, "sequential_image_generation": "bogus"},
+		{"model": util.ImageModelSeedream40, "prompt": "draw", "sequential_image_generation": "auto", "sequential_image_generation_options": []any{}},
+	}
+	for _, input := range cases {
+		if _, err := sub2APIImageGatewayJSONPayload(input); err == nil {
+			t.Fatalf("expected Seedream validation error for %#v", input)
+		}
+	}
+}
+
+func TestImageGatewayModelsSeedreamMultipleOutputsForceSequentialAuto(t *testing.T) {
+	lite, err := sub2APIImageGatewayJSONPayload(map[string]any{
+		"model":                               util.ImageModelSeedream50Lite,
+		"prompt":                              "draw",
+		"n":                                   3,
+		"sequential_image_generation":         "disabled",
+		"sequential_image_generation_options": map[string]any{"max_images": 7},
+	})
+	if err != nil {
+		t.Fatalf("lite payload error = %v", err)
+	}
+	if lite["sequential_image_generation"] != "auto" {
+		t.Fatalf("lite sequential mode = %#v, want auto", lite["sequential_image_generation"])
+	}
+	if options := util.StringMap(lite["sequential_image_generation_options"]); util.ToInt(options["max_images"], 0) != 7 {
+		t.Fatalf("lite sequential options = %#v", options)
+	}
+
+	seedream40, err := sub2APIImageGatewayJSONPayload(map[string]any{
+		"model":                       util.ImageModelSeedream40,
+		"prompt":                      "draw",
+		"n":                           2,
+		"image_urls":                  []string{"https://example.test/ref.png"},
+		"sequential_image_generation": "disabled",
+	})
+	if err != nil {
+		t.Fatalf("Seedream 4.0 payload error = %v", err)
+	}
+	if seedream40["sequential_image_generation"] != "auto" {
+		t.Fatalf("Seedream 4.0 sequential mode = %#v, want auto", seedream40["sequential_image_generation"])
 	}
 }
 
@@ -248,6 +337,19 @@ func TestImageGatewayModelsImageToolOptionsIgnoresEmptyOfficialFallback(t *testi
 }
 
 func TestImageGatewayModelsReferenceLimits(t *testing.T) {
+	grokRefs := []string{
+		"https://example.test/grok-1.png",
+		"https://example.test/grok-2.png",
+		"https://example.test/grok-3.png",
+		"https://example.test/grok-4.png",
+	}
+	if err := validateImageReferenceLimit(map[string]any{
+		"model":      util.ImageModelGrokImagine,
+		"image_urls": grokRefs,
+	}, nil); err == nil || !strings.Contains(err.Error(), "Grok Imagine 参考图最多支持 3 张") {
+		t.Fatalf("grok reference limit error = %v", err)
+	}
+
 	geminiRefs := make([]string, 15)
 	for i := range geminiRefs {
 		geminiRefs[i] = "https://example.test/gemini-" + strconv.Itoa(i) + ".png"
@@ -282,36 +384,50 @@ func TestImageGatewayModelsReferenceLimits(t *testing.T) {
 	}
 }
 
-func TestImageGatewayModelsGrokImaginePayloadUsesGenerationAndEditModels(t *testing.T) {
+func TestImageGatewayModelsGrokImaginePayloadUsesImage2Profile(t *testing.T) {
 	generation, err := sub2APIImageGatewayJSONPayload(map[string]any{
-		"prompt": "draw a product scene",
-		"model":  util.ImageModelGrokImagine,
-		"size":   "16:9",
-		"n":      2,
+		"prompt":           " draw a product scene ",
+		"model":            util.ImageModelGrokImagine,
+		"size":             "16:9",
+		"image_resolution": "2k",
+		"quality":          "low",
+		"nsfw_check":       true,
+		"n":                2,
 	})
 	if err != nil {
 		t.Fatalf("grok generation payload error = %v", err)
 	}
-	if generation["model"] != "grok-imagine-1.5-apimart" || generation["size"] != "16:9" || generation["n"] != 2 {
+	if generation["model"] != util.ImageModelGrokImagine || generation["aspect_ratio"] != "16:9" || generation["resolution"] != "2k" || generation["quality"] != "low" || generation["nsfw_check"] != true || generation["n"] != 2 {
 		t.Fatalf("grok generation payload = %#v", generation)
+	}
+	if generation["prompt"] != "draw a product scene" {
+		t.Fatalf("grok prompt = %#v", generation["prompt"])
+	}
+	if _, ok := generation["size"]; ok {
+		t.Fatalf("grok generation should use aspect_ratio instead of size: %#v", generation)
 	}
 	if _, ok := generation["image_urls"]; ok {
 		t.Fatalf("grok generation should not include image_urls: %#v", generation)
 	}
 
 	edit, err := sub2APIImageGatewayJSONPayload(map[string]any{
-		"prompt":     "keep the product and change background",
-		"model":      util.ImageModelGrokImagine,
-		"image_urls": []string{"https://example.test/ref.png"},
+		"prompt":           "keep the product and change background",
+		"model":            util.ImageModelGrokImagine,
+		"image_urls":       []string{"https://example.test/ref-1.png", "https://example.test/ref-2.png", "https://example.test/ref-3.png"},
+		"image_resolution": "1080p",
+		"quality":          "medium",
 	})
 	if err != nil {
 		t.Fatalf("grok edit payload error = %v", err)
 	}
-	if edit["model"] != "grok-imagine-1.5-edit-apimart" || edit["size"] != "1:1" {
+	if edit["model"] != util.ImageModelGrokImagine || edit["aspect_ratio"] != "auto" || edit["resolution"] != "1k" || edit["nsfw_check"] != false {
 		t.Fatalf("grok edit payload = %#v", edit)
 	}
+	if _, ok := edit["quality"]; ok {
+		t.Fatalf("grok edit should omit quality: %#v", edit)
+	}
 	urls := util.AsStringSlice(edit["image_urls"])
-	if len(urls) != 1 || urls[0] != "https://example.test/ref.png" {
+	if len(urls) != 3 || urls[0] != "https://example.test/ref-1.png" || urls[2] != "https://example.test/ref-3.png" {
 		t.Fatalf("grok edit image_urls = %#v", edit["image_urls"])
 	}
 }
@@ -320,13 +436,40 @@ func TestImageGatewayModelsGrokImaginePayloadRejectsTooManyReferences(t *testing
 	_, err := sub2APIImageGatewayJSONPayload(map[string]any{
 		"prompt":     "draw",
 		"model":      util.ImageModelGrokImagine,
-		"image_urls": []string{"https://example.test/1.png", "https://example.test/2.png"},
+		"image_urls": []string{"https://example.test/1.png", "https://example.test/2.png", "https://example.test/3.png", "https://example.test/4.png"},
 	})
 	if err == nil {
 		t.Fatal("expected reference limit error")
 	}
-	if !strings.Contains(err.Error(), "参考图最多支持 1 张") {
+	if !strings.Contains(err.Error(), "参考图最多支持 3 张") {
 		t.Fatalf("error = %q", err.Error())
+	}
+}
+
+func TestImageGatewayModelsGrokImaginePayloadRejectsInvalidParameters(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload map[string]any
+		want    string
+	}{
+		{name: "empty prompt", payload: map[string]any{"prompt": "  "}, want: "prompt 不能为空"},
+		{name: "long prompt", payload: map[string]any{"prompt": strings.Repeat("图", 8001)}, want: "最多支持 8000"},
+		{name: "fractional n", payload: map[string]any{"prompt": "draw", "n": 1.5}, want: "n 必须是 1 到 10 的整数"},
+		{name: "large n", payload: map[string]any{"prompt": "draw", "n": 11}, want: "n 必须是 1 到 10 的整数"},
+		{name: "invalid ratio", payload: map[string]any{"prompt": "draw", "size": "21:9"}, want: "aspect_ratio 不受支持"},
+		{name: "pixel size", payload: map[string]any{"prompt": "draw", "size": "1024x1024"}, want: "aspect_ratio 不受支持"},
+		{name: "invalid resolution", payload: map[string]any{"prompt": "draw", "image_resolution": "4k"}, want: "resolution 只支持 1k 或 2k"},
+		{name: "invalid quality", payload: map[string]any{"prompt": "draw", "quality": "high"}, want: "quality 只支持 low 或 medium"},
+		{name: "invalid nsfw check", payload: map[string]any{"prompt": "draw", "nsfw_check": "true"}, want: "nsfw_check 必须是布尔值"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.payload["model"] = util.ImageModelGrokImagine
+			_, err := sub2APIImageGatewayJSONPayload(tt.payload)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %v, want %q", err, tt.want)
+			}
+		})
 	}
 }
 
@@ -368,7 +511,12 @@ func TestImageGatewayModelsCreationTaskGrokImagineRejectsTooManyReferenceURLs(t 
 		"client_task_id": "grok-too-many-refs",
 		"prompt":         "draw",
 		"model":          util.ImageModelGrokImagine,
-		"image_urls":     []string{"https://example.test/1.png", "https://example.test/2.png"},
+		"image_urls": []string{
+			"https://example.test/1.png",
+			"https://example.test/2.png",
+			"https://example.test/3.png",
+			"https://example.test/4.png",
+		},
 	})))
 	req.Header.Set("Authorization", "Bearer "+rawKey)
 	req.Header.Set("Content-Type", "application/json")
@@ -377,7 +525,7 @@ func TestImageGatewayModelsCreationTaskGrokImagineRejectsTooManyReferenceURLs(t 
 	if res.Code != http.StatusBadRequest {
 		t.Fatalf("grok reference limit status = %d body = %s", res.Code, res.Body.String())
 	}
-	if !strings.Contains(res.Body.String(), "参考图最多支持 1 张") {
+	if !strings.Contains(res.Body.String(), "参考图最多支持 3 张") {
 		t.Fatalf("grok reference limit body = %s", res.Body.String())
 	}
 }
@@ -628,8 +776,11 @@ func TestImageGatewayModelsGrokImagineGenerationTaskUsesGenerationGateway(t *tes
 		return len(items) == 1 && items[0]["status"] == service.TaskStatusSuccess
 	})
 
-	if received["model"] != "grok-imagine-1.5-apimart" || received["size"] != "16:9" {
+	if received["model"] != util.ImageModelGrokImagine || received["aspect_ratio"] != "16:9" || received["resolution"] != "1k" || received["quality"] != "medium" {
 		t.Fatalf("grok generation gateway body = %#v", received)
+	}
+	if _, ok := received["response_format"]; ok {
+		t.Fatalf("grok generation should not include response_format: %#v", received)
 	}
 	if _, ok := received["image_urls"]; ok {
 		t.Fatalf("grok generation should not include image_urls: %#v", received)
@@ -646,7 +797,7 @@ func TestImageGatewayModelsGrokImagineImageEditTaskUsesDataURIReferences(t *test
 
 	var received map[string]any
 	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost || r.URL.Path != "/images/edits" {
+		if r.Method != http.MethodPost || r.URL.Path != "/images/generations" {
 			t.Fatalf("gateway request = %s %s", r.Method, r.URL.Path)
 		}
 		if !strings.Contains(r.Header.Get("Content-Type"), "application/json") {
@@ -722,8 +873,11 @@ func TestImageGatewayModelsGrokImagineImageEditTaskUsesDataURIReferences(t *test
 		return len(items) == 1 && items[0]["status"] == service.TaskStatusSuccess
 	})
 
-	if received["model"] != "grok-imagine-1.5-edit-apimart" || received["size"] != "1:1" {
+	if received["model"] != util.ImageModelGrokImagine || received["aspect_ratio"] != "1:1" || received["resolution"] != "1k" {
 		t.Fatalf("grok edit gateway body = %#v", received)
+	}
+	if _, ok := received["quality"]; ok {
+		t.Fatalf("grok edit should omit quality: %#v", received)
 	}
 	urls := util.AsStringSlice(received["image_urls"])
 	if len(urls) != 1 || !strings.HasPrefix(urls[0], "data:image/png;base64,") {

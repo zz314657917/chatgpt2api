@@ -37,6 +37,9 @@ func TestAuthServiceCreateAuthenticateDisableAndDelete(t *testing.T) {
 	if !HasAPIPermission(PermissionSet{APIPermissions: identity.APIPermissions}, "PATCH", "/api/images/tags") {
 		t.Fatalf("default user permissions missing image tags: %#v", identity.APIPermissions)
 	}
+	if !HasAPIPermission(PermissionSet{APIPermissions: identity.APIPermissions}, "PUT", "/api/bead-projects/project-1") {
+		t.Fatalf("default user permissions missing bead project save: %#v", identity.APIPermissions)
+	}
 
 	keyID, _ := public["id"].(string)
 	revealed, found := auth.RevealKey(keyID, filter)

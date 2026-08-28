@@ -1418,6 +1418,67 @@ func TestWriteSub2APIImagePartUsesImageContentType(t *testing.T) {
 	}
 }
 
+func TestReadMultipartImageBodyPreservesSeedreamFields(t *testing.T) {
+	var requestBody bytes.Buffer
+	writer := multipart.NewWriter(&requestBody)
+	fields := map[string]string{
+		"model":                               util.ImageModelSeedream50Lite,
+		"prompt":                              "draw",
+		"nsfw_check":                          "true",
+		"watermark":                           "false",
+		"sequential_image_generation":         "auto",
+		"sequential_image_generation_options": `{"max_images":12}`,
+	}
+	for key, value := range fields {
+		if err := writer.WriteField(key, value); err != nil {
+			t.Fatalf("WriteField(%s) error = %v", key, err)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("multipart close: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/v1/images/edits", &requestBody)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+
+	body, images, err := readMultipartImageBody(req)
+	if err != nil {
+		t.Fatalf("readMultipartImageBody() error = %v", err)
+	}
+	if len(images) != 0 || body["nsfw_check"] != true || body["watermark"] != false || body["sequential_image_generation"] != "auto" {
+		t.Fatalf("Seedream multipart body = %#v, images = %#v", body, images)
+	}
+	options := util.StringMap(body["sequential_image_generation_options"])
+	if util.ToInt(options["max_images"], 0) != 12 {
+		t.Fatalf("sequential options = %#v, want max_images 12", options)
+	}
+}
+
+func TestReadMultipartImageBodyRejectsInvalidSeedreamFields(t *testing.T) {
+	tests := map[string]map[string]string{
+		"boolean": {"nsfw_check": "maybe"},
+		"options": {"sequential_image_generation_options": `[]`},
+	}
+	for name, fields := range tests {
+		t.Run(name, func(t *testing.T) {
+			var requestBody bytes.Buffer
+			writer := multipart.NewWriter(&requestBody)
+			for key, value := range fields {
+				if err := writer.WriteField(key, value); err != nil {
+					t.Fatalf("WriteField(%s) error = %v", key, err)
+				}
+			}
+			if err := writer.Close(); err != nil {
+				t.Fatalf("multipart close: %v", err)
+			}
+			req := httptest.NewRequest(http.MethodPost, "/v1/images/edits", &requestBody)
+			req.Header.Set("Content-Type", writer.FormDataContentType())
+			if _, _, err := readMultipartImageBody(req); err == nil {
+				t.Fatalf("readMultipartImageBody() accepted invalid fields %#v", fields)
+			}
+		})
+	}
+}
+
 func TestDirectImageGenerationUsesCreationLimiter(t *testing.T) {
 	t.Setenv("CHATGPT2API_USER_DEFAULT_CONCURRENT_LIMIT", "2")
 	app := newTestApp(t)

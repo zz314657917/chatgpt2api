@@ -15,6 +15,9 @@ import {
   DEFAULT_IMAGE_CUSTOM_HEIGHT,
   DEFAULT_IMAGE_CUSTOM_RATIO,
   DEFAULT_IMAGE_CUSTOM_WIDTH,
+  GROK_IMAGE_ASPECT_RATIO_OPTIONS,
+  GROK_IMAGE_QUALITY_OPTIONS,
+  GROK_IMAGE_RESOLUTION_OPTIONS,
   IMAGE_QUALITY_OPTIONS,
   IMAGE_RESOLUTION_OPTIONS,
   IMAGE_SIZE_MODE_OPTIONS,
@@ -31,7 +34,15 @@ import {
   isImageSizeMode,
   isPixelIconSize,
   normalizeImageOutputCompression,
+  normalizeImageOutputFormatForModel,
+  normalizeGrokImageAspectRatio,
+  normalizeGrokImageQuality,
+  normalizeGrokImageResolution,
+  normalizeSeedreamImageAspectRatio,
+  normalizeSeedreamImageResolution,
   parseImageRatio,
+  seedreamImageAspectRatioOptions,
+  seedreamImageResolutionOptions,
   type ImageAspectRatio,
   type ImageQuality,
   type ImageResolution,
@@ -42,7 +53,7 @@ import { IMAGE_PROMPT_PRESETS, type ImagePromptPreset } from "@/app/image/image-
 import { consumeSimilarImageIntent } from "@/app/image/similar-image-intent";
 import { ImageOutputControls } from "@/components/image-output-controls";
 import { ImageModelSettingsPanel } from "@/components/image-model-settings-button";
-import { DEFAULT_IMAGE_RATIO_PICKER_OPTIONS, imageRatioPickerValueLabel } from "@/lib/image-ratio-picker-options";
+import { DEFAULT_IMAGE_RATIO_PICKER_OPTIONS, imageRatioPickerValueLabel, type ImageRatioPickerOption } from "@/lib/image-ratio-picker-options";
 import { ManagedImageAssetDock } from "@/components/managed-image-asset-dock";
 import { ModelProviderOptionLabel } from "@/components/model-provider-icon";
 import { displayModelLabel } from "@/lib/model-display";
@@ -88,9 +99,12 @@ import {
   IMAGE_CREATION_MODEL_OPTIONS,
   IMAGE_MODEL_ROUTE_DETAILS,
   MIDJOURNEY_IMAGE_MODEL,
-  imageReferenceInputLimit,
+  imageReferenceInputLimitForCount,
+  imageTaskMaxCount,
   isGeminiFlashImageModel,
   isGeminiProImageModel,
+  isGrokImagineImageModel,
+  isSeedreamImageModel,
   isChatModel,
   isHiddenImageModelOption,
   isImageCreationModel,
@@ -238,6 +252,10 @@ const activeConversationQueueIds = new Set<string>();
 const MISSING_RECOVERABLE_TASK_ID_ERROR = "页面刷新或任务中断，未找到可恢复的任务 ID";
 const IMAGE_ARENA_COLLECTION_NAME = "模型竞技场收藏";
 const IMAGE_ARENA_POLL_INTERVAL_MS = 2000;
+const GROK_IMAGE_RATIO_PICKER_OPTIONS = GROK_IMAGE_ASPECT_RATIO_OPTIONS.map((option) => ({
+  ...option,
+  section: "Grok Imagine 2.0",
+})) satisfies ReadonlyArray<ImageRatioPickerOption<ImageAspectRatio>>;
 
 type ComposerMode = "chat" | "image";
 type ImageAssetLibraryScope = Exclude<ManagedImageListScope, "all" | "public">;
@@ -264,6 +282,7 @@ type EditingTurnDraft = {
   webSearch?: boolean;
   midjourneySettings?: MidjourneySettingsPayload;
   geminiFlashSettings?: GeminiFlashSettingsPayload;
+  imageModelSettings?: ImageModelSettingsState;
   visibility: ImageVisibility;
   referenceImages: StoredReferenceImage[];
 };
@@ -578,14 +597,12 @@ async function buildReferenceImageFromStoredImage(
   };
 }
 
-const IMAGE_TASK_IMAGE_COUNT = 10;
-
 function normalizeRequestedImageCount(value: string | number) {
   return Math.max(1, Math.min(10, Number(value) || 1));
 }
 
 function requestedImageCountForModel(model: string | undefined, value: string | number) {
-  return model === MIDJOURNEY_IMAGE_MODEL ? 1 : normalizeRequestedImageCount(value);
+  return Math.max(1, Math.min(imageTaskMaxCount(model), Number(value) || 1));
 }
 
 function isInvalidCustomRatioSelection(sizeMode: ImageSizeMode, aspectRatio: ImageAspectRatio, customRatio: string) {
@@ -615,6 +632,22 @@ function imagePriceSizeFromRequest(size: string) {
 }
 
 function effectiveImageSizeSelection(model: ImageModel, selection: ImageSizeSelection): ImageSizeSelection {
+  if (isGrokImagineImageModel(model)) {
+    return {
+      ...selection,
+      mode: "ratio",
+      aspectRatio: normalizeGrokImageAspectRatio(selection.aspectRatio),
+      resolution: normalizeGrokImageResolution(selection.resolution),
+    };
+  }
+  if (isSeedreamImageModel(model)) {
+    return {
+      ...selection,
+      mode: "ratio",
+      aspectRatio: normalizeSeedreamImageAspectRatio(selection.aspectRatio, model),
+      resolution: normalizeSeedreamImageResolution(selection.resolution, model),
+    };
+  }
   const normalizedSelection = isPixelIconSize(selection.aspectRatio)
     ? {
         ...selection,
@@ -652,6 +685,9 @@ function buildEffectiveImageSizeRequest(model: ImageModel, selection: ImageSizeS
         ...effectiveSelection,
         resolution: "auto" as const,
       };
+  if (isSeedreamImageModel(model)) {
+    return { selection: effectiveSelection, size: effectiveSelection.aspectRatio || "auto" };
+  }
   return {
     selection: effectiveSelection,
     size: buildImageSize(sizeSelection),
@@ -674,6 +710,10 @@ function imageResolutionPresetLabel(resolution: string | undefined) {
       return "2K";
     case "4k":
       return "4K";
+    case "1.5k":
+      return "1.5K";
+    case "3k":
+      return "3K";
     default:
       return "";
   }
@@ -693,7 +733,7 @@ function isHighResolutionImageRequest(size: string, resolution?: string) {
 }
 
 function imageOutputFormatForModel(model: ImageModel, format: ImageOutputFormat) {
-  return supportsImageOutputControls(model) ? format : undefined;
+  return supportsImageOutputControls(model) ? normalizeImageOutputFormatForModel(model, format) : undefined;
 }
 
 function imageOutputCompressionForModel(model: ImageModel, format: ImageOutputFormat, value: unknown) {
@@ -821,12 +861,12 @@ function imageTaskLoadingDetail(turn: ImageTurn, fallbackDetail: string) {
   return "图片结果已返回，正在确认任务状态";
 }
 
-function imageTaskBatchId(turnId: string, imageIndex: number) {
-  return `${turnId}-task-${Math.floor(imageIndex / IMAGE_TASK_IMAGE_COUNT)}`;
+function imageTaskBatchId(turnId: string, imageIndex: number, model?: string) {
+  return `${turnId}-task-${Math.floor(imageIndex / imageTaskMaxCount(model))}`;
 }
 
-function imageTaskIdForImage(turnId: string, images: StoredImage[], imageIndex: number) {
-  return images[imageIndex]?.taskId || imageTaskBatchId(turnId, imageIndex);
+function imageTaskIdForImage(turnId: string, images: StoredImage[], imageIndex: number, model?: string) {
+  return images[imageIndex]?.taskId || imageTaskBatchId(turnId, imageIndex, model);
 }
 
 function imageDataIndexForTask(images: StoredImage[], imageIndex: number) {
@@ -1273,7 +1313,10 @@ function getStoredImageModeration() {
   return normalizeImageModeration(window.localStorage.getItem(IMAGE_MODERATION_STORAGE_KEY));
 }
 
-function imageQualityForModel(model: ImageModel, quality: ImageQuality): ImageQuality | undefined {
+function imageQualityForModel(model: ImageModel, quality: ImageQuality, hasReferenceImages = false): ImageQuality | undefined {
+  if (isGrokImagineImageModel(model)) {
+    return hasReferenceImages ? undefined : normalizeGrokImageQuality(quality);
+  }
   return supportsImageQuality(model) ? quality : undefined;
 }
 
@@ -1484,6 +1527,9 @@ function midjourneyExtraBody(model: ImageModel, settings?: MidjourneySettingsPay
 }
 
 function geminiFlashExtraBody(model: ImageModel, settings?: GeminiFlashSettingsPayload): GeminiFlashSettingsPayload | undefined {
+  if (!isGeminiFlashImageModel(model)) {
+    return undefined;
+  }
   const extraBody = imageModelSettingsToTaskFields(model, {
     geminiFlash: normalizeGeminiFlashSettings(settings || DEFAULT_GEMINI_FLASH_SETTINGS),
   }).extraBody;
@@ -1539,6 +1585,13 @@ function normalizeArenaSlotSettings(slot: ImageArenaAgentSlotDraft): ImageArenaA
       ...base,
       imageModelSettings: { geminiPro: geminiProSettings },
       geminiProSettings,
+    };
+  }
+  if (isGrokImagineImageModel(slot.model) || isSeedreamImageModel(slot.model)) {
+    const imageModelSettings = normalizeImageModelSettings(slot.model, sourceSettings);
+    return {
+      ...base,
+      imageModelSettings,
     };
   }
   return base;
@@ -1901,7 +1954,7 @@ async function recoverConversationHistory(items: ImageConversation[]) {
           turnChanged = true;
           return {
             ...image,
-            taskId: imageTaskIdForImage(turn.id, turn.images, imageIndex),
+            taskId: imageTaskIdForImage(turn.id, turn.images, imageIndex, turn.model),
             status: "loading" as const,
             error: undefined,
           };
@@ -1910,7 +1963,7 @@ async function recoverConversationHistory(items: ImageConversation[]) {
           turnChanged = true;
           return {
             ...image,
-            taskId: imageTaskIdForImage(turn.id, turn.images, imageIndex),
+            taskId: imageTaskIdForImage(turn.id, turn.images, imageIndex, turn.model),
           };
         }
         return image;
@@ -2014,6 +2067,13 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
   const [webSearchEnabled, setWebSearchEnabled] = useState(false);
   const [midjourneySettings, setMidjourneySettings] = useState<MidjourneySettingsPayload>(getStoredMidjourneySettings);
   const [geminiFlashSettings, setGeminiFlashSettings] = useState<GeminiFlashSettingsPayload>(getStoredGeminiFlashSettings);
+  const [grokSettings, setGrokSettings] = useState<NonNullable<ImageModelSettingsState["grok"]>>({ nsfwCheck: false });
+  const [seedreamSettings, setSeedreamSettings] = useState<NonNullable<ImageModelSettingsState["seedream"]>>({
+    nsfwCheck: false,
+    watermark: false,
+    sequentialImageGeneration: "disabled",
+    sequentialMaxImages: 15,
+  });
   const [defaultImageVisibility, setDefaultImageVisibility] = useState<ImageVisibility>("private");
   const [referenceImages, setReferenceImages] = useState<StoredReferenceImage[]>([]);
   const [conversations, setConversations] = useState<ImageConversation[]>([]);
@@ -2075,13 +2135,13 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     () => pickMenuModel(imageCreationModelOptions, imageModel, DEFAULT_IMAGE_MODEL),
     [imageCreationModelOptions, imageModel],
   );
-  const imageReferenceLimit = imageReferenceInputLimit(effectiveImageModel);
   const composerModel = composerMode === "chat" ? effectiveChatModel : effectiveImageModel;
   const composerModelOptions = composerMode === "chat" ? chatModelOptions : imageCreationModelOptions;
   const composerImageCount = useMemo(
     () => requestedImageCountForModel(effectiveImageModel, imageCount),
     [effectiveImageModel, imageCount],
   );
+  const imageReferenceLimit = imageReferenceInputLimitForCount(effectiveImageModel, composerImageCount);
   const imageSize = useMemo(
     () => {
       const request = buildEffectiveImageSizeRequest(effectiveImageModel, {
@@ -2123,6 +2183,14 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     editingDraftEffectiveSizeSelection?.mode === "ratio" &&
     isPixelIconSize(editingDraftEffectiveSizeSelection.aspectRatio);
   const editingDraftResolutionControlsVisible = editingDraftResolutionPresets && !editingDraftPixelIconSizeSelected;
+  const editingDraftGrokImageModel = isGrokImagineImageModel(editingTurnDraft?.model);
+  const editingDraftSeedreamImageModel = isSeedreamImageModel(editingTurnDraft?.model);
+  const editingDraftRatioOptions = editingDraftGrokImageModel
+    ? GROK_IMAGE_RATIO_PICKER_OPTIONS
+    : editingDraftSeedreamImageModel ? seedreamImageAspectRatioOptions(editingTurnDraft?.model) : DEFAULT_IMAGE_RATIO_PICKER_OPTIONS;
+  const editingDraftResolutionOptions = editingDraftGrokImageModel
+    ? GROK_IMAGE_RESOLUTION_OPTIONS
+    : editingDraftSeedreamImageModel ? seedreamImageResolutionOptions(editingTurnDraft?.model) : IMAGE_RESOLUTION_OPTIONS;
   const editingDraftOutputControls = editingTurnDraft
     ? supportsImageOutputControls(editingTurnDraft.model)
     : false;
@@ -2141,11 +2209,17 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         geminiPro: {
           inputImageMask: editingTurnDraft.inputImageMask,
         },
+        grok: editingTurnDraft.imageModelSettings?.grok,
+        seedream: editingTurnDraft.imageModelSettings?.seedream,
       }
     : undefined;
+  const editingDraftImageCount = editingTurnDraft?.mode === "chat"
+    ? 1
+    : requestedImageCountForModel(editingTurnDraft?.model, editingTurnDraft?.count || 1);
+  const editingDraftImageCountMax = imageTaskMaxCount(editingTurnDraft?.model);
   const editingDraftReferenceLimit =
     editingTurnDraft && editingTurnDraft.mode !== "chat"
-      ? imageReferenceInputLimit(editingTurnDraft.model)
+      ? imageReferenceInputLimitForCount(editingTurnDraft.model, editingDraftImageCount)
       : 0;
   const editingDraftReferenceLimitReached = Boolean(
     editingTurnDraft &&
@@ -2234,6 +2308,12 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
           : {}),
         ...(isGeminiProImageModel(current.model)
           ? { inputImageMask: settings.geminiPro?.inputImageMask || "" }
+          : {}),
+        ...(settings.grok
+          ? { imageModelSettings: normalizeImageModelSettings(current.model, { grok: settings.grok }) }
+          : {}),
+        ...(settings.seedream
+          ? { imageModelSettings: normalizeImageModelSettings(current.model, { seedream: settings.seedream }) }
           : {}),
       };
     });
@@ -2957,8 +3037,20 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
       return;
     }
     setImageModel(value);
-    if (value === MIDJOURNEY_IMAGE_MODEL) {
+    if (imageTaskMaxCount(value) === 1) {
       setImageCount("1");
+    }
+    if (isGrokImagineImageModel(value)) {
+      setImageSizeMode("ratio");
+      setImageAspectRatio((current) => normalizeGrokImageAspectRatio(current));
+      setImageResolution((current) => normalizeGrokImageResolution(current));
+      setImageQuality((current) => normalizeGrokImageQuality(current));
+    }
+    if (isSeedreamImageModel(value)) {
+      setImageSizeMode("ratio");
+      setImageAspectRatio((current) => normalizeSeedreamImageAspectRatio(current, value));
+      setImageResolution((current) => normalizeSeedreamImageResolution(current, value));
+      setImageOutputFormat((current) => normalizeImageOutputFormatForModel(value, current));
     }
   }, [composerMode]);
 
@@ -3117,6 +3209,19 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
           ? normalizeArenaSlotSettings({
               ...slot,
               geminiProSettings: settings,
+            })
+          : slot,
+      ),
+    );
+  }, []);
+
+  const handleArenaSlotImageModelSettingsChange = useCallback((slotId: string, settings: ImageModelSettingsState) => {
+    setArenaSlots((current) =>
+      current.map((slot) =>
+        slot.id === slotId
+          ? normalizeArenaSlotSettings({
+              ...slot,
+              imageModelSettings: normalizeImageModelSettings(slot.model, settings),
             })
           : slot,
       ),
@@ -3788,6 +3893,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
       webSearch: targetTurn.webSearch,
       midjourneySettings: targetTurn.midjourneySettings,
       geminiFlashSettings: targetTurn.geminiFlashSettings,
+      imageModelSettings: targetTurn.imageModelSettings,
       visibility: targetTurn.visibility || "private",
       referenceImages: targetTurn.mode === "chat" ? [] : targetTurn.referenceImages,
     });
@@ -3801,7 +3907,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
     if (!draft || draft.mode === "chat") {
       return;
     }
-    const referenceLimit = imageReferenceInputLimit(draft.model);
+    const referenceLimit = imageReferenceInputLimitForCount(draft.model, requestedImageCountForModel(draft.model, draft.count));
     const remainingSlots = Math.max(0, referenceLimit - draft.referenceImages.length);
     if (remainingSlots <= 0) {
       toast.error(referenceImageLimitMessage(referenceLimit));
@@ -3952,7 +4058,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         });
 
         const activeReferenceLimit = activeTurn.arenaMode === "image"
-          ? Math.min(...(activeTurn.agentSlots || []).map((slot) => imageReferenceInputLimit(slot.model)))
+          ? Math.min(...(activeTurn.agentSlots || []).map((slot) => imageReferenceInputLimitForCount(slot.model, activeTurn.count || 1)))
           : 0;
         if (activeTurn.arenaMode === "image" && activeTurn.referenceImages.length > activeReferenceLimit) {
           throw new Error(`${referenceImageLimitMessage(activeReferenceLimit)}，请移除多余图片后再生成`);
@@ -4008,7 +4114,9 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                 officialImageSettings: run.officialImageSettings,
                 geminiProSettings: run.geminiProSettings,
               });
-              const payload = adaptation.payload;
+              const payload = referenceImageIds.length > 0 && isGrokImagineImageModel(run.model)
+                ? { ...adaptation.payload, quality: undefined }
+                : adaptation.payload;
               const extraBody = {
                 ...payload.extraBody,
                 ...baseExtraBody(run),
@@ -4268,7 +4376,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                       image.status === "loading"
                         ? {
                             ...image,
-                            taskId: imageTaskIdForImage(turn.id, turn.images, imageIndex),
+                            taskId: imageTaskIdForImage(turn.id, turn.images, imageIndex, turn.model),
                           }
                         : image,
                     ),
@@ -4288,7 +4396,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                 ? "正在读取参考图并准备上传"
                 : "正在创建图片生成任务",
         });
-        const activeReferenceLimit = imageReferenceInputLimit(activeTurn.model);
+        const activeReferenceLimit = imageReferenceInputLimitForCount(activeTurn.model, activeTurn.count || 1);
         if (usesReferenceImages(activeTurn.mode) && activeTurn.referenceImages.length > activeReferenceLimit) {
           throw new Error(`${referenceImageLimitMessage(activeReferenceLimit)}，请移除多余图片后再生成`);
         }
@@ -4318,10 +4426,14 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         const fallbackReferenceImage = activeTurn.mode === "chat" ? undefined : getFallbackReferenceImage(snapshot, activeTurn.id);
         const activeTurnMidjourneyBody = activeTurn.mode === "chat" ? undefined : midjourneyExtraBody(activeTurn.model, activeTurn.midjourneySettings);
         const activeTurnGeminiFlashBody = activeTurn.mode === "chat" ? undefined : geminiFlashExtraBody(activeTurn.model, activeTurn.geminiFlashSettings);
+        const activeTurnModelFields = activeTurn.mode === "chat"
+          ? undefined
+          : imageModelSettingsToTaskFields(activeTurn.model, activeTurn.imageModelSettings, activeTurn.count);
         const activeTurnToolOptions = activeTurn.mode === "chat" ? undefined : imageTurnToolOptions(activeTurn);
         const activeTurnExtraBody = {
           ...activeTurnMidjourneyBody,
           ...activeTurnGeminiFlashBody,
+          ...activeTurnModelFields?.extraBody,
           ...(activeTurn.mode === "chat" && activeTurn.webSearch ? { web_search: true } : {}),
         };
         const pendingTaskGroups = activeTurn.images.reduce<Array<{ taskId: string; count: number }>>(
@@ -4329,7 +4441,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
             if (image.status !== "loading") {
               return groups;
             }
-            const taskId = imageTaskIdForImage(activeTurn.id, activeTurn.images, imageIndex);
+            const taskId = imageTaskIdForImage(activeTurn.id, activeTurn.images, imageIndex, activeTurn.model);
             const existing = groups.find((group) => group.taskId === taskId);
             if (existing) {
               existing.count += 1;
@@ -4361,7 +4473,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
               activeTurn.prompt,
               activeTurn.model,
               activeTurnSizeRequest.size,
-              imageQualityForModel(activeTurn.model, activeTurn.quality || DEFAULT_IMAGE_QUALITY),
+              imageQualityForModel(activeTurn.model, activeTurn.quality || DEFAULT_IMAGE_QUALITY, true),
               group.count,
               taskMessages,
               activeTurn.visibility || "private",
@@ -4576,7 +4688,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         count: 1,
         size: "",
         sizeSelection: undefined,
-        quality: imageQualityForModel(effectiveImageModel, DEFAULT_IMAGE_QUALITY),
+        quality: imageQualityForModel(effectiveImageModel, DEFAULT_IMAGE_QUALITY, true),
         outputFormat: "png",
         outputCompression: undefined,
         background: "transparent",
@@ -4584,7 +4696,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         images: [
           {
             id: `${turnId}-0`,
-            taskId: imageTaskBatchId(turnId, 0),
+            taskId: imageTaskBatchId(turnId, 0, effectiveImageModel),
             taskStatus: "queued",
             status: "loading",
             visibility,
@@ -4806,7 +4918,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
       const retryTaskIds = new Map(
         retryableIndexes.map((imageIndex) => [
           imageIndex,
-          imageTaskBatchId(`${targetTurn.id}-${retryRunId}`, imageIndex),
+          imageTaskBatchId(`${targetTurn.id}-${retryRunId}`, imageIndex, targetTurn.model),
         ]),
       );
       try {
@@ -5086,7 +5198,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                 const imageId = `${turn.id}-${regenerationId}-${index}`;
                 return {
                   id: imageId,
-                  taskId: imageTaskBatchId(`${turn.id}-${regenerationId}`, index),
+                  taskId: imageTaskBatchId(`${turn.id}-${regenerationId}`, index, turn.model),
                   taskStatus: "queued" as const,
                   status: "loading" as const,
                   visibility,
@@ -5136,7 +5248,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
             : imageCreationModelOptions[0]?.value || DEFAULT_IMAGE_MODEL;
       const imageCount = mode === "chat" ? 1 : requestedImageCountForModel(effectiveDraftModel, draft.count);
       const referenceImages = usesReferenceImages(mode) ? draft.referenceImages : [];
-      const draftReferenceLimit = imageReferenceInputLimit(effectiveDraftModel);
+      const draftReferenceLimit = imageReferenceInputLimitForCount(effectiveDraftModel, imageCount);
       if (usesReferenceImages(mode) && referenceImages.length > draftReferenceLimit) {
         toast.error(`${referenceImageLimitMessage(draftReferenceLimit)}，请移除多余图片后再保存`);
         return;
@@ -5219,11 +5331,12 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
               count: imageCount,
               size: draftImageSize,
               sizeSelection: mode === "chat" ? undefined : draftStoredSizeSelection,
-              quality: imageQualityForModel(effectiveDraftModel, draft.quality),
+              quality: imageQualityForModel(effectiveDraftModel, draft.quality, referenceImages.length > 0),
               outputFormat: draftOutputFormat,
               outputCompression: draftOutputCompression,
               midjourneySettings: draftMidjourneySettings,
               geminiFlashSettings: draftGeminiFlashSettings,
+              imageModelSettings: compactImageModelSettings(normalizeImageModelSettings(effectiveDraftModel, draft.imageModelSettings)),
               background: mode === "chat" ? undefined : draft.background,
               moderation: mode === "chat" ? undefined : draft.moderation,
               inputImageMask: mode === "chat" ? undefined : draft.inputImageMask,
@@ -5242,7 +5355,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                 const imageId = `${turn.id}-${regenerationId}-${index}`;
                 return {
                   id: imageId,
-                  taskId: imageTaskBatchId(`${turn.id}-${regenerationId}`, index),
+                  taskId: imageTaskBatchId(`${turn.id}-${regenerationId}`, index, effectiveDraftModel),
                   taskStatus: "queued" as const,
                   status: "loading" as const,
                   visibility: baseTurn.mode === "chat" ? undefined : baseTurn.visibility,
@@ -5328,7 +5441,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         }
         const storedSizeSelection = currentImageSizeRequest ? serializeImageSizeSelection(currentImageSizeRequest.selection) : undefined;
         const minReferenceLimit = arenaMode === "image"
-          ? Math.min(...arenaSlots.map((slot) => imageReferenceInputLimit(slot.model)))
+          ? Math.min(...arenaSlots.map((slot) => imageReferenceInputLimitForCount(slot.model, parsedCount)))
           : 0;
         if (arenaMode === "image" && referenceImages.length > minReferenceLimit) {
           toast.error(`${referenceImageLimitMessage(minReferenceLimit)}，请移除多余图片后再生成`);
@@ -5419,6 +5532,11 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
           ? pickMenuModel(chatModelOptions, chatModel, DEFAULT_CHAT_MODEL)
           : pickMenuModel(imageCreationModelOptions, imageModel, DEFAULT_IMAGE_MODEL);
       const requestedCount = effectiveImageMode === "chat" ? 1 : requestedImageCountForModel(effectiveModel, imageCount);
+      const requestedReferenceLimit = imageReferenceInputLimitForCount(effectiveModel, requestedCount);
+      if (usesReferenceImages(effectiveImageMode) && referenceImages.length > requestedReferenceLimit) {
+        toast.error(`${referenceImageLimitMessage(requestedReferenceLimit)}，请移除多余图片后再生成`);
+        return;
+      }
       const rawImageSizeSelection = {
         mode: imageSizeMode,
         aspectRatio: imageAspectRatio,
@@ -5467,7 +5585,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
           ? undefined
           : imageOutputCompressionForModel(effectiveModel, effectiveOutputFormat, imageOutputCompression);
       const effectiveImageResolution = imageResolutionPresetForModel(effectiveModel, currentImageSizeRequest?.selection);
-      const effectiveImageQuality = imageQualityForModel(effectiveModel, imageQuality);
+      const effectiveImageQuality = imageQualityForModel(effectiveModel, imageQuality, referenceImages.length > 0);
       const effectiveToolOptions =
         effectiveImageMode === "chat"
           ? undefined
@@ -5480,6 +5598,10 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         effectiveImageMode === "chat" ? undefined : midjourneyExtraBody(effectiveModel, midjourneySettings)?.midjourney_settings;
       const effectiveGeminiFlashSettings =
         effectiveImageMode === "chat" ? undefined : geminiFlashExtraBody(effectiveModel, geminiFlashSettings);
+      const effectiveImageModelSettings =
+        effectiveImageMode === "chat"
+          ? undefined
+          : compactImageModelSettings(normalizeImageModelSettings(effectiveModel, { grok: grokSettings, seedream: seedreamSettings }));
       const isHighResolutionRequest =
         effectiveImageMode !== "chat" &&
         isHighResolutionImageRequest(currentImageSize, effectiveImageResolution);
@@ -5506,6 +5628,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
         outputCompression: effectiveImageMode === "chat" ? undefined : effectiveOutputCompression,
         midjourneySettings: effectiveMidjourneySettings,
         geminiFlashSettings: effectiveGeminiFlashSettings,
+        imageModelSettings: effectiveImageModelSettings,
         background: effectiveToolOptions?.background,
         moderation: effectiveToolOptions?.moderation,
         inputImageMask: effectiveToolOptions?.inputImageMask,
@@ -5515,7 +5638,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
           const imageId = `${turnId}-${index}`;
           return {
             id: imageId,
-            taskId: imageTaskBatchId(turnId, index),
+            taskId: imageTaskBatchId(turnId, index, effectiveModel),
             taskStatus: "queued" as const,
             status: "loading" as const,
             visibility: effectiveImageMode === "chat" ? undefined : defaultImageVisibility,
@@ -5703,16 +5826,16 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                         type="number"
                         inputMode="numeric"
                         min="1"
-                        max={editingTurnDraft.model === MIDJOURNEY_IMAGE_MODEL ? "1" : "10"}
+                        max={String(editingDraftImageCountMax)}
                         step="1"
-                        value={editingTurnDraft.model === MIDJOURNEY_IMAGE_MODEL ? "1" : editingTurnDraft.count}
-                        disabled={editingTurnDraft.model === MIDJOURNEY_IMAGE_MODEL}
+                        value={editingDraftImageCountMax === 1 ? "1" : editingTurnDraft.count}
+                        disabled={editingDraftImageCountMax === 1}
                         onChange={(event) =>
                           setEditingTurnDraft((current) =>
                             current ? { ...current, count: event.target.value } : current,
                           )
                         }
-                        className={editingTurnDraft.model === MIDJOURNEY_IMAGE_MODEL ? "disabled:cursor-default disabled:opacity-100" : undefined}
+                        className={editingDraftImageCountMax === 1 ? "disabled:cursor-default disabled:opacity-100" : undefined}
                       />
                     </label>
                     ) : null}
@@ -5726,10 +5849,22 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                               ? {
                                   ...current,
                                   model: value,
-                                  count: value === MIDJOURNEY_IMAGE_MODEL ? "1" : current.count,
+                                  count: imageTaskMaxCount(value) === 1 ? "1" : current.count,
                                   background: supportsOfficialImageGenerationSettings(value) ? current.background || DEFAULT_IMAGE_BACKGROUND : undefined,
                                   moderation: supportsOfficialImageGenerationSettings(value) ? current.moderation || DEFAULT_IMAGE_MODERATION : undefined,
                                   inputImageMask: supportsImageMaskParameter(value) ? current.inputImageMask : undefined,
+                                  sizeMode: isGrokImagineImageModel(value) || isSeedreamImageModel(value) ? "ratio" : current.sizeMode,
+                                  aspectRatio: isGrokImagineImageModel(value)
+                                    ? normalizeGrokImageAspectRatio(current.aspectRatio)
+                                    : isSeedreamImageModel(value) ? normalizeSeedreamImageAspectRatio(current.aspectRatio, value) : current.aspectRatio,
+                                  resolution: isGrokImagineImageModel(value)
+                                    ? normalizeGrokImageResolution(current.resolution)
+                                    : isSeedreamImageModel(value) ? normalizeSeedreamImageResolution(current.resolution, value) : current.resolution,
+                                  outputFormat: normalizeImageOutputFormatForModel(value, current.outputFormat),
+                                  quality: isGrokImagineImageModel(value) ? normalizeGrokImageQuality(current.quality) : current.quality,
+                                  imageModelSettings: isGrokImagineImageModel(value) || isSeedreamImageModel(value)
+                                    ? normalizeImageModelSettings(value, current.imageModelSettings)
+                                    : undefined,
                                 }
                               : current,
                           )
@@ -5797,7 +5932,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                             </SelectTrigger>
                             <SelectContent>
                               <SelectGroup>
-                                {IMAGE_SIZE_MODE_OPTIONS.filter((option) => editingDraftStructuredParameters || option.value !== "custom").map((option) => (
+                                {IMAGE_SIZE_MODE_OPTIONS.filter((option) => editingDraftGrokImageModel || editingDraftSeedreamImageModel ? option.value === "ratio" : editingDraftStructuredParameters || option.value !== "custom").map((option) => (
                                   <SelectItem key={option.value} value={option.value}>
                                     {option.label}
                                   </SelectItem>
@@ -5847,13 +5982,21 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                               画幅/尺寸
                               <ImageRatioPicker
                                 label="画幅/尺寸"
-                                value={editingTurnDraft.aspectRatio}
+                                value={editingDraftGrokImageModel
+                                  ? normalizeGrokImageAspectRatio(editingTurnDraft.aspectRatio)
+                                  : editingDraftSeedreamImageModel ? normalizeSeedreamImageAspectRatio(editingTurnDraft.aspectRatio, editingTurnDraft.model) : editingTurnDraft.aspectRatio}
                                 valueLabel={
                                   editingTurnDraft.aspectRatio === CUSTOM_IMAGE_ASPECT_RATIO
                                     ? editingTurnDraft.customRatio.trim() || "自定义比例"
-                                    : imageRatioPickerValueLabel(DEFAULT_IMAGE_RATIO_PICKER_OPTIONS, editingTurnDraft.aspectRatio, "Auto")
+                                    : imageRatioPickerValueLabel(
+                                        editingDraftRatioOptions,
+                                        editingDraftGrokImageModel
+                                          ? normalizeGrokImageAspectRatio(editingTurnDraft.aspectRatio)
+                                          : editingDraftSeedreamImageModel ? normalizeSeedreamImageAspectRatio(editingTurnDraft.aspectRatio, editingTurnDraft.model) : editingTurnDraft.aspectRatio,
+                                        "Auto",
+                                      )
                                 }
-                                options={DEFAULT_IMAGE_RATIO_PICKER_OPTIONS}
+                                options={editingDraftRatioOptions}
                                 open={editingAspectRatioPickerOpen}
                                 onOpenChange={setEditingAspectRatioPickerOpen}
                                 onValueChange={(value) =>
@@ -5874,7 +6017,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                               <label className="flex flex-col gap-2 text-sm font-medium text-stone-700">
                                 分辨率
                                 <Select
-                                  value={editingTurnDraft.resolution}
+                                  value={editingDraftGrokImageModel ? normalizeGrokImageResolution(editingTurnDraft.resolution) : editingDraftSeedreamImageModel ? normalizeSeedreamImageResolution(editingTurnDraft.resolution, editingTurnDraft.model) : editingTurnDraft.resolution}
                                   onValueChange={(value) =>
                                     setEditingTurnDraft((current) =>
                                       current && isImageResolution(value) ? { ...current, resolution: value } : current,
@@ -5886,7 +6029,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                                   </SelectTrigger>
                                   <SelectContent>
                                     <SelectGroup>
-                                      {IMAGE_RESOLUTION_OPTIONS.map((option) => (
+                                      {editingDraftResolutionOptions.map((option) => (
                                         <SelectItem key={option.value} value={option.value}>
                                           {option.label}
                                         </SelectItem>
@@ -5917,7 +6060,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                         {editingDraftOutputControls ? (
                           <ImageOutputControls
                             imageModel={editingTurnDraft.model}
-                            outputFormat={editingTurnDraft.outputFormat}
+                            outputFormat={normalizeImageOutputFormatForModel(editingTurnDraft.model, editingTurnDraft.outputFormat)}
                             outputCompression={editingTurnDraft.outputCompression}
                             onOutputFormatChange={(outputFormat) =>
                               setEditingTurnDraft((current) =>
@@ -5935,11 +6078,11 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                             compressionPlaceholderDisabled="仅 JPEG"
                           />
                         ) : null}
-                        {supportsImageQuality(editingTurnDraft.model) ? (
+                        {supportsImageQuality(editingTurnDraft.model) && (!editingDraftGrokImageModel || editingTurnDraft.referenceImages.length === 0) ? (
                           <label className="flex flex-col gap-2 text-sm font-medium text-stone-700">
                             质量强度
                             <Select
-                              value={editingTurnDraft.quality}
+                              value={editingDraftGrokImageModel ? normalizeGrokImageQuality(editingTurnDraft.quality) : editingTurnDraft.quality}
                               onValueChange={(value) =>
                                 setEditingTurnDraft((current) =>
                                   current && isImageQuality(value) ? { ...current, quality: value } : current,
@@ -5951,7 +6094,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                               </SelectTrigger>
                               <SelectContent>
                                 <SelectGroup>
-                                  {IMAGE_QUALITY_OPTIONS.map((option) => (
+                                  {(editingDraftGrokImageModel ? GROK_IMAGE_QUALITY_OPTIONS : IMAGE_QUALITY_OPTIONS).map((option) => (
                                     <SelectItem key={option.value} value={option.value}>
                                       {option.label}
                                     </SelectItem>
@@ -6111,6 +6254,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                   onSlotGeminiFlashSettingsChange={handleArenaSlotGeminiFlashSettingsChange}
                   onSlotOfficialImageSettingsChange={handleArenaSlotOfficialImageSettingsChange}
                   onSlotGeminiProSettingsChange={handleArenaSlotGeminiProSettingsChange}
+                  onSlotImageModelSettingsChange={handleArenaSlotImageModelSettingsChange}
                   onReferenceImageChange={handleReferenceImageChange}
                   onRemoveReferenceImage={handleRemoveReferenceImage}
                   onSubmit={handleSubmit}
@@ -6137,6 +6281,8 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                   webSearch={webSearchEnabled}
                   midjourneySettings={midjourneySettings}
                   geminiFlashSettings={geminiFlashSettings}
+                  grokSettings={grokSettings}
+                  seedreamSettings={seedreamSettings}
                   billingBlocked={billingBlocked}
                   referenceImages={referenceImages}
                   mentionAssets={visibleAssets}
@@ -6161,6 +6307,8 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                   onWebSearchChange={setWebSearchEnabled}
                   onMidjourneySettingsChange={(settings) => setMidjourneySettings(normalizeMidjourneySettings(settings))}
                   onGeminiFlashSettingsChange={(settings) => setGeminiFlashSettings(normalizeGeminiFlashSettings(settings))}
+                  onGrokSettingsChange={setGrokSettings}
+                  onSeedreamSettingsChange={setSeedreamSettings}
                   onSubmit={handleSubmit}
                   onReferenceImageChange={handleReferenceImageChange}
                   onImageResultDrop={handleImageResultDrop}

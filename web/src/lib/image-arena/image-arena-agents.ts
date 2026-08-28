@@ -120,6 +120,8 @@ export function sanitizeImageArenaAgentSlots(input: {
       geminiFlash: slot.imageModelSettings?.geminiFlash || slot.geminiFlashSettings,
       officialImage: slot.imageModelSettings?.officialImage || slot.officialImageSettings,
       geminiPro: slot.imageModelSettings?.geminiPro || slot.geminiProSettings,
+      grok: slot.imageModelSettings?.grok,
+      seedream: slot.imageModelSettings?.seedream,
     });
     slots.push({
       id: slot.id || `arena-slot-${slots.length + 1}`,

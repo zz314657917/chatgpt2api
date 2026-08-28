@@ -44,6 +44,9 @@ import { hasImageResultDragPayload, parseImageResultDragPayload } from "@/app/im
 import { hasManagedImageDragPayload, parseManagedImageDragPayload } from "@/components/managed-image-drag";
 import {
   CUSTOM_IMAGE_ASPECT_RATIO,
+  GROK_IMAGE_ASPECT_RATIO_OPTIONS,
+  GROK_IMAGE_QUALITY_OPTIONS,
+  GROK_IMAGE_RESOLUTION_OPTIONS,
   IMAGE_QUALITY_OPTIONS,
   IMAGE_RESOLUTION_OPTIONS,
   IMAGE_SIZE_MODE_OPTIONS,
@@ -54,7 +57,14 @@ import {
   imageRequestSizeSupportMessage,
   isHighResolutionImageSize,
   isPixelIconSize,
+  normalizeGrokImageAspectRatio,
+  normalizeGrokImageQuality,
+  normalizeGrokImageResolution,
+  normalizeSeedreamImageAspectRatio,
+  normalizeSeedreamImageResolution,
   parseImageRatio,
+  seedreamImageAspectRatioOptions,
+  seedreamImageResolutionOptions,
   type ImageOutputFormat,
   type ImageAspectRatio,
   type ImageQuality,
@@ -64,7 +74,10 @@ import {
 import {
   IMAGE_MODEL_ROUTE_DETAILS,
   MIDJOURNEY_IMAGE_MODEL,
+  imageTaskMaxCount,
   isGeminiProImageModel,
+  isGrokImagineImageModel,
+  isSeedreamImageModel,
   supportsImageQuality,
   supportsImageOutputControls,
   supportsImageResolutionPresets,
@@ -76,7 +89,7 @@ import {
 } from "@/lib/api";
 import { imageModelHasSettings, type ImageModelSettingsState } from "@/lib/image-model-settings";
 import { cn } from "@/lib/utils";
-import { DEFAULT_IMAGE_RATIO_PICKER_OPTIONS, imageRatioPickerValueLabel } from "@/lib/image-ratio-picker-options";
+import { DEFAULT_IMAGE_RATIO_PICKER_OPTIONS, imageRatioPickerValueLabel, type ImageRatioPickerOption } from "@/lib/image-ratio-picker-options";
 
 const ImageLightbox = lazy(() =>
   import("@/components/image-lightbox").then((module) => ({ default: module.ImageLightbox })),
@@ -103,6 +116,8 @@ type ImageComposerProps = {
   webSearch: boolean;
   midjourneySettings: MidjourneySettingsPayload;
   geminiFlashSettings: GeminiFlashSettingsPayload;
+  grokSettings: NonNullable<ImageModelSettingsState["grok"]>;
+  seedreamSettings: NonNullable<ImageModelSettingsState["seedream"]>;
   billingBlocked: boolean;
   referenceImages: Array<{ name: string; dataUrl: string }>;
   mentionAssets?: ManagedImageSummary[];
@@ -127,6 +142,8 @@ type ImageComposerProps = {
   onWebSearchChange: (enabled: boolean) => void;
   onMidjourneySettingsChange: (settings: MidjourneySettingsPayload) => void;
   onGeminiFlashSettingsChange: (settings: GeminiFlashSettingsPayload) => void;
+  onGrokSettingsChange: (settings: NonNullable<ImageModelSettingsState["grok"]>) => void;
+  onSeedreamSettingsChange: (settings: NonNullable<ImageModelSettingsState["seedream"]>) => void;
   onSubmit: () => void | Promise<void>;
   onReferenceImageChange: (files: File[]) => void | Promise<void>;
   onImageResultDrop: (imageIds: string[]) => void | Promise<void>;
@@ -210,6 +227,16 @@ type ImageSettingsMenuOption<Value extends string> = {
 };
 
 const IMAGE_QUALITY_SETTINGS_OPTIONS = IMAGE_QUALITY_OPTIONS satisfies ReadonlyArray<ImageSettingsMenuOption<ImageQuality>>;
+const GROK_IMAGE_RATIO_PICKER_OPTIONS = GROK_IMAGE_ASPECT_RATIO_OPTIONS.map((option) => ({
+  ...option,
+  section: "Grok Imagine 2.0",
+})) satisfies ReadonlyArray<ImageRatioPickerOption<ImageAspectRatio>>;
+function seedreamImageRatioPickerOptions(model: ImageModel) {
+  return seedreamImageAspectRatioOptions(model).map((option) => ({
+    ...option,
+    section: "Seedream",
+  })) satisfies ReadonlyArray<ImageRatioPickerOption<ImageAspectRatio>>;
+}
 function ImageSettingsPopoverMenu<Value extends string>({
   label,
   value,
@@ -374,6 +401,8 @@ export function ImageComposer({
   webSearch,
   midjourneySettings,
   geminiFlashSettings,
+  grokSettings,
+  seedreamSettings,
   billingBlocked,
   referenceImages,
   mentionAssets = [],
@@ -398,6 +427,8 @@ export function ImageComposer({
   onWebSearchChange,
   onMidjourneySettingsChange,
   onGeminiFlashSettingsChange,
+  onGrokSettingsChange,
+  onSeedreamSettingsChange,
   onSubmit,
   onReferenceImageChange,
   onImageResultDrop,
@@ -435,17 +466,30 @@ export function ImageComposer({
   const imageModelLabel = imageModelOptions.find((option) => option.value === imageModel)?.label || imageModel;
   const imageModelRoute = IMAGE_MODEL_ROUTE_DETAILS[imageModel];
   const midjourneyImageModel = imageModel === MIDJOURNEY_IMAGE_MODEL;
+  const grokImageModel = isGrokImagineImageModel(imageModel);
+  const seedreamImageModel = isSeedreamImageModel(imageModel);
+  const imageCountMax = imageTaskMaxCount(imageModel);
+  const effectiveImageAspectRatio = grokImageModel
+    ? normalizeGrokImageAspectRatio(imageAspectRatio)
+    : seedreamImageModel ? normalizeSeedreamImageAspectRatio(imageAspectRatio, imageModel) : imageAspectRatio;
+  const imageRatioOptions = grokImageModel ? GROK_IMAGE_RATIO_PICKER_OPTIONS : seedreamImageModel ? seedreamImageRatioPickerOptions(imageModel) : DEFAULT_IMAGE_RATIO_PICKER_OPTIONS;
   const imageAspectRatioLabel =
-    imageAspectRatio === CUSTOM_IMAGE_ASPECT_RATIO
+    effectiveImageAspectRatio === CUSTOM_IMAGE_ASPECT_RATIO
       ? imageCustomRatio.trim() || "自定义比例"
-      : imageRatioPickerValueLabel(DEFAULT_IMAGE_RATIO_PICKER_OPTIONS, imageAspectRatio, "Auto");
+      : imageRatioPickerValueLabel(imageRatioOptions, effectiveImageAspectRatio, "Auto");
+  const effectiveImageResolutionValue = grokImageModel
+    ? normalizeGrokImageResolution(imageResolution)
+    : seedreamImageModel ? normalizeSeedreamImageResolution(imageResolution, imageModel) : imageResolution;
+  const imageResolutionOptions = grokImageModel ? GROK_IMAGE_RESOLUTION_OPTIONS : seedreamImageModel ? seedreamImageResolutionOptions(imageModel) : IMAGE_RESOLUTION_OPTIONS;
   const imageResolutionLabel =
-    IMAGE_RESOLUTION_OPTIONS.find((option) => option.value === imageResolution)?.label || "Auto";
+    imageResolutionOptions.find((option) => option.value === effectiveImageResolutionValue)?.label || "Auto";
   const structuredImageParameters = supportsStructuredImageParameters(imageModel);
   const resolutionPresetsSupported = supportsImageResolutionPresets(imageModel);
   const outputControlsSupported = supportsImageOutputControls(imageModel);
-  const imageQualitySupported = supportsImageQuality(imageModel);
-  const imageQualityLabel = IMAGE_QUALITY_OPTIONS.find((option) => option.value === imageQuality)?.label || "自动";
+  const imageQualitySupported = supportsImageQuality(imageModel) && (!grokImageModel || referenceImages.length === 0);
+  const effectiveImageQualityValue = grokImageModel ? normalizeGrokImageQuality(imageQuality) : imageQuality;
+  const imageQualityOptions = grokImageModel ? GROK_IMAGE_QUALITY_OPTIONS : IMAGE_QUALITY_SETTINGS_OPTIONS;
+  const imageQualityLabel = imageQualityOptions.find((option) => option.value === effectiveImageQualityValue)?.label || "自动";
   const modelSettingsSupported = imageModelHasSettings(imageModel);
   const imageModelSettingsValue: ImageModelSettingsState = {
     midjourney: midjourneySettings,
@@ -458,6 +502,8 @@ export function ImageComposer({
     geminiPro: {
       inputImageMask: imageMaskUrl,
     },
+    grok: grokSettings,
+    seedream: seedreamSettings,
   };
   const handleImageModelSettingsChange = (settings: ImageModelSettingsState) => {
     if (settings.midjourney) {
@@ -474,33 +520,41 @@ export function ImageComposer({
     if (isGeminiProImageModel(imageModel)) {
       onImageMaskUrlChange(settings.geminiPro?.inputImageMask || "");
     }
+    if (settings.grok) {
+      onGrokSettingsChange(settings.grok);
+    }
+    if (settings.seedream) {
+      onSeedreamSettingsChange(settings.seedream);
+    }
   };
-  const availableImageSizeModeOptions = structuredImageParameters
-    ? IMAGE_SIZE_MODE_OPTIONS
-    : IMAGE_SIZE_MODE_OPTIONS.filter((option) => option.value !== "custom");
-  const effectiveImageSizeMode = structuredImageParameters || imageSizeMode !== "custom" ? imageSizeMode : "auto";
-  const pixelIconSizeSelected = effectiveImageSizeMode === "ratio" && isPixelIconSize(imageAspectRatio);
+  const availableImageSizeModeOptions = grokImageModel || seedreamImageModel
+    ? IMAGE_SIZE_MODE_OPTIONS.filter((option) => option.value === "ratio")
+    : structuredImageParameters
+      ? IMAGE_SIZE_MODE_OPTIONS
+      : IMAGE_SIZE_MODE_OPTIONS.filter((option) => option.value !== "custom");
+  const effectiveImageSizeMode = grokImageModel || seedreamImageModel ? "ratio" : structuredImageParameters || imageSizeMode !== "custom" ? imageSizeMode : "auto";
+  const pixelIconSizeSelected = effectiveImageSizeMode === "ratio" && isPixelIconSize(effectiveImageAspectRatio);
   const resolutionControlsVisible = resolutionPresetsSupported && !pixelIconSizeSelected;
-  const effectiveImageResolution = resolutionControlsVisible ? imageResolution : "auto";
+  const effectiveImageResolution = resolutionControlsVisible ? effectiveImageResolutionValue : "auto";
   const submitLabel = composerMode === "chat" ? "发送对话" : referenceImages.length > 0 ? "编辑图片" : "生成图片";
   const computedImageSize = useMemo(
     () =>
       buildImageSize({
         mode: effectiveImageSizeMode,
-        aspectRatio: imageAspectRatio,
+        aspectRatio: effectiveImageAspectRatio,
         resolution: effectiveImageResolution,
         customRatio: imageCustomRatio,
         customWidth: imageCustomWidth,
         customHeight: imageCustomHeight,
       }),
-    [effectiveImageResolution, effectiveImageSizeMode, imageAspectRatio, imageCustomHeight, imageCustomRatio, imageCustomWidth],
+    [effectiveImageAspectRatio, effectiveImageResolution, effectiveImageSizeMode, imageCustomHeight, imageCustomRatio, imageCustomWidth],
   );
   const activeImageAspectRatio = getActiveImageAspectRatio({
-    aspectRatio: imageAspectRatio,
+    aspectRatio: effectiveImageAspectRatio,
     customRatio: imageCustomRatio,
   });
   const isCustomRatioInvalid =
-    effectiveImageSizeMode === "ratio" && imageAspectRatio === CUSTOM_IMAGE_ASPECT_RATIO && !parseImageRatio(imageCustomRatio);
+    effectiveImageSizeMode === "ratio" && effectiveImageAspectRatio === CUSTOM_IMAGE_ASPECT_RATIO && !parseImageRatio(imageCustomRatio);
   const sizeSupportMessage = imageRequestSizeSupportMessage(computedImageSize);
   const sizeSupportWarning = Boolean(sizeSupportMessage);
   const hasResolutionPreset = effectiveImageResolution !== "auto";
@@ -1146,12 +1200,12 @@ export function ImageComposer({
                             type="number"
                             inputMode="numeric"
                             min="1"
-                            max={midjourneyImageModel ? "1" : "10"}
+                            max={String(imageCountMax)}
                             step="1"
-                            value={midjourneyImageModel ? "1" : imageCount}
-                            disabled={midjourneyImageModel}
+                            value={imageCountMax === 1 ? "1" : imageCount}
+                            disabled={imageCountMax === 1}
                             onChange={(event) => {
-                              if (!midjourneyImageModel) {
+                              if (imageCountMax > 1) {
                                 onImageCountChange(event.target.value);
                               }
                             }}
@@ -1215,9 +1269,9 @@ export function ImageComposer({
                               <span className="shrink-0 font-medium text-[#45515e] dark:text-muted-foreground">画幅/尺寸</span>
                               <ImageRatioPicker
                                 label="画幅/尺寸"
-                                value={imageAspectRatio}
+                                value={effectiveImageAspectRatio}
                                 valueLabel={imageAspectRatioLabel}
-                                options={DEFAULT_IMAGE_RATIO_PICKER_OPTIONS}
+                                options={imageRatioOptions}
                                 open={isAspectRatioMenuOpen}
                                 onOpenChange={(open) => {
                                   setIsAspectRatioMenuOpen(open);
@@ -1243,9 +1297,9 @@ export function ImageComposer({
                                 <span className="shrink-0 font-medium text-[#45515e] dark:text-muted-foreground">分辨率</span>
                                 <ImageSettingsPopoverMenu
                                   label="分辨率"
-                                  value={imageResolution}
+                                  value={effectiveImageResolutionValue}
                                   valueLabel={imageResolutionLabel}
-                                  options={IMAGE_RESOLUTION_OPTIONS}
+                                  options={imageResolutionOptions}
                                   open={isResolutionMenuOpen}
                                   onOpenChange={(open) => {
                                   setIsResolutionMenuOpen(open);
@@ -1261,7 +1315,7 @@ export function ImageComposer({
                                 />
                               </div>
                             ) : null}
-                            {imageAspectRatio === CUSTOM_IMAGE_ASPECT_RATIO ? (
+                            {effectiveImageAspectRatio === CUSTOM_IMAGE_ASPECT_RATIO ? (
                               <div
                                 className={cn(
                                   "col-span-2 flex min-w-0 items-center justify-between gap-2 rounded-xl border bg-white px-3 py-1 dark:bg-background/70 sm:col-span-3",
@@ -1336,9 +1390,9 @@ export function ImageComposer({
                             <span className="shrink-0 font-medium text-[#45515e] dark:text-muted-foreground">质量强度</span>
                             <ImageSettingsPopoverMenu
                               label="质量强度"
-                              value={imageQuality}
+                              value={effectiveImageQualityValue}
                               valueLabel={imageQualityLabel}
-                              options={IMAGE_QUALITY_SETTINGS_OPTIONS}
+                              options={imageQualityOptions}
                               open={isQualityMenuOpen}
                               onOpenChange={(open) => {
                                 setIsQualityMenuOpen(open);

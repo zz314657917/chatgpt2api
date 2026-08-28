@@ -58,6 +58,60 @@ const geminiProMask = adaptImageArenaSettings("gemini-3-pro-image-preview", prod
 const geminiProMaskFields = imageArenaSubmittedFields(geminiProMask.payload);
 assert(geminiProMaskFields.mask_url === "https://cdn.example/pro-mask.png", "Gemini Pro should submit mask_url");
 
+const grokProduction = adaptImageArenaSettings("grok-imagine-image-2.0", productionSettings, {
+  imageModelSettings: { grok: { nsfwCheck: true } },
+});
+const grokProductionFields = imageArenaSubmittedFields(grokProduction.payload);
+const grokProductionFieldRecord = grokProductionFields as Record<string, unknown>;
+assert(grokProductionFields.model === "grok-imagine-image-2.0", "Grok should submit the 2.0 model");
+assert(grokProductionFields.size === "1:1", "Grok should submit a documented aspect ratio");
+assert(grokProductionFields.image_resolution === "2k", "Grok production should converge to 2K");
+assert(grokProductionFields.quality === "medium", "Grok production should converge to medium quality");
+assert(grokProductionFieldRecord.nsfw_check === true, "Grok should submit nsfw_check");
+assert(grokProduction.payload.extraBody?.nsfw_check === true, "Grok payload should retain nsfw_check");
+assert(grokProduction.payload.imageResolution !== "4k", "Grok should never submit 4K");
+assert(grokProduction.payload.quality !== "high", "Grok should never submit high quality");
+
+const grokLegacyRatio = adaptImageArenaSettings("grok-imagine-image-2.0", {
+  ...productionSettings,
+  aspectRatio: "21:9",
+});
+assert(grokLegacyRatio.payload.size === undefined, "Grok should omit unsupported legacy ratios");
+
+const seedream45Draft = adaptImageArenaSettings("doubao-seedance-4-5", {
+  ...productionSettings,
+  qualityTier: "draft",
+  outputFormat: "webp",
+});
+const seedream45DraftFields = imageArenaSubmittedFields(seedream45Draft.payload);
+assert(seedream45Draft.payload.imageResolution === "2k", "Seedream 4.5 should converge draft 1K to 2K");
+assert(seedream45DraftFields.output_format === undefined, "Seedream 4.5 should omit output_format");
+assert(seedream45DraftFields.quality === undefined, "Seedream 4.5 should omit quality");
+
+const seedreamLiteLegacy = adaptImageArenaSettings("seedream-5-0-lite", {
+  ...productionSettings,
+  aspectRatio: "9:21",
+  qualityTier: "draft",
+  outputFormat: "webp",
+}, {
+  imageModelSettings: {
+    seedream: { nsfwCheck: true, watermark: false, sequentialImageGeneration: "auto", sequentialMaxImages: 12 },
+  },
+});
+const seedreamLiteLegacyFields = imageArenaSubmittedFields(seedreamLiteLegacy.payload) as Record<string, unknown>;
+assert(seedreamLiteLegacy.payload.size === "auto", "Seedream Lite should converge unsupported 9:21 to auto");
+assert(seedreamLiteLegacy.payload.imageResolution === "2k", "Seedream Lite should converge draft 1K to 2K");
+assert(seedreamLiteLegacy.payload.outputFormat === "png", "Seedream Lite should converge WebP to PNG");
+assert(seedreamLiteLegacyFields.nsfw_check === true, "Seedream Lite should submit nsfw_check");
+assert(seedreamLiteLegacyFields.watermark === false, "Seedream Lite should submit watermark");
+assert(seedreamLiteLegacyFields.sequential_image_generation === "auto", "Seedream Lite should submit sequential mode");
+assert(seedreamLiteLegacyFields.quality === undefined, "Seedream Lite should omit quality");
+assert(seedreamLiteLegacyFields.google_search === undefined, "Seedream Lite should omit Gemini search fields");
+
+const seedreamProProduction = adaptImageArenaSettings("seedream-5-0-pro", productionSettings);
+assert(seedreamProProduction.payload.count === 1, "Seedream Pro should force n=1");
+assert(seedreamProProduction.payload.imageResolution === "2k", "Seedream Pro production should converge to 2K");
+
 const midjourney = adaptImageArenaSettings("midjourney", productionSettings, {
   midjourneySettings: {
     version: "6.1",

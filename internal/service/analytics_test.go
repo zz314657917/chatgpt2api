@@ -74,3 +74,15 @@ func TestAnalyticsServiceCountsUniqueUserOncePerDayPage(t *testing.T) {
 		t.Fatalf("page unique_user_count = %d", got)
 	}
 }
+
+func TestAnalyticsServiceRecognizesBeadWorkbench(t *testing.T) {
+	svc := NewAnalyticsService(newTestStorageBackend(t))
+	result, err := svc.Record(Identity{ID: "bead-user"}, []AnalyticsEvent{{Type: AnalyticsEventPageView, Path: "/beads"}})
+	if err != nil || result.Recorded != 1 {
+		t.Fatalf("Record(/beads) result=%#v err=%v", result, err)
+	}
+	overview := svc.Overview(7)
+	if len(overview.Pages) != 1 || overview.Pages[0]["path"] != "/beads" || overview.Pages[0]["label"] != "拼豆工坊" {
+		t.Fatalf("bead page analytics = %#v", overview.Pages)
+	}
+}

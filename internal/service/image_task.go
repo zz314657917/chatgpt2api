@@ -272,7 +272,7 @@ func (s *ImageTaskService) SubmitGeneration(ctx context.Context, identity Identi
 		return nil, err
 	}
 	size = normalizeImageTaskSize(size)
-	payload := map[string]any{"prompt": prompt, "model": model, "n": normalizedImageTaskCount(n), "size": size, "quality": quality, "response_format": "url", "base_url": baseURL, "visibility": visibility}
+	payload := map[string]any{"prompt": prompt, "model": model, "n": normalizedImageTaskCountForModel(model, n), "size": size, "quality": quality, "response_format": "url", "base_url": baseURL, "visibility": visibility}
 	if messages != nil {
 		payload["messages"] = messages
 	}
@@ -297,7 +297,7 @@ func (s *ImageTaskService) SubmitEdit(ctx context.Context, identity Identity, cl
 		return nil, err
 	}
 	size = normalizeImageTaskSize(size)
-	payload := map[string]any{"prompt": prompt, "images": images, "model": model, "n": normalizedImageTaskCount(n), "size": size, "quality": quality, "response_format": "url", "base_url": baseURL, "visibility": visibility}
+	payload := map[string]any{"prompt": prompt, "images": images, "model": model, "n": normalizedImageTaskCountForModel(model, n), "size": size, "quality": quality, "response_format": "url", "base_url": baseURL, "visibility": visibility}
 	if messages != nil {
 		payload["messages"] = messages
 	}
@@ -386,7 +386,7 @@ func (s *ImageTaskService) submitImageWithMetadataAndOptions(ctx context.Context
 		return nil, err
 	}
 	size = normalizeImageTaskSize(size)
-	payload := map[string]any{"prompt": prompt, "model": model, "n": normalizedImageTaskCount(n), "size": size, "quality": quality, "response_format": "url", "base_url": baseURL, "visibility": visibility}
+	payload := map[string]any{"prompt": prompt, "model": model, "n": normalizedImageTaskCountForModel(model, n), "size": size, "quality": quality, "response_format": "url", "base_url": baseURL, "visibility": visibility}
 	if images != nil {
 		payload["images"] = images
 	}
@@ -1973,11 +1973,29 @@ func normalizedImageTaskCount(n int) int {
 	return n
 }
 
-func imageTaskCount(payload map[string]any) int {
-	if payload["n"] == nil {
-		return normalizedImageTaskCount(util.ToInt(payload["count"], 1))
+func normalizedImageTaskCountForModel(model string, n int) int {
+	if n < 1 {
+		n = 1
 	}
-	return normalizedImageTaskCount(util.ToInt(payload["n"], 1))
+	limit := maxImageTaskCount
+	switch strings.ToLower(strings.TrimSpace(model)) {
+	case util.ImageModelSeedream40, util.ImageModelSeedream45, util.ImageModelSeedream50Lite:
+		limit = 15
+	case util.ImageModelSeedream50Pro:
+		limit = 1
+	}
+	if n > limit {
+		return limit
+	}
+	return n
+}
+
+func imageTaskCount(payload map[string]any) int {
+	model := util.Clean(payload["model"])
+	if payload["n"] == nil {
+		return normalizedImageTaskCountForModel(model, util.ToInt(payload["count"], 1))
+	}
+	return normalizedImageTaskCountForModel(model, util.ToInt(payload["n"], 1))
 }
 
 func taskCount(mode string, payload map[string]any) int {
@@ -2368,7 +2386,7 @@ func storedImageOutputCount(task map[string]any) int {
 	if data := util.AsMapSlice(task["data"]); len(data) > count {
 		count = len(data)
 	}
-	return normalizedImageTaskCount(count)
+	return normalizedImageTaskCountForModel(util.Clean(task["model"]), count)
 }
 
 func initialImageOutputStatuses(count int) []string {
@@ -2524,7 +2542,7 @@ func mergeImageTaskMetadata(payload map[string]any, metadata map[string]any) {
 	if len(metadata) == 0 {
 		return
 	}
-	preset := NormalizeImageResolutionPreset(util.Clean(metadata["image_resolution"]))
+	preset := normalizeImageTaskResolutionForModel(util.Clean(payload["model"]), util.Clean(metadata["image_resolution"]))
 	if util.ToBool(metadata["professional_mode"]) {
 		preset = normalizeProStudioResolution(util.Clean(metadata["image_resolution"]))
 	}
@@ -2567,6 +2585,14 @@ func mergeImageTaskMetadata(payload map[string]any, metadata map[string]any) {
 	if settings := util.StringMap(metadata["midjourney_settings"]); len(settings) > 0 {
 		payload["midjourney_settings"] = settings
 	}
+	for _, key := range []string{"nsfw_check", "watermark", "sequential_image_generation"} {
+		if value, ok := metadata[key]; ok {
+			payload[key] = value
+		}
+	}
+	if options := util.StringMap(metadata["sequential_image_generation_options"]); len(options) > 0 {
+		payload["sequential_image_generation_options"] = options
+	}
 	if compression, ok := NormalizeImageOutputCompressionValue(metadata["raw_output_compression"]); ok {
 		payload["raw_output_compression"] = compression
 	}
@@ -2575,6 +2601,18 @@ func mergeImageTaskMetadata(payload map[string]any, metadata map[string]any) {
 			payload[key] = value
 		}
 	}
+}
+
+func normalizeImageTaskResolutionForModel(model, value string) string {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	switch normalized {
+	case "1.5k", "3k":
+		model = strings.ToLower(strings.TrimSpace(model))
+		if model == util.ImageModelSeedream50Pro || model == util.ImageModelSeedream50Lite {
+			return normalized
+		}
+	}
+	return NormalizeImageResolutionPreset(normalized)
 }
 
 func normalizedFallbackReferenceImage(value any) map[string]any {

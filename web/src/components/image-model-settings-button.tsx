@@ -10,6 +10,10 @@ import {
   MIDJOURNEY_IMAGE_MODEL,
   isGeminiFlashImageModel,
   isGeminiProImageModel,
+  isGrokImagineImageModel,
+  isSeedreamImageModel,
+  isSeedream50LiteImageModel,
+  isSeedream50ProImageModel,
   isOfficialImageModel,
   midjourneyVersionSupportsStop,
   type ImageModel,
@@ -19,6 +23,7 @@ import {
   imageModelHasSettings,
   mergeImageModelSettingsForModel,
   normalizeImageModelSettings,
+  type SeedreamImageModelSettings,
   type ImageModelSettingsState,
 } from "@/lib/image-model-settings";
 import { cn } from "@/lib/utils";
@@ -102,6 +107,18 @@ function titleForModel(model: ImageModel | string) {
   if (isOfficialImageModel(model)) {
     return "官方图片参数";
   }
+  if (isGrokImagineImageModel(model)) {
+    return "Grok Imagine 2.0 参数";
+  }
+  if (isSeedream50LiteImageModel(model)) {
+    return "Seedream 5.0 Lite 参数";
+  }
+  if (isSeedream50ProImageModel(model)) {
+    return "Seedream 5.0 Pro 参数";
+  }
+  if (isSeedreamImageModel(model)) {
+    return "Seedream 参数";
+  }
   return "图片参数";
 }
 
@@ -114,6 +131,15 @@ function referenceLimitLabel(model: ImageModel | string) {
   }
   if (isOfficialImageModel(model)) {
     return "最多 16 张参考图";
+  }
+  if (isGrokImagineImageModel(model)) {
+    return "最多 3 张参考图";
+  }
+  if (isSeedream50ProImageModel(model)) {
+    return "最多 10 张参考图，固定输出 1 张";
+  }
+  if (isSeedreamImageModel(model)) {
+    return "输入图与输出图合计最多 15 张";
   }
   return "";
 }
@@ -205,6 +231,19 @@ export function ImageModelSettingsPanel({
         <GeminiProSettingsPanel
           settings={normalized.geminiPro || {}}
           onChange={(geminiPro) => update({ geminiPro })}
+        />
+      ) : null}
+      {isGrokImagineImageModel(model) ? (
+        <GrokImageSettingsPanel
+          settings={normalized.grok || {}}
+          onChange={(grok) => update({ grok })}
+        />
+      ) : null}
+      {isSeedreamImageModel(model) ? (
+        <SeedreamImageSettingsPanel
+          model={model}
+          settings={normalized.seedream || {}}
+          onChange={(seedream) => update({ seedream })}
         />
       ) : null}
     </div>
@@ -397,6 +436,65 @@ function GeminiFlashSettingsPanel({
           <span className={cn("truncate", fieldLabelClassName())}>{item.label}</span>
         </label>
       ))}
+    </div>
+  );
+}
+
+function GrokImageSettingsPanel({
+  settings,
+  onChange,
+}: {
+  settings: ImageModelSettingsState["grok"];
+  onChange: (settings: NonNullable<ImageModelSettingsState["grok"]>) => void;
+}) {
+  return (
+    <div className="grid gap-1.5 text-[11px]">
+      <label className={checkboxFieldClassName()}>
+        <Checkbox
+          checked={settings?.nsfwCheck === true}
+          onCheckedChange={(checked) => onChange({ nsfwCheck: checked === true })}
+          className="size-3.5"
+        />
+        <span className={cn("truncate", fieldLabelClassName())}>提交前内容审核（可能增加成本与延迟）</span>
+      </label>
+    </div>
+  );
+}
+
+function SeedreamImageSettingsPanel({
+  model,
+  settings,
+  onChange,
+}: {
+  model: ImageModel | string;
+  settings: ImageModelSettingsState["seedream"];
+  onChange: (settings: SeedreamImageModelSettings) => void;
+}) {
+  const update = (patch: Partial<SeedreamImageModelSettings>) => onChange({ ...settings, ...patch });
+  const sequential = !isSeedream50ProImageModel(model);
+  return (
+    <div className="grid gap-1.5 text-[11px]">
+      <label className={checkboxFieldClassName()}>
+        <Checkbox checked={settings?.nsfwCheck === true} onCheckedChange={(checked) => update({ nsfwCheck: checked === true })} className="size-3.5" />
+        <span className={cn("truncate", fieldLabelClassName())}>提交前内容审核</span>
+      </label>
+      <label className={checkboxFieldClassName()}>
+        <Checkbox checked={settings?.watermark === true} onCheckedChange={(checked) => update({ watermark: checked === true })} className="size-3.5" />
+        <span className={cn("truncate", fieldLabelClassName())}>添加水印</span>
+      </label>
+      {sequential ? (
+        <>
+          <label className={cn(fieldLabelClassName(), "mt-1")}>组图模式
+            <select value={settings?.sequentialImageGeneration || "disabled"} onChange={(event) => update({ sequentialImageGeneration: event.target.value as "auto" | "disabled" })} className={selectClassName()}>
+              <option value="auto">自动</option>
+              <option value="disabled">关闭</option>
+            </select>
+          </label>
+          <label className={cn(fieldLabelClassName(), "mt-1")}>组图上限
+            <Input type="number" min={1} max={15} value={settings?.sequentialMaxImages || 15} onChange={(event) => update({ sequentialMaxImages: Math.min(15, Math.max(1, Number(event.target.value) || 15)) })} className="ml-auto h-7 w-16 px-2 text-right text-xs" />
+          </label>
+        </>
+      ) : null}
     </div>
   );
 }

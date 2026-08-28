@@ -42,6 +42,15 @@ func TestMatchAppRoute(t *testing.T) {
 	}
 }
 
+func TestAppRouterMatchesBeadProjectSubtree(t *testing.T) {
+	app := newTestApp(t)
+	defer app.Close()
+	route := matchAppRoute(app.routes(), http.MethodPut, "/api/bead-projects/project-1")
+	if route == nil || route.path != "/api/bead-projects" {
+		t.Fatalf("bead project route = %#v", route)
+	}
+}
+
 func TestAppRouterKeepsAPIMissesOutOfSPA(t *testing.T) {
 	app := newTestApp(t)
 	defer app.Close()

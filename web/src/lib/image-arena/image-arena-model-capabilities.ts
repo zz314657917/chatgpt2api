@@ -4,6 +4,8 @@ import {
   MIDJOURNEY_IMAGE_MODEL,
   SEEDREAM_4_IMAGE_MODEL,
   SEEDREAM_45_IMAGE_MODEL,
+  SEEDREAM_50_LITE_IMAGE_MODEL,
+  SEEDREAM_50_PRO_IMAGE_MODEL,
   imageReferenceInputLimit,
   supportsImageOutputCompression,
   supportsImageOutputControls,
@@ -30,6 +32,8 @@ export const IMAGE_ARENA_MODEL_IDS = [
   GROK_IMAGINE_IMAGE_MODEL,
   SEEDREAM_4_IMAGE_MODEL,
   SEEDREAM_45_IMAGE_MODEL,
+  SEEDREAM_50_LITE_IMAGE_MODEL,
+  SEEDREAM_50_PRO_IMAGE_MODEL,
 ] as const satisfies readonly ImageModel[];
 
 const IMAGE_ARENA_MODEL_ID_SET = new Set<string>(IMAGE_ARENA_MODEL_IDS);
@@ -62,7 +66,7 @@ export function imageArenaModelCapability(model: ImageModel, outputFormat: Image
     supportsOutputControls: outputControlsSupported,
     supportsQuality: supportsImageQuality(model),
     supportsOutputCompression: compressionSupported,
-    supportsResolution: model === "gpt-image-2" || official,
+    supportsResolution: model === "gpt-image-2" || official || model === SEEDREAM_4_IMAGE_MODEL || model === SEEDREAM_45_IMAGE_MODEL || model === SEEDREAM_50_LITE_IMAGE_MODEL || model === SEEDREAM_50_PRO_IMAGE_MODEL,
     supportsOfficialSettings: official,
     supportsMask: supportsImageMaskParameter(model),
   };

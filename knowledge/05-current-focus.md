@@ -2,10 +2,12 @@
 title: Current Focus
 type: status
 repo: chatgpt2api
-last_verified: 2026-07-11
+last_verified: 2026-08-20
 ---
 
 # 当前稳定心智模型
+
+当前 checkout 已切到拼豆工坊（`/beads`）主线：`Task-025~Task-032` 已完成，其中 Task-029 收口转换控制，Task-032 收口 `seedance-2.5` 视频 profile。后续只在用户明确授权后做真实账号、真实对象存储、真实上游和部署前验证。早先的 image workspace / `/canvas` / Sub2API bridge 语境保留为历史背景，不再是现在的默认续做入口。
 
 chatgpt2api 当前不应再被理解为单纯“ChatGPT 官网能力封装服务”，也不应只理解成“Sub2API 跳转过来的图片工作台”。最近稳定主线已经从 6 月初的 image workspace + `/canvas` 工作台，进一步推进到“落叶创艺独立用户版 + Sub2API 作为用户/余额/充值/扣费真源 + 现有 `/image` 和 `/canvas` 能力作为创作底座”的三层产品面。
 

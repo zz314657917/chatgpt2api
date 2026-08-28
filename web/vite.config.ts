@@ -16,6 +16,9 @@ function vendorChunk(id: string) {
   if (/[\\/]node_modules[\\/](motion|framer-motion)[\\/]/.test(id)) {
     return "vendor-motion";
   }
+  if (/[\\/]node_modules[\\/]three[\\/]/.test(id)) {
+    return "vendor-three";
+  }
   if (/[\\/]node_modules[\\/]lucide-react[\\/]/.test(id)) {
     return "vendor-icons";
   }

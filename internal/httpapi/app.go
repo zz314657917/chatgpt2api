@@ -62,6 +62,7 @@ type App struct {
 	promptSplits *service.PromptSplitService
 	analytics    *service.AnalyticsService
 	canvases     *service.CanvasService
+	beadProjects *service.BeadProjectService
 	social       *service.SocialProjectService
 	announce     *service.AnnouncementService
 	prompts      *service.PromptFavoriteService
@@ -127,7 +128,7 @@ func NewApp() (*App, error) {
 	})
 	images := service.NewImageService(cfg, storageBackend)
 	images.SetLogger(logger)
-	app := &App{config: cfg, auth: auth, accounts: accounts, billing: billing, logs: logs, logger: logger, proxy: proxy, engine: engine, images: images, textAssets: service.NewTextAssetService(storageBackend), videoAssets: service.NewVideoAssetService(storageBackend), analytics: service.NewAnalyticsService(storageBackend), canvases: service.NewCanvasService(storageBackend), social: service.NewSocialProjectService(storageBackend), announce: service.NewAnnouncementService(storageBackend), prompts: service.NewPromptFavoriteService(storageBackend), cpa: service.NewCPAConfig(storageBackend), sub2: service.NewSub2APIConfig(storageBackend), sub2Bindings: sub2Bindings, teams: teams, update: newUpdateService(cfg), webSearch: websearch.NewClient(cfg.WebSearch()), cancel: cancel}
+	app := &App{config: cfg, auth: auth, accounts: accounts, billing: billing, logs: logs, logger: logger, proxy: proxy, engine: engine, images: images, textAssets: service.NewTextAssetService(storageBackend), videoAssets: service.NewVideoAssetService(storageBackend), analytics: service.NewAnalyticsService(storageBackend), canvases: service.NewCanvasService(storageBackend), beadProjects: service.NewBeadProjectService(storageBackend), social: service.NewSocialProjectService(storageBackend), announce: service.NewAnnouncementService(storageBackend), prompts: service.NewPromptFavoriteService(storageBackend), cpa: service.NewCPAConfig(storageBackend), sub2: service.NewSub2APIConfig(storageBackend), sub2Bindings: sub2Bindings, teams: teams, update: newUpdateService(cfg), webSearch: websearch.NewClient(cfg.WebSearch()), cancel: cancel}
 	app.cpaImport = service.NewCPAImportService(app.cpa, accounts, proxy)
 	app.sub2Import = service.NewSub2APIService(app.sub2, accounts)
 	app.sub2Launch = service.NewSub2APILaunchService(auth, sub2Bindings, cfg)
@@ -2882,6 +2883,30 @@ func readMultipartImageBody(r *http.Request) (map[string]any, []protocol.Uploade
 		"visibility":               firstForm(r.MultipartForm, "visibility"),
 		"response_format":          firstNonEmpty(firstForm(r.MultipartForm, "response_format"), "b64_json"),
 		"stream":                   util.ToBool(firstForm(r.MultipartForm, "stream")),
+	}
+	if sequential := strings.TrimSpace(firstForm(r.MultipartForm, "sequential_image_generation")); sequential != "" {
+		body["sequential_image_generation"] = sequential
+	}
+	for _, key := range []string{"nsfw_check", "watermark"} {
+		raw := strings.TrimSpace(firstForm(r.MultipartForm, key))
+		if raw == "" {
+			continue
+		}
+		switch strings.ToLower(raw) {
+		case "true", "1":
+			body[key] = true
+		case "false", "0":
+			body[key] = false
+		default:
+			return nil, nil, fmt.Errorf("%s must be boolean", key)
+		}
+	}
+	if rawSequential := strings.TrimSpace(firstForm(r.MultipartForm, "sequential_image_generation_options")); rawSequential != "" {
+		var options map[string]any
+		if err := json.Unmarshal([]byte(rawSequential), &options); err != nil || options == nil {
+			return nil, nil, fmt.Errorf("invalid sequential_image_generation_options")
+		}
+		body["sequential_image_generation_options"] = options
 	}
 	if rawMessages := strings.TrimSpace(firstForm(r.MultipartForm, "messages")); rawMessages != "" {
 		var messages any

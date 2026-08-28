@@ -27,9 +27,43 @@ export const IMAGE_ASPECT_RATIO_MENU_OPTIONS = [
   IMAGE_ASPECT_RATIO_OPTIONS[IMAGE_ASPECT_RATIO_OPTIONS.length - 1],
 ] as const;
 
+export const GROK_IMAGE_ASPECT_RATIO_OPTIONS = [
+  { value: "", label: "Auto" },
+  { value: "1:1", label: "1:1 (正方形)" },
+  { value: "3:4", label: "3:4 (竖版)" },
+  { value: "4:3", label: "4:3 (横版)" },
+  { value: "9:16", label: "9:16 (竖屏)" },
+  { value: "16:9", label: "16:9 (横屏)" },
+  { value: "2:3", label: "2:3 (竖版)" },
+  { value: "3:2", label: "3:2 (横版)" },
+  { value: "9:19.5", label: "9:19.5 (手机竖屏)" },
+  { value: "19.5:9", label: "19.5:9 (手机横屏)" },
+  { value: "9:20", label: "9:20 (手机竖屏)" },
+  { value: "20:9", label: "20:9 (手机横屏)" },
+  { value: "1:2", label: "1:2 (竖屏)" },
+  { value: "2:1", label: "2:1 (横屏)" },
+] as const;
+
+export const SEEDREAM_IMAGE_ASPECT_RATIO_OPTIONS = [
+  { value: "", label: "Auto" },
+  { value: "1:1", label: "1:1 (正方形)" },
+  { value: "4:3", label: "4:3 (横版)" },
+  { value: "3:4", label: "3:4 (竖版)" },
+  { value: "16:9", label: "16:9 (横版)" },
+  { value: "9:16", label: "9:16 (竖版)" },
+  { value: "3:2", label: "3:2 (横版)" },
+  { value: "2:3", label: "2:3 (竖版)" },
+  { value: "2:1", label: "2:1 (横版)" },
+  { value: "1:2", label: "1:2 (竖版)" },
+  { value: "21:9", label: "21:9 (超宽横版)" },
+  { value: "9:21", label: "9:21 (超长竖版)" },
+] as const;
+
 export type PixelIconSize = (typeof PIXEL_ICON_SIZE_OPTIONS)[number]["value"];
 export type ImageAspectRatio =
   | (typeof IMAGE_ASPECT_RATIO_OPTIONS)[number]["value"]
+  | (typeof GROK_IMAGE_ASPECT_RATIO_OPTIONS)[number]["value"]
+  | (typeof SEEDREAM_IMAGE_ASPECT_RATIO_OPTIONS)[number]["value"]
   | PixelIconSize;
 
 export const IMAGE_SIZE_MODE_OPTIONS = [
@@ -47,7 +81,20 @@ export const IMAGE_RESOLUTION_OPTIONS = [
   { value: "4k", label: "4K", description: "按链路像素上限收敛，上游会按账号能力判断" },
 ] as const;
 
-export type ImageResolution = (typeof IMAGE_RESOLUTION_OPTIONS)[number]["value"];
+export const GROK_IMAGE_RESOLUTION_OPTIONS = [
+  { value: "1080p", label: "1K", description: "Grok Imagine Image 2.0 默认清晰度" },
+  { value: "2k", label: "2K", description: "Grok Imagine Image 2.0 高清档位" },
+] as const;
+
+export const SEEDREAM_IMAGE_RESOLUTION_OPTIONS = [
+  { value: "1k", label: "1K", description: "Seedream 4.0 / Pro" },
+  { value: "1.5k", label: "1.5K", description: "Seedream 5.0 Pro" },
+  { value: "2k", label: "2K", description: "Seedream 4.x / 5.x" },
+  { value: "3k", label: "3K", description: "Seedream 5.0 Lite" },
+  { value: "4k", label: "4K", description: "Seedream 4.x / 5.x" },
+] as const;
+
+export type ImageResolution = (typeof IMAGE_RESOLUTION_OPTIONS)[number]["value"] | (typeof SEEDREAM_IMAGE_RESOLUTION_OPTIONS)[number]["value"];
 
 export type ImageSizeSelection = {
   mode: ImageSizeMode;
@@ -58,10 +105,17 @@ export type ImageSizeSelection = {
   customHeight: string;
 };
 
-const IMAGE_ASPECT_RATIO_VALUES = new Set<string>(IMAGE_ASPECT_RATIO_MENU_OPTIONS.map((option) => option.value));
+const IMAGE_ASPECT_RATIO_VALUES = new Set<string>([
+  ...IMAGE_ASPECT_RATIO_MENU_OPTIONS.map((option) => option.value),
+  ...GROK_IMAGE_ASPECT_RATIO_OPTIONS.map((option) => option.value),
+  ...SEEDREAM_IMAGE_ASPECT_RATIO_OPTIONS.map((option) => option.value),
+]);
 const PIXEL_ICON_SIZE_VALUES = new Set<string>(PIXEL_ICON_SIZE_OPTIONS.map((option) => option.value));
 const IMAGE_SIZE_MODE_VALUES = new Set<string>(IMAGE_SIZE_MODE_OPTIONS.map((option) => option.value));
-const IMAGE_RESOLUTION_VALUES = new Set<string>(IMAGE_RESOLUTION_OPTIONS.map((option) => option.value));
+const IMAGE_RESOLUTION_VALUES = new Set<string>([
+  ...IMAGE_RESOLUTION_OPTIONS.map((option) => option.value),
+  ...SEEDREAM_IMAGE_RESOLUTION_OPTIONS.map((option) => option.value),
+]);
 const SIZE_PATTERN = /^\s*(\d+)\s*[xX×]\s*(\d+)\s*$/;
 const RATIO_PATTERN = /^\s*(\d+(?:\.\d+)?)\s*[:xX×]\s*(\d+(?:\.\d+)?)\s*$/;
 const SIZE_MULTIPLE = 16;
@@ -92,6 +146,11 @@ export const IMAGE_QUALITY_OPTIONS = [
   { value: "medium", label: "标准", description: "兼顾速度与细节，适合日常生成" },
   { value: "high", label: "高品质", description: "优先细节效果，适合最终出图" },
 ] as const;
+
+export const GROK_IMAGE_QUALITY_OPTIONS = IMAGE_QUALITY_OPTIONS.filter(
+  (option): option is Extract<(typeof IMAGE_QUALITY_OPTIONS)[number], { value: "low" | "medium" }> =>
+    option.value === "low" || option.value === "medium",
+);
 
 export type ImageQuality = (typeof IMAGE_QUALITY_OPTIONS)[number]["value"];
 export type ImageOutputFormat = "png" | "jpeg" | "webp";
@@ -127,8 +186,69 @@ export function normalizeImageOutputFormat(value: unknown): ImageOutputFormat {
   return "png";
 }
 
+export function normalizeImageOutputFormatForModel(model: unknown, value: unknown): ImageOutputFormat {
+  const normalized = normalizeImageOutputFormat(value);
+  const normalizedModel = String(model || "").trim().toLowerCase();
+  if ((normalizedModel === "seedream-5-0-lite" || normalizedModel === "seedream-5-0-pro") && normalized === "webp") {
+    return "png";
+  }
+  return normalized;
+}
+
 export function isImageQuality(value: unknown): value is ImageQuality {
   return typeof value === "string" && IMAGE_QUALITY_VALUES.has(value);
+}
+
+const GROK_IMAGE_ASPECT_RATIO_VALUES = new Set<string>(GROK_IMAGE_ASPECT_RATIO_OPTIONS.map((option) => option.value));
+
+export function normalizeGrokImageAspectRatio(value: unknown): Exclude<ImageAspectRatio, "custom"> {
+  const normalized = String(value || "").trim().toLowerCase();
+  return GROK_IMAGE_ASPECT_RATIO_VALUES.has(normalized)
+    ? normalized as Exclude<ImageAspectRatio, "custom">
+    : "";
+}
+
+export function normalizeGrokImageResolution(value: unknown): Extract<ImageResolution, "1080p" | "2k"> {
+  return String(value || "").trim().toLowerCase() === "2k" ? "2k" : "1080p";
+}
+
+export function normalizeGrokImageQuality(value: unknown): Extract<ImageQuality, "low" | "medium"> {
+  return String(value || "").trim().toLowerCase() === "low" ? "low" : "medium";
+}
+
+export function seedreamImageAspectRatioOptions(model?: string) {
+  const normalizedModel = String(model || "").trim().toLowerCase();
+  return normalizedModel === "seedream-5-0-lite"
+    ? SEEDREAM_IMAGE_ASPECT_RATIO_OPTIONS.filter((option) => option.value !== "9:21")
+    : SEEDREAM_IMAGE_ASPECT_RATIO_OPTIONS;
+}
+
+export function normalizeSeedreamImageAspectRatio(value: unknown, model?: string): Exclude<ImageAspectRatio, "custom"> {
+  const normalized = String(value || "").trim().toLowerCase();
+  return seedreamImageAspectRatioOptions(model).some((option) => option.value === normalized)
+    ? normalized as Exclude<ImageAspectRatio, "custom">
+    : "";
+}
+
+export function seedreamImageResolutionOptions(model?: string) {
+  const normalizedModel = String(model || "").trim().toLowerCase();
+  switch (normalizedModel) {
+    case "doubao-seedance-4-0":
+      return SEEDREAM_IMAGE_RESOLUTION_OPTIONS.filter((option) => option.value === "1k" || option.value === "2k" || option.value === "4k");
+    case "doubao-seedance-4-5":
+      return SEEDREAM_IMAGE_RESOLUTION_OPTIONS.filter((option) => option.value === "2k" || option.value === "4k");
+    case "seedream-5-0-lite":
+      return SEEDREAM_IMAGE_RESOLUTION_OPTIONS.filter((option) => option.value === "2k" || option.value === "3k" || option.value === "4k");
+    case "seedream-5-0-pro":
+      return SEEDREAM_IMAGE_RESOLUTION_OPTIONS.filter((option) => option.value === "1k" || option.value === "1.5k" || option.value === "2k");
+    default:
+      return SEEDREAM_IMAGE_RESOLUTION_OPTIONS;
+  }
+}
+
+export function normalizeSeedreamImageResolution(value: unknown, model?: string): ImageResolution {
+  const normalized = String(value || "").trim().toLowerCase();
+  return seedreamImageResolutionOptions(model).some((option) => option.value === normalized) ? normalized as ImageResolution : "2k";
 }
 
 export function imageQualityLabel(value?: string) {

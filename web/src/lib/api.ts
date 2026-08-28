@@ -26,9 +26,11 @@ export const IMAGE_MODEL_OPTIONS = [
   { value: "gpt-image-2", label: "gpt-image-2" },
   { value: "gpt-image-2-official", label: "gpt-image-2-official" },
   { value: "midjourney", label: "Midjourney" },
-  { value: "grok-imagine-1.5", label: "grok-imagine-1.5" },
+  { value: "grok-imagine-image-2.0", label: "grok-imagine-image-2.0" },
   { value: "doubao-seedance-4-0", label: "doubao-seedance-4-0" },
   { value: "doubao-seedance-4-5", label: "doubao-seedance-4-5" },
+  { value: "seedream-5-0-lite", label: "seedream-5-0-lite" },
+  { value: "seedream-5-0-pro", label: "seedream-5-0-pro" },
   { value: "gemini-3-pro-image-preview", label: "gemini-3-pro-image-preview" },
   { value: "gemini-3-pro-image-preview-official", label: "gemini-3-pro-image-preview-official" },
   { value: "gemini-3.1-flash-image-preview", label: "gemini-3.1-flash-image-preview" },
@@ -43,13 +45,15 @@ export const DEFAULT_CHAT_MODEL: ImageModel = "auto";
 export const CODEX_IMAGE_MODEL: ImageModel = "codex-gpt-image-2";
 export const OFFICIAL_IMAGE_MODEL: ImageModel = "gpt-image-2-official";
 export const MIDJOURNEY_IMAGE_MODEL: ImageModel = "midjourney";
-export const GROK_IMAGINE_IMAGE_MODEL: ImageModel = "grok-imagine-1.5";
+export const GROK_IMAGINE_IMAGE_MODEL: ImageModel = "grok-imagine-image-2.0";
 export const SEEDREAM_4_IMAGE_MODEL: ImageModel = "doubao-seedance-4-0";
 export const SEEDREAM_45_IMAGE_MODEL: ImageModel = "doubao-seedance-4-5";
+export const SEEDREAM_50_LITE_IMAGE_MODEL: ImageModel = "seedream-5-0-lite";
+export const SEEDREAM_50_PRO_IMAGE_MODEL: ImageModel = "seedream-5-0-pro";
 const IMAGE_MODEL_VALUES = new Set<string>(IMAGE_MODEL_OPTIONS.map((option) => option.value));
 const GEMINI_FLASH_IMAGE_MODELS = new Set<string>(["gemini-3.1-flash-image-preview", "gemini-3.1-flash-image-preview-official"]);
 const GEMINI_PRO_IMAGE_MODELS = new Set<string>(["gemini-3-pro-image-preview", "gemini-3-pro-image-preview-official"]);
-const SEEDREAM_IMAGE_MODELS = new Set<string>([SEEDREAM_4_IMAGE_MODEL, SEEDREAM_45_IMAGE_MODEL]);
+const SEEDREAM_IMAGE_MODELS = new Set<string>([SEEDREAM_4_IMAGE_MODEL, SEEDREAM_45_IMAGE_MODEL, SEEDREAM_50_LITE_IMAGE_MODEL, SEEDREAM_50_PRO_IMAGE_MODEL]);
 const IMAGE_TASK_MODEL_VALUES = new Set<string>([
   "gpt-image-2",
   "gpt-image-2-official",
@@ -120,11 +124,24 @@ export function isSeedreamImageModel(model?: string) {
   return SEEDREAM_IMAGE_MODELS.has(String(model || "").trim());
 }
 
-export function imageTaskSubmitCount(model: string | undefined, count: number) {
-  if (String(model || "").trim() === MIDJOURNEY_IMAGE_MODEL) {
+export function isSeedream50LiteImageModel(model?: string) {
+  return String(model || "").trim() === SEEDREAM_50_LITE_IMAGE_MODEL;
+}
+
+export function isSeedream50ProImageModel(model?: string) {
+  return String(model || "").trim() === SEEDREAM_50_PRO_IMAGE_MODEL;
+}
+
+export function imageTaskMaxCount(model: string | undefined) {
+  const normalizedModel = String(model || "").trim();
+  if (normalizedModel === MIDJOURNEY_IMAGE_MODEL || isGeminiFlashImageModel(model) || normalizedModel === SEEDREAM_50_PRO_IMAGE_MODEL) {
     return 1;
   }
-  return Math.max(1, Math.floor(Number(count) || 1));
+  return isSeedreamImageModel(model) ? 15 : 10;
+}
+
+export function imageTaskSubmitCount(model: string | undefined, count: number) {
+  return Math.min(imageTaskMaxCount(model), Math.max(1, Math.floor(Number(count) || 1)));
 }
 
 const IMAGE_PRICE_ESTIMATE_MULTIPLIER = 1.2;
@@ -371,9 +388,9 @@ export const IMAGE_MODEL_ROUTE_DETAILS: Partial<Record<
     routeLabel: "Imagine",
     description: "Midjourney Imagine 通道，支持提示词和最多 4 张参考图。",
   },
-  "grok-imagine-1.5": {
-    routeLabel: "Grok Imagine 1.5",
-    description: "Grok Imagine 1.5 通道，支持提示词和 1 张参考图。",
+  "grok-imagine-image-2.0": {
+    routeLabel: "Grok Imagine Image 2.0",
+    description: "Grok Imagine Image 2.0 通道，支持提示词和最多 3 张参考图。",
   },
   "doubao-seedance-4-0": {
     routeLabel: "Seedream 4.0",
@@ -382,6 +399,14 @@ export const IMAGE_MODEL_ROUTE_DETAILS: Partial<Record<
   "doubao-seedance-4-5": {
     routeLabel: "Seedream 4.5",
     description: "Seedream 4.5 图片通道，支持提示词和最多 14 张参考图。",
+  },
+  "seedream-5-0-lite": {
+    routeLabel: "Seedream 5.0 Lite",
+    description: "Seedream 5.0 Lite 图片通道，支持组图，输入图与输出图合计最多 15 张。",
+  },
+  "seedream-5-0-pro": {
+    routeLabel: "Seedream 5.0 Pro",
+    description: "Seedream 5.0 Pro 图片通道，固定输出 1 张，最多支持 10 张参考图。",
   },
   "gemini-3-pro-image-preview": {
     routeLabel: "Nano Banana Pro 标准版本",
@@ -418,7 +443,7 @@ export function isHiddenImageModelOption(model: unknown) {
   if (!normalized || normalized === CODEX_IMAGE_MODEL) {
     return true;
   }
-  return normalized === "grok-imagine-1.5-apimart" || normalized === "grok-imagine-1.5-edit-apimart";
+  return false;
 }
 
 export function isChatModel(value: unknown): value is ImageModel {
@@ -497,15 +522,22 @@ export function supportsImageResolutionPresets(model: ImageModel) {
 }
 
 export function supportsImageOutputControls(model: ImageModel) {
-  return usesOfficialImageRoute(model) || usesCodexImageRoute(model);
+  return usesOfficialImageRoute(model) || usesCodexImageRoute(model) || isSeedream50LiteImageModel(model) || isSeedream50ProImageModel(model);
 }
 
 export function supportsImageOutputCompression(modelOrFormat: ImageModel | ImageOutputFormat | string, format?: ImageOutputFormat | string) {
+  if (format !== undefined && isSeedreamImageModel(String(modelOrFormat))) {
+    return false;
+  }
   return supportsTaskOutputCompression(format === undefined ? undefined : modelOrFormat, format ?? modelOrFormat);
 }
 
 export function isOfficialImageModel(model: ImageModel | string | undefined) {
   return isOfficialImageGatewayModel(model);
+}
+
+export function isGrokImagineImageModel(model: ImageModel | string | undefined) {
+  return String(model || "").trim().toLowerCase() === GROK_IMAGINE_IMAGE_MODEL;
 }
 
 export function supportsOfficialImageGenerationSettings(model: ImageModel | string | undefined) {
@@ -517,7 +549,7 @@ export function supportsImageMaskParameter(model: ImageModel | string | undefine
 }
 
 export function supportsImageQuality(model: ImageModel) {
-  return isOfficialImageModel(model);
+  return isOfficialImageModel(model) || isGrokImagineImageModel(model);
 }
 
 export function imageReferenceInputLimit(model: ImageModel | string | undefined) {
@@ -525,7 +557,7 @@ export function imageReferenceInputLimit(model: ImageModel | string | undefined)
     case MIDJOURNEY_IMAGE_MODEL:
       return 4;
     case GROK_IMAGINE_IMAGE_MODEL:
-      return 1;
+      return 3;
     case "gemini-3-pro-image-preview":
     case "gemini-3-pro-image-preview-official":
     case "gemini-3.1-flash-image-preview":
@@ -533,9 +565,21 @@ export function imageReferenceInputLimit(model: ImageModel | string | undefined)
     case SEEDREAM_4_IMAGE_MODEL:
     case SEEDREAM_45_IMAGE_MODEL:
       return 14;
+    case SEEDREAM_50_LITE_IMAGE_MODEL:
+      return 14;
+    case SEEDREAM_50_PRO_IMAGE_MODEL:
+      return 10;
     default:
       return 16;
   }
+}
+
+export function imageReferenceInputLimitForCount(model: ImageModel | string | undefined, count: number) {
+  const limit = imageReferenceInputLimit(model);
+  if (model === SEEDREAM_4_IMAGE_MODEL || model === SEEDREAM_45_IMAGE_MODEL || model === SEEDREAM_50_LITE_IMAGE_MODEL) {
+    return Math.max(0, Math.min(limit, 15 - imageTaskSubmitCount(String(model), count)));
+  }
+  return limit;
 }
 
 export function estimateImageDisplayPriceUSD(model: ImageModel, count: number, sizeOrResolution: string, quality = "auto") {
@@ -1467,6 +1511,112 @@ export type CanvasDocument = {
   updated_at?: string;
 };
 
+export type BeadAssetReference = {
+  path: string;
+  name: string;
+  scope: "mine" | "team";
+  team_id?: string;
+};
+
+export type BeadLayer = {
+  id: string;
+  name: string;
+  custom_name?: boolean;
+  visible: boolean;
+  locked: boolean;
+  include_in_usage: boolean;
+  opacity: number;
+  cells: Array<string | null>;
+};
+
+export type BeadEditingSettings = {
+  show_grid: boolean;
+  show_coordinates: boolean;
+  show_pegboard_boundaries: boolean;
+  show_layer_overlap: boolean;
+  show_active_layer_only: boolean;
+  show_color_codes: boolean;
+  bead_display_mode: "pixel" | "bead";
+  beads_per_pack: number;
+  right_click_action: "pan" | "erase";
+};
+
+export type BeadBoardSettings = {
+  board_width: number;
+  board_height: number;
+  show_board_ids: boolean;
+};
+
+export type BeadMakerState = {
+  active_board_index: number;
+  completed_cells: number[];
+};
+
+export type BeadConversionParams = {
+  width: number;
+  max_colors: number;
+  palette_mode: "221" | "291";
+  background_mode: "keep" | "remove-white";
+  background_color: [number, number, number];
+  tolerance: number;
+  detail_level: number;
+  dither: boolean;
+  speckle_reduction: number;
+  cluster_strength: number;
+  max_color_blocks: number;
+  min_color_block_size?: number;
+  source_brightness: number;
+  source_contrast: number;
+  generation_style: "cartoon" | "realistic";
+};
+
+export type BeadReferenceSettings = {
+  visible: boolean;
+  opacity: number;
+  scale: number;
+  offset: { x: number; y: number };
+  placement: "above" | "below";
+};
+
+export type BeadProjectDocument = {
+  id: string;
+  schema_version: 1;
+  revision: number;
+  name: string;
+  width: number;
+  height: number;
+  active_brand: "MARD";
+  palette_version: string;
+  cells: Array<string | null>;
+  layers: BeadLayer[];
+  active_layer_id: string;
+  editing_settings: BeadEditingSettings;
+  board_settings: BeadBoardSettings;
+  maker_state?: BeadMakerState;
+  conversion_params: BeadConversionParams;
+  source_image?: BeadAssetReference;
+  reference_image?: BeadAssetReference;
+  reference_settings: BeadReferenceSettings;
+  created_at: string;
+  updated_at: string;
+};
+
+export type BeadProjectSummary = {
+  id: string;
+  name: string;
+  revision: number;
+  width: number;
+  height: number;
+  bead_count: number;
+  preview: {
+    width: number;
+    height: number;
+    cells: Array<string | null>;
+  };
+  created_at: string;
+  updated_at: string;
+};
+
 export type CanvasNodeRunState = {
   id: string;
   type: CanvasNodeType;
@@ -2333,7 +2483,7 @@ export async function createImageGenerationTask(
     model,
     size,
     imageResolution,
-    quality,
+    quality: isSeedreamImageModel(model) ? undefined : quality,
     outputFormat,
     outputCompression,
     toolOptions,
@@ -2344,6 +2494,10 @@ export async function createImageGenerationTask(
       client_task_id: clientTaskId,
       prompt,
       ...imageTaskRequestBodyFields(requestParameters),
+      ...(isSeedreamImageModel(model) ? {
+        ...(size ? { size: String(size).trim().toLowerCase() } : {}),
+        ...(imageResolution && String(imageResolution).trim().toLowerCase() !== "auto" ? { image_resolution: String(imageResolution).trim().toLowerCase() } : {}),
+      } : {}),
       ...extraBody,
       ...(publicImageUrls.length ? { image_urls: publicImageUrls } : {}),
       ...(messages?.length ? { messages } : {}),
@@ -2414,7 +2568,7 @@ export async function createImageEditTask(
     model,
     size,
     imageResolution,
-    quality,
+    quality: isSeedreamImageModel(model) ? undefined : quality,
     outputFormat,
     outputCompression,
     toolOptions,
@@ -2427,6 +2581,14 @@ export async function createImageEditTask(
   formData.append("prompt", prompt);
   for (const [key, value] of Object.entries(imageTaskRequestBodyFields(requestParameters))) {
     formData.append(key, String(value));
+  }
+  if (isSeedreamImageModel(model)) {
+    if (size) {
+      formData.set("size", String(size).trim().toLowerCase());
+    }
+    if (imageResolution && String(imageResolution).trim().toLowerCase() !== "auto") {
+      formData.set("image_resolution", String(imageResolution).trim().toLowerCase());
+    }
   }
   for (const [key, value] of Object.entries(extraBody)) {
     if (value === undefined || value === null) {
@@ -2508,7 +2670,7 @@ export async function createImageEditTaskFromReferenceIds(
     model,
     size,
     imageResolution,
-    quality,
+    quality: isSeedreamImageModel(model) ? undefined : quality,
     outputFormat,
     outputCompression,
     toolOptions,
@@ -2520,6 +2682,10 @@ export async function createImageEditTaskFromReferenceIds(
       reference_image_ids: referenceImageIds,
       prompt,
       ...imageTaskRequestBodyFields(requestParameters),
+      ...(isSeedreamImageModel(model) ? {
+        ...(size ? { size: String(size).trim().toLowerCase() } : {}),
+        ...(imageResolution && String(imageResolution).trim().toLowerCase() !== "auto" ? { image_resolution: String(imageResolution).trim().toLowerCase() } : {}),
+      } : {}),
       ...extraBody,
       ...(publicImageUrls?.length ? { image_urls: publicImageUrls } : {}),
       ...(messages?.length ? { messages } : {}),
@@ -2744,6 +2910,58 @@ export async function saveCanvas(canvas: CanvasDocument) {
 
 export async function deleteCanvas(canvasId: string) {
   return httpRequest<{ ok: boolean }>(`/api/canvases/${encodeURIComponent(canvasId)}`, {
+    method: "DELETE",
+  });
+}
+
+export async function fetchBeadProjects() {
+  const data = await httpRequest<{ items?: BeadProjectSummary[] }>("/api/bead-projects", {
+    headers: { "Cache-Control": "no-cache", Pragma: "no-cache" },
+  });
+  return Array.isArray(data.items) ? data.items : [];
+}
+
+export async function createBeadProject(item?: BeadProjectDocument) {
+  const data = await httpRequest<{ item: BeadProjectDocument }>("/api/bead-projects", {
+    method: "POST",
+    body: item ? { item } : {},
+  });
+  return data.item;
+}
+
+export async function fetchBeadProject(projectId: string) {
+  const data = await httpRequest<{ item: BeadProjectDocument }>(`/api/bead-projects/${encodeURIComponent(projectId)}`, {
+    headers: { "Cache-Control": "no-cache", Pragma: "no-cache" },
+  });
+  return data.item;
+}
+
+export async function saveBeadProject(project: BeadProjectDocument) {
+  const data = await httpRequest<{ item: BeadProjectDocument }>(`/api/bead-projects/${encodeURIComponent(project.id)}`, {
+    method: "PUT",
+    body: { revision: project.revision, item: project },
+  });
+  return data.item;
+}
+
+export async function renameBeadProject(projectId: string, revision: number, name: string) {
+  const data = await httpRequest<{ item: BeadProjectDocument }>(`/api/bead-projects/${encodeURIComponent(projectId)}`, {
+    method: "PATCH",
+    body: { revision, name },
+  });
+  return data.item;
+}
+
+export async function copyBeadProject(projectId: string) {
+  const data = await httpRequest<{ item: BeadProjectDocument }>(`/api/bead-projects/${encodeURIComponent(projectId)}/copies`, {
+    method: "POST",
+    body: {},
+  });
+  return data.item;
+}
+
+export async function deleteBeadProject(projectId: string) {
+  return httpRequest<{ deleted: boolean; id: string }>(`/api/bead-projects/${encodeURIComponent(projectId)}`, {
     method: "DELETE",
   });
 }

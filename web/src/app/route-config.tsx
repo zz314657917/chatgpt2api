@@ -2,6 +2,7 @@ import { lazy, type ComponentType } from "react";
 
 const routePageComponents = {
   accounts: lazy(() => import("@/app/accounts/page")),
+  beads: lazy(() => import("@/app/beads/page")),
   linuxDoCallback: lazy(() => import("@/app/auth/linuxdo/callback/page")),
   sub2APILaunch: lazy(() => import("@/app/auth/sub2api/launch/page")),
   canvas: lazy(() => import("@/app/canvas/page")),
@@ -35,6 +36,8 @@ export const appRoutes: AppRouteConfig[] = [
   { path: "/auth/sub2api/launch", Component: routePageComponents.sub2APILaunch },
   { path: "/api/v1/auths/sub2api/launch", Component: routePageComponents.sub2APILaunch },
   { path: "/accounts", Component: routePageComponents.accounts, requiredPath: "/accounts" },
+  { path: "/beads", Component: routePageComponents.beads, requiredPath: "/beads" },
+  { path: "/beads/:projectId", Component: routePageComponents.beads, requiredPath: "/beads" },
   { path: "/register", Component: routePageComponents.register, requiredPath: "/register" },
   { path: "/image-manager", Component: routePageComponents.imageManager, requiredPath: "/image-manager" },
   { path: "/users", Component: routePageComponents.users, requiredPath: "/users" },

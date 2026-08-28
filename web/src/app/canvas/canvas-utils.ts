@@ -16,7 +16,10 @@ import { getManagedImagePathFromUrl, getManagedImagePreviewUrlFromPath, getManag
 import {
   normalizeImageOutputCompression,
   normalizeImageOutputFormat,
+  normalizeImageOutputFormatForModel,
   normalizeImageResolutionPreset,
+  normalizeSeedreamImageAspectRatio,
+  normalizeSeedreamImageResolution,
   normalizePixelIconSizeAlias,
   isPixelIconSize,
 } from "@/lib/image-parameters";
@@ -24,7 +27,8 @@ import { compactImageModelSettings } from "@/lib/image-model-settings";
 import {
   CHAT_MODEL_OPTIONS,
   IMAGE_CREATION_MODEL_OPTIONS,
-  MIDJOURNEY_IMAGE_MODEL,
+  imageTaskSubmitCount,
+  isSeedreamImageModel,
   isChatModel,
   isHiddenImageModelOption,
   isImageCreationModel,
@@ -195,8 +199,8 @@ export function normalizeCanvasImageOutputFormat(value?: string) {
   return normalizeImageOutputFormat(value);
 }
 
-export function normalizeCanvasImageOutputCompression(format: string | undefined, value: unknown) {
-  return supportsImageOutputCompression("", format || "") ? normalizeImageOutputCompression(value) : undefined;
+export function normalizeCanvasImageOutputCompression(format: string | undefined, value: unknown, model?: string) {
+  return supportsImageOutputCompression(model || "", format || "") ? normalizeImageOutputCompression(value) : undefined;
 }
 
 export function normalizeCanvasImageBackground(value?: string) {
@@ -1089,7 +1093,10 @@ function isUserModifiedCanvasImageSize(data: SmartCanvasItemData, normalizedSize
   return data.size_user_modified === true || (cleanImageText(data.size) !== "" && normalizedSize !== DEFAULT_COMPOSER.size);
 }
 
-function isUserModifiedCanvasImageResolution(data: SmartCanvasItemData) {
+function isUserModifiedCanvasImageResolution(data: SmartCanvasItemData, model?: string) {
+  if (isSeedreamImageModel(model)) {
+    return data.image_resolution_user_modified === true || cleanImageText(data.image_resolution) !== "";
+  }
   const resolution = normalizeCanvasImageResolution(data.image_resolution);
   return data.image_resolution_user_modified === true || (resolution !== "" && resolution !== "1080p");
 }
@@ -1098,21 +1105,22 @@ function sanitizeSmartItemData(data?: SmartCanvasItemData): SmartCanvasItemData 
   if (!data) {
     return {};
   }
-  const size = normalizeCanvasImageSize(data.size);
-  const pixelIconSize = isPixelIconSize(size);
-  const resolutionUserModified = isUserModifiedCanvasImageResolution(data);
-  const source = data as SmartCanvasItemData & { imageModelSettings?: SmartCanvasItemData["image_model_settings"] };
   const model = typeof data.model === "string" && data.model ? data.model : "auto";
+  const seedream = isSeedreamImageModel(model);
+  const size = seedream ? normalizeSeedreamImageAspectRatio(data.size, model) || "auto" : normalizeCanvasImageSize(data.size);
+  const pixelIconSize = isPixelIconSize(size);
+  const resolutionUserModified = isUserModifiedCanvasImageResolution(data, model);
+  const source = data as SmartCanvasItemData & { imageModelSettings?: SmartCanvasItemData["image_model_settings"] };
   return {
     ...data,
     prompt: typeof data.prompt === "string" ? data.prompt : "",
     model,
     size: data.size_user_modified === true && !cleanImageText(data.size) ? "" : size,
     size_user_modified: isUserModifiedCanvasImageSize(data, size),
-    image_resolution: pixelIconSize || !resolutionUserModified ? "" : normalizeCanvasImageResolution(data.image_resolution),
+    image_resolution: pixelIconSize || !resolutionUserModified ? "" : seedream ? normalizeSeedreamImageResolution(data.image_resolution, model) : normalizeCanvasImageResolution(data.image_resolution),
     image_resolution_user_modified: pixelIconSize ? true : resolutionUserModified,
-    output_format: data.output_format ? normalizeCanvasImageOutputFormat(data.output_format) : undefined,
-    output_compression: normalizeCanvasImageOutputCompression(data.output_format, data.output_compression),
+    output_format: data.output_format ? normalizeImageOutputFormatForModel(model, data.output_format) : undefined,
+    output_compression: normalizeCanvasImageOutputCompression(data.output_format, data.output_compression, model),
     image_model_settings: compactImageModelSettings(data.image_model_settings || source.imageModelSettings),
     background: normalizeCanvasImageBackground(data.background),
     moderation: cleanImageText(data.moderation),
@@ -1125,7 +1133,7 @@ function sanitizeSmartItemData(data?: SmartCanvasItemData): SmartCanvasItemData 
     enhance_prompt: data.enhance_prompt !== false,
     generate_audio: data.generate_audio === true,
     quality: typeof data.quality === "string" && data.quality ? data.quality : "auto",
-    n: model === MIDJOURNEY_IMAGE_MODEL ? 1 : Number.isFinite(Number(data.n)) ? Math.max(1, Math.min(10, Number(data.n))) : 1,
+    n: imageTaskSubmitCount(model, Number.isFinite(Number(data.n)) ? Number(data.n) : 1),
     visibility: "private",
     images: dedupeCanvasImageRefs(Array.isArray(data.images) ? data.images : []),
     videos: dedupeCanvasVideoRefs(Array.isArray(data.videos) ? data.videos : []),

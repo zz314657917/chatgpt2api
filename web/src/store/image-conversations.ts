@@ -136,6 +136,7 @@ export type ImageTurn = {
   partialImages?: number;
   midjourneySettings?: MidjourneySettingsPayload;
   geminiFlashSettings?: GeminiFlashSettingsPayload;
+  imageModelSettings?: ImageModelSettingsState;
   visibility?: ImageVisibility;
   images: StoredImage[];
   createdAt: string;
@@ -399,6 +400,7 @@ function normalizeArenaAgentSlot(slot: ImageArenaAgentSlot & Record<string, unkn
     geminiFlash: slot.geminiFlashSettings,
     officialImage: slot.officialImageSettings,
     geminiPro: slot.geminiProSettings,
+    seedream: slot.seedreamSettings,
   }) as ImageModelSettingsState);
   return {
     id: String(slot.id || `slot-${fallbackIndex}`),
@@ -448,6 +450,7 @@ function normalizeArenaRun(run: ImageArenaRun & Record<string, unknown>, fallbac
     geminiFlash: run.geminiFlashSettings,
     officialImage: run.officialImageSettings,
     geminiPro: run.geminiProSettings,
+    seedream: run.seedreamSettings,
   }) as ImageModelSettingsState);
   return {
     id: String(run.id || `run-${fallbackIndex}`),
@@ -643,6 +646,11 @@ function normalizeTurn(turn: ImageTurn & Record<string, unknown>): ImageTurn {
       : typeof turn.input_image_mask === "string" && turn.input_image_mask
         ? turn.input_image_mask
         : undefined;
+  const imageModelSettings = compactImageModelSettings((turn.imageModelSettings || {
+    midjourney: turn.midjourneySettings,
+    geminiFlash: turn.geminiFlashSettings,
+    seedream: turn.seedreamSettings,
+  }) as ImageModelSettingsState);
 
   return {
     id: String(turn.id || `${Date.now()}`),
@@ -677,6 +685,7 @@ function normalizeTurn(turn: ImageTurn & Record<string, unknown>): ImageTurn {
     partialImages: normalizePositiveInt(turn.partialImages),
     midjourneySettings: normalizeMidjourneySettings(turn.midjourneySettings),
     geminiFlashSettings: normalizeGeminiFlashSettings(turn.geminiFlashSettings),
+    imageModelSettings,
     visibility,
     images,
     createdAt: String(turn.createdAt || new Date().toISOString()),

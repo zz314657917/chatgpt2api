@@ -2,16 +2,57 @@
 repo: chatgpt2api
 project_type: web
 qa_mode: browser
-last_updated: 2026-07-30
+last_updated: 2026-08-05
 ---
 
 # Product Spec
 
 ## 当前状态
 
-- 当前 workflow 状态以 `docs/workflow/status.md` 为准：`phase=done`，当前 Sprint 为 `task-024-image-task-error-localization`。
+- 当前 workflow 状态以 `docs/workflow/status.md` 为准：`phase=contract-approved`，当前 Sprint 为 `task-031-canvas-model-contracts`。
 - `task-001` 到 `task-013` 已把落叶创艺独立用户版、Pro Studio、prompt split、bridge 计费元数据和 pending settlement retry 推成稳定背景层；当前默认续做不再是“继续补独立站入口”，而是继续收口 Canvas prompt-split fan-out 的布局、缩放和重复拆分语义。
 - 2026-07-11 新增的结算约束也已进入当前规格背景：固定结算场景下，Studio Bridge / APIMart 图片账单仍需保留真实模型语义，不能把 `gpt-image-2` 错映射成泛化模型名。
+
+## 追加需求：Canvas 模型参数契约
+
+### 一句话需求
+- 修复 Canvas 对 Gemini Flash 图片模型与 Sub2API 视频模型的参数边界，避免发送文档不接受的批量数量，或把未知视频模型误套为 Seedance 参数。
+
+### 验收标准
+- `gemini-3.1-flash-image-preview` 和 `gemini-3.1-flash-image-preview-official` 的 Canvas 张数控件与最终请求均固定为 `n=1`。
+- Canvas 仅向已建档的 Sub2API 视频模型提交任务；未知或失效模型在 UI 中不可选择，后端也以清晰错误拒绝直接请求。
+- 既有 Kling、Wan、VEO、Seedance 视频 payload 归一和图片模型的 Google Search 参数转发不回退。
+
+### Sprint 计划
+- `task-031-canvas-model-contracts`：Gemini Flash 单张约束、视频模型 profile 保护与定向回归。
+
+## 追加需求：拼豆工坊
+
+### 一句话需求
+- 原生迁入 `Jett-Wu/Perler_Beads_Generator` 固定提交 `36ac52d570246ab600611a79edd2236bccb954e5`，在 `/beads` 提供个人私有云端工程列表，在 `/beads/:projectId` 提供完整中文拼豆工作台。
+
+### 目标
+- 保留图片转图纸、MARD 221/291 色、完整编辑、多图层、参考图、3D、统计和 PNG/PDF/Excel/JSON 导出。
+- 使用当前 React/Vite、主题变量、Lucide 和 UI primitives，不使用 iframe 或上游独立构建；CSS 限定在 `.beads-workbench`。
+- 工程按登录用户隔离保存在现有 JSON 文档后端，使用 revision 乐观锁、1200 ms 自动保存和明确保存状态。
+- 本机原图/参考图先上传个人素材库，工程只保存素材引用；支持个人/团队素材导入，PNG 可回存个人素材库。
+- 桌面为中央画布与工具面板，移动端用抽屉/底栏承载工具、图层、色板和统计，功能不降级。
+
+### 非目标
+- 不接 AI 生成、Sub2API、扣费、团队共同编辑、公开分享、数据库迁移或新图片上传 API。
+- 不导入上游脚本、构建产物、README 截图或 iframe。
+
+### 固定约束
+- `BeadProjectDocument.schema_version=1`；每用户最多 30 个工程，画布边长 1..156，最多 20 图层，单工程 JSON 最大 5 MiB。
+- 工程只保存允许的个人/团队素材引用，禁止 `data:`、`blob:`、临时签名 URL 和图片二进制。
+- Three.js 和导出器按需加载；拼豆主页面 chunk 不超过 220 KiB，单资产不超过 512 KiB，总构建预算为 5 MiB。
+- 新增根级 `THIRD_PARTY_NOTICES.md`，记录上游仓库、固定提交和完整 MIT 版权声明。
+
+### Sprint 计划
+- `task-025-bead-project-cloud-storage`：个人私有工程 service/API、revision、校验、RBAC、分析路径和前端 API 客户端。
+- `task-026-bead-workbench-port`：固定提交源码迁入、路由导航、中文主题工作台、编辑/图层/3D/统计/导出和第三方声明。
+- `task-027-bead-assets-mobile-integration`：素材库双向互通、自动保存/冲突处理、真实缩略图和完整移动端响应式。
+- `task-028-bead-end-to-end-qa`：核心断言、bundle budget、三视口 Playwright、服务/前端全量回归和最终验收。
 
 ## 追加需求：图片任务错误本地化
 
@@ -320,3 +361,95 @@ last_updated: 2026-07-30
 - 固定结算图片任务进入 bridge 时，`gpt-image-2` 仍以 `gpt-image-2` 传递，而不是被改成其他模型名。
 - 现有金额、尺寸、张数和 retry 语义不回退。
 - 定向后端测试通过，并有 workflow task / qa 记录可追溯。
+
+## 追加需求：Canvas Seedance 2.5 参数契约
+
+### 一句话需求
+- 无限画布的视频生成节点按 APIMart 当前文档支持 `seedance-2.5`，不再套用 Seedance 2.0 的时长与分辨率规则。
+
+### 目标
+- Canvas 模型目录出现 `seedance-2.5` 时可正常选择和提交。
+- 前端 profile 支持七种比例、`480p/720p`、`4..30` 秒和 `mp4/mov`。
+- 后端使用独立 2.5 profile，保留 `duration=-1`，显式传递音频布尔值并限制参考图最多 30 张。
+
+### 非目标
+- 不增加视频/音频参考上传、首尾帧角色、视频编辑、视频延长、私域素材或联网搜索 UI。
+- 不修改计费、鉴权、数据库、部署或 Docker。
+
+### 验收标准
+- `seedance-2.5` 的 30 秒、无声、`mov` 请求能构造为文档字段；`1080p` 不会发送。
+- `duration=-1` 保持自动时长；普通时长限制在 `4..30`。
+- Canvas 保存恢复不会把 2.5 的 30 秒截断为 15 秒。
+- 现有 Seedance 2.0、Kling、Wan、VEO profile 回归通过。
+
+### Sprint 计划
+- `task-032-seedance-2-5-profile`：Canvas profile、视频请求字段、后端 payload 和定向回归。
+
+## 追加需求：移除本地图片内容关键词预审
+
+### 一句话需求
+- 图片生成、编辑、Responses 图片工具和 creation-task 不再按本地关键词表预先拒绝提示词，普通请求直接进入既有上游链路。
+
+### 目标
+- 删除本地 `ValidateImageContentPolicy` 调用、成人/暴力关键词表及无用文本归一化逻辑。
+- 修复 `desktop ornament` 因删除空格后跨词边界形成 `porn` 而被误拒绝的问题。
+- 保留上游真实 content policy 错误的识别、原始诊断、任务失败和前端中文展示。
+
+### 非目标
+- 不绕过、吞掉或伪造上游供应商的内容策略结果。
+- 不修改前端、计费、鉴权、数据库、Sub2API 协议、部署或 Docker。
+
+### 验收标准
+- 所有本地图片入口不再执行提示词关键词拒绝。
+- 本地策略规则与无用辅助实现被删除，不保留 no-op 兼容层。
+- 上游 `content_policy_violation` 等真实错误仍按既有语义归一和展示。
+- 定向 service/protocol、相关包、全量 Go 测试与差异检查通过。
+
+### Sprint 计划
+- `task-033-remove-local-image-content-policy`：删除本地图片提示词关键词预审，保留上游错误归一。
+
+## Task-035 Seedream 图片参数 profile
+
+### 一句话需求
+- 按 APIMart 当前文档补齐 Seedream 4.0、4.5、5.0 Lite、5.0 Pro 的模型专属参数和图片任务数量语义。
+
+### 目标
+- 4.x 保留现有 doubao-seedance-4-0/4-5 bridge ID；新增下游已支持的 seedream-5-0-lite 与 seedream-5-0-pro。
+- 4.0 支持 1K/2K/4K，4.5 支持 2K/4K，Lite 支持 2K/3K/4K 与 sequential 组图，Pro 固定单图并支持最多 10 张参考图。
+- 输入图与输出图合计上限为 15 的模型按 profile 校验；Pro 单图和 PNG/JPEG 约束独立校验。
+- 图片页、Canvas、电商套图和 Image Arena 的模型选择、参数控件、任务 payload 与保存恢复一致。
+
+### 非目标
+- 不修改 Sub2API、计费、鉴权、数据库、报价、部署或 Docker。
+- 不暴露下游尚未转发的 Pro background、layer_decomposition 和完整 optimize 参数。
+- 不把所有图片模型的全局任务上限从 10 放宽到 15。
+
+### 验收标准
+- 后端严格拒绝模型不支持的分辨率、数量、格式、参考图数量和输入输出合计数量，并对 Seedream 保留原始 size/ratio 语义。
+- 四个 profile 的前端控件只出现对应字段；请求不误带 quality、Gemini 搜索或 Grok 专属字段。
+- 定向/全量 Go、前端 lint/build、限定 diff 和隔离浏览器 mock 验收通过。
+
+### Sprint 计划
+- task-035-seedream-image-profiles：模型目录、后端 profile/校验、任务数量边界、四个工作台参数传播和验收。
+
+## Task-034 Grok Imagine Image 2.0 参数契约
+
+### 一句话需求
+- 将现有 Grok Imagine 1.5 图片通道直接替换为 APIMart `grok-imagine-image-2.0` 当前参数契约。
+
+### 目标
+- 文生图与最多 3 张参考图统一提交到 `images/generations`。
+- 使用 `aspect_ratio`、`resolution`、条件性的 `quality`、`image_urls` 与 `nsfw_check`。
+- 前端只展示 2.0 支持的 14 种比例、1K/2K 和 Low/Medium，并正确处理参考图联动。
+
+### 非目标
+- 不修改 Sub2API、计费、鉴权、数据库、报价接口、Docker、部署或生产配置。
+- 不保留 1.5 别名、兼容层、fallback 或生成/编辑双路径。
+
+### 验收标准
+- 后端模型、endpoint、payload、校验和参考图上限符合 2026-08-27 实时 APIMart 文档。
+- 图片页、Canvas、电商套图和 Image Arena 的 Grok 参数传播一致。
+- 定向/全量 Go、前端 lint/build、差异检查与浏览器 mock 验收通过。
+
+### Sprint 计划
+- `task-034-grok-imagine-image-2-profile`：替换 Grok 1.5 并实现 2.0 参数 profile。

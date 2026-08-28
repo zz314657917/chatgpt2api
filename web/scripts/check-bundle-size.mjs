@@ -8,8 +8,8 @@ const distRoot = path.resolve(webRoot, "../internal/web/dist");
 const assetRoot = path.join(distRoot, "assets");
 const maxAssetBytes = Number(process.env.BUNDLE_MAX_ASSET_BYTES || 512 * 1024);
 const maxPageBytes = Number(process.env.BUNDLE_MAX_PAGE_BYTES || 220 * 1024);
-const maxTotalBytes = Number(process.env.BUNDLE_MAX_TOTAL_BYTES || 4 * 1024 * 1024);
-const pageBudgetRoutes = String(process.env.BUNDLE_PAGE_BUDGET_ROUTES || "image,canvas")
+const maxTotalBytes = Number(process.env.BUNDLE_MAX_TOTAL_BYTES || 5 * 1024 * 1024);
+const pageBudgetRoutes = String(process.env.BUNDLE_PAGE_BUDGET_ROUTES || "image,canvas,beads")
   .split(",")
   .map((route) => route.trim().replace(/^\/+/, ""))
   .filter(Boolean);

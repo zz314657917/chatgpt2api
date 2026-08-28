@@ -73,3 +73,75 @@
 260730 2122 | task-024-image-task-error-localization | contract-approved | evaluator | docs/workflow/task-024-contract-review.md
 260730 2122 | task-024-image-task-error-localization | build-complete | codex | docs/workflow/worker-results/task-024-image-task-error-localization-result.md
 260730 2122 | task-024-image-task-error-localization | qa-pass | evaluator | docs/workflow/qa-reports/task-024-image-task-error-localization-qa.md
+260805 1308 | task-025-bead-project-cloud-storage | intake | planner | docs/workflow/spec.md
+260805 1308 | task-025-bead-project-cloud-storage | contract-draft | planner | docs/workflow/tasks/task-025-bead-project-cloud-storage.md
+260805 1308 | task-025-bead-project-cloud-storage | contract-approved | evaluator | docs/workflow/task-025-contract-review.md
+260805 1328 | task-025-bead-project-cloud-storage | worker-model-blocked | codex | deepseek-v4-pro unavailable via Claude CLI; implementation returned to Codex
+260805 1346 | task-025-bead-project-cloud-storage | build-complete | codex | docs/workflow/worker-results/task-025-bead-project-cloud-storage-result.md
+260805 1346 | task-025-bead-project-cloud-storage | qa-pass | evaluator | docs/workflow/qa-reports/task-025-bead-project-cloud-storage-qa.md
+260805 1310 | task-025-bead-project-cloud-storage | worker-start | codex | E:\codex-worktrees\chatgpt2api\task-025-bead-project-cloud-storage
+260805 1310 | task-025-bead-project-cloud-storage | worker-fail | worker | E:\codex-worktrees\chatgpt2api\task-025-bead-project-cloud-storage\docs\workflow\worker-results\task-025-bead-project-cloud-storage-worker.json
+260805 1352 | task-026-bead-workbench-port | contract-draft | planner | docs/workflow/tasks/task-026-bead-workbench-port.md
+260805 1352 | task-026-bead-workbench-port | contract-approved | evaluator | docs/workflow/task-026-contract-review.md
+260805 1415 | task-026-bead-workbench-port | build-complete | codex | docs/workflow/worker-results/task-026-bead-workbench-port-result.md
+260805 1415 | task-026-bead-workbench-port | qa-pass | evaluator | docs/workflow/qa-reports/task-026-bead-workbench-port-qa.md
+260805 1415 | task-026-bead-workbench-port | done | codex | docs/workflow/status.md
+260805 1415 | task-027-bead-assets-mobile-integration | contract-draft | planner | docs/workflow/tasks/task-027-bead-assets-mobile-integration.md
+260805 1420 | task-027-bead-assets-mobile-integration | contract-approved | evaluator | docs/workflow/task-027-contract-review.md
+260805 2010 | task-027-bead-assets-mobile-integration | build-complete | codex | docs/workflow/worker-results/task-027-bead-assets-mobile-integration-result.md
+260805 2010 | task-027-bead-assets-mobile-integration | qa-pass | evaluator | docs/workflow/qa-reports/task-027-bead-assets-mobile-integration-qa.md
+260805 2010 | task-027-bead-assets-mobile-integration | done | codex | docs/workflow/status.md
+260805 2010 | task-028-bead-end-to-end-qa | contract-draft | planner | docs/workflow/tasks/task-028-bead-end-to-end-qa.md
+260805 2010 | task-028-bead-end-to-end-qa | contract-approved | evaluator | docs/workflow/task-028-contract-review.md
+260805 2020 | task-028-bead-end-to-end-qa | build-complete | codex | docs/workflow/worker-results/task-028-bead-end-to-end-qa-result.md
+260805 2020 | task-028-bead-end-to-end-qa | qa-pass | evaluator | docs/workflow/qa-reports/task-028-bead-end-to-end-qa.md
+260805 2020 | task-028-bead-end-to-end-qa | done | codex | docs/workflow/qa-reports/bead-workshop-final-review.md
+260806 1131 | task-029-bead-conversion-controls | contract-draft | planner | docs/workflow/tasks/task-029-bead-conversion-controls.md
+260806 1131 | task-029-bead-conversion-controls | contract-approved | evaluator | docs/workflow/task-029-contract-review.md
+260806 1201 | task-029-bead-conversion-controls | build-complete | codex | docs/workflow/worker-results/task-029-bead-conversion-controls-result.md
+260806 1201 | task-029-bead-conversion-controls | qa-pass | evaluator | docs/workflow/qa-reports/task-029-bead-conversion-controls-qa.md
+260806 1201 | task-029-bead-conversion-controls | done | codex | docs/workflow/status.md
+260806 1218 | task-030-bead-maker-mode | contract-approved -> build | codex | docs/workflow/task-030-contract-review.md
+260806 1408 | task-030-bead-maker-mode | build-complete | codex | docs/workflow/worker-results/task-030-bead-maker-mode-result.md
+260806 1408 | task-030-bead-maker-mode | qa-pass -> done | codex | docs/workflow/qa-reports/task-030-bead-maker-mode-qa.md
+260817 1216 | task-031-canvas-model-contracts | intake | planner | docs/workflow/spec.md
+260817 1216 | task-031-canvas-model-contracts | contract-draft | planner | docs/workflow/tasks/task-031-canvas-model-contracts.md
+260817 1216 | task-031-canvas-model-contracts | contract-approved | evaluator | docs/workflow/task-031-contract-review.md
+260817 1216 | task-031-canvas-model-contracts | contract-amended-approved | evaluator | shared Canvas video profile in canvas-utils.ts
+260817 1240 | task-031-canvas-model-contracts | build-complete | codex | docs/workflow/worker-results/task-031-canvas-model-contracts-result.md
+260817 1240 | task-031-canvas-model-contracts | qa-pass | codex | docs/workflow/qa-reports/task-031-canvas-model-contracts-qa.md
+260817 1240 | task-031-canvas-model-contracts | done | codex | docs/workflow/status.md
+260817 1507 | task-032-seedance-2-5-profile | intake | planner | APIMart seedance-2.5 generation documentation
+260817 1507 | task-032-seedance-2-5-profile | contract-draft | planner | docs/workflow/tasks/task-032-seedance-2-5-profile.md
+260817 1507 | task-032-seedance-2-5-profile | contract-approved | evaluator | docs/workflow/task-032-contract-review.md
+260817 1507 | task-032-seedance-2-5-profile | contract-amended-approved | evaluator | isolated output/playwright/task-032-* QA artifacts
+260817 1507 | task-032-seedance-2-5-profile | contract-amended-approved | evaluator | Canvas video output format type field
+260817 1536 | task-032-seedance-2-5-profile | build-complete | codex | docs/workflow/worker-results/task-032-seedance-2-5-profile-result.md
+260817 1536 | task-032-seedance-2-5-profile | qa-pass | codex | docs/workflow/qa-reports/task-032-seedance-2-5-profile-qa.md
+260817 1536 | task-032-seedance-2-5-profile | done | codex | docs/workflow/status.md
+260821 2151 | task-033-remove-local-image-content-policy | intake | planner | screenshot and local policy source inspection
+260821 2151 | task-033-remove-local-image-content-policy | contract-draft | planner | docs/workflow/tasks/task-033-remove-local-image-content-policy.md
+260821 2151 | task-033-remove-local-image-content-policy | contract-approved | evaluator | docs/workflow/task-033-contract-review.md
+260821 2152 | task-033-remove-local-image-content-policy | worker-start | codex | E:\codex-worktrees\chatgpt2api\task-033-remove-local-image-content-policy
+260821 2152 | task-033-remove-local-image-content-policy | worker-fail | worker | E:\codex-worktrees\chatgpt2api\task-033-remove-local-image-content-policy\docs\workflow\worker-results\task-033-remove-local-image-content-policy-worker.json
+260821 2204 | task-033-remove-local-image-content-policy | contract-amended-approved | evaluator | internal/httpapi/app_test.go test-only assertions
+260821 2209 | task-033-remove-local-image-content-policy | contract-amended-approved | evaluator | social partial-failure test fixture
+260821 2218 | task-033-remove-local-image-content-policy | build-complete | developer-worker | docs/workflow/worker-results/task-033-remove-local-image-content-policy-result.md
+260821 2223 | task-033-remove-local-image-content-policy | qa-pass | qa-worker | docs/workflow/qa-reports/task-033-remove-local-image-content-policy-qa.md
+260821 2223 | task-033-remove-local-image-content-policy | done | final-evaluator | docs/workflow/status.md
+260827 1742 | task-034-grok-imagine-image-2-profile | intake | planner | APIMart Grok Imagine Image 2.0 live documentation and current source inspection
+260827 1742 | task-034-grok-imagine-image-2-profile | contract-draft | planner | docs/workflow/tasks/task-034-grok-imagine-image-2-profile.md
+260827 1742 | task-034-grok-imagine-image-2-profile | contract-approved | evaluator | docs/workflow/task-034-contract-review.md
+260827 1912 | task-034-grok-imagine-image-2-profile | contract-amended-approved | evaluator | image page Gemini isolation and Image Arena agent settings allowlist
+260827 1912 | task-034-grok-imagine-image-2-profile | build-complete | codex | docs/workflow/worker-results/task-034-grok-imagine-image-2-profile-result.md
+260827 1912 | task-034-grok-imagine-image-2-profile | qa-pass | codex | docs/workflow/qa-reports/task-034-grok-imagine-image-2-profile-qa.md
+260827 1912 | task-034-grok-imagine-image-2-profile | done | final-evaluator | docs/workflow/status.md
+260827 2332 | task-035-seedream-image-profiles | intake | planner | APIMart Seedream 4/4.5/5 Lite/Pro live docs and source inspection
+260827 2332 | task-035-seedream-image-profiles | contract-draft | planner | docs/workflow/tasks/task-035-seedream-image-profiles.md
+260827 2332 | task-035-seedream-image-profiles | contract-approved | evaluator | docs/workflow/task-035-contract-review.md
+260827 2332 | task-035-seedream-image-profiles | build | codex | model-specific Seedream implementation
+260828 0627 | task-035-seedream-image-profiles | contract-amendment-pass | Codex | docs/workflow/task-035-contract-review.md
+260828 0810 | task-035-seedream-image-profiles | build-complete | codex | docs/workflow/worker-results/task-035-seedream-image-profiles-result.md
+260828 0810 | task-035-seedream-image-profiles | qa-pass | codex | docs/workflow/qa-reports/task-035-seedream-image-profiles-qa.md
+260828 0810 | task-035-seedream-image-profiles | done | final-evaluator | docs/workflow/status.md
+260828 0816 | task-035-seedream-image-profiles | retest-pass | evaluator | sequential invalid-mode validation and go test ./...

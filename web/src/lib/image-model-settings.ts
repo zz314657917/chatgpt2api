@@ -2,6 +2,9 @@ import {
   MIDJOURNEY_IMAGE_MODEL,
   isGeminiFlashImageModel,
   isGeminiProImageModel,
+  isGrokImagineImageModel,
+  isSeedreamImageModel,
+  isSeedream50ProImageModel,
   isOfficialImageModel,
   midjourneyVersionSupportsStop,
   type GeminiFlashSettingsPayload,
@@ -20,11 +23,24 @@ export type GeminiProImageModelSettings = {
   inputImageMask?: string;
 };
 
+export type GrokImageModelSettings = {
+  nsfwCheck?: boolean;
+};
+
+export type SeedreamImageModelSettings = {
+  nsfwCheck?: boolean;
+  watermark?: boolean;
+  sequentialImageGeneration?: "auto" | "disabled";
+  sequentialMaxImages?: number;
+};
+
 export type ImageModelSettingsState = {
   midjourney?: MidjourneySettingsPayload;
   geminiFlash?: GeminiFlashSettingsPayload;
   geminiPro?: GeminiProImageModelSettings;
   officialImage?: OfficialImageModelSettings;
+  grok?: GrokImageModelSettings;
+  seedream?: SeedreamImageModelSettings;
 };
 
 export type ImageModelTaskFields = {
@@ -53,6 +69,15 @@ export const DEFAULT_IMAGE_MODEL_SETTINGS_STATE: ImageModelSettingsState = {
     moderation: "auto",
   },
   geminiPro: {},
+  grok: {
+    nsfwCheck: false,
+  },
+  seedream: {
+    nsfwCheck: false,
+    watermark: false,
+    sequentialImageGeneration: "disabled",
+    sequentialMaxImages: 15,
+  },
 };
 
 function sourceRecord(value: unknown): Record<string, unknown> {
@@ -185,6 +210,22 @@ export function normalizeGeminiProModelSettings(value: unknown): GeminiProImageM
   return inputImageMask ? { inputImageMask } : undefined;
 }
 
+export function normalizeGrokImageModelSettings(value: unknown): GrokImageModelSettings {
+  const source = sourceRecord(value);
+  return { nsfwCheck: source.nsfwCheck === true || source.nsfw_check === true };
+}
+
+export function normalizeSeedreamImageModelSettings(value: unknown): SeedreamImageModelSettings {
+  const source = sourceRecord(value);
+  const mode = source.sequentialImageGeneration === "auto" || source.sequential_image_generation === "auto" ? "auto" : "disabled";
+  return {
+    nsfwCheck: source.nsfwCheck === true || source.nsfw_check === true,
+    watermark: source.watermark === true,
+    sequentialImageGeneration: mode,
+    sequentialMaxImages: clampIntegerSetting(source.sequentialMaxImages ?? source.sequential_image_generation_max_images, 15, 1, 15),
+  };
+}
+
 export function defaultImageModelSettings(model: ImageModel | string): ImageModelSettingsState {
   return normalizeImageModelSettings(model, DEFAULT_IMAGE_MODEL_SETTINGS_STATE);
 }
@@ -203,6 +244,12 @@ export function normalizeImageModelSettings(model: ImageModel | string, value?: 
   if (isGeminiProImageModel(model)) {
     const geminiPro = normalizeGeminiProModelSettings(source.geminiPro ?? source);
     return geminiPro ? { geminiPro } : {};
+  }
+  if (isGrokImagineImageModel(model)) {
+    return { grok: normalizeGrokImageModelSettings(source.grok ?? source) };
+  }
+  if (isSeedreamImageModel(model)) {
+    return { seedream: normalizeSeedreamImageModelSettings(source.seedream ?? source) };
   }
   return {};
 }
@@ -249,11 +296,29 @@ export function mergeImageModelSettingsForModel(
     });
     return next ? { geminiPro: next } : {};
   }
+  if (isGrokImagineImageModel(model)) {
+    const patchValue = sourceRecord(patchRecord.grok || patchRecord);
+    return {
+      grok: normalizeGrokImageModelSettings({
+        ...sourceRecord(normalizedCurrent.grok),
+        ...patchValue,
+      }),
+    };
+  }
+  if (isSeedreamImageModel(model)) {
+    const patchValue = sourceRecord(patchRecord.seedream || patchRecord);
+    return {
+      seedream: normalizeSeedreamImageModelSettings({
+        ...sourceRecord(normalizedCurrent.seedream),
+        ...patchValue,
+      }),
+    };
+  }
   return {};
 }
 
 export function imageModelHasSettings(model: ImageModel | string) {
-  return isMidjourneyImageModel(model) || isGeminiFlashImageModel(model) || isOfficialImageModel(model) || isGeminiProImageModel(model);
+  return isMidjourneyImageModel(model) || isGeminiFlashImageModel(model) || isOfficialImageModel(model) || isGeminiProImageModel(model) || isGrokImagineImageModel(model) || isSeedreamImageModel(model);
 }
 
 export function imageModelSettingsSummary(model: ImageModel | string, settings?: ImageModelSettingsState) {
@@ -277,10 +342,17 @@ export function imageModelSettingsSummary(model: ImageModel | string, settings?:
   if (isGeminiProImageModel(model)) {
     return normalized.geminiPro?.inputImageMask ? "已设置遮罩" : "可设置遮罩";
   }
+  if (isGrokImagineImageModel(model)) {
+    return normalized.grok?.nsfwCheck ? "提交前审核开启" : "提交前审核关闭";
+  }
+  if (isSeedreamImageModel(model)) {
+    const item = normalized.seedream || normalizeSeedreamImageModelSettings(undefined);
+    return [item.nsfwCheck ? "审核开启" : "审核关闭", item.watermark ? "带水印" : "无水印"].join(" · ");
+  }
   return "";
 }
 
-export function imageModelSettingsToTaskFields(model: ImageModel | string, settings?: ImageModelSettingsState): ImageModelTaskFields {
+export function imageModelSettingsToTaskFields(model: ImageModel | string, settings?: ImageModelSettingsState, count = 1): ImageModelTaskFields {
   const normalized = normalizeImageModelSettings(model, settings);
   if (isMidjourneyImageModel(model)) {
     const midjourney = normalizeMidjourneyModelSettings(normalized.midjourney);
@@ -305,6 +377,26 @@ export function imageModelSettingsToTaskFields(model: ImageModel | string, setti
         }
       : {};
   }
+  if (isGrokImagineImageModel(model)) {
+    const grok = normalizeGrokImageModelSettings(normalized.grok);
+    return { extraBody: { nsfw_check: grok.nsfwCheck === true } };
+  }
+  if (isSeedreamImageModel(model)) {
+    const seedream = normalizeSeedreamImageModelSettings(normalized.seedream);
+    const sequentialMode = count > 1 ? "auto" : seedream.sequentialImageGeneration || "disabled";
+    return {
+      extraBody: {
+        nsfw_check: seedream.nsfwCheck === true,
+        watermark: seedream.watermark === true,
+        ...(!isSeedream50ProImageModel(model) ? {
+          sequential_image_generation: sequentialMode,
+          ...(sequentialMode === "auto" ? {
+            sequential_image_generation_options: { max_images: seedream.sequentialMaxImages || 15 },
+          } : {}),
+        } : {}),
+      },
+    };
+  }
   return {};
 }
 
@@ -327,6 +419,12 @@ export function compactImageModelSettings(settings?: ImageModelSettingsState): I
     if (geminiPro) {
       out.geminiPro = geminiPro;
     }
+  }
+  if (settings.grok) {
+    out.grok = normalizeGrokImageModelSettings(settings.grok);
+  }
+  if (settings.seedream) {
+    out.seedream = normalizeSeedreamImageModelSettings(settings.seedream);
   }
   return Object.keys(out).length > 0 ? out : undefined;
 }

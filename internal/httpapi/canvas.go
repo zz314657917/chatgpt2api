@@ -727,7 +727,7 @@ func canvasModelOptionsFromModelList(result map[string]any, includeLocal bool, a
 
 func shouldHideCanvasModel(id string) bool {
 	switch strings.ToLower(strings.TrimSpace(id)) {
-	case util.ImageModelCodex, "grok-imagine-1.5-apimart", "grok-imagine-1.5-edit-apimart":
+	case util.ImageModelCodex:
 		return true
 	default:
 		return false

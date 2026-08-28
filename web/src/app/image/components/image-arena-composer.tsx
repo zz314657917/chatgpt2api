@@ -47,6 +47,7 @@ type ImageArenaComposerProps = {
   onSlotGeminiFlashSettingsChange: (slotId: string, settings: GeminiFlashSettingsPayload) => void;
   onSlotOfficialImageSettingsChange: (slotId: string, settings: ImageTaskToolOptions) => void;
   onSlotGeminiProSettingsChange: (slotId: string, settings: ImageTaskToolOptions | undefined) => void;
+  onSlotImageModelSettingsChange: (slotId: string, settings: ImageModelSettingsState) => void;
   onReferenceImageChange: (files: File[]) => void | Promise<void>;
   onRemoveReferenceImage: (index: number) => void;
   onSubmit: () => void | Promise<void>;
@@ -73,6 +74,7 @@ export function ImageArenaComposer({
   onSlotGeminiFlashSettingsChange,
   onSlotOfficialImageSettingsChange,
   onSlotGeminiProSettingsChange,
+  onSlotImageModelSettingsChange,
   onReferenceImageChange,
   onRemoveReferenceImage,
   onSubmit,
@@ -218,6 +220,7 @@ export function ImageArenaComposer({
                     onSlotGeminiFlashSettingsChange={onSlotGeminiFlashSettingsChange}
                     onSlotOfficialImageSettingsChange={onSlotOfficialImageSettingsChange}
                     onSlotGeminiProSettingsChange={onSlotGeminiProSettingsChange}
+                    onSlotImageModelSettingsChange={onSlotImageModelSettingsChange}
                   />
                 ) : null}
               </div>
@@ -340,12 +343,14 @@ function SlotSettingsPopover({
   onSlotGeminiFlashSettingsChange,
   onSlotOfficialImageSettingsChange,
   onSlotGeminiProSettingsChange,
+  onSlotImageModelSettingsChange,
 }: {
   slot: ImageArenaAgentSlotDraft;
   onSlotMidjourneySettingsChange: (slotId: string, settings: MidjourneySettingsPayload) => void;
   onSlotGeminiFlashSettingsChange: (slotId: string, settings: GeminiFlashSettingsPayload) => void;
   onSlotOfficialImageSettingsChange: (slotId: string, settings: ImageTaskToolOptions) => void;
   onSlotGeminiProSettingsChange: (slotId: string, settings: ImageTaskToolOptions | undefined) => void;
+  onSlotImageModelSettingsChange: (slotId: string, settings: ImageModelSettingsState) => void;
 }) {
   const value: ImageModelSettingsState = {
     ...slot.imageModelSettings,
@@ -360,6 +365,7 @@ function SlotSettingsPopover({
       value={value}
       compact
       onChange={(settings) => {
+        onSlotImageModelSettingsChange(slot.id, settings);
         if (settings.midjourney) {
           onSlotMidjourneySettingsChange(slot.id, settings.midjourney);
         }

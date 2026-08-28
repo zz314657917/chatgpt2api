@@ -4,6 +4,7 @@ import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react"
 import {
   BarChart3,
   Brush,
+  CircleDotDashed,
   ChevronDown,
   ChevronUp,
   Clock3,
@@ -54,6 +55,7 @@ const navItems = [
   { href: "/image", label: "创作台", icon: Brush },
   { href: "/canvas", label: "无限画布", icon: Grid2X2 },
   { href: "/ecommerce-suite", label: "电商套图", icon: PackageSearch },
+  { href: "/beads", label: "拼豆工坊", icon: CircleDotDashed },
   { href: "/image-manager", label: "素材库", icon: FolderOpen },
 ];
 const profileNavItem = { href: "/profile", label: "个人中心" };

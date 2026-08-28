@@ -28,6 +28,7 @@ var analyticsAllowedPaths = map[string]string{
 	"/image":           "创作台",
 	"/canvas":          "无限画布",
 	"/ecommerce-suite": "电商套图",
+	"/beads":           "拼豆工坊",
 	"/social":          "社媒运营",
 	"/image-manager":   "素材库",
 	"/team":            "团队空间",

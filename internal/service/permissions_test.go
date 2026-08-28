@@ -92,6 +92,36 @@ func TestCanvasPermissionsAreExplicit(t *testing.T) {
 	}
 }
 
+func TestBeadProjectPermissionsAreDefaultAndExplicit(t *testing.T) {
+	defaults := DefaultPermissionSetForRole(AuthRoleUser)
+	if !containsString(defaults.MenuPaths, "/beads") {
+		t.Fatalf("default user menu paths missing /beads: %#v", defaults.MenuPaths)
+	}
+	for _, tc := range []struct {
+		method string
+		path   string
+	}{
+		{"GET", "/api/bead-projects"},
+		{"POST", "/api/bead-projects"},
+		{"GET", "/api/bead-projects/project-1"},
+		{"POST", "/api/bead-projects/project-1/copies"},
+		{"PUT", "/api/bead-projects/project-1"},
+		{"PATCH", "/api/bead-projects/project-1"},
+		{"DELETE", "/api/bead-projects/project-1"},
+	} {
+		if !HasAPIPermission(defaults, tc.method, tc.path) {
+			t.Fatalf("missing default bead permission for %s %s in %#v", tc.method, tc.path, defaults.APIPermissions)
+		}
+	}
+	readOnly := PermissionSet{APIPermissions: []string{APIPermissionKey("GET", "/api/bead-projects")}}
+	if !HasAPIPermission(readOnly, "GET", "/api/bead-projects/project-1") {
+		t.Fatal("read-only bead permission should allow project detail")
+	}
+	if HasAPIPermission(readOnly, "PUT", "/api/bead-projects/project-1") {
+		t.Fatal("read-only bead permission should not allow project save")
+	}
+}
+
 func TestSocialPermissionsAreDefaultAndExplicit(t *testing.T) {
 	defaults := DefaultPermissionSetForRole(AuthRoleUser)
 	if !containsString(defaults.MenuPaths, "/social") {

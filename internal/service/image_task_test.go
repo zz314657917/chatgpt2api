@@ -787,6 +787,48 @@ func TestImageTaskServiceAllowsTenQueuedOutputs(t *testing.T) {
 	}
 }
 
+func TestImageTaskServiceAllowsFifteenSeedreamOutputs(t *testing.T) {
+	handlerCalls := make(chan map[string]any, 1)
+	handler := func(ctx context.Context, identity Identity, payload map[string]any) (map[string]any, error) {
+		handlerCalls <- payload
+		count := imageTaskCount(payload)
+		data := make([]map[string]any, 0, count)
+		for index := 0; index < count; index++ {
+			data = append(data, map[string]any{"url": "https://example.test/seedream.png"})
+		}
+		return map[string]any{"data": data}, nil
+	}
+	svc := newTestImageTaskService(t, handler, handler, handler, func() int { return 30 })
+	identity := Identity{ID: "alice", Name: "Alice", Role: "user"}
+
+	task, err := svc.SubmitGeneration(context.Background(), identity, "seedream-15", "draw", util.ImageModelSeedream50Lite, "1:1", "", "https://base.test", 15, nil)
+	if err != nil {
+		t.Fatalf("SubmitGeneration() error = %v", err)
+	}
+	if statuses := util.AsStringSlice(task["output_statuses"]); len(statuses) != 15 {
+		t.Fatalf("initial output_statuses = %#v, want 15 queued statuses", task["output_statuses"])
+	}
+	select {
+	case payload := <-handlerCalls:
+		if got := imageTaskCount(payload); got != 15 {
+			t.Fatalf("handler imageTaskCount = %d, want 15 in %#v", got, payload)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for handler payload")
+	}
+	waitForTaskStatus(t, svc, identity, "seedream-15", TaskStatusSuccess)
+	items := svc.ListTasks(identity, []string{"seedream-15"})["items"].([]map[string]any)
+	if len(items) != 1 || util.ToInt(items[0]["count"], 0) != 15 {
+		t.Fatalf("listed Seedream task = %#v, want count 15", items)
+	}
+	if statuses := util.AsStringSlice(items[0]["output_statuses"]); len(statuses) != 15 {
+		t.Fatalf("stored output_statuses = %#v, want 15 statuses", statuses)
+	}
+	if data := util.AsMapSlice(items[0]["data"]); len(data) != 15 {
+		t.Fatalf("stored task data count = %d, want 15", len(data))
+	}
+}
+
 func TestImageTaskServiceNormalizesPixelIconSizeAliases(t *testing.T) {
 	handlerCalls := make(chan map[string]any, 1)
 	handler := func(ctx context.Context, identity Identity, payload map[string]any) (map[string]any, error) {

@@ -4,9 +4,10 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   IMAGE_OUTPUT_FORMAT_OPTIONS,
+  normalizeImageOutputFormatForModel,
   type ImageOutputFormat,
 } from "@/lib/image-parameters";
-import { supportsImageOutputCompression, type ImageModel } from "@/lib/api";
+import { isSeedream50LiteImageModel, isSeedream50ProImageModel, supportsImageOutputCompression, type ImageModel } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 type ImageOutputControlsProps = {
@@ -54,16 +55,20 @@ export function ImageOutputControls({
   selectContentSideOffset = 4,
   selectContentCollisionPadding = 8,
 }: ImageOutputControlsProps) {
-  const compressionSupported = supportsImageOutputCompression(imageModel || "", outputFormat);
+  const effectiveOutputFormat = normalizeImageOutputFormatForModel(imageModel, outputFormat);
+  const compressionSupported = supportsImageOutputCompression(imageModel || "", effectiveOutputFormat);
   const compressionDisabled = !compressionSupported;
   const normalizedCompression = outputCompression ?? "";
+  const formatOptions = isSeedream50LiteImageModel(imageModel) || isSeedream50ProImageModel(imageModel)
+    ? IMAGE_OUTPUT_FORMAT_OPTIONS.filter((option) => option.value === "png" || option.value === "jpeg")
+    : IMAGE_OUTPUT_FORMAT_OPTIONS;
 
   return (
     <>
       <div className={fieldClassName}>
         <span className={cn("shrink-0", labelClassName)}>格式</span>
         <Select
-          value={outputFormat}
+          value={effectiveOutputFormat}
           onValueChange={(value) => {
             const nextFormat = value as ImageOutputFormat;
             onOutputFormatChange(nextFormat);
@@ -83,7 +88,7 @@ export function ImageOutputControls({
             className={selectContentClassName}
           >
             <SelectGroup>
-              {IMAGE_OUTPUT_FORMAT_OPTIONS.map((option) => (
+              {formatOptions.map((option) => (
                 <SelectItem
                   key={option.value}
                   value={option.value}

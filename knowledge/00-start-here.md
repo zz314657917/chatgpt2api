@@ -1,10 +1,15 @@
 # ChatGPT2API Knowledge Entry
 
-Last updated: 2026-07-11
+Last updated: 2026-08-20
 
 ## Purpose
 
 This directory stores project-local context that is useful across Codex sessions. It should stay short, factual, and actionable.
+
+## Current Checkout
+
+- 当前 checkout 已切到拼豆工坊（`/beads`）主线，`knowledge/tasks/current-task.md` 是当前会话事实源。
+- 早先的 image workspace / Sub2API bridge 语境仍可作为历史背景，但不再是现在的默认续做入口。
 
 ## Read Order
 
@@ -14,6 +19,8 @@ This directory stores project-local context that is useful across Codex sessions
 4. Read `knowledge/tasks/current-task.md` when continuing an unfinished task.
 5. Read `knowledge/tasks/timeline.md` when the user asks for recent history, phase summary, or recovery context.
 6. Read domain notes only when they match the current task. For `luoye` independent-user mode, Sub2API launch/redeem, wallet billing, session-probe, object storage downloads, or image collections, read `knowledge/08-luoye-independent-mode.md`. For `/canvas`, Sub2API launch/redeem, embedded-session issues, or shared image-result flows, read `knowledge/06-canvas-and-embedded-session.md`. For `/canvas` browser acceptance, read `knowledge/07-canvas-manual-checklist.md`. Existing ChatGPT web protocol research remains under `jshook/docs/`.
+7. For the current workflow, read `docs/workflow/status.md` first; Task-032 (`seedance-2.5` profile) is PASS, and the workflow may only continue through a newly authorized contract.
+8. For the current Bead Workshop checkout, read `knowledge/tasks/current-task.md` first and treat the earlier image-workspace notes as background.
 
 ## Stable Project Facts
 
@@ -44,6 +51,9 @@ This directory stores project-local context that is useful across Codex sessions
 - Stable facts added on 2026-07-10 to 2026-07-11 should now be treated as default continuation context:
   - fixed-price `gpt-image-2` settlement no longer follows APIMart task-cost overrides; ordinary `gpt-image-2` stays on its reserved fixed price, while `gpt-image-2-official` and other cost-based models keep actual-cost settlement semantics
   - the current workflow context is no longer only generic image-workspace follow-up; it has moved to `task-013` / `task-014` on `/canvas` prompt split and batch layout, with the remaining `task-013` blocker isolated to safe creation-task recovery after service restart
+- Stable facts added on 2026-07-21 to 2026-07-28 should now be treated as the current default continuation context:
+  - `task-020-image-tool-text-response-hardening` is already PASS, so text-only creation tasks are no longer treated as image success
+  - the active `/canvas` follow-up has moved on to `task-021-generator-node-responsive-parameters`; generator-node responsiveness, wheel boundaries, and browser QA are now the current default continuation point
 
 ## Current Known Capability Notes
 

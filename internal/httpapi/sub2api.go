@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"chatgpt2api/internal/imagestore"
 	"chatgpt2api/internal/protocol"
@@ -256,6 +257,11 @@ func (a *App) callSub2APIResponsesWithBody(ctx context.Context, body map[string]
 }
 
 func (a *App) callSub2APIImageGenerations(ctx context.Context, identity service.Identity, payload map[string]any, binding service.Sub2APIBinding) (map[string]any, error) {
+	if sub2APIUsesGrokImagineGateway(payload) {
+		if _, err := sub2APIGrokImagineImageGatewayPayload(payload); err != nil {
+			return nil, err
+		}
+	}
 	if sub2APIUsesMidjourneyGateway(payload) {
 		return a.callSub2APIImageBatchesWithBinding(ctx, identity, payload, binding, func(ctx context.Context, batchPayload map[string]any) (map[string]any, error) {
 			body, err := sub2APIMidjourneyImageGatewayPayload(batchPayload)
@@ -265,22 +271,14 @@ func (a *App) callSub2APIImageGenerations(ctx context.Context, identity service.
 			return a.postSub2APIJSON(ctx, binding, "midjourney/generations", body)
 		})
 	}
-	if sub2APIUsesGrokImagineGateway(payload) && sub2APIGrokImaginePayloadNeedsEdit(payload) {
-		return a.callSub2APIImageBatchesWithBinding(ctx, identity, payload, binding, func(ctx context.Context, batchPayload map[string]any) (map[string]any, error) {
-			body, err := sub2APIGrokImagineImageGatewayPayload(batchPayload, true)
-			if err != nil {
-				return nil, err
-			}
-			body["response_format"] = "b64_json"
-			return a.postSub2APIJSON(ctx, binding, "images/edits", body)
-		})
-	}
 	return a.callSub2APIImageBatchesWithBinding(ctx, identity, payload, binding, func(ctx context.Context, batchPayload map[string]any) (map[string]any, error) {
 		body, err := sub2APIImageGatewayJSONPayload(batchPayload)
 		if err != nil {
 			return nil, err
 		}
-		body["response_format"] = "b64_json"
+		if !sub2APIUsesGrokImagineGateway(batchPayload) {
+			body["response_format"] = "b64_json"
+		}
 		return a.postSub2APIJSON(ctx, binding, "images/generations", body)
 	})
 }
@@ -301,13 +299,15 @@ func (a *App) callSub2APIImageEdits(ctx context.Context, identity service.Identi
 		})
 	}
 	if sub2APIUsesGrokImagineGateway(payload) {
+		if _, err := sub2APIGrokImagineImageGatewayPayload(payload); err != nil {
+			return nil, err
+		}
 		return a.callSub2APIImageBatchesWithBinding(ctx, identity, payload, binding, func(ctx context.Context, batchPayload map[string]any) (map[string]any, error) {
-			body, err := sub2APIGrokImagineImageGatewayPayload(batchPayload, true)
+			body, err := sub2APIGrokImagineImageGatewayPayload(batchPayload)
 			if err != nil {
 				return nil, err
 			}
-			body["response_format"] = "b64_json"
-			return a.postSub2APIJSON(ctx, binding, "images/edits", body)
+			return a.postSub2APIJSON(ctx, binding, "images/generations", body)
 		})
 	}
 	if sub2APIUsesImageGenerationsJSONGateway(payload) && sub2APIImageEditSupportsJSONGateway(payload) {
@@ -621,8 +621,15 @@ func sub2APIImageRequestedCount(payload map[string]any) int {
 	if count < 1 {
 		return 1
 	}
-	if count > sub2APIImageBatchLimit {
-		return sub2APIImageBatchLimit
+	limit := sub2APIImageBatchLimit
+	switch sub2APIImageModel(payload["model"]) {
+	case util.ImageModelSeedream40, util.ImageModelSeedream45, util.ImageModelSeedream50Lite:
+		limit = sub2APISeedreamImageBatchLimit
+	case util.ImageModelSeedream50Pro:
+		limit = 1
+	}
+	if count > limit {
+		return limit
 	}
 	return count
 }
@@ -631,6 +638,12 @@ func sub2APIImageBatchSize(payload map[string]any) int {
 	limit := sub2APIImageBatchLimit
 	if sub2APIImageModel(payload["model"]) == util.ImageModelGPTOfficial {
 		limit = sub2APIOfficialImageBatchLimit
+	}
+	switch sub2APIImageModel(payload["model"]) {
+	case util.ImageModelSeedream40, util.ImageModelSeedream45, util.ImageModelSeedream50Lite:
+		limit = sub2APISeedreamImageBatchLimit
+	case util.ImageModelSeedream50Pro:
+		limit = 1
 	}
 	if configured := service.ImageOutputBatchLimit(payload); configured > 0 && configured < limit {
 		limit = configured
@@ -701,7 +714,7 @@ func sub2APIImageGatewayJSONPayload(payload map[string]any) (map[string]any, err
 		return sub2APIMidjourneyImageGatewayPayload(payload)
 	}
 	if sub2APIUsesGrokImagineGateway(payload) {
-		return sub2APIGrokImagineImageGatewayPayload(payload, sub2APIGrokImaginePayloadNeedsEdit(payload))
+		return sub2APIGrokImagineImageGatewayPayload(payload)
 	}
 	if sub2APIUsesOfficialImageGateway(payload) {
 		return sub2APIOfficialImageGatewayPayload(payload)
@@ -710,7 +723,7 @@ func sub2APIImageGatewayJSONPayload(payload map[string]any) (map[string]any, err
 		return sub2APIGeminiImageGatewayPayload(payload), nil
 	}
 	if sub2APIUsesSeedreamGateway(payload) {
-		return sub2APISeedreamImageGatewayPayload(payload), nil
+		return sub2APISeedreamImageGatewayPayload(payload)
 	}
 	return sub2APIImageJSONPayload(payload), nil
 }
@@ -776,6 +789,8 @@ func sub2APIUsesSeedreamGateway(payload map[string]any) bool {
 	switch sub2APIImageModel(payload["model"]) {
 	case util.ImageModelSeedream40, util.ImageModelSeedream45:
 		return true
+	case util.ImageModelSeedream50Lite, util.ImageModelSeedream50Pro:
+		return true
 	default:
 		return false
 	}
@@ -826,29 +841,124 @@ func sub2APIImageMultipartPayload(payload map[string]any) map[string]any {
 	return out
 }
 
-func sub2APISeedreamImageGatewayPayload(payload map[string]any) map[string]any {
-	out := sub2APIImageJSONPayload(payload)
-	delete(out, "quality")
-	delete(out, "background")
-	delete(out, "moderation")
-	delete(out, "style")
-	delete(out, "partial_images")
-	delete(out, "input_image_mask")
-	delete(out, "official_fallback")
-	if resolution := sub2APIImageResolution(payload); resolution != "" {
-		out["resolution"] = strings.ToLower(resolution)
-	} else {
-		delete(out, "resolution")
+func sub2APISeedreamImageGatewayPayload(payload map[string]any) (map[string]any, error) {
+	model := sub2APIImageModel(payload["model"])
+	profile, ok := sub2APISeedreamProfileForModel(model)
+	if !ok {
+		return nil, protocol.HTTPError{Status: http.StatusBadRequest, Message: "Seedream 模型不受支持"}
 	}
-	if urls := sub2APISeedreamImageURLs(payload); len(urls) > 0 {
-		out["image_urls"] = urls
+	count := util.ToInt(payload["n"], 1)
+	if count < 1 || count > profile.maxN {
+		return nil, protocol.HTTPError{Status: http.StatusBadRequest, Message: fmt.Sprintf("%s n 必须是 1 到 %d 的整数", model, profile.maxN)}
 	}
-	for _, key := range []string{"watermark", "optimize_prompt_options", "sequential_image_generation", "sequential_image_generation_options"} {
-		if value := payload[key]; value != nil && util.Clean(value) != "" {
-			out[key] = value
+	refs := sub2APISeedreamImageURLs(payload)
+	if len(refs) > profile.maxReferences || (profile.inputOutputMax > 0 && len(refs)+count > profile.inputOutputMax) {
+		return nil, protocol.HTTPError{Status: http.StatusBadRequest, Message: fmt.Sprintf("%s 参考图数量和生成数量超出限制", model)}
+	}
+	size, err := sub2APISeedreamSize(payload, profile)
+	if err != nil {
+		return nil, err
+	}
+	resolution, err := sub2APISeedreamResolution(payload, profile)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]any{"model": model, "prompt": util.Clean(payload["prompt"]), "n": count, "size": size, "resolution": resolution}
+	if len(refs) > 0 {
+		out["image_urls"] = refs
+	}
+	for _, key := range []string{"nsfw_check", "watermark"} {
+		if value, present := payload[key]; present {
+			checked, ok := value.(bool)
+			if !ok {
+				return nil, protocol.HTTPError{Status: http.StatusBadRequest, Message: fmt.Sprintf("%s 必须是布尔值", key)}
+			}
+			out[key] = checked
 		}
 	}
-	return out
+	if profile.formats != nil {
+		format := strings.ToLower(strings.TrimSpace(util.Clean(payload["output_format"])))
+		if format == "jpg" {
+			format = "jpeg"
+		}
+		if format == "" {
+			format = "png"
+		}
+		if _, ok := profile.formats[format]; !ok {
+			return nil, protocol.HTTPError{Status: http.StatusBadRequest, Message: fmt.Sprintf("%s output_format 只支持 PNG 或 JPEG", model)}
+		}
+		out["output_format"] = format
+	} else if strings.TrimSpace(util.Clean(payload["output_format"])) != "" {
+		return nil, protocol.HTTPError{Status: http.StatusBadRequest, Message: fmt.Sprintf("%s 不支持 output_format", model)}
+	}
+	if profile.sequential {
+		rawMode := strings.ToLower(strings.TrimSpace(util.Clean(payload["sequential_image_generation"])))
+		if rawMode != "" && rawMode != "auto" && rawMode != "disabled" {
+			return nil, protocol.HTTPError{Status: http.StatusBadRequest, Message: "Seedream sequential_image_generation 只支持 auto 或 disabled"}
+		}
+		mode := rawMode
+		if count > 1 {
+			mode = "auto"
+		}
+		if profile.sequentialRequiresReferences && count > 1 && len(refs) == 0 {
+			return nil, protocol.HTTPError{Status: http.StatusBadRequest, Message: fmt.Sprintf("%s 多图生成必须提供参考图", model)}
+		}
+		if mode != "" {
+			out["sequential_image_generation"] = mode
+		}
+		if rawValue, present := payload["sequential_image_generation_options"]; present && rawValue != nil {
+			raw, ok := rawValue.(map[string]any)
+			if !ok {
+				return nil, protocol.HTTPError{Status: http.StatusBadRequest, Message: "Seedream sequential_image_generation_options 必须是对象"}
+			}
+			if mode != "auto" {
+				return nil, protocol.HTTPError{Status: http.StatusBadRequest, Message: "Seedream sequential_image_generation_options 仅在 auto 模式可用"}
+			}
+			maxImages := util.ToInt(raw["max_images"], 0)
+			if maxImages < 1 || maxImages > 15 {
+				return nil, protocol.HTTPError{Status: http.StatusBadRequest, Message: "Seedream max_images 必须是 1 到 15"}
+			}
+			out["sequential_image_generation_options"] = map[string]any{"max_images": maxImages}
+		}
+	} else if payload["sequential_image_generation"] != nil || payload["sequential_image_generation_options"] != nil {
+		return nil, protocol.HTTPError{Status: http.StatusBadRequest, Message: fmt.Sprintf("%s 不支持组图参数", model)}
+	}
+	return out, nil
+}
+
+func sub2APISeedreamSize(payload map[string]any, profile sub2APISeedreamProfile) (string, error) {
+	value := firstNonEmpty(util.Clean(payload["aspect_ratio"]), util.Clean(payload["size"]), util.Clean(payload["requested_size"]))
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	if normalized == "" {
+		normalized = "auto"
+	}
+	if _, ok := profile.ratio[normalized]; ok {
+		return normalized, nil
+	}
+	if profile.model == util.ImageModelSeedream50Pro && sub2APIImageDimensionSize(normalized) {
+		match := regexp.MustCompile(`^(\d+)x(\d+)$`).FindStringSubmatch(normalized)
+		width, _ := strconv.ParseInt(match[1], 10, 64)
+		height, _ := strconv.ParseInt(match[2], 10, 64)
+		pixels := width * height
+		ratio := float64(width) / float64(height)
+		if pixels < 921600 || pixels > 4624220 || ratio < 1.0/16.0 || ratio > 16 {
+			return "", protocol.HTTPError{Status: http.StatusBadRequest, Message: "Seedream Pro size 像素或宽高比超出范围"}
+		}
+		return normalized, nil
+	}
+	return "", protocol.HTTPError{Status: http.StatusBadRequest, Message: fmt.Sprintf("%s size 不受支持", profile.model)}
+}
+
+func sub2APISeedreamResolution(payload map[string]any, profile sub2APISeedreamProfile) (string, error) {
+	value := firstNonEmpty(util.Clean(payload["resolution"]), util.Clean(payload["image_resolution"]))
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	if normalized == "" {
+		normalized = "2k"
+	}
+	if _, ok := profile.resolutions[normalized]; !ok {
+		return "", protocol.HTTPError{Status: http.StatusBadRequest, Message: fmt.Sprintf("%s resolution 不受支持", profile.model)}
+	}
+	return normalized, nil
 }
 
 func sub2APIGeminiImageGatewayPayload(payload map[string]any) map[string]any {
@@ -922,63 +1032,187 @@ func sub2APIMidjourneyImageGatewayPayload(payload map[string]any) (map[string]an
 
 const sub2APIMidjourneyReferenceLimit = 4
 
-const sub2APIGrokImagineReferenceLimit = 1
+const sub2APIGrokImagineReferenceLimit = 3
+
+const sub2APIGrokImaginePromptLimit = 8000
+
+var sub2APIGrokImagineAspectRatios = map[string]struct{}{
+	"1:1": {}, "3:4": {}, "4:3": {}, "9:16": {}, "16:9": {}, "2:3": {}, "3:2": {},
+	"9:19.5": {}, "19.5:9": {}, "9:20": {}, "20:9": {}, "1:2": {}, "2:1": {}, "auto": {},
+}
 
 const sub2APISeedreamInputOutputLimit = 15
+const sub2APISeedreamImageBatchLimit = 15
 
-func sub2APIGrokImagineImageGatewayPayload(payload map[string]any, edit bool) (map[string]any, error) {
-	out := map[string]any{
-		"model":  sub2APIGrokImagineUpstreamModel(edit),
-		"prompt": util.Clean(payload["prompt"]),
-		"n":      sub2APIGrokImagineImagePayloadCount(payload),
+type sub2APISeedreamProfile struct {
+	model                        string
+	maxN                         int
+	maxReferences                int
+	inputOutputMax               int
+	resolutions                  map[string]struct{}
+	ratio                        map[string]struct{}
+	formats                      map[string]struct{}
+	sequential                   bool
+	sequentialRequiresReferences bool
+}
+
+var sub2APISeedreamRatios = map[string]struct{}{
+	"auto": {}, "1:1": {}, "4:3": {}, "3:4": {}, "16:9": {}, "9:16": {},
+	"3:2": {}, "2:3": {}, "2:1": {}, "1:2": {}, "21:9": {}, "9:21": {},
+}
+
+func sub2APISeedreamProfileForModel(model string) (sub2APISeedreamProfile, bool) {
+	base := sub2APISeedreamProfile{model: strings.TrimSpace(model), maxN: 15, maxReferences: 15, inputOutputMax: 15, ratio: sub2APISeedreamRatios}
+	switch strings.ToLower(strings.TrimSpace(model)) {
+	case util.ImageModelSeedream40:
+		base.resolutions = map[string]struct{}{"1k": {}, "2k": {}, "4k": {}}
+		base.sequential = true
+		base.sequentialRequiresReferences = true
+	case util.ImageModelSeedream45:
+		base.resolutions = map[string]struct{}{"2k": {}, "4k": {}}
+		base.sequential = true
+		base.sequentialRequiresReferences = true
+	case util.ImageModelSeedream50Lite:
+		base.resolutions = map[string]struct{}{"2k": {}, "3k": {}, "4k": {}}
+		base.formats = map[string]struct{}{"png": {}, "jpeg": {}}
+		base.sequential = true
+		base.ratio = map[string]struct{}{"auto": {}, "1:1": {}, "4:3": {}, "3:4": {}, "16:9": {}, "9:16": {}, "3:2": {}, "2:3": {}, "2:1": {}, "1:2": {}, "21:9": {}}
+	case util.ImageModelSeedream50Pro:
+		base.maxN = 1
+		base.maxReferences = 10
+		base.inputOutputMax = 0
+		base.resolutions = map[string]struct{}{"1k": {}, "1.5k": {}, "2k": {}}
+		base.formats = map[string]struct{}{"png": {}, "jpeg": {}}
+	default:
+		return sub2APISeedreamProfile{}, false
 	}
-	if size := sub2APIGrokImagineImageSize(payload); size != "" {
-		out["size"] = size
+	return base, true
+}
+
+func sub2APIGrokImagineImageGatewayPayload(payload map[string]any) (map[string]any, error) {
+	prompt := strings.TrimSpace(util.Clean(payload["prompt"]))
+	if prompt == "" {
+		return nil, protocol.HTTPError{Status: http.StatusBadRequest, Message: "Grok Imagine prompt 不能为空"}
+	}
+	if utf8.RuneCountInString(prompt) > sub2APIGrokImaginePromptLimit {
+		return nil, protocol.HTTPError{Status: http.StatusBadRequest, Message: "Grok Imagine prompt 最多支持 8000 个字符"}
+	}
+	count, err := sub2APIGrokImagineImagePayloadCount(payload)
+	if err != nil {
+		return nil, err
+	}
+	aspectRatio, err := sub2APIGrokImagineAspectRatio(payload)
+	if err != nil {
+		return nil, err
+	}
+	resolution, err := sub2APIGrokImagineResolution(payload)
+	if err != nil {
+		return nil, err
+	}
+	nsfwCheck, err := sub2APIGrokImagineNSFWCheck(payload)
+	if err != nil {
+		return nil, err
 	}
 	urls := sub2APIGrokImagineImageURLs(payload)
-	if edit {
-		if len(urls) == 0 {
-			return nil, protocol.HTTPError{Status: http.StatusBadRequest, Message: "Grok Imagine 参考图不能为空"}
-		}
-		if len(urls) > sub2APIGrokImagineReferenceLimit {
-			return nil, sub2APIGrokImagineReferenceLimitError()
-		}
-		out["image_urls"] = urls
+	if len(urls) > sub2APIGrokImagineReferenceLimit {
+		return nil, sub2APIGrokImagineReferenceLimitError()
 	}
-	for key, value := range out {
-		if value == "" {
-			delete(out, key)
+	out := map[string]any{
+		"model":        util.ImageModelGrokImagine,
+		"prompt":       prompt,
+		"n":            count,
+		"aspect_ratio": aspectRatio,
+		"resolution":   resolution,
+		"nsfw_check":   nsfwCheck,
+	}
+	if len(urls) > 0 {
+		out["image_urls"] = urls
+	} else {
+		quality, qualityErr := sub2APIGrokImagineQuality(payload)
+		if qualityErr != nil {
+			return nil, qualityErr
 		}
+		out["quality"] = quality
 	}
 	return out, nil
 }
 
-func sub2APIGrokImagineUpstreamModel(edit bool) string {
-	if edit {
-		return "grok-imagine-1.5-edit-apimart"
+func sub2APIGrokImagineImagePayloadCount(payload map[string]any) (int, error) {
+	value, ok := payload["n"]
+	if !ok || value == nil {
+		return 1, nil
 	}
-	return "grok-imagine-1.5-apimart"
+	var count int
+	switch typed := value.(type) {
+	case int:
+		count = typed
+	case int64:
+		count = int(typed)
+	case float64:
+		if math.Trunc(typed) != typed {
+			return 0, protocol.HTTPError{Status: http.StatusBadRequest, Message: "Grok Imagine n 必须是 1 到 10 的整数"}
+		}
+		count = int(typed)
+	case json.Number:
+		parsed, parseErr := typed.Int64()
+		if parseErr != nil {
+			return 0, protocol.HTTPError{Status: http.StatusBadRequest, Message: "Grok Imagine n 必须是 1 到 10 的整数"}
+		}
+		count = int(parsed)
+	default:
+		return 0, protocol.HTTPError{Status: http.StatusBadRequest, Message: "Grok Imagine n 必须是 1 到 10 的整数"}
+	}
+	if count < 1 || count > sub2APIImageBatchLimit {
+		return 0, protocol.HTTPError{Status: http.StatusBadRequest, Message: "Grok Imagine n 必须是 1 到 10 的整数"}
+	}
+	return count, nil
 }
 
-func sub2APIGrokImagineImagePayloadCount(payload map[string]any) int {
-	count := util.ToInt(payload["n"], 1)
-	if count < 1 {
-		return 1
+func sub2APIGrokImagineAspectRatio(payload map[string]any) (string, error) {
+	value := firstNonEmpty(util.Clean(payload["aspect_ratio"]), util.Clean(payload["size"]), util.Clean(payload["requested_size"]))
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	if normalized == "" {
+		normalized = "auto"
 	}
-	if count > sub2APIImageBatchLimit {
-		return sub2APIImageBatchLimit
+	if _, ok := sub2APIGrokImagineAspectRatios[normalized]; !ok {
+		return "", protocol.HTTPError{Status: http.StatusBadRequest, Message: "Grok Imagine aspect_ratio 不受支持"}
 	}
-	return count
+	return normalized, nil
 }
 
-func sub2APIGrokImagineImageSize(payload map[string]any) string {
-	size := firstNonEmpty(util.Clean(payload["size"]), util.Clean(payload["requested_size"]))
-	size = protocol.NormalizeImageGenerationSize(size)
-	normalized := strings.ToLower(strings.TrimSpace(size))
-	if normalized == "" || normalized == "auto" {
-		return "1:1"
+func sub2APIGrokImagineResolution(payload map[string]any) (string, error) {
+	value := firstNonEmpty(util.Clean(payload["image_resolution"]), util.Clean(payload["resolution"]))
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "auto", "1k", "1080p":
+		return "1k", nil
+	case "2k":
+		return "2k", nil
+	default:
+		return "", protocol.HTTPError{Status: http.StatusBadRequest, Message: "Grok Imagine resolution 只支持 1k 或 2k"}
 	}
-	return normalized
+}
+
+func sub2APIGrokImagineQuality(payload map[string]any) (string, error) {
+	quality := strings.ToLower(strings.TrimSpace(util.Clean(payload["quality"])))
+	if quality == "" {
+		return "medium", nil
+	}
+	if quality != "low" && quality != "medium" {
+		return "", protocol.HTTPError{Status: http.StatusBadRequest, Message: "Grok Imagine quality 只支持 low 或 medium"}
+	}
+	return quality, nil
+}
+
+func sub2APIGrokImagineNSFWCheck(payload map[string]any) (bool, error) {
+	value, ok := payload["nsfw_check"]
+	if !ok || value == nil {
+		return false, nil
+	}
+	checked, ok := value.(bool)
+	if !ok {
+		return false, protocol.HTTPError{Status: http.StatusBadRequest, Message: "Grok Imagine nsfw_check 必须是布尔值"}
+	}
+	return checked, nil
 }
 
 func sub2APIGrokImagineImageURLs(payload map[string]any) []string {
@@ -1001,14 +1235,8 @@ func sub2APIGrokImagineImageURLs(payload map[string]any) []string {
 	return dedupe(urls)
 }
 
-func sub2APIGrokImaginePayloadNeedsEdit(payload map[string]any) bool {
-	return len(sub2APIGrokImagineImageURLs(payload)) > 0 ||
-		len(util.AsStringSlice(payload["reference_image_ids"])) > 0 ||
-		payload["image"] != nil
-}
-
 func sub2APIGrokImagineReferenceLimitError() error {
-	return protocol.HTTPError{Status: http.StatusBadRequest, Message: "Grok Imagine 参考图最多支持 1 张"}
+	return protocol.HTTPError{Status: http.StatusBadRequest, Message: "Grok Imagine 参考图最多支持 3 张"}
 }
 
 func sub2APIImageURLs(payload map[string]any) []string {

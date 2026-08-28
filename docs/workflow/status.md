@@ -1,15 +1,135 @@
 ---
 phase: done
-current_sprint: task-024-image-task-error-localization
-total_sprints: 17
-pending_action: deploy-or-plan-next-sprint
+current_sprint: task-035-seedream-image-profiles
+total_sprints: 28
+pending_action: planner-next-sprint-or-authorized-runtime-smoke
 project_type: web
 qa_mode: browser
 approval_required: true
-last_verified: 2026-07-30
+last_verified: 2026-08-28
 ---
 
 # Workflow Status
+
+- 当前阶段：done（Task-035 PASS）
+- 当前 Sprint：task-035-seedream-image-profiles
+- 当前目标：为 Seedream 4.0、4.5、5.0 Lite、5.0 Pro 建立模型专属参数 profile、payload 校验、任务数量上限和前端工作台传播。
+- 当前 contract：docs/workflow/tasks/task-035-seedream-image-profiles.md
+- Contract review：docs/workflow/task-035-contract-review.md（PASS）
+- 下一合法动作：Planner 为下一独立 scope 建立 contract，或在另行授权后做真实上游/运行态 smoke；不得将本轮 mock 结论外推为生产已验证。
+- 范围边界：4.x 保留 doubao-seedance-4-0/4-5 bridge ID；5.0 使用 seedream-5-0-lite/pro；Pro 图层拆分、透明编辑和完整 optimize 参数 deferred。
+- Task-035 裁决：模型专属 profile、4.x/Lite n=1..15 与输入/输出总量限制、Pro n=1/10 参考图限制、Seedream sequential 默认/多图归一、前端四工作台传播和浏览器 mock 均通过。
+- Worker result：docs/workflow/worker-results/task-035-seedream-image-profiles-result.md
+- QA report：docs/workflow/qa-reports/task-035-seedream-image-profiles-qa.md（PASS）
+- 未验证：真实 APIMart Token/付费生成、供应商计费、embedded binary、Docker、部署和运行实例版本。
+
+- 当前阶段：`done`（Task-034 PASS）
+- 当前 Sprint：`task-034-grok-imagine-image-2-profile`
+- 当前目标：将 Grok Imagine 1.5 直接替换为 APIMart `grok-imagine-image-2.0`，统一生成/参考图 endpoint 和参数 profile。
+- 当前 contract：`docs/workflow/tasks/task-034-grok-imagine-image-2-profile.md`
+- Contract review：`docs/workflow/task-034-contract-review.md`（PASS）
+- Worker result：`docs/workflow/worker-results/task-034-grok-imagine-image-2-profile-result.md`（DONE）
+- QA report：`docs/workflow/qa-reports/task-034-grok-imagine-image-2-profile-qa.md`（PASS）
+- 已确认文档契约：`n=1..10`、14 种比例、`1k|2k`、文生图 `low|medium`、最多 3 张参考图、`nsfw_check` 默认 false；有参考图时不得发送 `quality`。
+- Task-034 裁决：运行时代码无 1.5 残留；文生图与参考图统一上游 `images/generations`，图片页、Canvas、电商套图与 Image Arena 的 2.0 参数传播、定向/全量 Go、前端 lint/build、差异检查及隔离浏览器请求体验收均通过。
+- 未验证项：没有真实 APIMart Token/付费生成；三参考图在隔离账号无图片额度处终止，不宣称真实上游图片或计费已验证。
+- 下一合法动作：等待下一项独立 scope；如需运行态生效或真实上游 smoke，另行授权测试额度、构建/部署或 Docker 更新。
+- 范围边界：不修改 Sub2API、计费、鉴权、数据库、报价接口、部署或生产配置；不保留 1.5 兼容层。
+
+- 当前阶段：`done`（Task-033 PASS）
+- 当前 Sprint：`task-033-remove-local-image-content-policy`
+- 当前目标：移除图片请求的本地提示词关键词预审，保留上游 content policy 错误归一与展示。
+- 当前 contract：`docs/workflow/tasks/task-033-remove-local-image-content-policy.md`
+- Contract review：`docs/workflow/task-033-contract-review.md`（PASS）
+- Worker result：`docs/workflow/worker-results/task-033-remove-local-image-content-policy-result.md`（DONE）
+- QA report：`docs/workflow/qa-reports/task-033-remove-local-image-content-policy-qa.md`（PASS）
+- Task-033 裁决：图片生成、编辑、chat/streaming、Responses image tool 与 creation-task 不再执行本地提示词关键词预审；`desktop ornament` 跨词误命中和成人/暴力关键词本地拒绝均已移除，上游真实 content-policy 与图片过大错误归一保持。
+- 已验证：独立定向 service/protocol/httpapi、三包、`go test ./...`、残留符号扫描和限定路径差异检查均 PASS。
+- 未验证项：没有真实上游供应商调用，不将本地测试结论外推为上游一定接受任意提示词；未构建或部署运行中服务。
+- 下一合法动作：如需让当前运行实例生效，另行授权构建/部署或 Docker 更新；否则等待下一项独立 Sprint。
+- 范围边界：不修改前端、计费、鉴权、数据库、Sub2API 协议、部署或 Docker；不吞掉或绕过上游真实策略拒绝。
+
+- 当前阶段：`done`（Task-032 PASS）
+- 当前 Sprint：`task-032-seedance-2-5-profile`
+- 当前目标：按 APIMart 文档为 Canvas 和视频 bridge 增加独立 `seedance-2.5` 参数 profile。
+- 当前 contract：`docs/workflow/tasks/task-032-seedance-2-5-profile.md`
+- Contract review：`docs/workflow/task-032-contract-review.md`（PASS）
+- Worker result：`docs/workflow/worker-results/task-032-seedance-2-5-profile-result.md`（DONE）
+- QA report：`docs/workflow/qa-reports/task-032-seedance-2-5-profile-qa.md`（PASS）
+- Task-032 裁决：Canvas 已支持 `seedance-2.5` 七种比例、`480p/720p`、`4..30|-1`、显式音频开关和 `mp4/mov`；后端 payload、全量 Go、前端 lint/build、差异检查和 mock 浏览器验收均通过。
+- 未验证项：没有真实 APIMart Token 或付费生成证据，不将本地参数契约结论外推为真实 30 秒/MOV 产物和计费已验证。
+- 下一合法动作：如需参考视频/音频、首尾帧、编辑/延长或素材库能力，创建独立 contract；本 Sprint 不更新部署或 Docker。
+- 范围边界：不实现视频/音频上传、首尾帧角色、视频编辑/延长、素材库、计费、鉴权、部署或 Docker。
+
+- 当前阶段：`done`（Task-031 PASS）
+- 当前 Sprint：`task-031-canvas-model-contracts`
+- 当前目标：收紧 Canvas Gemini Flash 的单张约束，并阻止未知视频模型按 Seedance 默认参数提交。
+- 当前 contract：`docs/workflow/tasks/task-031-canvas-model-contracts.md`
+- Contract review：`docs/workflow/task-031-contract-review.md`（PASS）
+- Worker result：`docs/workflow/worker-results/task-031-canvas-model-contracts-result.md`（DONE）
+- QA report：`docs/workflow/qa-reports/task-031-canvas-model-contracts-qa.md`（PASS）
+- Task-031 裁决：Gemini Flash 控件和请求体固定 `n=1`；Canvas 视频只展示有 profile 的模型，保存的未知模型在 UI 和后端 bridge 均被拒绝。定向/包级 Go、前端 lint/build、差异检查和 mock 浏览器验收均通过。
+- 未验证项：没有可用的真实登录态或 Sub2API 上游配置，本轮不将 mock 浏览器和单元测试结论外推为真实账号或生产调用已验证。
+- 下一合法动作：获得新的产品 scope 后处理模型目录、兼容别名或真实上游联调；本 Sprint 不更新部署或 Docker。
+
+- 当前阶段：`done`（Task-030 PASS）
+- 当前 Sprint：`task-030-bead-maker-mode`
+- 当前目标：参考 Pindou Studio 的制作模式独立实现平板友好制作视图，并补齐最少色块转换滑块。
+- 当前 contract：`docs/workflow/tasks/task-030-bead-maker-mode.md`
+- Contract review：`docs/workflow/task-030-contract-review.md`（PASS）
+- Worker result：`docs/workflow/worker-results/task-030-bead-maker-mode-result.md`（DONE）
+- QA report：`docs/workflow/qa-reports/task-030-bead-maker-mode-qa.md`（PASS）
+- Task-030 裁决：制作模式、最少色块转换、保存恢复、平板/移动端浏览器验收和前后端检查均通过；真实账号、嵌入式服务和生产未验证。
+- 下一合法动作：获得授权后补真实素材/embedded 服务 smoke。
+
+- 当前阶段：`done`（Task-029 PASS）
+- 当前 Sprint：`task-029-bead-conversion-controls`
+- 当前目标：补齐拼豆导入精细度、抖动、平滑、主色聚类、最多色块、亮度和对比度等实际生效的转换控制，并保持 v1 工程恢复。
+- 当前 contract：`docs/workflow/tasks/task-029-bead-conversion-controls.md`
+- Contract review：`docs/workflow/task-029-contract-review.md`（PASS）
+- Worker result：`docs/workflow/worker-results/task-029-bead-conversion-controls-result.md`（DONE）
+- QA report：`docs/workflow/qa-reports/task-029-bead-conversion-controls-qa.md`（PASS）
+- Task-029 裁决：桌面/移动抽屉、真实本地图片转换、工程控制恢复、lint/build/bundle、包级与全包 Go 测试、差异检查均 PASS。
+- 下一合法动作：获得授权后执行真实账号素材/对象存储 smoke，或构建 embedded 服务后进行预发布 smoke；本轮不更新 Docker 或部署。
+
+- 当前阶段：`done`（Task-028 PASS）
+- 当前 Sprint：`task-028-bead-end-to-end-qa`
+- 当前目标：执行拼豆工坊跨 Sprint 全量验收，输出 evidence-first 最终复核，明确 checkout、mock 浏览器与生产未验证边界。
+- 当前 contract：`docs/workflow/tasks/task-028-bead-end-to-end-qa.md`
+- Contract review：`docs/workflow/task-028-contract-review.md`（PASS）
+- Worker result：`docs/workflow/worker-results/task-028-bead-end-to-end-qa-result.md`（DONE）
+- QA report：`docs/workflow/qa-reports/task-028-bead-end-to-end-qa.md`（PASS）
+- 最终复核：`docs/workflow/qa-reports/bead-workshop-final-review.md`
+- 下一合法动作：在获得授权后使用真实账号与部署环境补验；本轮不执行部署。
+
+- 当前阶段：`done`（Task-027 PASS）
+- 当前 Sprint：`task-027-bead-assets-mobile-integration`
+- 当前目标：拼豆工程 1200ms 自动保存、revision 冲突处理、个人/团队素材互通、导出结果回存个人素材库和完整移动端抽屉体验。
+- 当前 contract：`docs/workflow/tasks/task-027-bead-assets-mobile-integration.md`
+- Contract review：`docs/workflow/task-027-contract-review.md`（PASS）
+- Worker result：`docs/workflow/worker-results/task-027-bead-assets-mobile-integration-result.md`（DONE）
+- QA report：`docs/workflow/qa-reports/task-027-bead-assets-mobile-integration-qa.md`（PASS）
+- Task-027 裁决：自动保存/409/素材/导出/移动端浏览器 mock 回归通过；最终复审修复了关闭选择器的迟到素材读取和另存副本迟到导航两个竞态。
+
+- 当前阶段：`done`（Task-026 PASS）
+- 当前 Sprint：`task-026-bead-workbench-port`
+- 当前目标：固定提交原生迁入算法、编辑工作台、MARD 221/291、3D/统计/全部导出，并接入 `/beads` 列表/路由/导航与 MIT 声明。
+- 当前 contract：`docs/workflow/tasks/task-026-bead-workbench-port.md`
+- Contract review：`docs/workflow/task-026-contract-review.md`（PASS）
+- Worker result：`docs/workflow/worker-results/task-026-bead-workbench-port-result.md`（DONE）
+- QA report：`docs/workflow/qa-reports/task-026-bead-workbench-port-qa.md`（PASS）
+- Task-026 裁决：工作台和项目列表浏览器场景通过；修复了工作区高度约束与 1440px 三列缩略图布局；全包 Go 测试仍有既有无关计费测试失败，未修改该链路。
+
+- 当前阶段：`done`（Task-025 PASS）
+- 当前 Sprint：`task-025-bead-project-cloud-storage`
+- 当前目标：建立拼豆工程个人私有云端存储、CRUD/revision API、严格校验、RBAC/分析映射和前端类型化 API 客户端。
+- 当前 contract：`docs/workflow/tasks/task-025-bead-project-cloud-storage.md`
+- Contract review：`docs/workflow/task-025-contract-review.md`（PASS）
+- Worker result：`docs/workflow/worker-results/task-025-bead-project-cloud-storage-result.md`（DONE）
+- QA report：`docs/workflow/qa-reports/task-025-bead-project-cloud-storage-qa.md`（PASS）
+- Task-025 裁决：个人私有工程 CRUD、revision 409、严格 v1/大小/素材引用校验、owner 隔离、独立索引/文档存储、RBAC/分析和前端 API 契约均通过定向与包级测试。
+- 下一合法动作：Planner 创建并审核 `task-026-bead-workbench-port` contract。
+- 后续 Sprint：`task-026-bead-workbench-port`、`task-027-bead-assets-mobile-integration`、`task-028-bead-end-to-end-qa`。
 
 - 当前阶段：`done`（Task-024 PASS）
 - 当前 Sprint：`task-024-image-task-error-localization`

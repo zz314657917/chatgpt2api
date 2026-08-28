@@ -1610,6 +1610,10 @@ func (a *App) handleCreationTasks(w http.ResponseWriter, r *http.Request) {
 			util.WriteError(w, http.StatusBadRequest, err.Error())
 			return
 		}
+		if err := validateSeedreamPayload(body, nil); err != nil {
+			util.WriteError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		n := util.ToInt(body["n"], 1)
 		task, err := a.tasks.SubmitGenerationWithOptions(r.Context(), identity, util.Clean(body["client_task_id"]), util.Clean(body["prompt"]), model, util.Clean(body["size"]), util.Clean(body["quality"]), a.resolveImageBaseURL(r), n, body["messages"], imageTaskRequestMetadata(body), imageOutputOptionsFromBody(body), imageGenerationToolOptionsFromBody(model, n, body), util.Clean(body["visibility"]))
 		if err != nil {
@@ -1671,6 +1675,10 @@ func (a *App) handleCreationTasks(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := validateImageReferenceLimit(body, images); err != nil {
+			util.WriteError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if err := validateSeedreamPayload(body, images); err != nil {
 			util.WriteError(w, http.StatusBadRequest, err.Error())
 			return
 		}
@@ -1803,6 +1811,16 @@ func imageTaskRequestMetadata(body map[string]any) map[string]any {
 	}
 	if compression, ok := service.NormalizeImageOutputCompressionValue(body["output_compression"]); ok {
 		metadata["raw_output_compression"] = compression
+	}
+	if sub2APIUsesSeedreamGateway(body) {
+		for _, key := range []string{"nsfw_check", "watermark", "sequential_image_generation"} {
+			if value, ok := body[key]; ok {
+				metadata[key] = value
+			}
+		}
+		if options := util.StringMap(body["sequential_image_generation_options"]); len(options) > 0 {
+			metadata["sequential_image_generation_options"] = options
+		}
 	}
 	for _, key := range []string{"team_id", "payer_user_id", "actor_user_id", "actor_name"} {
 		if value := util.Clean(body[key]); value != "" {
@@ -2034,6 +2052,21 @@ func validateSeedreamImageReferenceAndCount(body map[string]any, referenceCount 
 		return nil
 	}
 	return protocol.HTTPError{Status: http.StatusBadRequest, Message: fmt.Sprintf("Seedream 参考图数量和生成数量合计最多支持 %d", sub2APISeedreamInputOutputLimit)}
+}
+
+func validateSeedreamPayload(body map[string]any, images []protocol.UploadedImage) error {
+	if !sub2APIUsesSeedreamGateway(body) {
+		return nil
+	}
+	payload := make(map[string]any, len(body)+1)
+	for key, value := range body {
+		payload[key] = value
+	}
+	if len(images) > 0 {
+		payload["images"] = images
+	}
+	_, err := sub2APISeedreamImageGatewayPayload(payload)
+	return err
 }
 
 func imageOutputOptionsFromBody(body map[string]any) service.ImageOutputOptions {

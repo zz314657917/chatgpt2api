@@ -84,6 +84,7 @@ func (a *App) routes() []appRoute {
 		subtree("/api/creation-tasks", a.handleCreationTasks),
 		subtree("/api/social-projects", a.handleSocialProjects),
 		subtree("/api/canvases", a.handleCanvases),
+		subtree("/api/bead-projects", a.handleBeadProjects),
 		exact(http.MethodGet, "/api/canvas/models", a.handleCanvasModels),
 		subtree("/api/canvas-runs", a.handleCanvasRuns),
 		subtree("/api/register", a.handleRegister),

@@ -3,12 +3,22 @@ import {
   estimateImageDisplayPriceUSD,
   isGeminiFlashImageModel,
   isGeminiProImageModel,
+  isGrokImagineImageModel,
+  isSeedreamImageModel,
+  isSeedream50ProImageModel,
   isOfficialImageModel,
   type ImageModel,
   type MidjourneySettingsPayload,
   type GeminiFlashSettingsPayload,
 } from "@/lib/api";
-import { buildImageSize, isImageAspectRatio } from "@/lib/image-parameters";
+import {
+  buildImageSize,
+  isImageAspectRatio,
+  normalizeGrokImageAspectRatio,
+  normalizeGrokImageQuality,
+  normalizeSeedreamImageAspectRatio,
+  normalizeSeedreamImageResolution,
+} from "@/lib/image-parameters";
 import { normalizeImageOutputCompression, normalizeImageOutputFormat, type ImageQuality } from "@/lib/image-parameters";
 import { imageModelSettingsToTaskFields, type ImageModelSettingsState } from "@/lib/image-model-settings";
 import type { ImageTaskToolOptions } from "@/lib/image-task-request";
@@ -92,6 +102,8 @@ export function adaptImageArenaSettings(
     geminiFlash: modelSettings?.geminiFlashSettings,
     officialImage: modelSettings?.officialImageSettings,
     geminiPro: modelSettings?.geminiProSettings,
+    grok: modelSettings?.imageModelSettings?.grok,
+    seedream: modelSettings?.imageModelSettings?.seedream,
   };
   let payload: ImageArenaTaskPayload;
   let estimateSizeOrResolution: string = tier.estimateResolution;
@@ -206,6 +218,50 @@ export function adaptImageArenaSettings(
     estimateSizeOrResolution = tier.estimateResolution;
     if (normalizedFormat !== "png") {
       warnings.push("Gemini Pro 通道不提交输出格式控制");
+    }
+  } else if (isGrokImagineImageModel(model)) {
+    const fields = imageModelSettingsToTaskFields(model, imageModelSettings);
+    const grokResolution = tier.resolution === "1k" ? "1080p" : "2k";
+    const grokQuality = normalizeGrokImageQuality(tier.quality);
+    payload = {
+      model,
+      size: normalizeGrokImageAspectRatio(settings.aspectRatio) || undefined,
+      imageResolution: grokResolution,
+      quality: grokQuality,
+      count,
+      ...(fields.extraBody ? { extraBody: fields.extraBody } : {}),
+    };
+    estimateQuality = grokQuality;
+    estimateSizeOrResolution = grokResolution === "2k" ? "2K" : "1K";
+    if (settings.qualityTier === "production") {
+      warnings.push("Grok Imagine Image 2.0 最高使用 2K / Medium");
+    }
+    if (normalizedFormat !== "png") {
+      warnings.push("Grok Imagine Image 2.0 不提交输出格式控制");
+    }
+  } else if (isSeedreamImageModel(model)) {
+    const fields = imageModelSettingsToTaskFields(model, imageModelSettings, count);
+    const resolution = normalizeSeedreamImageResolution(tier.resolution, model);
+    const outputFormat = capability.supportsOutputControls
+      ? normalizedFormat === "jpeg" ? "jpeg" : "png"
+      : undefined;
+    payload = {
+      model,
+      size: normalizeSeedreamImageAspectRatio(settings.aspectRatio, model) || "auto",
+      imageResolution: resolution,
+      count: isSeedream50ProImageModel(model) ? 1 : count,
+      ...(outputFormat ? { outputFormat } : {}),
+      ...(fields.extraBody ? { extraBody: fields.extraBody } : {}),
+    };
+    estimateQuality = "auto";
+    estimateSizeOrResolution = resolution.toUpperCase();
+    if (outputFormat && normalizedFormat !== outputFormat) {
+      warnings.push("Seedream 仅支持 PNG 或 JPEG 输出格式");
+    } else if (!outputFormat && normalizedFormat !== "png") {
+      warnings.push("Seedream 4.x 不提交输出格式控制");
+    }
+    if (isSeedream50ProImageModel(model) && count !== 1) {
+      warnings.push("Seedream 5.0 Pro 固定输出 1 张");
     }
   } else {
     payload = {

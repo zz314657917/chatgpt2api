@@ -16,32 +16,24 @@ func TestCanvasModelOptionsHideCodexImageRoute(t *testing.T) {
 	catalogItems := canvasModelOptionsFromCatalog(map[string]any{
 		"items": []map[string]any{
 			{"id": util.ImageModelCodex, "name": util.ImageModelCodex, "capabilities": []string{"image"}, "enabled": true},
-			{"id": "grok-imagine-1.5-apimart", "name": "grok-imagine-1.5-apimart", "capabilities": []string{"image"}, "enabled": true},
-			{"id": "grok-imagine-1.5-edit-apimart", "name": "grok-imagine-1.5-edit-apimart", "capabilities": []string{"image"}, "enabled": true},
 			{"id": util.ImageModelGPT, "name": util.ImageModelGPT, "capabilities": []string{"image"}, "enabled": true},
 		},
 	})
 	assertCanvasModelIDs(t, catalogItems, map[string]bool{
-		util.ImageModelCodex:            false,
-		"grok-imagine-1.5-apimart":      false,
-		"grok-imagine-1.5-edit-apimart": false,
-		util.ImageModelGPT:              true,
+		util.ImageModelCodex: false,
+		util.ImageModelGPT:   true,
 	})
 
 	modelListItems := canvasModelOptionsFromModelList(map[string]any{
 		"data": []map[string]any{
 			{"id": util.ImageModelCodex},
-			{"id": "grok-imagine-1.5-apimart"},
-			{"id": "grok-imagine-1.5-edit-apimart"},
 			{"id": "remote-image"},
 		},
 	}, true, false)
 	assertCanvasModelIDs(t, modelListItems, map[string]bool{
-		util.ImageModelCodex:            false,
-		"grok-imagine-1.5-apimart":      false,
-		"grok-imagine-1.5-edit-apimart": false,
-		util.ImageModelGPT:              true,
-		"remote-image":                  true,
+		util.ImageModelCodex: false,
+		util.ImageModelGPT:   true,
+		"remote-image":       true,
 	})
 }
 

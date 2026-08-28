@@ -68,6 +68,10 @@ import {
   MIDJOURNEY_IMAGE_MODEL,
   createManagedTextAsset,
   fetchManagedTextAssets,
+  imageTaskMaxCount,
+  imageTaskSubmitCount,
+  isGrokImagineImageModel,
+  isSeedreamImageModel,
   supportsImageOutputControls,
   supportsImageQuality,
   type CanvasImageRef,
@@ -86,12 +90,22 @@ import {
 import { getManagedImagePathFromUrl } from "@/lib/image-path";
 import {
   IMAGE_ASPECT_RATIO_OPTIONS,
+  GROK_IMAGE_ASPECT_RATIO_OPTIONS,
+  GROK_IMAGE_QUALITY_OPTIONS,
+  GROK_IMAGE_RESOLUTION_OPTIONS,
   IMAGE_QUALITY_OPTIONS,
   IMAGE_RESOLUTION_OPTIONS,
   PIXEL_ICON_SIZE_OPTIONS,
   isImageQuality,
   isPixelIconSize,
-  normalizeImageOutputFormat,
+  normalizeGrokImageAspectRatio,
+  normalizeGrokImageQuality,
+  normalizeGrokImageResolution,
+  normalizeImageOutputFormatForModel,
+  normalizeSeedreamImageAspectRatio,
+  normalizeSeedreamImageResolution,
+  seedreamImageAspectRatioOptions,
+  seedreamImageResolutionOptions,
   type ImageAspectRatio,
   type ImageResolution,
 } from "@/lib/image-parameters";
@@ -266,6 +280,31 @@ const canvasImageRatioOptions = [
     section: "像素图标尺寸",
   })),
 ] as const satisfies ReadonlyArray<ImageRatioPickerOption<Exclude<ImageAspectRatio, "" | "custom">>>;
+const canvasGrokImageRatioOptions = GROK_IMAGE_ASPECT_RATIO_OPTIONS.map((option) => ({
+  value: option.value || "auto",
+  label: option.value || "Auto",
+  section: "Grok Imagine 2.0",
+  glyphValue: option.value || "auto",
+})) satisfies ReadonlyArray<ImageRatioPickerOption<CanvasImageRatioValue>>;
+const canvasGrokImageResolutionOptions = GROK_IMAGE_RESOLUTION_OPTIONS.map((option) => ({
+  value: option.value,
+  label: option.label,
+}));
+function canvasSeedreamImageRatioOptions(model: string) {
+  return seedreamImageAspectRatioOptions(model).map((option) => ({
+    value: option.value || "auto",
+    label: option.value || "Auto",
+    section: "Seedream",
+    glyphValue: option.value || "auto",
+  })) satisfies ReadonlyArray<ImageRatioPickerOption<CanvasImageRatioValue>>;
+}
+
+function canvasSeedreamImageResolutionOptions(model: string) {
+  return seedreamImageResolutionOptions(model).map((option) => ({
+    value: option.value,
+    label: option.label,
+  }));
+}
 type CanvasImageRatioValue = "auto" | Exclude<ImageAspectRatio, "" | "custom">;
 const imageNodeTileMinWidth = 108;
 const imageNodeTileMinHeight = 82;
@@ -4414,30 +4453,46 @@ function GeneratorNodeBody({
   const proStudioState = normalizeProStudioState(item.data?.pro_studio_state as Partial<ProStudioState> | undefined, "free_canvas");
   const proStudioEnabled = item.data?.professional_mode === true || proStudioState.enabled;
   const activeImageModel = proStudioEnabled ? OFFICIAL_IMAGE_MODEL : imageModel;
+  const grokImageModel = isGrokImagineImageModel(activeImageModel);
+  const seedreamImageModel = isSeedreamImageModel(activeImageModel);
   const midjourneyImageModel = activeImageModel === MIDJOURNEY_IMAGE_MODEL;
-  const imageCount = midjourneyImageModel ? 1 : Math.max(1, Math.min(10, Number(item.data?.n || 1)));
+  const imageCountMax = imageTaskMaxCount(activeImageModel);
+  const imageCountLocked = imageCountMax === 1;
+  const imageCount = imageTaskSubmitCount(activeImageModel, Number(item.data?.n || 1));
   const hasInputImages = images.length > 0;
-  const ratioValue: CanvasImageRatioValue = hasInputImages && (!item.data?.size_user_modified || !String(item.data?.size || "").trim())
-    ? "auto"
-    : canvasImageRatioValue(item.data?.size);
+  const ratioValue: CanvasImageRatioValue = grokImageModel
+    ? (hasInputImages && (!item.data?.size_user_modified || !String(item.data?.size || "").trim())
+        ? "auto"
+        : normalizeGrokImageAspectRatio(item.data?.size) || "auto")
+    : seedreamImageModel ? normalizeSeedreamImageAspectRatio(item.data?.size, activeImageModel) || "auto"
+    : hasInputImages && (!item.data?.size_user_modified || !String(item.data?.size || "").trim())
+      ? "auto"
+      : canvasImageRatioValue(item.data?.size);
   const pixelIconSizeSelected = isPixelIconSize(ratioValue);
-  const imageResolutionValue = pixelIconSizeSelected ? "pixel" : normalizeCanvasImageResolution(item.data?.image_resolution) || "unspecified";
-  const imageResolutionOptions = hasInputImages && item.data?.image_resolution_user_modified !== true
+  const imageResolutionValue = grokImageModel
+    ? normalizeGrokImageResolution(item.data?.image_resolution)
+    : seedreamImageModel ? normalizeSeedreamImageResolution(item.data?.image_resolution, activeImageModel)
+    : pixelIconSizeSelected ? "pixel" : normalizeCanvasImageResolution(item.data?.image_resolution) || "unspecified";
+  const imageResolutionOptions = grokImageModel
+    ? canvasGrokImageResolutionOptions
+    : seedreamImageModel ? canvasSeedreamImageResolutionOptions(activeImageModel)
+    : hasInputImages && item.data?.image_resolution_user_modified !== true
     ? canvasImageResolutionOptions.map((option) => option.value === "unspecified" ? { ...option, label: "保持原图清晰度" } : option)
     : canvasImageResolutionOptions;
+  const baseImageRatioOptions = grokImageModel ? canvasGrokImageRatioOptions : seedreamImageModel ? canvasSeedreamImageRatioOptions(activeImageModel) : canvasImageRatioOptions;
   const imageRatioOptions = hasInputImages
     ? [
         { value: "auto", label: "原图", description: "保持输入图片比例", section: "输入图片", glyphValue: "auto" },
-        ...canvasImageRatioOptions,
+        ...baseImageRatioOptions.filter((option) => option.value !== "auto"),
       ] satisfies ReadonlyArray<ImageRatioPickerOption<CanvasImageRatioValue>>
-    : canvasImageRatioOptions satisfies ReadonlyArray<ImageRatioPickerOption<CanvasImageRatioValue>>;
+    : baseImageRatioOptions satisfies ReadonlyArray<ImageRatioPickerOption<CanvasImageRatioValue>>;
   const imageRatioLabel = imageRatioOptions.find((option) => option.value === ratioValue)?.label || ratioValue;
   const outputControlsSupported = supportsImageOutputControls(activeImageModel);
-  const imageQualitySupported = supportsImageQuality(activeImageModel);
-  const outputFormat = normalizeImageOutputFormat(item.data?.output_format);
+  const imageQualitySupported = supportsImageQuality(activeImageModel) && (!grokImageModel || !hasInputImages);
+  const outputFormat = normalizeImageOutputFormatForModel(activeImageModel, item.data?.output_format);
   const outputCompression = typeof item.data?.output_compression === "number" ? item.data.output_compression : undefined;
-  const imageQuality = isImageQuality(item.data?.quality) ? item.data.quality : "auto";
-  const setImageCount = (next: number) => onUpdateData({ n: midjourneyImageModel ? 1 : Math.max(1, Math.min(10, Math.round(next) || 1)) });
+  const imageQuality = grokImageModel ? normalizeGrokImageQuality(item.data?.quality) : isImageQuality(item.data?.quality) ? item.data.quality : "auto";
+  const setImageCount = (next: number) => onUpdateData({ n: imageTaskSubmitCount(activeImageModel, Math.round(next) || 1) });
   const setOutputCompression = (value: string) => {
     if (!value.trim()) {
       onUpdateData({ output_compression: undefined });
@@ -4595,7 +4650,28 @@ function GeneratorNodeBody({
         compact
       />
       <div className={cn("min-w-0 gap-2", parameterLayout === "stacked" ? "grid grid-cols-1" : "flex")}>
-        <Select value={activeImageModel} onValueChange={(model) => onUpdateData({ model, ...(model === MIDJOURNEY_IMAGE_MODEL ? { n: 1 } : {}) })} disabled={proStudioEnabled}>
+        <Select
+          value={activeImageModel}
+          onValueChange={(model) => onUpdateData({
+            model,
+            ...(imageTaskMaxCount(model) === 1 ? { n: 1 } : {}),
+            ...(isGrokImagineImageModel(model)
+              ? {
+                  size: normalizeGrokImageAspectRatio(item.data?.size),
+                  image_resolution: normalizeGrokImageResolution(item.data?.image_resolution),
+                  quality: normalizeGrokImageQuality(item.data?.quality),
+                }
+              : {}),
+            ...(isSeedreamImageModel(model)
+              ? {
+                  size: normalizeSeedreamImageAspectRatio(item.data?.size, model),
+                  image_resolution: normalizeSeedreamImageResolution(item.data?.image_resolution, model),
+                  output_format: normalizeImageOutputFormatForModel(model, item.data?.output_format),
+                }
+              : {}),
+          })}
+          disabled={proStudioEnabled}
+        >
           <SelectTrigger className={cn(canvasSelectClass, "min-w-0 flex-1")}>
             <SelectValue placeholder="模型" />
           </SelectTrigger>
@@ -4681,7 +4757,7 @@ function GeneratorNodeBody({
               <SelectValue placeholder="质量强度" />
             </SelectTrigger>
             <SelectContent>
-              {IMAGE_QUALITY_OPTIONS.map((option) => (
+              {(grokImageModel ? GROK_IMAGE_QUALITY_OPTIONS : IMAGE_QUALITY_OPTIONS).map((option) => (
                 <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
               ))}
             </SelectContent>
@@ -4691,9 +4767,9 @@ function GeneratorNodeBody({
           <button
             type="button"
             className="flex items-center justify-center border-r border-border text-muted-foreground transition hover:bg-accent hover:text-foreground disabled:opacity-40 dark:border-slate-700"
-            disabled={midjourneyImageModel || imageCount <= 1}
+            disabled={imageCountLocked || imageCount <= 1}
             onClick={() => setImageCount(imageCount - 1)}
-            aria-label={midjourneyImageModel ? "减少生成次数" : "减少张数"}
+            aria-label={imageCountLocked ? "生成张数固定为 1" : midjourneyImageModel ? "减少生成次数" : "减少张数"}
           >
             <ChevronLeft className="size-3.5" />
           </button>
@@ -4704,18 +4780,18 @@ function GeneratorNodeBody({
               pattern="[0-9]*"
               value={imageCount}
               onChange={(event) => setImageCount(Number(event.target.value) || 1)}
-              disabled={midjourneyImageModel}
+              disabled={imageCountLocked}
               className="h-9 w-7 rounded-none border-0 bg-transparent p-0 text-right text-xs font-bold shadow-none focus-visible:ring-0 disabled:cursor-default disabled:opacity-100"
-              aria-label={midjourneyImageModel ? "生成次数" : "生成张数"}
+              aria-label={imageCountLocked ? "生成张数固定为 1" : midjourneyImageModel ? "生成次数" : "生成张数"}
             />
             <span className={cn("text-[11px] font-bold", canvasSubtleTextClass)}>{midjourneyImageModel ? "次" : "张"}</span>
           </div>
           <button
             type="button"
             className="flex items-center justify-center border-l border-border text-muted-foreground transition hover:bg-accent hover:text-foreground disabled:opacity-40 dark:border-slate-700"
-            disabled={midjourneyImageModel || imageCount >= 10}
+            disabled={imageCountLocked || imageCount >= imageCountMax}
             onClick={() => setImageCount(imageCount + 1)}
-            aria-label={midjourneyImageModel ? "增加生成次数" : "增加张数"}
+            aria-label={imageCountLocked ? "生成张数固定为 1" : midjourneyImageModel ? "增加生成次数" : "增加张数"}
           >
             <ChevronRight className="size-3.5" />
           </button>
