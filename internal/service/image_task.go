@@ -844,10 +844,7 @@ func (s *ImageTaskService) submit(ctx context.Context, identity Identity, client
 	if isMediaTaskMode(mode) {
 		task["output_statuses"] = initialImageOutputStatuses(count)
 	}
-	compressionSupported := SupportsImageOutputCompression(outputFormat)
-	if IsProStudioRequest(payload) {
-		compressionSupported = SupportsOfficialImageOutputCompression(outputFormat)
-	}
+	compressionSupported := imageTaskSupportsOutputCompression(util.Clean(payload["model"]), outputFormat, IsProStudioRequest(payload))
 	if compressionSupported {
 		if compression, ok := NormalizeImageOutputCompressionValue(payload["output_compression"]); ok {
 			task["output_compression"] = compression
@@ -1555,7 +1552,7 @@ func (s *ImageTaskService) loadLocked() map[string]map[string]any {
 		visibility, _ := NormalizeImageVisibility(util.Clean(task["visibility"]))
 		outputFormat := NormalizeImageOutputFormat(util.Clean(task["output_format"]))
 		normalized := map[string]any{"id": id, "owner_id": owner, "status": status, "mode": mode, "model": firstNonEmpty(util.Clean(task["model"]), util.ImageModelAuto), "size": util.Clean(task["size"]), "quality": util.Clean(task["quality"]), "output_format": outputFormat, "visibility": visibility, "count": count, "created_at": firstNonEmpty(util.Clean(task["created_at"]), util.NowLocal()), "updated_at": firstNonEmpty(util.Clean(task["updated_at"]), util.Clean(task["created_at"]), util.NowLocal())}
-		if SupportsImageOutputCompression(outputFormat) {
+		if imageTaskSupportsOutputCompression(util.Clean(task["model"]), outputFormat, false) {
 			if compression, ok := NormalizeImageOutputCompressionValue(task["output_compression"]); ok {
 				normalized["output_compression"] = compression
 			}
@@ -1847,10 +1844,7 @@ func publicTask(task map[string]any) map[string]any {
 	if format := NormalizeImageOutputFormat(util.Clean(task["output_format"])); format != "" {
 		item["output_format"] = format
 	}
-	compressionSupported := SupportsImageOutputCompression(util.Clean(item["output_format"]))
-	if IsProStudioRequest(task) {
-		compressionSupported = SupportsOfficialImageOutputCompression(util.Clean(item["output_format"]))
-	}
+	compressionSupported := imageTaskSupportsOutputCompression(util.Clean(task["model"]), util.Clean(item["output_format"]), IsProStudioRequest(task))
 	if compressionSupported {
 		if compression, ok := NormalizeImageOutputCompressionValue(task["output_compression"]); ok {
 			item["output_compression"] = compression
@@ -1979,6 +1973,8 @@ func normalizedImageTaskCountForModel(model string, n int) int {
 	}
 	limit := maxImageTaskCount
 	switch strings.ToLower(strings.TrimSpace(model)) {
+	case util.ImageModelGPT25Flare, util.ImageModelGPT25Sunburst:
+		limit = 4
 	case util.ImageModelSeedream40, util.ImageModelSeedream45, util.ImageModelSeedream50Lite:
 		limit = 15
 	case util.ImageModelSeedream50Pro:
@@ -2605,6 +2601,12 @@ func mergeImageTaskMetadata(payload map[string]any, metadata map[string]any) {
 
 func normalizeImageTaskResolutionForModel(model, value string) string {
 	normalized := strings.ToLower(strings.TrimSpace(value))
+	if model == util.ImageModelGPT25Flare || model == util.ImageModelGPT25Sunburst {
+		if normalized == "1k" || normalized == "2k" || normalized == "4k" {
+			return normalized
+		}
+		return ""
+	}
 	switch normalized {
 	case "1.5k", "3k":
 		model = strings.ToLower(strings.TrimSpace(model))
@@ -2635,10 +2637,7 @@ func mergeImageOutputOptions(payload map[string]any, options ImageOutputOptions)
 		return
 	}
 	payload["output_format"] = format
-	compressionSupported := SupportsImageOutputCompression(format)
-	if IsProStudioRequest(payload) {
-		compressionSupported = SupportsOfficialImageOutputCompression(format)
-	}
+	compressionSupported := imageTaskSupportsOutputCompression(util.Clean(payload["model"]), format, IsProStudioRequest(payload))
 	if !compressionSupported || options.Compression == nil {
 		delete(payload, "output_compression")
 		return
@@ -2650,6 +2649,18 @@ func mergeImageOutputOptions(payload map[string]any, options ImageOutputOptions)
 		compression = 100
 	}
 	payload["output_compression"] = compression
+}
+
+func imageTaskSupportsOutputCompression(model, format string, official bool) bool {
+	switch strings.ToLower(strings.TrimSpace(model)) {
+	case util.ImageModelGPT25Flare, util.ImageModelGPT25Sunburst:
+		return SupportsOfficialImageOutputCompression(format)
+	default:
+		if official {
+			return SupportsOfficialImageOutputCompression(format)
+		}
+		return SupportsImageOutputCompression(format)
+	}
 }
 
 func mergeImageToolOptions(payload map[string]any, options ImageToolOptions) {

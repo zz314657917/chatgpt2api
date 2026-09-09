@@ -7,6 +7,7 @@ import {
   SEEDREAM_50_LITE_IMAGE_MODEL,
   SEEDREAM_50_PRO_IMAGE_MODEL,
   imageReferenceInputLimit,
+  isGPTImage25Model,
   supportsImageOutputCompression,
   supportsImageOutputControls,
   supportsImageMaskParameter,
@@ -24,6 +25,8 @@ export type ImageArenaModelOption = {
 };
 
 export const IMAGE_ARENA_MODEL_IDS = [
+  "gpt-image-2.5-flare",
+  "gpt-image-2.5-sunburst",
   "gpt-image-2",
   OFFICIAL_IMAGE_MODEL,
   "gemini-3.1-flash-image-preview",
@@ -66,8 +69,8 @@ export function imageArenaModelCapability(model: ImageModel, outputFormat: Image
     supportsOutputControls: outputControlsSupported,
     supportsQuality: supportsImageQuality(model),
     supportsOutputCompression: compressionSupported,
-    supportsResolution: model === "gpt-image-2" || official || model === SEEDREAM_4_IMAGE_MODEL || model === SEEDREAM_45_IMAGE_MODEL || model === SEEDREAM_50_LITE_IMAGE_MODEL || model === SEEDREAM_50_PRO_IMAGE_MODEL,
-    supportsOfficialSettings: official,
+    supportsResolution: isGPTImage25Model(model) || model === "gpt-image-2" || official || model === SEEDREAM_4_IMAGE_MODEL || model === SEEDREAM_45_IMAGE_MODEL || model === SEEDREAM_50_LITE_IMAGE_MODEL || model === SEEDREAM_50_PRO_IMAGE_MODEL,
+    supportsOfficialSettings: official || isGPTImage25Model(model),
     supportsMask: supportsImageMaskParameter(model),
   };
 }

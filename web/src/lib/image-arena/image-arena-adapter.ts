@@ -7,6 +7,7 @@ import {
   isSeedreamImageModel,
   isSeedream50ProImageModel,
   isOfficialImageModel,
+  isGPTImage25Model,
   type ImageModel,
   type MidjourneySettingsPayload,
   type GeminiFlashSettingsPayload,
@@ -219,6 +220,11 @@ export function adaptImageArenaSettings(
     if (normalizedFormat !== "png") {
       warnings.push("Gemini Pro 通道不提交输出格式控制");
     }
+  } else if (isGPTImage25Model(model)) {
+    const fields = imageModelSettingsToTaskFields(model, imageModelSettings);
+    payload = { model, size: settings.aspectRatio || "auto", imageResolution: tier.resolution, quality: tier.quality, count, outputFormat: normalizedFormat, ...(normalizedFormat !== "png" ? { outputCompression: normalizeImageOutputCompression(settings.outputCompression) } : {}), ...fields };
+    estimateQuality = tier.quality;
+    estimateSizeOrResolution = tier.estimateResolution;
   } else if (isGrokImagineImageModel(model)) {
     const fields = imageModelSettingsToTaskFields(model, imageModelSettings);
     const grokResolution = tier.resolution === "1k" ? "1080p" : "2k";

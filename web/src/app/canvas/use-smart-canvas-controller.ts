@@ -59,6 +59,9 @@ import {
   isImageQuality,
   isPixelIconSize,
   normalizeGrokImageAspectRatio,
+  isGPTImage25Model,
+  normalizeGPTImage25Quality,
+  normalizeGPTImage25Resolution,
   normalizeGrokImageQuality,
   normalizeGrokImageResolution,
   normalizeImageOutputCompression,
@@ -567,6 +570,7 @@ function mergeLoopSlotStatuses(
 }
 
 function generatorImageResolution(generator: SmartCanvasItem, hasInputImages = false) {
+  if (isGPTImage25Model(generatorImageModel(generator))) return normalizeGPTImage25Resolution(generator.data?.image_resolution);
   if (generatorProStudioEnabled(generator)) {
     return generatorProStudioState(generator).settings.resolution;
   }
@@ -586,6 +590,7 @@ function generatorImageResolution(generator: SmartCanvasItem, hasInputImages = f
 }
 
 function generatorImageSize(generator: SmartCanvasItem, hasInputImages = false) {
+  if (isGPTImage25Model(generatorImageModel(generator))) return generator.data?.size?.trim() || "auto";
   if (generatorProStudioEnabled(generator)) {
     return generatorProStudioState(generator).settings.size;
   }
@@ -651,6 +656,7 @@ function generatorOutputCompression(generator: SmartCanvasItem) {
 }
 
 function generatorImageQuality(generator: SmartCanvasItem, hasInputImages = false): ImageQuality | undefined {
+  if (isGPTImage25Model(generatorImageModel(generator))) return normalizeGPTImage25Quality(generator.data?.quality);
   if (generatorProStudioEnabled(generator)) {
     return generatorProStudioState(generator).settings.quality;
   }

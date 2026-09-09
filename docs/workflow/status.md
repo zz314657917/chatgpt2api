@@ -1,15 +1,28 @@
 ---
 phase: done
-current_sprint: task-035-seedream-image-profiles
-total_sprints: 28
-pending_action: planner-next-sprint-or-authorized-runtime-smoke
+current_sprint: task-036-gpt-image-2-5-profiles
+total_sprints: 29
+pending_action: await-next-scope
 project_type: web
 qa_mode: browser
 approval_required: true
-last_verified: 2026-08-28
+last_verified: 2026-09-09
 ---
 
 # Workflow Status
+
+- 当前阶段：done（Task-036 scope PASS；既有前端断言失败已做 HEAD 基线对照）
+- 当前 Sprint：task-036-gpt-image-2-5-profiles
+- 当前目标：按 2026-09-09 APIMart 文档新增 GPT Image 2.5 Flare/Sunburst，并贯通四个图片工作台的专属设置与后端 JSON generations 网关。
+- 当前 contract：docs/workflow/tasks/task-036-gpt-image-2-5-profiles.md
+- Contract review：docs/workflow/contract-reviews/task-036-gpt-image-2-5-profiles-review.md（PASS）
+- 下一合法动作：按用户授权提交并推送 Task-036，核验远程一致性；部署不在本次范围。
+- Worker result：docs/workflow/worker-results/task-036-gpt-image-2-5-profiles-result.md
+- QA report：docs/workflow/qa-reports/task-036-gpt-image-2-5-profiles-qa.md
+- 验证：定向/全量 Go、lint/build、四入口 browser mock 和新增 2.5 断言通过；Midjourney repeat 既有断言 HEAD 同样失败，不称全部前端断言通过。
+- 范围边界：不替换旧 GPT Image 2/official，不修改 Sub2API、计费、鉴权、数据库、部署或 Docker。
+- 未验证：真实 APIMart Token/付费生成、token 计费、embedded binary、Docker、部署和运行实例版本。
+
 
 - 当前阶段：done（Task-035 PASS）
 - 当前 Sprint：task-035-seedream-image-profiles

@@ -94,6 +94,11 @@ import { imageExtension, downloadImageFile } from "@/lib/image-download";
 import { getManagedImagePreviewUrlFromPath, getManagedImageUrlFromPath } from "@/lib/image-path";
 import {
   GROK_IMAGE_QUALITY_OPTIONS,
+  isGPTImage25Model,
+  GPT_IMAGE_25_QUALITY_OPTIONS,
+  GPT_IMAGE_25_ASPECT_RATIO_OPTIONS,
+  GPT_IMAGE_25_RESOLUTION_OPTIONS,
+  normalizeGPTImage25Quality,
   IMAGE_QUALITY_OPTIONS,
   isImageOutputFormat,
   isImageQuality,
@@ -1969,9 +1974,10 @@ export default function EcommerceSuitePage() {
             : pendingProject.size;
           const taskResolution = grokImageModel
             ? normalizeGrokImageResolution(pendingProject.imageResolution)
-            : undefined;
+            : isGPTImage25Model(pendingProject.imageModel) ? pendingProject.imageResolution : undefined;
           const taskQuality = grokImageModel
             ? hasReferenceImages ? undefined : normalizeGrokImageQuality(pendingProject.imageQuality)
+            : isGPTImage25Model(pendingProject.imageModel) ? normalizeGPTImage25Quality(pendingProject.imageQuality)
             : isOfficialImageModel(pendingProject.imageModel) && isImageQuality(pendingProject.imageQuality)
               ? pendingProject.imageQuality
               : undefined;
@@ -1987,7 +1993,7 @@ export default function EcommerceSuitePage() {
               "private",
               taskResolution,
               pendingProject.outputFormat,
-              undefined,
+              pendingProject.outputCompression,
               modelFields.toolOptions,
               pendingProject.id,
               undefined,
@@ -2007,7 +2013,7 @@ export default function EcommerceSuitePage() {
             "private",
             taskResolution,
             pendingProject.outputFormat,
-            undefined,
+            pendingProject.outputCompression,
             modelFields.toolOptions,
             pendingProject.id,
             undefined,
@@ -2327,7 +2333,7 @@ export default function EcommerceSuitePage() {
         : project.size);
       const taskResolution = proStudioCompositePayload?.image_resolution || (grokImageModel
         ? normalizeGrokImageResolution(project.imageResolution)
-        : undefined);
+        : isGPTImage25Model(taskModel) ? project.imageResolution : undefined);
       const extraBody = {
         ...(proStudioCompositePayload
           ? {
@@ -2350,6 +2356,7 @@ export default function EcommerceSuitePage() {
           ? isImageQuality(proStudioCompositePayload.quality) ? proStudioCompositePayload.quality : "auto"
           : grokImageModel
             ? undefined
+            : isGPTImage25Model(taskModel) ? normalizeGPTImage25Quality(project.imageQuality)
             : isOfficialImageModel(taskModel) && isImageQuality(project.imageQuality)
             ? project.imageQuality
             : undefined,
@@ -2360,7 +2367,7 @@ export default function EcommerceSuitePage() {
         proStudioCompositePayload
           ? isImageOutputFormat(proStudioCompositePayload.output_format) ? proStudioCompositePayload.output_format : "png"
           : project.outputFormat,
-        proStudioCompositePayload?.output_compression,
+        proStudioCompositePayload?.output_compression ?? project.outputCompression,
         proStudioCompositePayload
           ? { background: proStudioCompositePayload.background, moderation: proStudioCompositePayload.moderation, inputImageMask: proStudioCompositePayload.input_image_mask }
           : modelFields?.toolOptions,
@@ -3007,7 +3014,7 @@ export default function EcommerceSuitePage() {
                     </div>
                   ) : null}
                   {!selectedProject.professionalMode && (
-                    isOfficialImageModel(selectedProject.imageModel) ||
+                    isOfficialImageModel(selectedProject.imageModel) || isGPTImage25Model(selectedProject.imageModel) ||
                     (isGrokImagineImageModel(selectedProject.imageModel) && selectedProject.referenceImages.length === 0)
                   ) ? (
                     <label className="grid gap-1.5">
@@ -3017,12 +3024,12 @@ export default function EcommerceSuitePage() {
                       <Select
                         value={isGrokImagineImageModel(selectedProject.imageModel)
                           ? normalizeGrokImageQuality(selectedProject.imageQuality)
-                          : isImageQuality(selectedProject.imageQuality) ? selectedProject.imageQuality : "auto"}
+                          : isGPTImage25Model(selectedProject.imageModel) ? normalizeGPTImage25Quality(selectedProject.imageQuality) : isImageQuality(selectedProject.imageQuality) ? selectedProject.imageQuality : "auto"}
                         onValueChange={(value) =>
                           updateSelectedProject({
                             imageQuality: isGrokImagineImageModel(selectedProject.imageModel)
                               ? normalizeGrokImageQuality(value)
-                              : isImageQuality(value) ? value : "auto",
+                              : isGPTImage25Model(selectedProject.imageModel) ? normalizeGPTImage25Quality(value) : isImageQuality(value) ? value : "auto",
                           })
                         }
                       >
@@ -3032,7 +3039,7 @@ export default function EcommerceSuitePage() {
                         <SelectContent>
                           {(isGrokImagineImageModel(selectedProject.imageModel)
                             ? GROK_IMAGE_QUALITY_OPTIONS
-                            : IMAGE_QUALITY_OPTIONS).map((option) => (
+                            : isGPTImage25Model(selectedProject.imageModel) ? GPT_IMAGE_25_QUALITY_OPTIONS : IMAGE_QUALITY_OPTIONS).map((option) => (
                             <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
                           ))}
                         </SelectContent>
@@ -3041,6 +3048,29 @@ export default function EcommerceSuitePage() {
                   ) : null}
                 </div>
                 <div className="mt-3">
+                  {!selectedProject.professionalMode && isGPTImage25Model(selectedProject.imageModel) ? <>
+                    <label className="grid gap-1 text-xs">比例
+                      <select aria-label="2.5 比例" className="h-10 rounded-xl border bg-background px-3" value={selectedProject.size} onChange={(event) => updateSelectedProject({ size: event.target.value || "auto" })}>
+                        {GPT_IMAGE_25_ASPECT_RATIO_OPTIONS.map((option) => <option key={option.value} value={option.value || "auto"}>{option.label}</option>)}
+                      </select>
+                    </label>
+                    <label className="grid gap-1 text-xs">精确像素
+                      <Input aria-label="2.5 精确像素" placeholder="1600x1200" value={selectedProject.size === "auto" || selectedProject.size.includes(":") ? "" : selectedProject.size} onChange={(event) => updateSelectedProject({ size: event.target.value })} />
+                    </label>
+                    <label className="grid gap-1 text-xs">分辨率
+                      <select aria-label="2.5 分辨率" className="h-10 rounded-xl border bg-background px-3" value={selectedProject.imageResolution.toLowerCase()} onChange={(event) => updateSelectedProject({ imageResolution: event.target.value })}>
+                        {GPT_IMAGE_25_RESOLUTION_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                      </select>
+                    </label>
+                    <label className="grid gap-1 text-xs">输出格式
+                      <select aria-label="2.5 输出格式" className="h-10 rounded-xl border bg-background px-3" value={selectedProject.outputFormat} onChange={(event) => updateSelectedProject({ outputFormat: event.target.value as "png" | "jpeg" | "webp" })}>
+                        <option value="png">PNG</option><option value="jpeg">JPEG</option><option value="webp">WebP</option>
+                      </select>
+                    </label>
+                    {selectedProject.outputFormat !== "png" ? <label className="grid gap-1 text-xs">压缩率（0–100）
+                      <Input aria-label="2.5 压缩率" type="number" min={0} max={100} value={selectedProject.outputCompression ?? 100} onChange={(event) => updateSelectedProject({ outputCompression: Number(event.target.value) })} />
+                    </label> : null}
+                  </> : null}
                   <ProStudioPanel
                     scope="ecommerce"
                     state={{ ...selectedProject.proStudioState, enabled: selectedProject.professionalMode }}

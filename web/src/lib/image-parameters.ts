@@ -1,4 +1,17 @@
 export const CUSTOM_IMAGE_ASPECT_RATIO = "custom";
+export function isGPTImage25Model(model: unknown) {
+  return model === "gpt-image-2.5-flare" || model === "gpt-image-2.5-sunburst";
+}
+
+export const GPT_IMAGE_25_ASPECT_RATIO_OPTIONS = [
+  { value: "", label: "Auto" },
+  ...(["1:1", "3:2", "2:3", "4:3", "3:4", "5:4", "4:5", "16:9", "9:16", "2:1", "1:2", "21:9", "9:21", "3:1", "1:3"] as const).map((value) => ({ value, label: value })),
+] as const;
+export const GPT_IMAGE_25_RESOLUTION_OPTIONS = [
+  { value: "1k", label: "1K", description: "标准分辨率" },
+  { value: "2k", label: "2K", description: "高清分辨率" },
+  { value: "4k", label: "4K", description: "超高清分辨率" },
+] as const;
 export const DEFAULT_IMAGE_CUSTOM_RATIO = "16:9";
 
 export const IMAGE_ASPECT_RATIO_OPTIONS = [
@@ -61,6 +74,7 @@ export const SEEDREAM_IMAGE_ASPECT_RATIO_OPTIONS = [
 
 export type PixelIconSize = (typeof PIXEL_ICON_SIZE_OPTIONS)[number]["value"];
 export type ImageAspectRatio =
+  | (typeof GPT_IMAGE_25_ASPECT_RATIO_OPTIONS)[number]["value"]
   | (typeof IMAGE_ASPECT_RATIO_OPTIONS)[number]["value"]
   | (typeof GROK_IMAGE_ASPECT_RATIO_OPTIONS)[number]["value"]
   | (typeof SEEDREAM_IMAGE_ASPECT_RATIO_OPTIONS)[number]["value"]
@@ -106,6 +120,7 @@ export type ImageSizeSelection = {
 };
 
 const IMAGE_ASPECT_RATIO_VALUES = new Set<string>([
+  ...GPT_IMAGE_25_ASPECT_RATIO_OPTIONS.map((option) => option.value),
   ...IMAGE_ASPECT_RATIO_MENU_OPTIONS.map((option) => option.value),
   ...GROK_IMAGE_ASPECT_RATIO_OPTIONS.map((option) => option.value),
   ...SEEDREAM_IMAGE_ASPECT_RATIO_OPTIONS.map((option) => option.value),
@@ -152,7 +167,19 @@ export const GROK_IMAGE_QUALITY_OPTIONS = IMAGE_QUALITY_OPTIONS.filter(
     option.value === "low" || option.value === "medium",
 );
 
-export type ImageQuality = (typeof IMAGE_QUALITY_OPTIONS)[number]["value"];
+export const GPT_IMAGE_25_QUALITY_OPTIONS = [
+  ...IMAGE_QUALITY_OPTIONS,
+  { value: "xhigh", label: "超高品质", description: "更多细节" },
+  { value: "max", label: "最高品质", description: "最高质量档位" },
+] as const;
+export type ImageQuality = (typeof GPT_IMAGE_25_QUALITY_OPTIONS)[number]["value"];
+export function normalizeGPTImage25Quality(value: unknown): ImageQuality {
+  return GPT_IMAGE_25_QUALITY_OPTIONS.some((option) => option.value === value) ? value as ImageQuality : "auto";
+}
+export function normalizeGPTImage25Resolution(value: unknown): ImageResolution {
+  const normalized = String(value || "").trim().toLowerCase();
+  return normalized === "2k" || normalized === "4k" ? normalized : "1k";
+}
 export type ImageOutputFormat = "png" | "jpeg" | "webp";
 
 const IMAGE_QUALITY_VALUES = new Set<string>(IMAGE_QUALITY_OPTIONS.map((option) => option.value));

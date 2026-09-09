@@ -24,6 +24,52 @@ import (
 
 const sub2APITestPNGBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
 
+func TestGPTImage25GenerationAndEditGateway(t *testing.T) {
+	app := newTestApp(t)
+	defer app.Close()
+	received := make(chan map[string]any, 4)
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/images/generations" || r.Method != http.MethodPost {
+			t.Errorf("route %s %s", r.Method, r.URL.Path)
+		}
+		body, err := readJSONMap(r)
+		if err != nil {
+			t.Error(err)
+		}
+		received <- body
+		util.WriteJSON(w, http.StatusOK, map[string]any{"data": []map[string]any{{"b64_json": sub2APITestPNGBase64}}})
+	}))
+	defer gateway.Close()
+	binding := service.Sub2APIBinding{GatewayBaseURL: gateway.URL, APIKey: "mock"}
+	for _, model := range []string{util.ImageModelGPT25Flare, util.ImageModelGPT25Sunburst} {
+		for _, edit := range []bool{false, true} {
+			payload := map[string]any{"model": model, "prompt": "mock image", "size": "5:4", "image_resolution": "1k", "quality": "max", "output_format": "webp", "output_compression": 73}
+			metadata := imageTaskRequestMetadata(payload)
+			if metadata["image_resolution"] != "1k" {
+				t.Fatalf("metadata %#v", metadata)
+			}
+			var err error
+			if edit {
+				payload["official_public_image_urls"] = []string{"https://example.test/ref.png"}
+				payload["images"] = []protocol.UploadedImage{{}}
+				_, err = app.callSub2APIImageEdits(context.Background(), service.Identity{}, payload, binding)
+			} else {
+				_, err = app.callSub2APIImageGenerations(context.Background(), service.Identity{}, payload, binding)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			body := <-received
+			if body["response_format"] != nil || body["quality"] != "max" || body["resolution"] != "1k" || body["size"] != "5:4" {
+				t.Fatalf("body %#v", body)
+			}
+			if edit && len(util.AsStringSlice(body["image_urls"])) != 1 {
+				t.Fatalf("missing references %#v", body)
+			}
+		}
+	}
+}
+
 type testSub2APIImageConfig struct {
 	root string
 }

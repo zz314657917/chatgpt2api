@@ -27,6 +27,8 @@ const (
 	ImageModelGeminiFlashPreviewOfficial = "gemini-3.1-flash-image-preview-official"
 	ImageModelMidjourney                 = "midjourney"
 	ImageModelGrokImagine                = "grok-imagine-image-2.0"
+	ImageModelGPT25Flare                 = "gpt-image-2.5-flare"
+	ImageModelGPT25Sunburst              = "gpt-image-2.5-sunburst"
 	ImageModelSeedream40                 = "doubao-seedance-4-0"
 	ImageModelSeedream45                 = "doubao-seedance-4-5"
 	ImageModelSeedream50Lite             = "seedream-5-0-lite"
@@ -47,6 +49,8 @@ var ImageModels = map[string]struct{}{
 	ImageModelGeminiFlashPreviewOfficial: {},
 	ImageModelMidjourney:                 {},
 	ImageModelGrokImagine:                {},
+	ImageModelGPT25Flare:                 {},
+	ImageModelGPT25Sunburst:              {},
 	ImageModelSeedream40:                 {},
 	ImageModelSeedream45:                 {},
 	ImageModelSeedream50Lite:             {},
@@ -63,6 +67,8 @@ var ModelIDs = []string{
 	ImageModelGeminiFlashPreviewOfficial,
 	ImageModelMidjourney,
 	ImageModelGrokImagine,
+	ImageModelGPT25Flare,
+	ImageModelGPT25Sunburst,
 	ImageModelSeedream40,
 	ImageModelSeedream45,
 	ImageModelSeedream50Lite,
@@ -83,6 +89,8 @@ var ImageGenerationModelIDs = []string{
 	ImageModelGeminiFlashPreviewOfficial,
 	ImageModelMidjourney,
 	ImageModelGrokImagine,
+	ImageModelGPT25Flare,
+	ImageModelGPT25Sunburst,
 	ImageModelSeedream40,
 	ImageModelSeedream45,
 	ImageModelSeedream50Lite,

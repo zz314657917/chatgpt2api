@@ -1,4 +1,6 @@
 import {
+  isGPTImage25Model,
+  normalizeGPTImage25Resolution,
   normalizeImageOutputCompression,
   normalizeImageOutputFormat,
   normalizeImageResolutionPreset,
@@ -47,19 +49,22 @@ export function normalizeTaskImageResolution(value?: string) {
 
 export function supportsTaskOutputCompression(model: string | undefined, format: ImageOutputFormat | string) {
   const normalizedFormat = normalizeImageOutputFormat(format);
-  return supportsImageOutputCompression(normalizedFormat) || (isOfficialImageGatewayModel(model) && normalizedFormat === "webp");
+  return supportsImageOutputCompression(normalizedFormat) || ((isOfficialImageGatewayModel(model) || isGPTImage25Model(model)) && normalizedFormat === "webp");
 }
 
 export function buildImageTaskRequestParameters(parameters: ImageTaskRequestParameters): NormalizedImageTaskRequestParameters {
   const model = String(parameters.model || "").trim();
   const size = parameters.size ? normalizePixelIconSizeAlias(parameters.size) : "";
-  const imageResolution = normalizeTaskImageResolution(parameters.imageResolution);
+  const imageResolution = isGPTImage25Model(model) ? normalizeGPTImage25Resolution(parameters.imageResolution) : normalizeTaskImageResolution(parameters.imageResolution);
   const outputFormat = parameters.outputFormat ? normalizeImageOutputFormat(parameters.outputFormat) : undefined;
   const outputCompression =
     outputFormat && supportsTaskOutputCompression(model, outputFormat)
       ? normalizeImageOutputCompression(parameters.outputCompression)
       : undefined;
   const toolOptions = normalizeImageTaskToolOptions(parameters.toolOptions);
+  if (isGPTImage25Model(model) && outputFormat === "jpeg" && toolOptions?.background === "transparent") {
+    throw new Error("透明背景请选择 PNG 或 WebP 输出");
+  }
   return {
     ...(model ? { model } : {}),
     ...(size ? { size } : {}),

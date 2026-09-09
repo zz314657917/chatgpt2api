@@ -16,6 +16,12 @@ import {
   DEFAULT_IMAGE_CUSTOM_RATIO,
   DEFAULT_IMAGE_CUSTOM_WIDTH,
   GROK_IMAGE_ASPECT_RATIO_OPTIONS,
+  isGPTImage25Model,
+  GPT_IMAGE_25_ASPECT_RATIO_OPTIONS,
+  GPT_IMAGE_25_QUALITY_OPTIONS,
+  GPT_IMAGE_25_RESOLUTION_OPTIONS,
+  normalizeGPTImage25Quality,
+  normalizeGPTImage25Resolution,
   GROK_IMAGE_QUALITY_OPTIONS,
   GROK_IMAGE_RESOLUTION_OPTIONS,
   IMAGE_QUALITY_OPTIONS,
@@ -632,6 +638,7 @@ function imagePriceSizeFromRequest(size: string) {
 }
 
 function effectiveImageSizeSelection(model: ImageModel, selection: ImageSizeSelection): ImageSizeSelection {
+  if (isGPTImage25Model(model)) return { ...selection, resolution: normalizeGPTImage25Resolution(selection.resolution) };
   if (isGrokImagineImageModel(model)) {
     return {
       ...selection,
@@ -679,6 +686,9 @@ function hasPixelIconAspectRatio(selection: { aspectRatio?: unknown } | undefine
 
 function buildEffectiveImageSizeRequest(model: ImageModel, selection: ImageSizeSelection) {
   const effectiveSelection = effectiveImageSizeSelection(model, selection);
+  if (isGPTImage25Model(model)) {
+    return { selection: effectiveSelection, size: effectiveSelection.mode === "custom" ? buildImageSize(effectiveSelection) : effectiveSelection.mode === "ratio" ? effectiveSelection.aspectRatio || "auto" : "auto" };
+  }
   const sizeSelection = supportsStructuredImageParameters(model)
     ? effectiveSelection
     : {
@@ -1287,7 +1297,7 @@ function getStoredImageQuality(): ImageQuality {
     return DEFAULT_IMAGE_QUALITY;
   }
   const storedQuality = window.localStorage.getItem(IMAGE_QUALITY_STORAGE_KEY);
-  return isImageQuality(storedQuality) ? storedQuality : DEFAULT_IMAGE_QUALITY;
+  return normalizeGPTImage25Quality(storedQuality);
 }
 
 function normalizeImageBackground(value: unknown) {
@@ -1315,10 +1325,11 @@ function getStoredImageModeration() {
 }
 
 function imageQualityForModel(model: ImageModel, quality: ImageQuality, hasReferenceImages = false): ImageQuality | undefined {
+  if (isGPTImage25Model(model)) return normalizeGPTImage25Quality(quality);
   if (isGrokImagineImageModel(model)) {
     return hasReferenceImages ? undefined : normalizeGrokImageQuality(quality);
   }
-  return supportsImageQuality(model) ? quality : undefined;
+  return supportsImageQuality(model) ? isImageQuality(quality) ? quality : "auto" : undefined;
 }
 
 function visibleImageToolOptionsForModel(
@@ -2188,9 +2199,11 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
   const editingDraftSeedreamImageModel = isSeedreamImageModel(editingTurnDraft?.model);
   const editingDraftRatioOptions = editingDraftGrokImageModel
     ? GROK_IMAGE_RATIO_PICKER_OPTIONS
+    : isGPTImage25Model(editingTurnDraft?.model) ? GPT_IMAGE_25_ASPECT_RATIO_OPTIONS
     : editingDraftSeedreamImageModel ? seedreamImageAspectRatioOptions(editingTurnDraft?.model) : DEFAULT_IMAGE_RATIO_PICKER_OPTIONS;
   const editingDraftResolutionOptions = editingDraftGrokImageModel
     ? GROK_IMAGE_RESOLUTION_OPTIONS
+    : isGPTImage25Model(editingTurnDraft?.model) ? GPT_IMAGE_25_RESOLUTION_OPTIONS
     : editingDraftSeedreamImageModel ? seedreamImageResolutionOptions(editingTurnDraft?.model) : IMAGE_RESOLUTION_OPTIONS;
   const editingDraftOutputControls = editingTurnDraft
     ? supportsImageOutputControls(editingTurnDraft.model)
@@ -3038,6 +3051,15 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
       return;
     }
     setImageModel(value);
+    if (isGPTImage25Model(value)) {
+      setImageCount((current) => String(Math.min(4, Number(current) || 1)));
+      setImageResolution((current) => normalizeGPTImage25Resolution(current));
+      setImageQuality((current) => normalizeGPTImage25Quality(current));
+      setImageModeration("low");
+      setImageAspectRatio((current) => GPT_IMAGE_25_ASPECT_RATIO_OPTIONS.some((option) => option.value === current) ? current : "");
+    } else {
+      setImageQuality((current) => isImageQuality(current) ? current : "auto");
+    }
     if (imageTaskMaxCount(value) === 1) {
       setImageCount("1");
     }
@@ -6086,7 +6108,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                               value={editingDraftGrokImageModel ? normalizeGrokImageQuality(editingTurnDraft.quality) : editingTurnDraft.quality}
                               onValueChange={(value) =>
                                 setEditingTurnDraft((current) =>
-                                  current && isImageQuality(value) ? { ...current, quality: value } : current,
+                                  current && (isImageQuality(value) || isGPTImage25Model(current.model)) ? { ...current, quality: normalizeGPTImage25Quality(value) } : current,
                                 )
                               }
                             >
@@ -6095,7 +6117,7 @@ function ImagePageContent({ session }: { session: NonNullable<ReturnType<typeof 
                               </SelectTrigger>
                               <SelectContent>
                                 <SelectGroup>
-                                  {(editingDraftGrokImageModel ? GROK_IMAGE_QUALITY_OPTIONS : IMAGE_QUALITY_OPTIONS).map((option) => (
+                                  {(isGPTImage25Model(editingTurnDraft.model) ? GPT_IMAGE_25_QUALITY_OPTIONS : editingDraftGrokImageModel ? GROK_IMAGE_QUALITY_OPTIONS : IMAGE_QUALITY_OPTIONS).map((option) => (
                                     <SelectItem key={option.value} value={option.value}>
                                       {option.label}
                                     </SelectItem>

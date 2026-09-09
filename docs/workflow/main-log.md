@@ -145,3 +145,8 @@
 260828 0810 | task-035-seedream-image-profiles | qa-pass | codex | docs/workflow/qa-reports/task-035-seedream-image-profiles-qa.md
 260828 0810 | task-035-seedream-image-profiles | done | final-evaluator | docs/workflow/status.md
 260828 0816 | task-035-seedream-image-profiles | retest-pass | evaluator | sequential invalid-mode validation and go test ./...
+260909 1701 | task-036-gpt-image-2-5-profiles | spec-updated | planner | docs/workflow/spec.md
+260909 1701 | task-036-gpt-image-2-5-profiles | contract-approved | evaluator | docs/workflow/contract-reviews/task-036-gpt-image-2-5-profiles-review.md
+260909 1708 | task-036-gpt-image-2-5-profiles | build-start | codex | docs/workflow/status.md
+260909 1756 | task-036-gpt-image-2-5-profiles | build-complete | codex | docs/workflow/worker-results/task-036-gpt-image-2-5-profiles-result.md
+260909 1801 | task-036-gpt-image-2-5-profiles | qa-scope-pass | evaluator | docs/workflow/qa-reports/task-036-gpt-image-2-5-profiles-qa.md

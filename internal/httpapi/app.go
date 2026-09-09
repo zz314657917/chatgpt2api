@@ -2486,7 +2486,7 @@ func (a *App) jsonImageEditUploads(ctx context.Context, body map[string]any, ide
 				Data:        image.Data,
 			})
 		}
-		if usesSub2APIEdit && model == util.ImageModelGPTOfficial {
+		if usesSub2APIEdit && (model == util.ImageModelGPTOfficial || model == util.ImageModelGPT25Flare || model == util.ImageModelGPT25Sunburst) {
 			signedReferenceURLs, err = a.images.TempReferenceImageSignedURLs(refs, identityScope(identity), 30*time.Minute)
 			if err != nil {
 				return nil, err
@@ -2504,7 +2504,7 @@ func (a *App) jsonImageEditUploads(ctx context.Context, body map[string]any, ide
 	}
 	publicURLRefs := publicJSONImageURLs(urls)
 	allJSONRefsPublic := len(publicURLRefs) == len(urls)
-	if usesSub2APIEdit && model == util.ImageModelGPTOfficial && len(publicURLs) > 0 && allJSONRefsPublic {
+	if usesSub2APIEdit && (model == util.ImageModelGPTOfficial || model == util.ImageModelGPT25Flare || model == util.ImageModelGPT25Sunburst) && len(publicURLs) > 0 && allJSONRefsPublic {
 		return make([]protocol.UploadedImage, len(publicURLs)), nil
 	}
 	if (model == util.ImageModelMidjourney || model == util.ImageModelGrokImagine) && len(publicURLs) > 0 {
@@ -2528,7 +2528,7 @@ func (a *App) jsonImageEditUploads(ctx context.Context, body map[string]any, ide
 		}
 		images = append(images, image)
 	}
-	if !urlNative || (usesSub2APIEdit && model == util.ImageModelGPTOfficial && !allJSONRefsPublic) {
+	if !urlNative || (usesSub2APIEdit && (model == util.ImageModelGPTOfficial || model == util.ImageModelGPT25Flare || model == util.ImageModelGPT25Sunburst) && !allJSONRefsPublic) {
 		delete(body, "official_public_image_urls")
 		delete(body, "image_url")
 		delete(body, "image_urls")
@@ -2543,7 +2543,7 @@ func (a *App) imageEditUsesSub2API(ctx context.Context, identity service.Identit
 
 func jsonImageEditUsesPublicReferenceURLs(model string) bool {
 	switch model {
-	case util.ImageModelGPTOfficial, util.ImageModelMidjourney, util.ImageModelGrokImagine:
+	case util.ImageModelGPTOfficial, util.ImageModelMidjourney, util.ImageModelGrokImagine, util.ImageModelGPT25Flare, util.ImageModelGPT25Sunburst:
 		return true
 	default:
 		return false

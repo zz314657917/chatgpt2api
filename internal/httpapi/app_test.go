@@ -4152,6 +4152,17 @@ func TestSub2APIGPTImageEditTaskConvertsJSONURLToMultipartReference(t *testing.T
 }
 
 func TestSub2APIOfficialImageEditTaskUsesSignedTempReferenceURL(t *testing.T) {
+	testImageEditTaskUsesSignedTempReferenceURL(t, util.ImageModelGPTOfficial)
+}
+
+func TestGPTImage25EditTaskUsesSignedTempReferenceURL(t *testing.T) {
+	for _, model := range []string{util.ImageModelGPT25Flare, util.ImageModelGPT25Sunburst} {
+		t.Run(model, func(t *testing.T) { testImageEditTaskUsesSignedTempReferenceURL(t, model) })
+	}
+}
+
+func testImageEditTaskUsesSignedTempReferenceURL(t *testing.T, model string) {
+	t.Helper()
 	var objectPutPath string
 	objectServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
@@ -4237,7 +4248,7 @@ func TestSub2APIOfficialImageEditTaskUsesSignedTempReferenceURL(t *testing.T) {
 	body := jsonString(map[string]any{
 		"client_task_id":      "sub2-official-signed-ref-task",
 		"prompt":              "edit image",
-		"model":               util.ImageModelGPTOfficial,
+		"model":               model,
 		"reference_image_ids": []string{ref.ID},
 		"size":                "16:9",
 		"image_resolution":    "2k",
@@ -4267,7 +4278,7 @@ func TestSub2APIOfficialImageEditTaskUsesSignedTempReferenceURL(t *testing.T) {
 		return len(items) == 1 && items[0]["status"] == service.TaskStatusSuccess
 	})
 
-	if received["model"] != util.ImageModelGPTOfficial || received["size"] != "16:9" || received["resolution"] != "2k" {
+	if received["model"] != model || received["size"] != "16:9" || received["resolution"] != "2k" {
 		t.Fatalf("official signed ref gateway body = %#v", received)
 	}
 	urls := util.AsStringSlice(received["image_urls"])

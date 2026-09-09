@@ -1054,6 +1054,27 @@ func TestImageTaskServicePreservesProStudioMetadata(t *testing.T) {
 	}
 }
 
+func TestGPTImage25TaskParameters(t *testing.T) {
+	for _, model := range []string{util.ImageModelGPT25Flare, util.ImageModelGPT25Sunburst} {
+		if normalizedImageTaskCountForModel(model, 10) != 4 {
+			t.Fatal("count limit")
+		}
+		payload := map[string]any{"model": model}
+		compression := 0
+		mergeImageTaskMetadata(payload, map[string]any{"image_resolution": "1k"})
+		mergeImageOutputOptions(payload, ImageOutputOptions{Format: "webp", Compression: &compression})
+		if payload["image_resolution"] != "1k" || payload["output_compression"] != 0 {
+			t.Fatalf("payload %#v", payload)
+		}
+		if publicTask(payload)["output_compression"] != 0 {
+			t.Fatal("public task lost compression")
+		}
+	}
+	if imageTaskSupportsOutputCompression(util.ImageModelGPT, "webp", false) {
+		t.Fatal("old model semantics changed")
+	}
+}
+
 func TestImageTaskServicePassesVideoOptionsToHandler(t *testing.T) {
 	handlerCalls := make(chan map[string]any, 1)
 	videoHandler := func(ctx context.Context, identity Identity, payload map[string]any) (map[string]any, error) {

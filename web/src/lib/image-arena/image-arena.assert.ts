@@ -18,6 +18,14 @@ const productionSettings: ImageArenaSharedSettings = {
 };
 
 const official = adaptImageArenaSettings("gpt-image-2-official", productionSettings);
+for (const model of ["gpt-image-2.5-flare", "gpt-image-2.5-sunburst"]) {
+  const adapted = adaptImageArenaSettings(model, { ...productionSettings, aspectRatio: "5:4", outputFormat: "webp" });
+  assert(adapted.payload.size === "5:4", "2.5 ratio preserved");
+  assert(adapted.payload.imageResolution === "4k", "2.5 resolution preserved");
+  assert(adapted.payload.quality === "high" && adapted.payload.count === 4, "2.5 quality and count");
+  assert(adapted.payload.outputCompression === 80, "2.5 WebP compression");
+  assert(adapted.estimatedCost === null, "2.5 must not guess token pricing");
+}
 assert(official.payload.imageResolution === "4k", "official production should submit resolution=4k");
 assert(official.payload.quality === "high", "official production should submit quality=high");
 assert(official.payload.count === 4, "official n should clamp to 4");

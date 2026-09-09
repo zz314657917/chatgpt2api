@@ -3,7 +3,7 @@ import localforage from "localforage";
 import { DEFAULT_CHAT_MODEL, DEFAULT_IMAGE_MODEL, type CreationTask, type ImageModel } from "@/lib/api";
 import { compactImageModelSettings, type ImageModelSettingsState } from "@/lib/image-model-settings";
 import type { ProStudioOfficialSettingsPayload, ProStudioPayloadMeta } from "@/lib/pro-studio";
-import { isImageQuality, type ImageQuality } from "@/lib/image-parameters";
+import { isImageQuality, isGPTImage25Model, normalizeGPTImage25Quality, type ImageQuality } from "@/lib/image-parameters";
 import { createDefaultProStudioState, normalizeProStudioState, type ProStudioState } from "@/lib/pro-studio";
 import { getManagedImagePathFromUrl, getManagedImageUrlFromPath } from "@/lib/image-path";
 import { getStoredAuthSession, type StoredAuthSession } from "@/store/auth";
@@ -80,7 +80,8 @@ export type CommerceSuiteProject = {
   size: string;
   imageResolution: string;
   imageQuality: ImageQuality;
-  outputFormat: "png";
+  outputFormat: "png" | "jpeg" | "webp";
+  outputCompression?: number;
   imageModelSettings?: ImageModelSettingsState;
   professionalMode?: boolean;
   proStudioState?: ProStudioState;
@@ -351,8 +352,9 @@ export function normalizeCommerceSuiteProject(value: Partial<CommerceSuiteProjec
     imageModel: String(value.imageModel || DEFAULT_IMAGE_MODEL).trim(),
     size: String(value.size || "1:1").trim(),
     imageResolution: String(value.imageResolution || "1K").trim(),
-    imageQuality: isImageQuality(value.imageQuality) ? value.imageQuality : "auto",
-    outputFormat: "png",
+    imageQuality: isGPTImage25Model(value.imageModel) ? normalizeGPTImage25Quality(value.imageQuality) : isImageQuality(value.imageQuality) ? value.imageQuality : "auto",
+    outputFormat: isGPTImage25Model(value.imageModel) && (value.outputFormat === "jpeg" || value.outputFormat === "webp") ? value.outputFormat : "png",
+    outputCompression: typeof value.outputCompression === "number" ? Math.min(100, Math.max(0, Math.round(value.outputCompression))) : undefined,
     imageModelSettings: compactImageModelSettings((value.imageModelSettings || value.image_model_settings) as ImageModelSettingsState | undefined),
     professionalMode: Boolean(value.professionalMode),
     proStudioState: normalizeProStudioState(value.proStudioState as Partial<ProStudioState> | undefined, "product_main"),

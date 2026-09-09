@@ -45,6 +45,11 @@ import { hasManagedImageDragPayload, parseManagedImageDragPayload } from "@/comp
 import {
   CUSTOM_IMAGE_ASPECT_RATIO,
   GROK_IMAGE_ASPECT_RATIO_OPTIONS,
+  isGPTImage25Model,
+  GPT_IMAGE_25_ASPECT_RATIO_OPTIONS,
+  GPT_IMAGE_25_QUALITY_OPTIONS,
+  GPT_IMAGE_25_RESOLUTION_OPTIONS,
+  normalizeGPTImage25Resolution,
   GROK_IMAGE_QUALITY_OPTIONS,
   GROK_IMAGE_RESOLUTION_OPTIONS,
   IMAGE_QUALITY_OPTIONS,
@@ -472,15 +477,15 @@ export function ImageComposer({
   const effectiveImageAspectRatio = grokImageModel
     ? normalizeGrokImageAspectRatio(imageAspectRatio)
     : seedreamImageModel ? normalizeSeedreamImageAspectRatio(imageAspectRatio, imageModel) : imageAspectRatio;
-  const imageRatioOptions = grokImageModel ? GROK_IMAGE_RATIO_PICKER_OPTIONS : seedreamImageModel ? seedreamImageRatioPickerOptions(imageModel) : DEFAULT_IMAGE_RATIO_PICKER_OPTIONS;
+  const imageRatioOptions = isGPTImage25Model(imageModel) ? GPT_IMAGE_25_ASPECT_RATIO_OPTIONS.map((option) => ({ value: option.value, label: option.label, ratio: option.value || undefined })) : grokImageModel ? GROK_IMAGE_RATIO_PICKER_OPTIONS : seedreamImageModel ? seedreamImageRatioPickerOptions(imageModel) : DEFAULT_IMAGE_RATIO_PICKER_OPTIONS;
   const imageAspectRatioLabel =
     effectiveImageAspectRatio === CUSTOM_IMAGE_ASPECT_RATIO
       ? imageCustomRatio.trim() || "自定义比例"
       : imageRatioPickerValueLabel(imageRatioOptions, effectiveImageAspectRatio, "Auto");
   const effectiveImageResolutionValue = grokImageModel
     ? normalizeGrokImageResolution(imageResolution)
-    : seedreamImageModel ? normalizeSeedreamImageResolution(imageResolution, imageModel) : imageResolution;
-  const imageResolutionOptions = grokImageModel ? GROK_IMAGE_RESOLUTION_OPTIONS : seedreamImageModel ? seedreamImageResolutionOptions(imageModel) : IMAGE_RESOLUTION_OPTIONS;
+    : isGPTImage25Model(imageModel) ? normalizeGPTImage25Resolution(imageResolution) : seedreamImageModel ? normalizeSeedreamImageResolution(imageResolution, imageModel) : imageResolution;
+  const imageResolutionOptions = isGPTImage25Model(imageModel) ? GPT_IMAGE_25_RESOLUTION_OPTIONS : grokImageModel ? GROK_IMAGE_RESOLUTION_OPTIONS : seedreamImageModel ? seedreamImageResolutionOptions(imageModel) : IMAGE_RESOLUTION_OPTIONS;
   const imageResolutionLabel =
     imageResolutionOptions.find((option) => option.value === effectiveImageResolutionValue)?.label || "Auto";
   const structuredImageParameters = supportsStructuredImageParameters(imageModel);
@@ -488,7 +493,7 @@ export function ImageComposer({
   const outputControlsSupported = supportsImageOutputControls(imageModel);
   const imageQualitySupported = supportsImageQuality(imageModel) && (!grokImageModel || referenceImages.length === 0);
   const effectiveImageQualityValue = grokImageModel ? normalizeGrokImageQuality(imageQuality) : imageQuality;
-  const imageQualityOptions = grokImageModel ? GROK_IMAGE_QUALITY_OPTIONS : IMAGE_QUALITY_SETTINGS_OPTIONS;
+  const imageQualityOptions = isGPTImage25Model(imageModel) ? GPT_IMAGE_25_QUALITY_OPTIONS : grokImageModel ? GROK_IMAGE_QUALITY_OPTIONS : IMAGE_QUALITY_SETTINGS_OPTIONS;
   const imageQualityLabel = imageQualityOptions.find((option) => option.value === effectiveImageQualityValue)?.label || "自动";
   const modelSettingsSupported = imageModelHasSettings(imageModel);
   const imageModelSettingsValue: ImageModelSettingsState = {

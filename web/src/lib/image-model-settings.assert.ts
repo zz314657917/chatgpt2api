@@ -8,6 +8,12 @@ import {
   normalizeImageModelSettings,
 } from "@/lib/image-model-settings";
 
+for (const model of ["gpt-image-2.5-flare", "gpt-image-2.5-sunburst"]) {
+  assert.equal(defaultImageModelSettings(model).officialImage?.moderation, "low");
+  const fields = imageModelSettingsToTaskFields(model, { officialImage: { background: "transparent", moderation: "low", inputImageMask: "https://example.test/mask.png" } });
+  assert.deepEqual(fields, { toolOptions: { background: "transparent", moderation: "low" } });
+}
+
 const midjourneyDefault = defaultImageModelSettings("midjourney").midjourney;
 assert.equal(midjourneyDefault?.version, "8.1");
 assert.equal(midjourneyDefault?.speed, "relax");

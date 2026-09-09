@@ -91,6 +91,12 @@ import { getManagedImagePathFromUrl } from "@/lib/image-path";
 import {
   IMAGE_ASPECT_RATIO_OPTIONS,
   GROK_IMAGE_ASPECT_RATIO_OPTIONS,
+  isGPTImage25Model,
+  GPT_IMAGE_25_ASPECT_RATIO_OPTIONS,
+  GPT_IMAGE_25_QUALITY_OPTIONS,
+  GPT_IMAGE_25_RESOLUTION_OPTIONS,
+  normalizeGPTImage25Quality,
+  normalizeGPTImage25Resolution,
   GROK_IMAGE_QUALITY_OPTIONS,
   GROK_IMAGE_RESOLUTION_OPTIONS,
   IMAGE_QUALITY_OPTIONS,
@@ -4460,7 +4466,9 @@ function GeneratorNodeBody({
   const imageCountLocked = imageCountMax === 1;
   const imageCount = imageTaskSubmitCount(activeImageModel, Number(item.data?.n || 1));
   const hasInputImages = images.length > 0;
-  const ratioValue: CanvasImageRatioValue = grokImageModel
+  const ratioValue: CanvasImageRatioValue = isGPTImage25Model(activeImageModel)
+    ? (GPT_IMAGE_25_ASPECT_RATIO_OPTIONS.some((option) => option.value === item.data?.size) ? item.data?.size || "auto" : "auto") as CanvasImageRatioValue
+    : grokImageModel
     ? (hasInputImages && (!item.data?.size_user_modified || !String(item.data?.size || "").trim())
         ? "auto"
         : normalizeGrokImageAspectRatio(item.data?.size) || "auto")
@@ -4471,27 +4479,29 @@ function GeneratorNodeBody({
   const pixelIconSizeSelected = isPixelIconSize(ratioValue);
   const imageResolutionValue = grokImageModel
     ? normalizeGrokImageResolution(item.data?.image_resolution)
+    : isGPTImage25Model(activeImageModel) ? normalizeGPTImage25Resolution(item.data?.image_resolution)
     : seedreamImageModel ? normalizeSeedreamImageResolution(item.data?.image_resolution, activeImageModel)
     : pixelIconSizeSelected ? "pixel" : normalizeCanvasImageResolution(item.data?.image_resolution) || "unspecified";
   const imageResolutionOptions = grokImageModel
     ? canvasGrokImageResolutionOptions
+    : isGPTImage25Model(activeImageModel) ? GPT_IMAGE_25_RESOLUTION_OPTIONS
     : seedreamImageModel ? canvasSeedreamImageResolutionOptions(activeImageModel)
     : hasInputImages && item.data?.image_resolution_user_modified !== true
     ? canvasImageResolutionOptions.map((option) => option.value === "unspecified" ? { ...option, label: "保持原图清晰度" } : option)
     : canvasImageResolutionOptions;
-  const baseImageRatioOptions = grokImageModel ? canvasGrokImageRatioOptions : seedreamImageModel ? canvasSeedreamImageRatioOptions(activeImageModel) : canvasImageRatioOptions;
+  const baseImageRatioOptions = isGPTImage25Model(activeImageModel) ? GPT_IMAGE_25_ASPECT_RATIO_OPTIONS.map((option) => ({ ...option, value: (option.value || "auto") as CanvasImageRatioValue })) : grokImageModel ? canvasGrokImageRatioOptions : seedreamImageModel ? canvasSeedreamImageRatioOptions(activeImageModel) : canvasImageRatioOptions;
   const imageRatioOptions = hasInputImages
     ? [
         { value: "auto", label: "原图", description: "保持输入图片比例", section: "输入图片", glyphValue: "auto" },
         ...baseImageRatioOptions.filter((option) => option.value !== "auto"),
       ] satisfies ReadonlyArray<ImageRatioPickerOption<CanvasImageRatioValue>>
     : baseImageRatioOptions satisfies ReadonlyArray<ImageRatioPickerOption<CanvasImageRatioValue>>;
-  const imageRatioLabel = imageRatioOptions.find((option) => option.value === ratioValue)?.label || ratioValue;
+  const imageRatioLabel = isGPTImage25Model(activeImageModel) && /^\d+x\d+$/.test(item.data?.size || "") ? item.data?.size || "" : imageRatioOptions.find((option) => option.value === ratioValue)?.label || ratioValue;
   const outputControlsSupported = supportsImageOutputControls(activeImageModel);
   const imageQualitySupported = supportsImageQuality(activeImageModel) && (!grokImageModel || !hasInputImages);
   const outputFormat = normalizeImageOutputFormatForModel(activeImageModel, item.data?.output_format);
   const outputCompression = typeof item.data?.output_compression === "number" ? item.data.output_compression : undefined;
-  const imageQuality = grokImageModel ? normalizeGrokImageQuality(item.data?.quality) : isImageQuality(item.data?.quality) ? item.data.quality : "auto";
+  const imageQuality = isGPTImage25Model(activeImageModel) ? normalizeGPTImage25Quality(item.data?.quality) : grokImageModel ? normalizeGrokImageQuality(item.data?.quality) : isImageQuality(item.data?.quality) ? item.data.quality : "auto";
   const setImageCount = (next: number) => onUpdateData({ n: imageTaskSubmitCount(activeImageModel, Math.round(next) || 1) });
   const setOutputCompression = (value: string) => {
     if (!value.trim()) {
@@ -4737,6 +4747,13 @@ function GeneratorNodeBody({
           triggerClassName={cn(canvasSelectClass, "justify-between")}
           contentClassName="w-[min(21rem,calc(100vw-2rem))]"
         />
+        {isGPTImage25Model(activeImageModel) ? (
+          <label className="grid gap-1 text-xs">
+            <span>精确像素（优先于分辨率）</span>
+            <Input aria-label="精确像素" placeholder="1600x1200" value={item.data?.size === "auto" || item.data?.size?.includes(":") ? "" : item.data?.size || ""}
+              onChange={(event) => onUpdateData({ size: event.target.value, size_user_modified: true })} />
+          </label>
+        ) : null}
         {outputControlsSupported ? (
           <ImageOutputControls
             imageModel={imageModel}
@@ -4752,12 +4769,12 @@ function GeneratorNodeBody({
           />
         ) : null}
         {imageQualitySupported ? (
-          <Select value={imageQuality} onValueChange={(quality) => isImageQuality(quality) && onUpdateData({ quality })}>
+          <Select value={imageQuality} onValueChange={(quality) => (isGPTImage25Model(activeImageModel) || isImageQuality(quality)) && onUpdateData({ quality })}>
             <SelectTrigger className={canvasSelectClass}>
               <SelectValue placeholder="质量强度" />
             </SelectTrigger>
             <SelectContent>
-              {(grokImageModel ? GROK_IMAGE_QUALITY_OPTIONS : IMAGE_QUALITY_OPTIONS).map((option) => (
+              {(isGPTImage25Model(activeImageModel) ? GPT_IMAGE_25_QUALITY_OPTIONS : grokImageModel ? GROK_IMAGE_QUALITY_OPTIONS : IMAGE_QUALITY_OPTIONS).map((option) => (
                 <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
               ))}
             </SelectContent>

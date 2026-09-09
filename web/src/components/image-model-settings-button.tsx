@@ -15,6 +15,7 @@ import {
   isSeedream50LiteImageModel,
   isSeedream50ProImageModel,
   isOfficialImageModel,
+  isGPTImage25Model,
   midjourneyVersionSupportsStop,
   type ImageModel,
   type MidjourneySettingsPayload,
@@ -104,6 +105,7 @@ function titleForModel(model: ImageModel | string) {
   if (isGeminiProImageModel(model)) {
     return "Nano Banana Pro 参数";
   }
+  if (isGPTImage25Model(model)) return "GPT Image 2.5 参数";
   if (isOfficialImageModel(model)) {
     return "官方图片参数";
   }
@@ -123,6 +125,7 @@ function titleForModel(model: ImageModel | string) {
 }
 
 function referenceLimitLabel(model: ImageModel | string) {
+  if (isGPTImage25Model(model)) return "最多 16 张参考图，最多生成 4 张";
   if (model === MIDJOURNEY_IMAGE_MODEL) {
     return "最多 4 张参考图";
   }
@@ -221,8 +224,9 @@ export function ImageModelSettingsPanel({
           onChange={(geminiFlash) => update({ geminiFlash })}
         />
       ) : null}
-      {isOfficialImageModel(model) ? (
+      {isOfficialImageModel(model) || isGPTImage25Model(model) ? (
         <OfficialImageSettingsPanel
+          supportsMask={!isGPTImage25Model(model)}
           settings={normalized.officialImage || {}}
           onChange={(officialImage) => update({ officialImage })}
         />
@@ -502,7 +506,9 @@ function SeedreamImageSettingsPanel({
 function OfficialImageSettingsPanel({
   settings,
   onChange,
+  supportsMask = true,
 }: {
+  supportsMask?: boolean;
   settings: ImageModelSettingsState["officialImage"];
   onChange: (settings: NonNullable<ImageModelSettingsState["officialImage"]>) => void;
 }) {
@@ -528,15 +534,16 @@ function OfficialImageSettingsPanel({
           <option value="low">低限制</option>
         </select>
       </label>
-      <label className="col-span-2 space-y-1">
+      {supportsMask ? <label className="col-span-2 space-y-1">
         <span className={fieldLabelClassName()}>遮罩 URL</span>
         <Input
+          disabled={!supportsMask}
           value={normalized.inputImageMask}
           onChange={(event) => onChange({ ...normalized, inputImageMask: event.target.value.trim() || undefined })}
           placeholder="https://..."
           className={inputClassName()}
         />
-      </label>
+      </label> : null}
     </div>
   );
 }

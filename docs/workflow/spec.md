@@ -453,3 +453,26 @@ last_updated: 2026-08-05
 
 ### Sprint 计划
 - `task-034-grok-imagine-image-2-profile`：替换 Grok 1.5 并实现 2.0 参数 profile。
+
+## Task-036 GPT Image 2.5 参数 profile
+
+### 一句话需求
+- 按 APIMart 当前文档新增 `gpt-image-2.5-flare` 与 `gpt-image-2.5-sunburst`，并将模型专属设置贯通图片页、Canvas、电商套图和 Image Arena。
+
+### 目标
+- 两个模型支持 15 种比例、合法精确像素、1K/2K/4K、`auto/low/medium/high/xhigh/max`、PNG/JPEG/WebP、压缩率、背景与审核。
+- 文生图与最多 16 张参考图编辑统一走 `images/generations` JSON payload，单次输出严格 `n=1..4`。
+- `xhigh/max`、精确尺寸和 2.5 背景/格式校验只在 2.5 profile 生效，不改变旧 GPT Image 2/official 行为。
+
+### 非目标
+- 不替换或重命名现有 GPT Image 2/official，不修改 Sub2API、计费、鉴权、数据库、部署或 Docker。
+- 不实现文档明确不支持的流式部分图，不做真实付费生成。
+
+### 验收标准
+- 后端严格拒绝非法 model/size/resolution/quality/n/output_format/output_compression/background/moderation/参考图数量。
+- 透明背景只能与 PNG/WebP 搭配；JPEG 压缩率有效，PNG 不发送压缩率。
+- 四个工作台的模型目录、控件、保存恢复和 mock 请求一致；旧模型不出现 `xhigh/max`。
+- 定向/全量 Go、前端断言、lint/build、限定 diff 与隔离浏览器 mock 验收通过。
+
+### Sprint 计划
+- `task-036-gpt-image-2-5-profiles`：模型目录、专属 profile、JSON 网关、四工作台传播和验收。

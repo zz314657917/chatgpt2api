@@ -15,6 +15,8 @@ import type {
 import { getManagedImagePathFromUrl, getManagedImagePreviewUrlFromPath, getManagedImageThumbnailUrlFromPath, getManagedImageUrlFromPath } from "@/lib/image-path";
 import {
   normalizeImageOutputCompression,
+  isGPTImage25Model,
+  normalizeGPTImage25Resolution,
   normalizeImageOutputFormat,
   normalizeImageOutputFormatForModel,
   normalizeImageResolutionPreset,
@@ -1117,7 +1119,7 @@ function sanitizeSmartItemData(data?: SmartCanvasItemData): SmartCanvasItemData 
     model,
     size: data.size_user_modified === true && !cleanImageText(data.size) ? "" : size,
     size_user_modified: isUserModifiedCanvasImageSize(data, size),
-    image_resolution: pixelIconSize || !resolutionUserModified ? "" : seedream ? normalizeSeedreamImageResolution(data.image_resolution, model) : normalizeCanvasImageResolution(data.image_resolution),
+    image_resolution: isGPTImage25Model(model) ? normalizeGPTImage25Resolution(data.image_resolution) : pixelIconSize || !resolutionUserModified ? "" : seedream ? normalizeSeedreamImageResolution(data.image_resolution, model) : normalizeCanvasImageResolution(data.image_resolution),
     image_resolution_user_modified: pixelIconSize ? true : resolutionUserModified,
     output_format: data.output_format ? normalizeImageOutputFormatForModel(model, data.output_format) : undefined,
     output_compression: normalizeCanvasImageOutputCompression(data.output_format, data.output_compression, model),

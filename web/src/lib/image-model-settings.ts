@@ -6,6 +6,7 @@ import {
   isSeedreamImageModel,
   isSeedream50ProImageModel,
   isOfficialImageModel,
+  isGPTImage25Model,
   midjourneyVersionSupportsStop,
   type GeminiFlashSettingsPayload,
   type ImageModel,
@@ -227,11 +228,17 @@ export function normalizeSeedreamImageModelSettings(value: unknown): SeedreamIma
 }
 
 export function defaultImageModelSettings(model: ImageModel | string): ImageModelSettingsState {
+  if (isGPTImage25Model(model)) return normalizeImageModelSettings(model);
   return normalizeImageModelSettings(model, DEFAULT_IMAGE_MODEL_SETTINGS_STATE);
 }
 
 export function normalizeImageModelSettings(model: ImageModel | string, value?: ImageModelSettingsState | Record<string, unknown> | null): ImageModelSettingsState {
   const source = sourceRecord(value);
+  if (isGPTImage25Model(model)) {
+    const item = sourceRecord(source.officialImage ?? source);
+    const normalized = normalizeOfficialImageModelSettings({ ...item, moderation: item.moderation || "low" });
+    return { officialImage: { background: normalized.background, moderation: normalized.moderation } };
+  }
   if (isMidjourneyImageModel(model)) {
     return { midjourney: normalizeMidjourneyModelSettings(source.midjourney ?? source) };
   }
@@ -261,6 +268,9 @@ export function mergeImageModelSettingsForModel(
 ): ImageModelSettingsState {
   const normalizedCurrent = normalizeImageModelSettings(model, current);
   const patchRecord = sourceRecord(patch);
+  if (isGPTImage25Model(model)) {
+    return normalizeImageModelSettings(model, { officialImage: { ...normalizedCurrent.officialImage, ...sourceRecord(patchRecord.officialImage ?? patchRecord) } });
+  }
   if (isMidjourneyImageModel(model)) {
     const patchValue = sourceRecord(patchRecord.midjourney || patchRecord);
     return {
@@ -318,11 +328,13 @@ export function mergeImageModelSettingsForModel(
 }
 
 export function imageModelHasSettings(model: ImageModel | string) {
+  if (isGPTImage25Model(model)) return true;
   return isMidjourneyImageModel(model) || isGeminiFlashImageModel(model) || isOfficialImageModel(model) || isGeminiProImageModel(model) || isGrokImagineImageModel(model) || isSeedreamImageModel(model);
 }
 
 export function imageModelSettingsSummary(model: ImageModel | string, settings?: ImageModelSettingsState) {
   const normalized = normalizeImageModelSettings(model, settings);
+  if (isGPTImage25Model(model)) return `背景 ${normalized.officialImage?.background} · 审核 ${normalized.officialImage?.moderation}`;
   if (isMidjourneyImageModel(model)) {
     const item = normalized.midjourney || normalizeMidjourneyModelSettings(undefined);
     return [`V${item.version || "8.1"}`, item.speed || "relax", `Q${item.quality || "1"}`].join(" · ");
@@ -354,6 +366,7 @@ export function imageModelSettingsSummary(model: ImageModel | string, settings?:
 
 export function imageModelSettingsToTaskFields(model: ImageModel | string, settings?: ImageModelSettingsState, count = 1): ImageModelTaskFields {
   const normalized = normalizeImageModelSettings(model, settings);
+  if (isGPTImage25Model(model)) return { toolOptions: normalized.officialImage };
   if (isMidjourneyImageModel(model)) {
     const midjourney = normalizeMidjourneyModelSettings(normalized.midjourney);
     return { extraBody: { midjourney_settings: midjourney } };

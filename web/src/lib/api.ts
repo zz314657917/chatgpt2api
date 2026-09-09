@@ -8,6 +8,9 @@ export {
   type ImageQuality,
 } from "@/lib/image-parameters";
 import { normalizePixelIconSizeAlias } from "@/lib/image-parameters";
+import { isGPTImage25Model } from "@/lib/image-parameters";
+export { isGPTImage25Model } from "@/lib/image-parameters";
+export { normalizeGPTImage25Quality } from "@/lib/image-parameters";
 import {
   buildImageTaskRequestParameters,
   imageTaskRequestBodyFields,
@@ -25,6 +28,8 @@ export const IMAGE_MODEL_OPTIONS = [
   { value: "auto", label: "Auto" },
   { value: "gpt-image-2", label: "gpt-image-2" },
   { value: "gpt-image-2-official", label: "gpt-image-2-official" },
+  { value: "gpt-image-2.5-flare", label: "GPT Image 2.5 Flare" },
+  { value: "gpt-image-2.5-sunburst", label: "GPT Image 2.5 Sunburst" },
   { value: "midjourney", label: "Midjourney" },
   { value: "grok-imagine-image-2.0", label: "grok-imagine-image-2.0" },
   { value: "doubao-seedance-4-0", label: "doubao-seedance-4-0" },
@@ -55,6 +60,8 @@ const GEMINI_FLASH_IMAGE_MODELS = new Set<string>(["gemini-3.1-flash-image-previ
 const GEMINI_PRO_IMAGE_MODELS = new Set<string>(["gemini-3-pro-image-preview", "gemini-3-pro-image-preview-official"]);
 const SEEDREAM_IMAGE_MODELS = new Set<string>([SEEDREAM_4_IMAGE_MODEL, SEEDREAM_45_IMAGE_MODEL, SEEDREAM_50_LITE_IMAGE_MODEL, SEEDREAM_50_PRO_IMAGE_MODEL]);
 const IMAGE_TASK_MODEL_VALUES = new Set<string>([
+  "gpt-image-2.5-flare",
+  "gpt-image-2.5-sunburst",
   "gpt-image-2",
   "gpt-image-2-official",
   MIDJOURNEY_IMAGE_MODEL,
@@ -133,6 +140,7 @@ export function isSeedream50ProImageModel(model?: string) {
 }
 
 export function imageTaskMaxCount(model: string | undefined) {
+  if (isGPTImage25Model(model)) return 4;
   const normalizedModel = String(model || "").trim();
   if (normalizedModel === MIDJOURNEY_IMAGE_MODEL || isGeminiFlashImageModel(model) || normalizedModel === SEEDREAM_50_PRO_IMAGE_MODEL) {
     return 1;
@@ -376,6 +384,8 @@ export const IMAGE_MODEL_ROUTE_DETAILS: Partial<Record<
     badge?: string;
   }
 >> = {
+  "gpt-image-2.5-flare": { routeLabel: "GPT Image 2.5 Flare", description: "速度优先，适合批量创作和快速原型。" },
+  "gpt-image-2.5-sunburst": { routeLabel: "GPT Image 2.5 Sunburst", description: "精细编辑，适合成品级商品图。" },
   "gpt-image-2": {
     routeLabel: "标准版本",
     description: "标准版本图片通道，比例只作为构图偏好，实际像素以上游返回为准。",
@@ -514,7 +524,7 @@ export function usesCodexImageRoute(model: ImageModel) {
 }
 
 export function supportsStructuredImageParameters(model: ImageModel) {
-  return usesCodexImageRoute(model);
+  return usesCodexImageRoute(model) || isGPTImage25Model(model);
 }
 
 export function supportsImageResolutionPresets(model: ImageModel) {
@@ -522,6 +532,7 @@ export function supportsImageResolutionPresets(model: ImageModel) {
 }
 
 export function supportsImageOutputControls(model: ImageModel) {
+  if (isGPTImage25Model(model)) return true;
   return usesOfficialImageRoute(model) || usesCodexImageRoute(model) || isSeedream50LiteImageModel(model) || isSeedream50ProImageModel(model);
 }
 
@@ -541,7 +552,7 @@ export function isGrokImagineImageModel(model: ImageModel | string | undefined) 
 }
 
 export function supportsOfficialImageGenerationSettings(model: ImageModel | string | undefined) {
-  return isOfficialImageModel(model);
+  return isOfficialImageModel(model) || isGPTImage25Model(model);
 }
 
 export function supportsImageMaskParameter(model: ImageModel | string | undefined) {
@@ -549,7 +560,7 @@ export function supportsImageMaskParameter(model: ImageModel | string | undefine
 }
 
 export function supportsImageQuality(model: ImageModel) {
-  return isOfficialImageModel(model) || isGrokImagineImageModel(model);
+  return isOfficialImageModel(model) || isGrokImagineImageModel(model) || isGPTImage25Model(model);
 }
 
 export function imageReferenceInputLimit(model: ImageModel | string | undefined) {

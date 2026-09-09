@@ -185,6 +185,50 @@ func TestImageGatewayModelsGPTImagePayloadPassesReferenceURLs(t *testing.T) {
 	}
 }
 
+func TestGPTImage25GatewayProfile(t *testing.T) {
+	for _, model := range []string{util.ImageModelGPT25Flare, util.ImageModelGPT25Sunburst} {
+		for _, quality := range []string{"auto", "low", "medium", "high", "xhigh", "max"} {
+			body, err := sub2APIImageGatewayJSONPayload(map[string]any{"model": model, "prompt": "draw", "n": 4, "size": "5:4", "image_resolution": "4k", "quality": quality, "output_format": "webp", "output_compression": 0, "background": "transparent", "image_urls": []string{"https://example.test/ref.png"}, "partial_images": 3, "mask_url": "https://example.test/mask.png", "nsfw_check": true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if body["quality"] != quality || body["size"] != "5:4" || body["resolution"] != "4k" || body["output_compression"] != 0 || body["n"] != 4 {
+				t.Fatalf("body = %#v", body)
+			}
+			for _, key := range []string{"partial_images", "mask_url", "nsfw_check", "response_format"} {
+				if body[key] != nil {
+					t.Fatalf("unexpected %s", key)
+				}
+			}
+		}
+		body, err := sub2APIImageGatewayJSONPayload(map[string]any{"model": model, "prompt": "draw", "size": "1600x1200", "resolution": "ignored"})
+		if err != nil || body["size"] != "1600x1200" || body["resolution"] != nil {
+			t.Fatalf("exact pixels = %#v, %v", body, err)
+		}
+	}
+}
+
+func TestGPTImage25GatewayRejectsInvalidParameters(t *testing.T) {
+	for _, override := range []map[string]any{
+		{"n": 5}, {"n": 0}, {"n": 1.5}, {"n": "2"}, {"size": "1025x1024"}, {"size": "4096x2048"}, {"size": "512x512"}, {"size": "3840x3840"}, {"size": "3200x800"}, {"size": "9:20"}, {"resolution": "3k"}, {"quality": "ultra"}, {"output_format": "gif"}, {"output_format": "jpeg", "background": "transparent"}, {"output_format": "webp", "output_compression": 101}, {"output_format": "jpeg", "output_compression": 2.5}, {"image_urls": []string{"data:image/png;base64,eA=="}},
+	} {
+		payload := map[string]any{"model": util.ImageModelGPT25Flare, "prompt": "draw"}
+		for key, value := range override {
+			payload[key] = value
+		}
+		if _, err := sub2APIGPTImage25GatewayPayload(payload); err == nil {
+			t.Fatalf("accepted %#v", override)
+		}
+	}
+	refs := make([]string, 17)
+	for i := range refs {
+		refs[i] = "https://example.test/" + strconv.Itoa(i) + ".png"
+	}
+	if _, err := sub2APIGPTImage25GatewayPayload(map[string]any{"model": util.ImageModelGPT25Sunburst, "prompt": "draw", "image_urls": refs}); err == nil {
+		t.Fatal("accepted 17 references")
+	}
+}
+
 func TestImageGatewayModelsSeedreamPayloadUsesImageGateway(t *testing.T) {
 	payload, err := sub2APIImageGatewayJSONPayload(map[string]any{
 		"prompt":                              "draw a product scene",

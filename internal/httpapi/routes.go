@@ -1614,6 +1614,10 @@ func (a *App) handleCreationTasks(w http.ResponseWriter, r *http.Request) {
 			util.WriteError(w, http.StatusBadRequest, err.Error())
 			return
 		}
+		if err := validateGPTImage25Payload(body, nil); err != nil {
+			util.WriteError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		n := util.ToInt(body["n"], 1)
 		task, err := a.tasks.SubmitGenerationWithOptions(r.Context(), identity, util.Clean(body["client_task_id"]), util.Clean(body["prompt"]), model, util.Clean(body["size"]), util.Clean(body["quality"]), a.resolveImageBaseURL(r), n, body["messages"], imageTaskRequestMetadata(body), imageOutputOptionsFromBody(body), imageGenerationToolOptionsFromBody(model, n, body), util.Clean(body["visibility"]))
 		if err != nil {
@@ -1679,6 +1683,10 @@ func (a *App) handleCreationTasks(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := validateSeedreamPayload(body, images); err != nil {
+			util.WriteError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if err := validateGPTImage25Payload(body, images); err != nil {
 			util.WriteError(w, http.StatusBadRequest, err.Error())
 			return
 		}
@@ -1760,6 +1768,9 @@ func imageTaskRequestMetadata(body map[string]any) map[string]any {
 	size := util.Clean(body["size"])
 	metadata := map[string]any{}
 	preset := service.NormalizeImageResolutionPreset(util.Clean(body["image_resolution"]))
+	if sub2APIUsesGPTImage25Gateway(body) {
+		preset = strings.ToLower(firstNonEmpty(util.Clean(body["image_resolution"]), util.Clean(body["resolution"])))
+	}
 	if service.IsProStudioRequest(body) {
 		if settings := util.StringMap(body["official_settings"]); len(settings) > 0 {
 			preset = util.Clean(settings["resolution"])
@@ -2020,6 +2031,8 @@ func validateImageReferenceLimit(body map[string]any, images []protocol.Uploaded
 			return sub2APIGrokImagineReferenceLimitError()
 		}
 		return nil
+	case model == util.ImageModelGPT25Flare || model == util.ImageModelGPT25Sunburst:
+		return validateImageReferenceCount(len(sub2APIImageURLs(payload)), sub2APIGPTImage25ReferenceLimit, "GPT Image 2.5")
 	case model == util.ImageModelMidjourney:
 		if len(sub2APIMidjourneyImageURLs(payload)) > sub2APIMidjourneyReferenceLimit {
 			return sub2APIMidjourneyReferenceLimitError()
@@ -2069,11 +2082,28 @@ func validateSeedreamPayload(body map[string]any, images []protocol.UploadedImag
 	return err
 }
 
+func validateGPTImage25Payload(body map[string]any, images []protocol.UploadedImage) error {
+	if !sub2APIUsesGPTImage25Gateway(body) {
+		return nil
+	}
+	payload := make(map[string]any, len(body)+1)
+	for key, value := range body {
+		payload[key] = value
+	}
+	// Uploaded bytes are converted to public URLs by the edit gateway after validation.
+	if err := validateImageReferenceLimit(body, images); err != nil {
+		return err
+	}
+	delete(payload, "images")
+	_, err := sub2APIGPTImage25GatewayPayload(payload)
+	return err
+}
+
 func imageOutputOptionsFromBody(body map[string]any) service.ImageOutputOptions {
 	format := service.NormalizeImageOutputFormat(util.Clean(body["output_format"]))
 	options := service.ImageOutputOptions{Format: format}
 	compressionSupported := service.SupportsImageOutputCompression(format)
-	if service.IsProStudioRequest(body) {
+	if service.IsProStudioRequest(body) || sub2APIUsesGPTImage25Gateway(body) {
 		compressionSupported = service.SupportsOfficialImageOutputCompression(format)
 	}
 	if compressionSupported {

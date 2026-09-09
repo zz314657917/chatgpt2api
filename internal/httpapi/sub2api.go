@@ -257,6 +257,11 @@ func (a *App) callSub2APIResponsesWithBody(ctx context.Context, body map[string]
 }
 
 func (a *App) callSub2APIImageGenerations(ctx context.Context, identity service.Identity, payload map[string]any, binding service.Sub2APIBinding) (map[string]any, error) {
+	if sub2APIUsesGPTImage25Gateway(payload) {
+		if _, err := sub2APIGPTImage25GatewayPayload(payload); err != nil {
+			return nil, err
+		}
+	}
 	if sub2APIUsesGrokImagineGateway(payload) {
 		if _, err := sub2APIGrokImagineImageGatewayPayload(payload); err != nil {
 			return nil, err
@@ -276,7 +281,7 @@ func (a *App) callSub2APIImageGenerations(ctx context.Context, identity service.
 		if err != nil {
 			return nil, err
 		}
-		if !sub2APIUsesGrokImagineGateway(batchPayload) {
+		if !sub2APIUsesGrokImagineGateway(batchPayload) && !sub2APIUsesGPTImage25Gateway(batchPayload) {
 			body["response_format"] = "b64_json"
 		}
 		return a.postSub2APIJSON(ctx, binding, "images/generations", body)
@@ -284,6 +289,9 @@ func (a *App) callSub2APIImageGenerations(ctx context.Context, identity service.
 }
 
 func (a *App) callSub2APIImageEdits(ctx context.Context, identity service.Identity, payload map[string]any, binding service.Sub2APIBinding) (map[string]any, error) {
+	if err := validateGPTImage25Payload(payload, uploadedImagesFromPayload(payload["images"])); err != nil {
+		return nil, err
+	}
 	if prepared, err := sub2APIPrepareOfficialImageEditPayload(ctx, payload); err != nil {
 		return nil, err
 	} else {
@@ -316,7 +324,9 @@ func (a *App) callSub2APIImageEdits(ctx context.Context, identity service.Identi
 			if err != nil {
 				return nil, err
 			}
-			body["response_format"] = "b64_json"
+			if !sub2APIUsesGPTImage25Gateway(batchPayload) {
+				body["response_format"] = "b64_json"
+			}
 			return a.postSub2APIJSON(ctx, binding, "images/generations", body)
 		})
 	}
@@ -357,7 +367,7 @@ func (a *App) callSub2APIImageEdits(ctx context.Context, identity service.Identi
 }
 
 func sub2APIPrepareOfficialImageEditPayload(ctx context.Context, payload map[string]any) (map[string]any, error) {
-	if !sub2APIUsesOfficialImageGateway(payload) || len(nonEmptyUploadedImagesFromPayload(payload["images"])) == 0 {
+	if (!sub2APIUsesOfficialImageGateway(payload) && !sub2APIUsesGPTImage25Gateway(payload)) || len(nonEmptyUploadedImagesFromPayload(payload["images"])) == 0 {
 		return payload, nil
 	}
 	publicURLs := sub2APIOfficialPublicImageURLs(payload)
@@ -623,6 +633,8 @@ func sub2APIImageRequestedCount(payload map[string]any) int {
 	}
 	limit := sub2APIImageBatchLimit
 	switch sub2APIImageModel(payload["model"]) {
+	case util.ImageModelGPT25Flare, util.ImageModelGPT25Sunburst:
+		limit = sub2APIGPTImage25BatchLimit
 	case util.ImageModelSeedream40, util.ImageModelSeedream45, util.ImageModelSeedream50Lite:
 		limit = sub2APISeedreamImageBatchLimit
 	case util.ImageModelSeedream50Pro:
@@ -636,7 +648,7 @@ func sub2APIImageRequestedCount(payload map[string]any) int {
 
 func sub2APIImageBatchSize(payload map[string]any) int {
 	limit := sub2APIImageBatchLimit
-	if sub2APIImageModel(payload["model"]) == util.ImageModelGPTOfficial {
+	if sub2APIImageModel(payload["model"]) == util.ImageModelGPTOfficial || sub2APIUsesGPTImage25Gateway(payload) {
 		limit = sub2APIOfficialImageBatchLimit
 	}
 	switch sub2APIImageModel(payload["model"]) {
@@ -716,6 +728,9 @@ func sub2APIImageGatewayJSONPayload(payload map[string]any) (map[string]any, err
 	if sub2APIUsesGrokImagineGateway(payload) {
 		return sub2APIGrokImagineImageGatewayPayload(payload)
 	}
+	if sub2APIUsesGPTImage25Gateway(payload) {
+		return sub2APIGPTImage25GatewayPayload(payload)
+	}
 	if sub2APIUsesOfficialImageGateway(payload) {
 		return sub2APIOfficialImageGatewayPayload(payload)
 	}
@@ -729,7 +744,7 @@ func sub2APIImageGatewayJSONPayload(payload map[string]any) (map[string]any, err
 }
 
 func sub2APIUsesImageGenerationsJSONGateway(payload map[string]any) bool {
-	return sub2APIUsesOfficialImageGateway(payload) || sub2APIUsesGeminiImageGateway(payload) || sub2APIUsesMidjourneyGateway(payload) || sub2APIUsesGrokImagineGateway(payload) || sub2APIUsesSeedreamGateway(payload)
+	return sub2APIUsesOfficialImageGateway(payload) || sub2APIUsesGeminiImageGateway(payload) || sub2APIUsesMidjourneyGateway(payload) || sub2APIUsesGrokImagineGateway(payload) || sub2APIUsesGPTImage25Gateway(payload) || sub2APIUsesSeedreamGateway(payload)
 }
 
 func sub2APIImageEditSupportsJSONGateway(payload map[string]any) bool {
@@ -783,6 +798,15 @@ func sub2APIUsesMidjourneyGateway(payload map[string]any) bool {
 
 func sub2APIUsesGrokImagineGateway(payload map[string]any) bool {
 	return sub2APIImageModel(payload["model"]) == util.ImageModelGrokImagine
+}
+
+func sub2APIUsesGPTImage25Gateway(payload map[string]any) bool {
+	switch sub2APIImageModel(payload["model"]) {
+	case util.ImageModelGPT25Flare, util.ImageModelGPT25Sunburst:
+		return true
+	default:
+		return false
+	}
 }
 
 func sub2APIUsesSeedreamGateway(payload map[string]any) bool {
@@ -1036,9 +1060,23 @@ const sub2APIGrokImagineReferenceLimit = 3
 
 const sub2APIGrokImaginePromptLimit = 8000
 
+const sub2APIGPTImage25ReferenceLimit = 16
+
+const sub2APIGPTImage25BatchLimit = 4
+
 var sub2APIGrokImagineAspectRatios = map[string]struct{}{
 	"1:1": {}, "3:4": {}, "4:3": {}, "9:16": {}, "16:9": {}, "2:3": {}, "3:2": {},
 	"9:19.5": {}, "19.5:9": {}, "9:20": {}, "20:9": {}, "1:2": {}, "2:1": {}, "auto": {},
+}
+
+var sub2APIGPTImage25Sizes = map[string]struct{}{
+	"auto": {}, "1:1": {}, "3:2": {}, "2:3": {}, "4:3": {}, "3:4": {},
+	"5:4": {}, "4:5": {}, "16:9": {}, "9:16": {}, "2:1": {}, "1:2": {},
+	"21:9": {}, "9:21": {}, "3:1": {}, "1:3": {},
+}
+
+var sub2APIGPTImage25Qualities = map[string]struct{}{
+	"auto": {}, "low": {}, "medium": {}, "high": {}, "xhigh": {}, "max": {},
 }
 
 const sub2APISeedreamInputOutputLimit = 15
@@ -1087,6 +1125,170 @@ func sub2APISeedreamProfileForModel(model string) (sub2APISeedreamProfile, bool)
 		return sub2APISeedreamProfile{}, false
 	}
 	return base, true
+}
+
+func sub2APIGPTImage25GatewayPayload(payload map[string]any) (map[string]any, error) {
+	model := sub2APIImageModel(payload["model"])
+	if model != util.ImageModelGPT25Flare && model != util.ImageModelGPT25Sunburst {
+		return nil, protocol.HTTPError{Status: http.StatusBadRequest, Message: "GPT Image 2.5 模型不受支持"}
+	}
+	prompt := strings.TrimSpace(util.Clean(payload["prompt"]))
+	if prompt == "" {
+		return nil, protocol.HTTPError{Status: http.StatusBadRequest, Message: "GPT Image 2.5 prompt 不能为空"}
+	}
+	count, err := sub2APIGPTImage25Count(payload)
+	if err != nil {
+		return nil, err
+	}
+	size, exactSize, err := sub2APIGPTImage25Size(payload)
+	if err != nil {
+		return nil, err
+	}
+	quality := strings.ToLower(strings.TrimSpace(util.Clean(payload["quality"])))
+	if quality == "" {
+		quality = "auto"
+	}
+	if _, ok := sub2APIGPTImage25Qualities[quality]; !ok {
+		return nil, protocol.HTTPError{Status: http.StatusBadRequest, Message: "GPT Image 2.5 quality 只支持 auto、low、medium、high、xhigh 或 max"}
+	}
+	format := strings.ToLower(strings.TrimSpace(util.Clean(payload["output_format"])))
+	if format == "" {
+		format = "png"
+	}
+	if format != "png" && format != "jpeg" && format != "webp" {
+		return nil, protocol.HTTPError{Status: http.StatusBadRequest, Message: "GPT Image 2.5 output_format 只支持 png、jpeg 或 webp"}
+	}
+	background := strings.ToLower(strings.TrimSpace(util.Clean(payload["background"])))
+	if background == "" {
+		background = "auto"
+	}
+	if background != "transparent" && background != "opaque" && background != "auto" {
+		return nil, protocol.HTTPError{Status: http.StatusBadRequest, Message: "GPT Image 2.5 background 只支持 transparent、opaque 或 auto"}
+	}
+	if background == "transparent" && format == "jpeg" {
+		return nil, protocol.HTTPError{Status: http.StatusBadRequest, Message: "GPT Image 2.5 透明背景不支持 JPEG 输出"}
+	}
+	moderation := strings.ToLower(strings.TrimSpace(util.Clean(payload["moderation"])))
+	if moderation == "" {
+		moderation = "low"
+	}
+	if moderation != "auto" && moderation != "low" {
+		return nil, protocol.HTTPError{Status: http.StatusBadRequest, Message: "GPT Image 2.5 moderation 只支持 auto 或 low"}
+	}
+	rawURLs := sub2APIImageURLReferences(payload)
+	imageURLs := sub2APIOfficialPublicImageURLs(payload)
+	if len(rawURLs) > 0 && len(imageURLs) != len(rawURLs) {
+		return nil, protocol.HTTPError{Status: http.StatusBadRequest, Message: "GPT Image 2.5 参考图必须是可公开访问的 HTTP(S) URL"}
+	}
+	if len(imageURLs) > sub2APIGPTImage25ReferenceLimit {
+		return nil, sub2APIGPTImage25ReferenceLimitError()
+	}
+	out := map[string]any{
+		"model":         model,
+		"prompt":        prompt,
+		"n":             count,
+		"size":          size,
+		"quality":       quality,
+		"output_format": format,
+		"background":    background,
+		"moderation":    moderation,
+	}
+	if !exactSize {
+		resolution, resolutionErr := sub2APIGPTImage25Resolution(payload)
+		if resolutionErr != nil {
+			return nil, resolutionErr
+		}
+		out["resolution"] = resolution
+	}
+	if (format == "jpeg" || format == "webp") && payload["output_compression"] != nil {
+		compression, compressionErr := sub2APIGPTImage25Compression(payload["output_compression"])
+		if compressionErr != nil {
+			return nil, compressionErr
+		}
+		out["output_compression"] = compression
+	}
+	if len(imageURLs) > 0 {
+		out["image_urls"] = imageURLs
+	}
+	return out, nil
+}
+
+func sub2APIGPTImage25Count(payload map[string]any) (int, error) {
+	value, ok := payload["n"]
+	if !ok || value == nil {
+		return 1, nil
+	}
+	count, ok := sub2APIStrictInteger(value)
+	if !ok || count < 1 || count > sub2APIGPTImage25BatchLimit {
+		return 0, protocol.HTTPError{Status: http.StatusBadRequest, Message: "GPT Image 2.5 n 必须是 1 到 4 的整数"}
+	}
+	return count, nil
+}
+
+func sub2APIGPTImage25Size(payload map[string]any) (string, bool, error) {
+	value := firstNonEmpty(util.Clean(payload["size"]), util.Clean(payload["aspect_ratio"]), util.Clean(payload["requested_size"]))
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	if normalized == "" {
+		normalized = "auto"
+	}
+	if _, ok := sub2APIGPTImage25Sizes[normalized]; ok {
+		return normalized, false, nil
+	}
+	match := regexp.MustCompile(`^(\d+)x(\d+)$`).FindStringSubmatch(normalized)
+	if len(match) != 3 {
+		return "", false, protocol.HTTPError{Status: http.StatusBadRequest, Message: "GPT Image 2.5 size 不受支持"}
+	}
+	width, _ := strconv.ParseInt(match[1], 10, 64)
+	height, _ := strconv.ParseInt(match[2], 10, 64)
+	pixels := width * height
+	longSide := max(width, height)
+	shortSide := min(width, height)
+	if width%16 != 0 || height%16 != 0 || longSide > 3840 || shortSide == 0 || longSide > shortSide*3 || pixels < 655360 || pixels > 8294400 {
+		return "", false, protocol.HTTPError{Status: http.StatusBadRequest, Message: "GPT Image 2.5 精确像素需为 16 的倍数、单边不超过 3840、比例不超过 3:1，且总像素为 655360 到 8294400"}
+	}
+	return normalized, true, nil
+}
+
+func sub2APIGPTImage25Resolution(payload map[string]any) (string, error) {
+	value := strings.ToLower(strings.TrimSpace(firstNonEmpty(util.Clean(payload["resolution"]), util.Clean(payload["image_resolution"]))))
+	if value == "" {
+		value = "1k"
+	}
+	if value != "1k" && value != "2k" && value != "4k" {
+		return "", protocol.HTTPError{Status: http.StatusBadRequest, Message: "GPT Image 2.5 resolution 只支持 1k、2k 或 4k"}
+	}
+	return value, nil
+}
+
+func sub2APIGPTImage25Compression(value any) (int, error) {
+	compression, ok := sub2APIStrictInteger(value)
+	if !ok || compression < 0 || compression > 100 {
+		return 0, protocol.HTTPError{Status: http.StatusBadRequest, Message: "GPT Image 2.5 output_compression 必须是 0 到 100 的整数"}
+	}
+	return compression, nil
+}
+
+func sub2APIStrictInteger(value any) (int, bool) {
+	switch typed := value.(type) {
+	case int:
+		return typed, true
+	case int64:
+		return int(typed), true
+	case float64:
+		if math.Trunc(typed) == typed {
+			return int(typed), true
+		}
+	case json.Number:
+		parsed, err := typed.Int64()
+		if err == nil {
+			return int(parsed), true
+		}
+	}
+	return 0, false
+}
+
+func sub2APIGPTImage25ReferenceLimitError() error {
+	return protocol.HTTPError{Status: http.StatusBadRequest, Message: "GPT Image 2.5 参考图最多支持 16 张"}
 }
 
 func sub2APIGrokImagineImageGatewayPayload(payload map[string]any) (map[string]any, error) {

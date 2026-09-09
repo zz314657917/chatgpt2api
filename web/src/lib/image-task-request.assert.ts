@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { isImageQuality, normalizeGPTImage25Quality } from "@/lib/image-parameters";
 
 import {
   buildImageTaskRequestParameters,
@@ -6,6 +7,17 @@ import {
   isOfficialImageGatewayModel,
   supportsTaskOutputCompression,
 } from "@/lib/image-task-request";
+
+for (const model of ["gpt-image-2.5-flare", "gpt-image-2.5-sunburst"]) {
+  const fields = imageTaskRequestBodyFields(buildImageTaskRequestParameters({ model, size: "5:4", imageResolution: "1k", quality: "max", outputFormat: "webp", outputCompression: 0, toolOptions: { background: "transparent", moderation: "low" } }));
+  assert.equal(fields.size, "5:4");
+  assert.equal(fields.image_resolution, "1k");
+  assert.equal(fields.quality, "max");
+  assert.equal(fields.output_compression, 0);
+  assert.throws(() => buildImageTaskRequestParameters({ model, outputFormat: "jpeg", toolOptions: { background: "transparent" } }), /透明背景/);
+}
+assert.equal(isImageQuality("max"), false);
+assert.equal(normalizeGPTImage25Quality("max"), "max");
 
 const officialWebp = buildImageTaskRequestParameters({
   model: "gpt-image-2-official",
