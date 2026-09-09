@@ -141,7 +141,7 @@ import {
   isImageOutputFormat,
   type ImageOutputFormat,
 } from "@/lib/image-parameters";
-import { fetchAuthenticatedImageBlob } from "@/lib/authenticated-image";
+import { fetchAuthenticatedImageBlob, isManagedImageURL } from "@/lib/authenticated-image";
 import { getManagedImagePathFromUrl, getManagedImageUrlFromPath } from "@/lib/image-path";
 import {
   adaptImageArenaSettings,
@@ -777,7 +777,6 @@ async function buildReferenceImageFromManagedImage(item: ManagedImageSummary): P
     name: file.name,
     type: file.type || "image/png",
     dataUrl: await readFileAsDataUrl(file),
-    publicUrl: url,
     source: "upload",
     clientReferenceId: createId(),
     uploadStatus: "pending",
@@ -803,7 +802,9 @@ function imageOutputCompressionForFormat(format: ImageOutputFormat, value: unkno
 }
 
 function publicReferenceImageUrls(images: Array<{ publicUrl?: string }>) {
-  return Array.from(new Set(images.map((image) => image.publicUrl?.trim() || "").filter(Boolean)));
+  return Array.from(new Set(images
+    .map((image) => image.publicUrl?.trim() || "")
+    .filter((url) => /^https?:\/\//i.test(url) && !isManagedImageURL(url))));
 }
 
 function formatHighResolutionHint(canInspectAccounts: boolean) {
