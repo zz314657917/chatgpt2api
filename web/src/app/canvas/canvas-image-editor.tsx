@@ -9,7 +9,8 @@ import {
   type PointerEvent as ReactPointerEvent,
   type WheelEvent as ReactWheelEvent,
 } from "react";
-import { ChevronLeft, ChevronRight, FileText, Image as ImageIcon, LoaderCircle, RotateCcw, X, ZoomIn } from "lucide-react";
+import { ChevronLeft, ChevronRight, Download, FileText, Image as ImageIcon, LoaderCircle, RotateCcw, X, ZoomIn } from "lucide-react";
+import { toast } from "sonner";
 
 import { AuthenticatedImage } from "@/components/authenticated-image";
 import { ImageLightbox } from "@/components/image-lightbox";
@@ -17,6 +18,8 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import type { CanvasImageRef } from "@/lib/api";
 import { fetchAuthenticatedImageBlob } from "@/lib/authenticated-image";
+import { buildTimestampedImageDownloadName, downloadImageFile } from "@/lib/image-download";
+import { getManagedImagePathFromUrl } from "@/lib/image-path";
 import { cn } from "@/lib/utils";
 
 import { DEFAULT_CROP, DEFAULT_OUTPAINT, DEFAULT_RESIZE, MASK_BRUSH_ALPHA, MAX_RESIZE_SIDE, MIN_CROP_SIZE, MIN_RESIZE_SIDE, cropAspectOptions, editModes } from "./canvas-image-editor-config";
@@ -128,6 +131,7 @@ export function SmartCanvasImageEditor({
   const [outpaintBackground, setOutpaintBackground] = useState<OutpaintBackground>("white");
   const [zoom, setZoom] = useState(1);
   const [applying, setApplying] = useState(false);
+  const [downloading, setDownloading] = useState(false);
   const [submittingAngle, setSubmittingAngle] = useState(false);
   const [submittingBackgroundRemoval, setSubmittingBackgroundRemoval] = useState(false);
   const [backgroundRemovalPrompt, setBackgroundRemovalPrompt] = useState("");
@@ -708,6 +712,30 @@ export function SmartCanvasImageEditor({
   }, [src, zoom]);
 
   const closeEditor = useCallback(() => onOpenChange(false), [onOpenChange]);
+
+  const downloadOriginal = useCallback(async () => {
+    if (!image || !src || downloading) {
+      return;
+    }
+    setDownloading(true);
+    try {
+      await downloadImageFile({
+        id: image.path || src,
+        src,
+        path: image.path || getManagedImagePathFromUrl(src),
+        fileName: buildTimestampedImageDownloadName({
+          prefix: "canvas-image",
+          id: image.name || "preview",
+          index: 0,
+          src,
+        }),
+      });
+    } catch {
+      toast.error("图片下载失败，请重试");
+    } finally {
+      setDownloading(false);
+    }
+  }, [downloading, image, src]);
 
   const submitAngleAndClose = useCallback(async () => {
     if (submittingAngle) {
@@ -1342,6 +1370,18 @@ export function SmartCanvasImageEditor({
           >
             取消
           </Button>
+          {isPreviewMode ? (
+            <Button
+              type="button"
+              variant="outline"
+              className="h-9 rounded-full px-4 text-xs font-bold dark:border-slate-700 dark:bg-slate-950 dark:text-slate-300 dark:hover:bg-slate-800"
+              onClick={() => void downloadOriginal()}
+              disabled={!src || downloading}
+            >
+              {downloading ? <LoaderCircle className="size-4 animate-spin" /> : <Download className="size-4" />}
+              {downloading ? "下载中" : "下载"}
+            </Button>
+          ) : null}
           <Button
             type="button"
             className="h-9 rounded-full px-5 text-xs font-black"
