@@ -43,7 +43,7 @@ const (
 	maxJSONImageURLRedirects   = 5
 	imageThumbnailCacheControl = "public, max-age=31536000, immutable"
 	authSessionCookieName      = "chatgpt2api_session"
-	imageMaxSavedPerUserLimit  = 30
+	imageMaxSavedPerUserLimit  = 50
 )
 
 type App struct {

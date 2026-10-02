@@ -329,10 +329,10 @@ export function ConfigCard() {
               <NumberInputWithUnit
                 id="settings-image-max-saved-per-user"
                 min={0}
-                max={30}
+                max={50}
                 value={config?.image_max_saved_per_user ?? ""}
                 onChange={setImageMaxSavedPerUser}
-                placeholder="30"
+                placeholder="50"
                 unit="张"
               />
             </Field>

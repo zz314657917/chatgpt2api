@@ -49,7 +49,7 @@ import {
 } from "@/lib/login-page-image-layout";
 
 export const PAGE_SIZE_OPTIONS = ["50", "100", "200"] as const;
-const IMAGE_MAX_SAVED_PER_USER_LIMIT = 30;
+const IMAGE_MAX_SAVED_PER_USER_LIMIT = 50;
 
 export type PageSizeOption = (typeof PAGE_SIZE_OPTIONS)[number];
 

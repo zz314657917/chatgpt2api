@@ -7,6 +7,26 @@ import (
 	"testing"
 )
 
+func TestImageMaxSavedPerUserDefaultAndLimit(t *testing.T) {
+	t.Setenv("CHATGPT2API_ROOT", t.TempDir())
+	unsetEnv(t, "CHATGPT2API_IMAGE_MAX_SAVED_PER_USER")
+	store, err := NewStore()
+	if err != nil {
+		t.Fatalf("NewStore() error = %v", err)
+	}
+	if got := store.ImageMaxSavedPerUser(); got != 50 {
+		t.Fatalf("default ImageMaxSavedPerUser() = %d, want 50", got)
+	}
+	for _, value := range []int{0, 30, 40, 50, 100} {
+		got, err := store.Update(map[string]any{"image_max_saved_per_user": value})
+		if err != nil {
+			t.Fatalf("Update(%d) error = %v", value, err)
+		}
+		want := min(value, 50)
+		assertConfigValue(t, got, "image_max_saved_per_user", want)
+	}
+}
+
 func TestStoreUpdatePersistsRuntimeSettings(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("CHATGPT2API_ROOT", root)
@@ -77,7 +97,7 @@ func TestStoreUpdatePersistsRuntimeSettings(t *testing.T) {
 		"CHATGPT2API_USER_DEFAULT_RPM_LIMIT=30",
 		"CHATGPT2API_IMAGE_RETENTION_DAYS=14",
 		"CHATGPT2API_IMAGE_STORAGE_LIMIT_MB=512",
-		"CHATGPT2API_IMAGE_MAX_SAVED_PER_USER=30",
+		"CHATGPT2API_IMAGE_MAX_SAVED_PER_USER=50",
 		"CHATGPT2API_LOG_RETENTION_DAYS=21",
 		"CHATGPT2API_DEFAULT_LOG_VIEW=business",
 		"CHATGPT2API_REGISTRATION_ENABLED=true",
@@ -366,12 +386,12 @@ func TestStoreUpdateRefreshesEnvFileBackedRuntimeSettings(t *testing.T) {
 	assertConfigValue(t, got, "user_default_rpm_limit", 45)
 	assertConfigValue(t, got, "image_retention_days", 12)
 	assertConfigValue(t, got, "image_storage_limit_mb", 1024)
-	assertConfigValue(t, got, "image_max_saved_per_user", 30)
+	assertConfigValue(t, got, "image_max_saved_per_user", 40)
 	if store.ImageStorageLimitBytes() != 1024*1024*1024 {
 		t.Fatalf("ImageStorageLimitBytes() = %d, want 1GiB", store.ImageStorageLimitBytes())
 	}
-	if store.ImageMaxSavedPerUser() != 30 {
-		t.Fatalf("ImageMaxSavedPerUser() = %d, want 30", store.ImageMaxSavedPerUser())
+	if store.ImageMaxSavedPerUser() != 40 {
+		t.Fatalf("ImageMaxSavedPerUser() = %d, want 40", store.ImageMaxSavedPerUser())
 	}
 	assertConfigValue(t, got, "log_retention_days", 30)
 	assertConfigValue(t, got, "auto_remove_invalid_accounts", false)
@@ -389,7 +409,7 @@ func TestStoreUpdateRefreshesEnvFileBackedRuntimeSettings(t *testing.T) {
 		"CHATGPT2API_USER_DEFAULT_RPM_LIMIT":            "45",
 		"CHATGPT2API_IMAGE_RETENTION_DAYS":              "12",
 		"CHATGPT2API_IMAGE_STORAGE_LIMIT_MB":            "1024",
-		"CHATGPT2API_IMAGE_MAX_SAVED_PER_USER":          "30",
+		"CHATGPT2API_IMAGE_MAX_SAVED_PER_USER":          "40",
 		"CHATGPT2API_LOG_RETENTION_DAYS":                "30",
 		"CHATGPT2API_AUTO_REMOVE_INVALID_ACCOUNTS":      "false",
 		"CHATGPT2API_AUTO_REMOVE_RATE_LIMITED_ACCOUNTS": "true",
@@ -538,7 +558,7 @@ func TestStoreUpdateOverridesEnvOnlyRuntimeSettings(t *testing.T) {
 	assertConfigValue(t, got, "default_subscription_period", "weekly")
 	assertConfigValue(t, got, "image_retention_days", 12)
 	assertConfigValue(t, got, "image_storage_limit_mb", 1024)
-	assertConfigValue(t, got, "image_max_saved_per_user", 30)
+	assertConfigValue(t, got, "image_max_saved_per_user", 40)
 	assertConfigValue(t, got, "log_retention_days", 30)
 	assertConfigValue(t, got, "auto_remove_invalid_accounts", false)
 	assertConfigValue(t, got, "auto_remove_rate_limited_accounts", true)
@@ -565,7 +585,7 @@ func TestStoreUpdateOverridesEnvOnlyRuntimeSettings(t *testing.T) {
 		"CHATGPT2API_DEFAULT_SUBSCRIPTION_PERIOD":       "weekly",
 		"CHATGPT2API_IMAGE_RETENTION_DAYS":              "12",
 		"CHATGPT2API_IMAGE_STORAGE_LIMIT_MB":            "1024",
-		"CHATGPT2API_IMAGE_MAX_SAVED_PER_USER":          "30",
+		"CHATGPT2API_IMAGE_MAX_SAVED_PER_USER":          "40",
 		"CHATGPT2API_LOG_RETENTION_DAYS":                "30",
 		"CHATGPT2API_AUTO_REMOVE_INVALID_ACCOUNTS":      "false",
 		"CHATGPT2API_AUTO_REMOVE_RATE_LIMITED_ACCOUNTS": "true",

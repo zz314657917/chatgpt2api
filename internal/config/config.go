@@ -61,7 +61,7 @@ const (
 	defaultImageTaskTimeoutSeconds = 300
 	minImageTaskTimeoutSeconds     = 30
 	maxImageTaskTimeoutSeconds     = 3600
-	defaultImageMaxSavedPerUser    = 30
+	defaultImageMaxSavedPerUser    = 50
 )
 
 type Store struct {
