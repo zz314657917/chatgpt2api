@@ -3433,12 +3433,12 @@ function ImageNodeBody({
           />
         </div>
       ) : uploading ? (
-        <div className="flex flex-col justify-center rounded-xl border border-sky-400/35 bg-sky-500/8 p-4 dark:border-sky-400/25 dark:bg-sky-400/10" style={{ height }}>
-          <div className="flex items-center gap-3">
-            <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-sky-500/12 text-sky-700 dark:bg-sky-400/12 dark:text-sky-200">
-              <LoaderCircle className="size-4 animate-spin" />
+        <div role="status" aria-label="正在上传图片" className="flex flex-col items-center justify-center rounded-xl border border-sky-400/35 bg-sky-500/8 p-4 dark:border-sky-400/25 dark:bg-sky-400/10" style={{ height }}>
+          <div className="flex w-full flex-col items-center gap-3">
+            <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-sky-500/12 text-sky-700 dark:bg-sky-400/12 dark:text-sky-200">
+              <LoaderCircle className="size-5 animate-spin" />
             </span>
-            <div className="min-w-0 flex-1">
+            <div className="w-full min-w-0">
               <div className="flex items-center justify-between gap-2 text-[11px]">
                 <span className="truncate font-bold text-foreground dark:text-slate-100">正在上传图片</span>
                 <span className="shrink-0 font-mono font-bold tabular-nums text-sky-700 dark:text-sky-200">{uploadProgress}%</span>
@@ -3448,7 +3448,7 @@ function ImageNodeBody({
               </div>
             </div>
           </div>
-          <div className={cn("mt-3 truncate pl-12 text-[11px] font-semibold", canvasSubtleTextClass)}>
+          <div className={cn("mt-3 max-w-full truncate text-center text-[11px] font-semibold", canvasSubtleTextClass)}>
             {item.name || "图片上传中"}
           </div>
         </div>

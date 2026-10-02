@@ -2933,10 +2933,6 @@ export function useSmartCanvasController() {
     createImageNodeLinkedToGenerator(refs, target);
   }, [addImagesToCanvas, createImageNodeLinkedToGenerator, selectedItemId]);
 
-  const connectImagesToGenerator = useCallback((images: CanvasImageRef[], generator: SmartCanvasItem) => {
-    createImageNodeLinkedToGenerator(images, generator);
-  }, [createImageNodeLinkedToGenerator]);
-
   const uploadFilesToRefs = useCallback(async (
     files: File[],
     options: { onProgress?: (progress: number) => void } = {},
@@ -2980,10 +2976,10 @@ export function useSmartCanvasController() {
     }), dirty, historyLabel);
   }, [updateCanvas]);
 
-  const createPendingImageUploadNode = useCallback((files: File[], point: { x: number; y: number }, targetNodeId?: string): PendingImageUploadNode => {
+  const createPendingImageUploadNode = useCallback((files: File[], point?: { x: number; y: number }, targetNodeId?: string): PendingImageUploadNode => {
     const rect = boardRef.current?.getBoundingClientRect();
     const world = rect
-      ? screenToWorld(point, rect, viewportRef.current)
+      ? screenToWorld(point || { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }, rect, viewportRef.current)
       : { x: 120, y: 120 };
     const current = canvasRef.current;
     const targetNode = targetNodeId ? current?.nodes.find((node) => node.id === targetNodeId) : null;
@@ -3026,6 +3022,33 @@ export function useSmartCanvasController() {
   const uploadedImageNodeName = useCallback((refs: CanvasImageRef[]) => {
     return refs.length > 1 ? `${refs.length} 张图片` : refs[0]?.name || "图片";
   }, []);
+
+  const uploadImagesToCanvas = useCallback(async (files: File[], point?: { x: number; y: number }, targetNodeId?: string) => {
+    const pending = createPendingImageUploadNode(files, point, targetNodeId);
+    const refs = await uploadFilesToRefs(files, {
+      onProgress: (progress) => updatePendingImageUploadNode(pending.nodeId, {
+        upload_progress: progress,
+        upload_status: "uploading",
+      }),
+    });
+    if (refs.length === 0) {
+      updatePendingImageUploadNode(pending.nodeId, {
+        upload_progress: 0,
+        upload_status: "error",
+        status: "error",
+        error: "上传图片失败",
+      }, true);
+      return;
+    }
+    updatePendingImageUploadNode(pending.nodeId, {
+      images: refs,
+      visibility: "private",
+      upload_progress: 100,
+      upload_status: undefined,
+      status: undefined,
+      error: "",
+    }, true, undefined, uploadedImageNodeName(refs));
+  }, [createPendingImageUploadNode, updatePendingImageUploadNode, uploadedImageNodeName, uploadFilesToRefs]);
 
   const addImagesNearGenerator = useCallback((refs: CanvasImageRef[], target: SmartCanvasItem, point?: { x: number; y: number }) => {
     const normalizedRefs = dedupeCanvasImageRefs(refs);
@@ -3082,31 +3105,8 @@ export function useSmartCanvasController() {
       toast.error("仅支持图片文件");
       return;
     }
-    const pending = createPendingImageUploadNode(files, { x: event.clientX, y: event.clientY }, targetGeneratorId);
-    const refs = await uploadFilesToRefs(files, {
-      onProgress: (progress) => updatePendingImageUploadNode(pending.nodeId, {
-        upload_progress: progress,
-        upload_status: "uploading",
-      }),
-    });
-    if (refs.length === 0) {
-      updatePendingImageUploadNode(pending.nodeId, {
-        upload_progress: 0,
-        upload_status: "error",
-        status: "error",
-        error: "上传图片失败",
-      }, true);
-      return;
-    }
-    updatePendingImageUploadNode(pending.nodeId, {
-      images: refs,
-      visibility: "private",
-      upload_progress: 100,
-      upload_status: undefined,
-      status: undefined,
-      error: "",
-    }, true, undefined, uploadedImageNodeName(refs));
-  }, [addImagesNearGenerator, addImagesToCanvas, addManagedImagePayload, createPendingImageUploadNode, updatePendingImageUploadNode, uploadedImageNodeName, uploadFilesToRefs]);
+    await uploadImagesToCanvas(files, { x: event.clientX, y: event.clientY }, targetGeneratorId);
+  }, [addImagesNearGenerator, addImagesToCanvas, addManagedImagePayload, uploadImagesToCanvas]);
 
   const handleBoardDragOver = useCallback((event: ReactDragEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -3129,20 +3129,8 @@ export function useSmartCanvasController() {
       return;
     }
     event.preventDefault();
-    const refs = await uploadFilesToRefs(files);
-    if (selectedItem?.type === "image") {
-      updateCanvas((current) => ({
-        ...current,
-        nodes: current.nodes.map((item) => item.id === selectedItem.id
-          ? { ...item, data: { ...item.data, images: dedupeCanvasImageRefs([...(item.data?.images || []), ...refs]) } }
-          : item),
-      }), true, "粘贴图片");
-    } else if (isGenerationNode(selectedItem)) {
-      connectImagesToGenerator(refs, selectedItem);
-    } else {
-      addImagesToCanvas(refs);
-    }
-  }, [addImagesToCanvas, connectImagesToGenerator, selectedItem, updateCanvas, uploadFilesToRefs]);
+    await uploadImagesToCanvas(files);
+  }, [uploadImagesToCanvas]);
 
   useEffect(() => {
     window.addEventListener("paste", handleWindowPaste);
