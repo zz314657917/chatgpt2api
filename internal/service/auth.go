@@ -1728,9 +1728,15 @@ func mergeDefaultManagedRole(roles []ManagedRole) []ManagedRole {
 			}
 			role.MenuPaths = mergeNormalizedStrings(role.MenuPaths, []string{
 				"/ecommerce-suite",
+				"/beads",
 				"/image-manager",
 			})
 			role.APIPermissions = mergeNormalizedStrings(role.APIPermissions, []string{
+				APIPermissionKey("GET", "/api/bead-projects"),
+				APIPermissionKey("POST", "/api/bead-projects"),
+				APIPermissionKey("PUT", "/api/bead-projects"),
+				APIPermissionKey("PATCH", "/api/bead-projects"),
+				APIPermissionKey("DELETE", "/api/bead-projects"),
 				APIPermissionKey("DELETE", "/api/images"),
 				APIPermissionKey("GET", "/api/images/tags"),
 				APIPermissionKey("PATCH", "/api/images/tags"),

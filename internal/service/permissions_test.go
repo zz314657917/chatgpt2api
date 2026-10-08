@@ -1,6 +1,9 @@
 package service
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
 
 func TestNormalizeAPIPermissionsMigratesCreationTaskPermissions(t *testing.T) {
 	permissions := NormalizeAPIPermissions([]string{
@@ -233,6 +236,54 @@ func TestMergeDefaultManagedRoleAddsAssetCollectionPermissions(t *testing.T) {
 		if !HasAPIPermission(permissions, tc.method, tc.path) {
 			t.Fatalf("merged default role missing asset collection permission for %s %s in %#v", tc.method, tc.path, roles[0].APIPermissions)
 		}
+	}
+}
+
+func TestMergeDefaultManagedRoleAddsBeadPermissionsOnlyToDefaultRole(t *testing.T) {
+	customRole := ManagedRole{
+		ID:             "custom-read-only",
+		Name:           "Read only",
+		MenuPaths:      []string{"/image"},
+		APIPermissions: []string{APIPermissionKey("GET", "/api/images")},
+	}
+	roles := mergeDefaultManagedRole([]ManagedRole{{
+		ID:             DefaultManagedRoleID,
+		Name:           "Default user",
+		Builtin:        true,
+		MenuPaths:      []string{"/image", "/canvas"},
+		APIPermissions: []string{APIPermissionKey("GET", "/api/canvases")},
+	}, customRole})
+	if len(roles) != 2 {
+		t.Fatalf("roles = %#v", roles)
+	}
+	permissions := roles[0].PermissionSet()
+	for _, path := range []string{"/image", "/canvas", "/beads"} {
+		if !containsString(permissions.MenuPaths, path) {
+			t.Fatalf("merged default role missing menu %s: %#v", path, permissions.MenuPaths)
+		}
+	}
+	for _, tc := range []struct {
+		method string
+		path   string
+	}{
+		{"GET", "/api/canvases"},
+		{"GET", "/api/bead-projects"},
+		{"POST", "/api/bead-projects"},
+		{"GET", "/api/bead-projects/project-1"},
+		{"POST", "/api/bead-projects/project-1/copies"},
+		{"PUT", "/api/bead-projects/project-1"},
+		{"PATCH", "/api/bead-projects/project-1"},
+		{"DELETE", "/api/bead-projects/project-1"},
+	} {
+		if !HasAPIPermission(permissions, tc.method, tc.path) {
+			t.Fatalf("merged default role missing %s %s: %#v", tc.method, tc.path, permissions)
+		}
+	}
+	if !reflect.DeepEqual(roles[1], customRole) {
+		t.Fatalf("custom role changed: got %#v, want %#v", roles[1], customRole)
+	}
+	if again := mergeDefaultManagedRole(roles); !reflect.DeepEqual(again, roles) {
+		t.Fatalf("role merge is not idempotent: got %#v, want %#v", again, roles)
 	}
 }
 

@@ -2,6 +2,42 @@ package service
 
 import "testing"
 
+func TestAuthServiceReloadGrantsBeadPermissionsToExistingDefaultUser(t *testing.T) {
+	backend := newTestStorageBackend(t)
+	auth := NewAuthService(backend)
+	_, raw, err := auth.RegisterPasswordUser("bead-user", "Password123", "Bead user")
+	if err != nil {
+		t.Fatalf("RegisterPasswordUser() error = %v", err)
+	}
+	legacyRole := ManagedRole{
+		ID:             DefaultManagedRoleID,
+		Name:           "Default user",
+		Builtin:        true,
+		MenuPaths:      []string{"/image", "/canvas", "/ecommerce-suite", "/image-manager"},
+		APIPermissions: []string{APIPermissionKey("GET", "/api/images")},
+	}
+	if err := auth.roleStore.SaveJSONDocument(rbacRolesDocumentName, map[string]any{
+		"items": []map[string]any{storedManagedRole(legacyRole)},
+	}); err != nil {
+		t.Fatalf("save legacy role: %v", err)
+	}
+
+	reloaded := NewAuthService(backend)
+	identity := reloaded.Authenticate(raw)
+	if identity == nil {
+		t.Fatal("existing session did not authenticate after reload")
+	}
+	if !containsString(identity.MenuPaths, "/beads") {
+		t.Fatalf("existing user's menu missing /beads: %#v", identity.MenuPaths)
+	}
+	permissions := PermissionSet{APIPermissions: identity.APIPermissions}
+	for _, method := range []string{"GET", "POST", "PUT", "PATCH", "DELETE"} {
+		if !HasAPIPermission(permissions, method, "/api/bead-projects/project-1") {
+			t.Fatalf("existing user missing bead %s permission: %#v", method, identity.APIPermissions)
+		}
+	}
+}
+
 func TestAuthServiceCreateAuthenticateDisableAndDelete(t *testing.T) {
 	backend := newTestStorageBackend(t)
 	auth := NewAuthService(backend)
