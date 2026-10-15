@@ -1,15 +1,44 @@
 ---
-phase: done
-current_sprint: task-036-gpt-image-2-5-profiles
+phase: build
+current_sprint: task-037-game-promo
 total_sprints: 29
-pending_action: await-next-scope
+pending_action: game-promo-split-development
 project_type: web
 qa_mode: browser
 approval_required: true
-last_verified: 2026-09-09
+last_verified: 2026-10-15
 ---
 
 # Workflow Status
+
+- 2026-10-15：游戏推广申请素材增量最终 PASS。独立 Chromium 15+3 检查，PNG/JPEG 1082×300与10,000,000字节边界、申请TXT、文案/图片历史、裁剪人工确认、迟到结果、跨标签/刷新/账号/项目并发边界、原ZIP16均通过。build/lint/26申请+31批次断言通过，8源hash匹配、14保护hash不变。mock验收不代表真实AI图文质量或无英文像素已确认；真实模型验收另行执行。复核：`docs/workflow/contract-reviews/task-037-game-promo-application-final-review.md`。
+
+- 申请素材增量开发 READY：8个限定源码文件，新增独立3+1文案和1082×300轮播；开发 build/lint、26申请断言及31批次断言通过，14保护hash不变。主控已审原文件精确差异、确认原9/16映射不动，独立gpt-6.1-sol执行浏览器QA；真实AI成品仍未验收。
+
+- 2026-10-15：用户按两张申请表截图要求追加对应文案与图片生成。增量 contract/review PASS：`docs/workflow/tasks/task-037-game-promo-application.md`；独立申请素材区，三个描述+其他说明、1082×300 PNG/JPEG、10M字节校验、无英文人工确认；原9设计/16槽保持。实际AI仍待验收，不操作外部平台。
+
+- 2026-10-15：用户批准“生成缺失设计”和“按新要求重生成整套”两个批量入口。增量 contract/review PASS：`docs/workflow/tasks/task-037-game-promo-batch.md`；保留文案/主图明确确认，新主图确认后自动跑剩余目标，统一修正要求、持久化批次、保留历史并防止刷新重复提交。真实 AI 验收仍单独待定。
+- 批量增量开发 READY：六个限定源文件、持久化批次与 Web Locks 原子关联、连续调度和显式主图确认，开发 build/lint/31 条纯断言 PASS、11 个保护 hash 无变化；主控首轮 diff 合规，独立浏览器 QA 正执行真实交互及 mock 网络计数，暂不称真实生成通过。
+- 2026-10-15：批量增量最终 PASS。独立 Chromium 26 项检查通过：缺失/整套9张请求数、新主图明确确认后自动8张、统一要求与新主图参考、双标签与刷新防重、失败/停止/变更输入/卸载/账号切换/删除边界、历史与复制、390/1440布局及实际 ZIP16。主控复跑 build/lint/31批次+既有断言并复核分段源码清单、11保护hash、截图与网络证据。旧测试harness解析/选择器/opaque-origin错误已修正并保留诊断；业务源码验收期间未变。最终复核：`docs/workflow/contract-reviews/task-037-game-promo-batch-final-review.md`。本地预览更新；真实AI及部署仍未验收，不提交推送部署。
+
+- 2026-10-15：用户要求所有槽位移到下方专门视觉区，以瀑布流展示。增量 contract/review PASS：`docs/workflow/tasks/task-037-game-promo-gallery.md`；仅页面布局，保留裁剪、单槽/ZIP 下载及已有侧栏和滚动修复，真实 AI 验收仍单独待定。
+- 下方视觉区已实现：上半两列编辑区、下方 1/2/3/4 列容器响应式 CSS columns 与缺图原比例占位。限定 diff 两处布局修改、14 个保护路径 hash 无变化，开发 build/lint PASS；独立 `gpt-6.1-sol` 浏览器 QA 正验证布局与导出。
+- 2026-10-15：下方瀑布流视觉区增量 PASS。独立 Chromium 八组检查通过：390/768/1440 两种侧栏状态、完整/缺图画幅、无横溢出或文档空白滚动、裁剪与刷新恢复、实际像素卡内滚动、PNG/JPEG 单图及完整/部分 ZIP。主控复跑 build/lint 并抽查 diff、截图、DOM 数值及 14 个保护 hash；已有本地预览保持运行并加载新布局。最终复核：`docs/workflow/contract-reviews/task-037-game-promo-gallery-final-review.md`。完整主任务真实 AI 验收仍未完成，不提交、推送或部署。
+
+- 2026-10-15：用户要求游戏推广左侧项目列表参考无限画布并可收起/展开。增量 contract 与 review PASS：`docs/workflow/tasks/task-037-game-promo-sidebar.md`；仅项目侧栏与页面布局，真实生图验收仍未完成。
+- Task-037 侧栏增量已实现：独立 68/276px 项目导航、悬停/固定展开、卡片管理与手机抽屉；开发 build/lint/纯断言 PASS，限定差异与保护路径哈希无越界变化，独立 Chromium QA 正在执行。
+- 独立侧栏 QA：前 8 组交互/导出/响应式通过，长列表滚动 FAIL；16 项目撑高至 4906px，根因 AnimatedRoutes 遗漏 `/game-promo` 的视口容器判断。增量审查批准此一行入口修复，交原开发处理后重测。
+- 路由高度修复已完成：`animated-routes.tsx` 仅新增 `/game-promo` 判定，fresh build/lint/纯断言 PASS；原预览 HMR 生效，独立 QA 正重测长列表与工作区正常滚动。
+- 长列表与工作区/ZIP 复测通过；主控额外发现 document 可滚至空白，独立 DOM 诊断定位 `sr-only` 绝对定位 file input 使用 BODY 作为 containing block。浏览器临时设根 MAIN relative 后 document 高度从 2496 恢复为视口 1000px；原开发只补该 class 后 QA 验证滚动边界。
+- 2026-10-15：侧栏增量最终 PASS。独立 QA 主流程/四视口/ZIP16 与长列表通过；主控执行独立 QA 已编写的最终源码脚本（QA 最后轮模型调用 HTTP 524）验证 relative 修复，额外 12 次滚轮后 document/body=1000px、scrollY=0。三源文件 hash 匹配，11 个保护路径不变；本地预览 HMR 保持服务运行。最终复核：`docs/workflow/contract-reviews/task-037-game-promo-sidebar-final-review.md`。完整任务仍等待真实模型生成验收，不部署、不提交、不推送。
+
+- Task-037：用户批准游戏推广套图；contract 与独立 contract review 已完成。实现仅前端和专属验证文档，保留现有脏文件；不提交、不部署。真实生成验收尚未执行。
+- Contract：`docs/workflow/tasks/task-037-game-promo.md`；Review：`docs/workflow/contract-reviews/task-037-game-promo-review.md`。
+- Task-037 dispatch BLOCKED：仓库矩阵 deepseek-v4-pro 返回 HTTP 403 `No available group route matches the requested model or request type`，未执行源码修改。需恢复路由或用户明确授权替代模型；保留 contract-approved 阶段。证据：`docs/workflow/worker-results/task-037-game-promo-result.md`。
+- 2026-10-14：用户指定替换为 `gpt-6.1-sol`，已更新矩阵、contract 和审查，改用 Codex agent 调度；先前模型路由阻塞已解除。
+- Task-037 已在隔离工作区实现，开发 build/lint/纯断言通过；独立 QA 正执行浏览器验收。主控复核发现 cookie-only 会话 scope 和异步状态回退竞态，已交开发修复。主工作区源码待验收后精确引入；真实上游出图仍未验证。
+- Task-037 本地实现与验收 PASS：两项复核问题已修复，独立浏览器 21 项通过；14 个业务/入口文件与 QA 清单 SHA-256 完全相同，未修改的 mobile-nav-provider 仅原工作区 LF 与隔离工作区 CRLF 差异。15 个限定文件（含 worker report）已引入主工作区，主工作区 build/lint/纯断言/diff-check 再次 PASS，lint 仅既有两条 warning。
+- Task-037 完整上游验收 BLOCKED：没有可用的已授权 live test service；真实模型文案、生图效果与中文可读性未验证。阶段保留 qa，等待真实生成验收；不将 fixture 测试当作真实生成，不部署、不提交、不推送。QA 报告：`docs/workflow/qa-reports/task-037-game-promo-qa.md`。
 
 - 当前阶段：done（Task-036 scope PASS；既有前端断言失败已做 HEAD 基线对照）
 - 当前 Sprint：task-036-gpt-image-2-5-profiles

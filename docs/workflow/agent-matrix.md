@@ -2,7 +2,7 @@
 repo: chatgpt2api
 project_type: web
 qa_mode: browser
-last_verified: 2026-05-26
+last_verified: 2026-10-14
 ---
 
 # Agent Matrix
@@ -12,8 +12,8 @@ last_verified: 2026-05-26
 | Agent | Model | Responsibility | Output | Stop Rules |
 | --- | --- | --- | --- | --- |
 | Planner | `gpt-5.5` | 拆需求、写 spec、写 task contract、定义验收标准 | `docs/workflow/spec.md`, `docs/workflow/tasks/*.md` | 需求不清、范围影响生产/数据库/安全时先确认 |
-| Developer Worker | `deepseek-v4-pro` | 按已批准 contract 实现允许范围内的代码或文档 | `docs/workflow/worker-results/*-result.md` | contract 不清、越界路径、需要架构裁决时 `BLOCKED` |
-| QA Worker | `deepseek-v4-pro` | Playwright UI smoke、布局/交互验证、截图和控制台日志采证 | `docs/workflow/qa-reports/*-qa.md` | 测试环境缺失、命令不可执行、模型不可用时 `BLOCKED` |
+| Developer Worker | `gpt-6.1-sol` | 按已批准 contract 实现允许范围内的代码或文档 | `docs/workflow/worker-results/*-result.md` | contract 不清、越界路径、需要架构裁决时 `BLOCKED` |
+| QA Worker | `gpt-6.1-sol` | Playwright UI smoke、布局/交互验证、截图和控制台日志采证 | `docs/workflow/qa-reports/*-qa.md` | 测试环境缺失、命令不可执行、模型不可用时 `BLOCKED` |
 | Final Evaluator | `gpt-5.5` | 审 diff、审 worker report、审 QA evidence，最终判定 `PASS/FAIL/BLOCKED` | `docs/workflow/status.md`, final response | 证据不足时不得报 PASS |
 
 ## Canvas Defaults
@@ -26,9 +26,10 @@ last_verified: 2026-05-26
 
 - 大功能、多步骤、跨模块、需要 worker 或需要测试采证时，默认启用本矩阵。
 - 一次性小修、简单解释、单条命令或纯 spike 不强制启用。
-- 常规测试、验收、回归复核优先交给 `deepseek-v4-pro` worker；不要默认用 `gpt-5.5` 做测试 worker。
+- 开发和独立 QA 使用用户于 2026-10-14 指定的 `gpt-6.1-sol`，通过 Codex agent 工具调度，不经过旧 Claude runner。
+- 常规测试、验收、回归复核优先交给 `gpt-6.1-sol` worker；不要默认用 `gpt-5.5` 做测试 worker。
 - `gpt-5.5` 只用于计划、最终裁决、疑难失败深审和高风险验收抽查。
-- `deepseek-v4-pro` worker 不可用时报告 `BLOCKED` 或请求确认，不要静默回退到 `gpt-5.5`。
+- `gpt-6.1-sol` worker 不可用时报告 `BLOCKED` 或请求确认，不要静默更换模型。
 
 ## Short Triggers
 

@@ -150,3 +150,34 @@
 260909 1708 | task-036-gpt-image-2-5-profiles | build-start | codex | docs/workflow/status.md
 260909 1756 | task-036-gpt-image-2-5-profiles | build-complete | codex | docs/workflow/worker-results/task-036-gpt-image-2-5-profiles-result.md
 260909 1801 | task-036-gpt-image-2-5-profiles | qa-scope-pass | evaluator | docs/workflow/qa-reports/task-036-gpt-image-2-5-profiles-qa.md
+261014 2221 | task-037-game-promo | worker-start | codex | E:\codex-worktrees\chatgpt2api\task-037-game-promo@fe4953f86fbf9f4746dbfacbc422aed2131a9f93
+261014 2221 | task-037-game-promo | worker-fail | worker | E:\codex-runtime\pge\chatgpt2api\task-037-game-promo\20261014222103\worker-output.json
+261014 | task-037-game-promo | model-change-approved | user | gpt-6.1-sol; docs/workflow/agent-matrix.md
+261014 | task-037-game-promo | worker-resumed | codex | Codex agent game_promo_dev; E:/codex-worktrees/chatgpt2api/task-037-game-promo
+261014 | task-037-game-promo | qa-contract-approved | evaluator | docs/workflow/contract-reviews/task-037-game-promo-qa-review.md; independent gpt-6.1-sol QA
+261014 | task-037-game-promo | build-ready | developer | isolated worktree; build/lint/core assertions PASS
+261014 | task-037-game-promo | qa-start | independent-qa | docs/workflow/evidence/task-037-game-promo/browser-smoke.cjs
+261014 | task-037-game-promo | review-fixes | evaluator | cookie-only identity and terminal task-state race; Developer owns fixes
+261014 | task-037-game-promo | local-qa-pass | independent-qa | 21 browser checks; docs/workflow/qa-reports/task-037-game-promo-qa.md
+261014 | task-037-game-promo | integrated-verified | codex | 15 scoped files; main worktree build/lint/assert/diff-check PASS; source hashes verified
+261014 | task-037-game-promo | live-qa-blocked | final-evaluator | no authorized live test service; real generation/quality unverified; no deploy/commit/push
+261015 | task-037-game-promo-sidebar | contract-approved | planner-evaluator | dedicated canvas-style collapsible project rail; sidebar contract and independent review PASS
+261015 | task-037-game-promo-sidebar | worker-start | gpt-6.1-sol | main worktree narrow allowlist; project-sidebar.tsx, page.tsx; isolated browser QA follows
+261015 | task-037-game-promo-sidebar | build-ready | developer | build/lint/pure assertions PASS; original preview HMR preserved
+261015 | task-037-game-promo-sidebar | qa-start | independent-gpt-6.1-sol | four viewport browser checks; source writes and user preview actions denied
+261015 | task-037-game-promo-sidebar | qa-fail-fix-approved | evaluator | 8 groups PASS; long-list unbounded route height; one-line animated-routes predicate authorized for developer
+261015 | task-037-game-promo-sidebar | fix-verified-retest | developer-evaluator | one-line route fix; fresh build/lint/assert PASS; protected hashes unchanged; browser scroll retest underway
+261015 | task-037-game-promo-sidebar | parent-scroll-review-fix | evaluator | absolute file inputs escaped to BODY; measured 2496 -> 1000px with root MAIN relative; existing page allowlist fix assigned
+261015 | task-037-game-promo-sidebar | final-ui-pass | final-evaluator | independent browser QA + parent final execution PASS; doc height1000/scrollY0; 3 scoped hashes/11 protected paths; original live generation pending
+261015 | task-037-game-promo-gallery | worker-start | gpt-6.1-sol | approved lower masonry gallery contract; page-only layout; protected snapshot saved; existing preview preserved
+261015 | task-037-game-promo-gallery | qa-start | independent-gpt-6.1-sol | two layout hunks reviewed; build/lint PASS; 14 protected hashes match; gallery geometry/crop/export browser checks
+261015 | task-037-game-promo-gallery | final-ui-pass | final-evaluator | eight independent browser groups PASS; columns1/2/3/4; crop persistence and PNG/JPEG ZIP16/partial13; source/protected hashes match; preview HMR live
+261015 | task-037-game-promo-batch | contract-approved | planner-evaluator | missing-only and regenerate9 batch; explicit new-hero approval; persisted claims/input guards/history; no paid calls
+261015 | task-037-game-promo-batch | worker-start | gpt-6.1-sol | main worktree six-source allowlist; four before snapshots and 11 protected hashes; existing preview preserved
+261015 | task-037-game-promo-batch | qa-start | independent-gpt-6.1-sol | developer READY, build/lint/assert31 PASS; scoped diff reviewed; batch network identity/hero gate/refresh/two-tab/history browser checks
+261015 | task-037-game-promo-batch | final-ui-pass | final-evaluator | browser26 PASS; exact9/partial counts/newhero gate/refresh+two-tab/stop+scope/history; parent build/lint/assert and source/protected hashes PASS; live AI pending
+261015 | task-037-game-promo-application | contract-approved | planner-evaluator | screenshot-based application copy and independent1082x300/noEnglish/10M banner; preserve ZIP16; no external platform actions
+261015 application | task-037-game-promo-application | build-dispatch | gpt-6.1-sol | docs/workflow/tasks/task-037-game-promo-application.md
+261015 application | task-037-game-promo-application | independent-qa | gpt-6.1-sol | docs/workflow/tasks/task-037-game-promo-application-qa.md
+261015 application | task-037-game-promo-application | PASS | evaluator | docs/workflow/contract-reviews/task-037-game-promo-application-final-review.md
+261015 split | task-037-game-promo-split | build-dispatch | gpt-6.1-sol | docs/workflow/tasks/task-037-game-promo-split.md

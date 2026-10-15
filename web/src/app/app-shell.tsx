@@ -11,7 +11,7 @@ export function AppShell() {
   const isCanvasPage = pathname === "/canvas";
   const isBeadsWorkbench = pathname.startsWith("/beads/");
   const isEmbeddedMode = new URLSearchParams(location.search).get("ui_mode") === "embedded";
-  const isViewportWorkspacePage = pathname === "/canvas" || pathname === "/image" || pathname === "/image-arena" || pathname === "/ecommerce-suite" || pathname === "/image-manager" || pathname === "/social" || isBeadsWorkbench;
+  const isViewportWorkspacePage = pathname === "/canvas" || pathname === "/image" || pathname === "/image-arena" || pathname === "/ecommerce-suite" || pathname === "/game-promo" || pathname === "/image-manager" || pathname === "/social" || isBeadsWorkbench;
   const shellPadding = isEmbeddedMode && isViewportWorkspacePage
     ? "px-2 pt-2 pb-2 sm:px-2 lg:px-3"
     : "px-3 pt-2 pb-3 sm:px-5 lg:px-6";

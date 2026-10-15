@@ -10,6 +10,7 @@ import {
   Clock3,
   FolderOpen,
   Grid2X2,
+  Gamepad2,
   LayoutPanelLeft,
   LogOut,
   Menu,
@@ -55,6 +56,7 @@ const navItems = [
   { href: "/image", label: "创作台", icon: Brush },
   { href: "/canvas", label: "无限画布", icon: Grid2X2 },
   { href: "/ecommerce-suite", label: "电商套图", icon: PackageSearch },
+  { href: "/game-promo", label: "游戏推广", icon: Gamepad2 },
   { href: "/beads", label: "拼豆工坊", icon: CircleDotDashed },
   { href: "/image-manager", label: "素材库", icon: FolderOpen },
 ];
@@ -1053,7 +1055,7 @@ export function TopNav({ alignToShellTop = false }: { alignToShellTop?: boolean 
     return null;
   }
 
-  const visibleNavItems = navItems.filter((item) => canAccessPath(session, item.href));
+  const visibleNavItems = navItems.filter((item) => canAccessPath(session, item.href === "/game-promo" ? "/image" : item.href));
   const currentNavItem = [...visibleNavItems, profileNavItem, teamNavItem, usageOverviewNavItem].find((item) => isActivePath(pathname, item.href));
   const roleLabel = session.role === "admin" ? "管理员" : session.roleName || (session.provider === "linuxdo" ? "Linuxdo 用户" : "普通用户");
   const canAccessImageTasks = canAccessPath(session, "/image");
